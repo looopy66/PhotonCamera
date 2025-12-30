@@ -1,0 +1,32 @@
+<resources>
+    <string name="app_name">Photon Camera</string>
+    
+    <!-- Camera Controls -->
+    <string name="capture">Capture</string>
+    <string name="switch_camera">Switch Camera</string>
+    <string name="settings">Settings</string>
+    
+    <!-- Exposure Controls -->
+    <string name="exposure_compensation">EV</string>
+    <string name="iso">ISO</string>
+    <string name="shutter_speed">Shutter</string>
+    <string name="auto">AUTO</string>
+    
+    <!-- Focus -->
+    <string name="focus">Focus</string>
+    <string name="tap_to_focus">Tap to focus</string>
+    
+    <!-- Aspect Ratio -->
+    <string name="aspect_ratio">Aspect Ratio</string>
+    <string name="ratio_3_2">3:2</string>
+    <string name="ratio_4_3">4:3</string>
+    <string name="ratio_16_9">16:9</string>
+    <string name="ratio_1_1">1:1</string>
+    
+    <!-- Permissions -->
+    <string name="camera_permission_required">Camera permission is required</string>
+    <string name="grant_permission">Grant Permission</string>
+    
+    <!-- Zoom -->
+    <string name="zoom">Zoom</string>
+</resources>
