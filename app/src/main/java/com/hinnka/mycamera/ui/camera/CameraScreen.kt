@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.hinnka.mycamera.camera.CameraState
+import com.hinnka.mycamera.ui.components.ZoomStepSelector
 import com.hinnka.mycamera.ui.components.LutControlPanel
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import kotlin.math.abs
@@ -95,6 +96,23 @@ fun CameraScreen(
             },
             modifier = Modifier.fillMaxSize()
         )
+        
+        // 变焦档位选择器（显示在预览上方）
+        val zoomSteps = viewModel.getZoomSteps()
+        if (zoomSteps.size > 1 && !viewModel.isLandscape) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 80.dp),
+                contentAlignment = Alignment.TopCenter
+            ) {
+                ZoomStepSelector(
+                    zoomSteps = zoomSteps,
+                    currentZoom = state.zoomRatio,
+                    onZoomSelected = { viewModel.setZoomStep(it) }
+                )
+            }
+        }
         
         // 控制层
         Controls(state, viewModel)
@@ -234,7 +252,22 @@ fun LandscapeControlsContent(
             }
         }
 
-        Spacer(modifier = Modifier.weight(1f))
+        // 中间区域：镜头选择器
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight(),
+            contentAlignment = Alignment.Center
+        ) {
+            val zoomSteps = viewModel.getZoomSteps()
+            if (zoomSteps.size > 1) {
+                ZoomStepSelector(
+                    zoomSteps = zoomSteps,
+                    currentZoom = state.zoomRatio,
+                    onZoomSelected = { viewModel.setZoomStep(it) }
+                )
+            }
+        }
 
         // 右侧按钮区
         Column(

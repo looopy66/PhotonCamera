@@ -65,53 +65,281 @@ class CameraController(private val context: Context) {
     
     /**
      * 更新可用相机列表
+     * 使用 Camera2 CameraManager 直接枚举所有相机（包括物理摄像头）
      */
+    @SuppressLint("RestrictedApi")
+    @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
     private fun updateAvailableCameras() {
         val provider = cameraProvider ?: return
-        val cameras = mutableListOf<CameraInfo>()
+        val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
         
-        // 后置摄像头
-        if (provider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)) {
-            val backCameraInfo = createCameraInfo(provider, CameraSelector.DEFAULT_BACK_CAMERA, LensType.BACK_MAIN)
-            backCameraInfo?.let { cameras.add(it) }
+        val cameras = mutableListOf<CameraInfo>()
+        val backCameras = mutableListOf<CameraInfo>()
+        
+        try {
+            val cameraIds = cameraManager.cameraIdList
+            Log.d(TAG, "CameraManager found ${cameraIds.size} camera IDs: ${cameraIds.toList()}")
+            
+            for (cameraId in cameraIds) {
+                try {
+                    val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+                    val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING) ?: continue
+                    
+                    // 检查是否是逻辑多摄相机
+                    val capabilities = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+                    val isLogicalMultiCamera = capabilities?.contains(
+                        CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA
+                    ) == true
+                    
+                    // 获取物理摄像头 ID（Android 9+）
+                    val physicalCameraIds = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P && isLogicalMultiCamera) {
+                        characteristics.physicalCameraIds.toList()
+                    } else {
+                        emptyList()
+                    }
+                    
+                    Log.d(TAG, "Camera $cameraId: facing=$lensFacing, logical=$isLogicalMultiCamera, physicalIds=$physicalCameraIds")
+                    
+                    if (isLogicalMultiCamera && physicalCameraIds.isNotEmpty()) {
+                        // 对于逻辑多摄相机，枚举其物理摄像头
+                        for (physicalId in physicalCameraIds) {
+                            try {
+                                val physicalCharacteristics = cameraManager.getCameraCharacteristics(physicalId)
+                                val info = createCameraInfoFromCharacteristics(
+                                    physicalId,
+                                    physicalCharacteristics,
+                                    lensFacing,
+                                    cameraId // 记录逻辑相机 ID
+                                )
+                                if (info != null) {
+                                    if (lensFacing == CameraCharacteristics.LENS_FACING_BACK) {
+                                        backCameras.add(info)
+                                    } else if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+                                        cameras.add(info.copy(lensType = LensType.FRONT))
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Failed to get physical camera $physicalId characteristics", e)
+                            }
+                        }
+                    } else {
+                        // 非逻辑多摄相机，直接添加
+                        val info = createCameraInfoFromCharacteristics(
+                            cameraId,
+                            characteristics,
+                            lensFacing,
+                            null
+                        )
+                        if (info != null) {
+                            if (lensFacing == CameraCharacteristics.LENS_FACING_BACK) {
+                                backCameras.add(info)
+                            } else if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+                                cameras.add(info.copy(lensType = LensType.FRONT))
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to get camera $cameraId characteristics", e)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to enumerate cameras", e)
+            // 回退到 CameraX 方式
+            updateAvailableCamerasLegacy()
+            return
         }
         
-        // 前置摄像头
-        if (provider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) {
-            val frontCameraInfo = createCameraInfo(provider, CameraSelector.DEFAULT_FRONT_CAMERA, LensType.FRONT)
-            frontCameraInfo?.let { cameras.add(it) }
+        // 根据焦距对后置摄像头分类
+        val classifiedBackCameras = classifyBackCameras(backCameras)
+        cameras.addAll(classifiedBackCameras)
+        
+        // 如果没有通过物理摄像头找到多个，尝试使用 CameraX 方式
+        if (cameras.isEmpty()) {
+            Log.w(TAG, "No cameras found via CameraManager, falling back to CameraX")
+            updateAvailableCamerasLegacy()
+            return
+        }
+        
+        Log.d(TAG, "Found ${cameras.size} cameras (${backCameras.size} back cameras):")
+        cameras.forEach { cam ->
+            Log.d(TAG, "  - ${cam.cameraId}: ${cam.lensType}, focal=${cam.focalLength}mm, 35mm=${cam.focalLength35mmEquivalent}mm")
         }
         
         val defaultCameraId = cameras.firstOrNull { it.lensType == LensType.BACK_MAIN }?.cameraId 
+            ?: cameras.firstOrNull { it.lensFacing == CameraCharacteristics.LENS_FACING_BACK }?.cameraId
             ?: cameras.firstOrNull()?.cameraId ?: ""
+        
+        val defaultCamera = cameras.find { it.cameraId == defaultCameraId }
         
         _state.value = _state.value.copy(
             availableCameras = cameras,
             currentCameraId = defaultCameraId,
-            currentLensType = if (cameras.find { it.cameraId == defaultCameraId }?.lensType == LensType.FRONT) {
-                LensType.FRONT
-            } else {
-                LensType.BACK_MAIN
-            }
+            currentLensType = defaultCamera?.lensType ?: LensType.BACK_MAIN
         )
     }
     
     /**
-     * 创建相机信息
+     * 从 CameraCharacteristics 创建 CameraInfo
      */
-    @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
-    private fun createCameraInfo(
-        provider: ProcessCameraProvider,
-        cameraSelector: CameraSelector,
-        lensType: LensType
+    private fun createCameraInfoFromCharacteristics(
+        cameraId: String,
+        characteristics: android.hardware.camera2.CameraCharacteristics,
+        lensFacing: Int,
+        logicalCameraId: String?
     ): CameraInfo? {
         return try {
-            val cameraInfos = provider.availableCameraInfos.filter {
-                cameraSelector.filter(listOf(it)).isNotEmpty()
-            }
-            val cameraInfo = cameraInfos.firstOrNull() ?: return null
-            val camera2Info = Camera2CameraInfo.from(cameraInfo)
+            // 获取焦距信息
+            val focalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+            val focalLength = focalLengths?.firstOrNull() ?: 0f
             
+            // 计算 35mm 等效焦距
+            val sensorSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+            val focalLength35mm = if (sensorSize != null && focalLength > 0) {
+                focalLength * (36f / sensorSize.width)
+            } else {
+                0f
+            }
+            
+            // ISO 范围
+            val isoRange = characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+            
+            // 曝光时间范围
+            val exposureTimeRange = characteristics.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+            
+            // 曝光补偿范围
+            val exposureCompensationRange = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
+                ?: Range(0, 0)
+            
+            // 曝光补偿步长
+            val exposureCompensationStep = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0f
+            
+            // 最大数字变焦
+            val maxZoom = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
+            
+            // 传感器方向
+            val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+            
+            // 活动区域大小
+            val activeArraySize = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+            
+            Log.d(TAG, "Camera $cameraId: focal=$focalLength, 35mm=$focalLength35mm, sensor=${sensorSize?.width}x${sensorSize?.height}")
+            
+            CameraInfo(
+                cameraId = if (logicalCameraId != null) "$logicalCameraId:$cameraId" else cameraId,
+                lensFacing = lensFacing,
+                lensType = LensType.BACK_MAIN, // 临时，后续分类
+                physicalCameraIds = if (logicalCameraId != null) listOf(cameraId) else emptyList(),
+                isoRange = isoRange,
+                exposureTimeRange = exposureTimeRange,
+                exposureCompensationRange = exposureCompensationRange,
+                exposureCompensationStep = exposureCompensationStep,
+                maxZoom = maxZoom,
+                sensorOrientation = sensorOrientation,
+                activeArraySize = activeArraySize,
+                focalLength = focalLength,
+                focalLength35mmEquivalent = focalLength35mm
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to create camera info for $cameraId", e)
+            null
+        }
+    }
+    
+    /**
+     * 使用 CameraX 方式获取相机列表（回退方案）
+     */
+    @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
+    private fun updateAvailableCamerasLegacy() {
+        val provider = cameraProvider ?: return
+        val cameras = mutableListOf<CameraInfo>()
+        val backCameras = mutableListOf<CameraInfo>()
+        
+        for (cameraInfo in provider.availableCameraInfos) {
+            val camera2Info = Camera2CameraInfo.from(cameraInfo)
+            val cameraId = camera2Info.cameraId
+            val lensFacing = camera2Info.getCameraCharacteristic(CameraCharacteristics.LENS_FACING)
+                ?: continue
+            
+            val focalLengths = camera2Info.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+            val focalLength = focalLengths?.firstOrNull() ?: 0f
+            
+            val sensorSize = camera2Info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+            val focalLength35mm = if (sensorSize != null && focalLength > 0) {
+                focalLength * (36f / sensorSize.width)
+            } else {
+                0f
+            }
+            
+            val info = createCameraInfoFromCamera2(cameraInfo, camera2Info, LensType.BACK_MAIN, focalLength, focalLength35mm)
+            
+            if (info != null) {
+                if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+                    cameras.add(info.copy(lensType = LensType.FRONT))
+                } else if (lensFacing == CameraCharacteristics.LENS_FACING_BACK) {
+                    backCameras.add(info)
+                }
+            }
+        }
+        
+        val classifiedBackCameras = classifyBackCameras(backCameras)
+        cameras.addAll(classifiedBackCameras)
+        
+        Log.d(TAG, "Legacy: Found ${cameras.size} cameras")
+        
+        val defaultCameraId = cameras.firstOrNull { it.lensType == LensType.BACK_MAIN }?.cameraId 
+            ?: cameras.firstOrNull()?.cameraId ?: ""
+        val defaultCamera = cameras.find { it.cameraId == defaultCameraId }
+        
+        _state.value = _state.value.copy(
+            availableCameras = cameras,
+            currentCameraId = defaultCameraId,
+            currentLensType = defaultCamera?.lensType ?: LensType.BACK_MAIN
+        )
+    }
+    
+    /**
+     * 根据焦距对后置摄像头进行分类
+     */
+    private fun classifyBackCameras(cameras: List<CameraInfo>): List<CameraInfo> {
+        if (cameras.isEmpty()) return emptyList()
+        if (cameras.size == 1) {
+            return listOf(cameras.first().copy(lensType = LensType.BACK_MAIN))
+        }
+        
+        // 按 35mm 等效焦距排序
+        val sorted = cameras.sortedBy { it.focalLength35mmEquivalent }
+        
+        return sorted.mapIndexed { index, camera ->
+            val lensType = when {
+                // 如果只有两个摄像头
+                sorted.size == 2 -> {
+                    if (index == 0) LensType.BACK_ULTRA_WIDE else LensType.BACK_MAIN
+                }
+                // 三个或更多摄像头
+                else -> {
+                    when (index) {
+                        0 -> LensType.BACK_ULTRA_WIDE
+                        sorted.size - 1 -> LensType.BACK_TELEPHOTO
+                        else -> LensType.BACK_MAIN
+                    }
+                }
+            }
+            camera.copy(lensType = lensType)
+        }
+    }
+    
+    /**
+     * 从 Camera2 信息创建 CameraInfo
+     */
+    @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
+    private fun createCameraInfoFromCamera2(
+        cameraInfo: androidx.camera.core.CameraInfo,
+        camera2Info: Camera2CameraInfo,
+        lensType: LensType,
+        focalLength: Float,
+        focalLength35mm: Float
+    ): CameraInfo? {
+        return try {
             val cameraId = camera2Info.cameraId
             val lensFacing = camera2Info.getCameraCharacteristic(CameraCharacteristics.LENS_FACING)
                 ?: CameraCharacteristics.LENS_FACING_BACK
@@ -148,17 +376,22 @@ class CameraController(private val context: Context) {
                 exposureCompensationStep = exposureCompensationStep,
                 maxZoom = maxZoom,
                 sensorOrientation = sensorOrientation,
-                activeArraySize = activeArraySize
+                activeArraySize = activeArraySize,
+                focalLength = focalLength,
+                focalLength35mmEquivalent = focalLength35mm
             )
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to create camera info", e)
+            Log.e(TAG, "Failed to create camera info from Camera2", e)
             null
         }
     }
+
     
     /**
      * 绑定相机到生命周期
+     * 使用当前 cameraId 选择特定的摄像头
      */
+    @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
     fun bindCamera(lifecycleOwner: LifecycleOwner, surfaceProvider: Preview.SurfaceProvider) {
         this.lifecycleOwner = lifecycleOwner
         this.currentSurfaceProvider = surfaceProvider
@@ -172,15 +405,31 @@ class CameraController(private val context: Context) {
             // 解绑之前的用例
             provider.unbindAll()
             
-            // 选择相机（前置或后置）
-            val cameraSelector = if (_state.value.currentLensType == LensType.FRONT) {
-                CameraSelector.DEFAULT_FRONT_CAMERA
+            val currentCameraId = _state.value.currentCameraId
+            val currentLensType = _state.value.currentLensType
+            
+            // 解析 cameraId，可能是 "逻辑相机ID:物理相机ID" 格式
+            val (logicalCameraId, physicalCameraId) = if (currentCameraId.contains(":")) {
+                val parts = currentCameraId.split(":")
+                Pair(parts[0], parts[1])
             } else {
-                CameraSelector.DEFAULT_BACK_CAMERA
+                Pair(currentCameraId, null)
             }
             
+            Log.d(TAG, "Binding camera: logical=$logicalCameraId, physical=$physicalCameraId, type=$currentLensType")
+            
+            // 根据逻辑相机 ID 创建选择器
+            val cameraSelector = CameraSelector.Builder()
+                .addCameraFilter { cameraInfoList ->
+                    cameraInfoList.filter { cameraInfo ->
+                        val camera2Info = Camera2CameraInfo.from(cameraInfo)
+                        camera2Info.cameraId == logicalCameraId
+                    }
+                }
+                .build()
+            
             // 创建预览用例
-            preview = Preview.Builder()
+            val previewBuilder = Preview.Builder()
                 .setResolutionSelector(
                     ResolutionSelector.Builder()
                         .setResolutionStrategy(
@@ -191,16 +440,29 @@ class CameraController(private val context: Context) {
                         )
                         .build()
                 )
-                .build()
-                .also {
-                    it.surfaceProvider = surfaceProvider
-                }
+            
+            // 如果有物理相机 ID，使用 Camera2Interop 设置
+            if (physicalCameraId != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                androidx.camera.camera2.interop.Camera2Interop.Extender(previewBuilder)
+                    .setPhysicalCameraId(physicalCameraId)
+            }
+            
+            preview = previewBuilder.build().also {
+                it.surfaceProvider = surfaceProvider
+            }
             
             // 创建拍照用例
-            imageCapture = ImageCapture.Builder()
+            val imageCaptureBuilder = ImageCapture.Builder()
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
                 .setJpegQuality(95)
-                .build()
+            
+            // 如果有物理相机 ID，拍照也使用该物理相机
+            if (physicalCameraId != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                androidx.camera.camera2.interop.Camera2Interop.Extender(imageCaptureBuilder)
+                    .setPhysicalCameraId(physicalCameraId)
+            }
+            
+            imageCapture = imageCaptureBuilder.build()
             
             // 绑定用例到生命周期
             camera = provider.bindToLifecycle(
@@ -214,7 +476,7 @@ class CameraController(private val context: Context) {
             updateCameraInfoFromBoundCamera()
             
             _state.value = _state.value.copy(isPreviewActive = true)
-            Log.d(TAG, "Camera bound successfully")
+            Log.d(TAG, "Camera bound successfully: ${currentLensType}")
             
         } catch (e: Exception) {
             Log.e(TAG, "Failed to bind camera", e)
@@ -229,19 +491,55 @@ class CameraController(private val context: Context) {
         val cam = camera ?: return
         val cameraInfo = cam.cameraInfo
 
-        // 更新 maxZoom
+        // 观察变焦状态
         cameraInfo.zoomState.observeForever { zoomState ->
             val currentState = _state.value
             val currentCameraId = currentState.currentCameraId
+            
+            val minZoom = zoomState.minZoomRatio
+            val maxZoom = zoomState.maxZoomRatio
+            
+            // 计算变焦档位
+            val zoomSteps = calculateZoomSteps(minZoom, maxZoom)
+            
+            Log.d(TAG, "Camera zoom range: $minZoom - $maxZoom, steps: $zoomSteps")
+            
             val updatedCameras = currentState.availableCameras.map { info ->
                 if (info.cameraId == currentCameraId) {
-                    info.copy(maxZoom = zoomState.maxZoomRatio)
+                    info.copy(
+                        maxZoom = maxZoom,
+                        minZoom = minZoom,
+                        zoomSteps = zoomSteps
+                    )
                 } else {
                     info
                 }
             }
             _state.value = currentState.copy(availableCameras = updatedCameras)
         }
+    }
+    
+    /**
+     * 计算变焦档位
+     * 根据 minZoom 和 maxZoom 生成常用的变焦档位（如 0.5x, 1x, 2x, 3x 等）
+     */
+    private fun calculateZoomSteps(minZoom: Float, maxZoom: Float): List<Float> {
+        val steps = mutableListOf<Float>()
+        
+        // 广角 (0.5x, 0.6x)
+        if (minZoom <= 0.5f) steps.add(0.5f)
+        else if (minZoom <= 0.6f) steps.add(0.6f)
+        
+        // 主摄 (1x)
+        steps.add(1f)
+        
+        // 长焦档位
+        if (maxZoom >= 2f) steps.add(2f)
+        if (maxZoom >= 3f) steps.add(3f)
+        if (maxZoom >= 5f) steps.add(5f)
+        if (maxZoom >= 10f) steps.add(10f)
+        
+        return steps.filter { it >= minZoom && it <= maxZoom }
     }
     
     /**
@@ -335,13 +633,31 @@ class CameraController(private val context: Context) {
     
     /**
      * 设置变焦倍数
+     * 支持小于 1.0 的值（广角模式）
      */
     fun setZoomRatio(ratio: Float) {
+        val minZoom = _state.value.getMinZoom()
         val maxZoom = _state.value.getMaxZoom()
-        val clampedRatio = ratio.coerceIn(1f, maxZoom)
+        val clampedRatio = ratio.coerceIn(minZoom, maxZoom)
         _state.value = _state.value.copy(zoomRatio = clampedRatio)
         
         camera?.cameraControl?.setZoomRatio(clampedRatio)
+        Log.d(TAG, "setZoomRatio: $ratio -> $clampedRatio (range: $minZoom - $maxZoom)")
+    }
+    
+    /**
+     * 设置到指定的变焦档位
+     * @param step 变焦档位值（如 0.5, 1.0, 2.0）
+     */
+    fun setZoomStep(step: Float) {
+        setZoomRatio(step)
+    }
+    
+    /**
+     * 获取变焦档位列表
+     */
+    fun getZoomSteps(): List<Float> {
+        return _state.value.getZoomSteps()
     }
     
     /**
@@ -408,7 +724,9 @@ class CameraController(private val context: Context) {
     }
     
     /**
-     * 切换摄像头
+     * 切换摄像头（前后置切换）
+     * 如果当前是前置，切换到主摄
+     * 如果当前是后置，切换到前置
      */
     fun switchCamera() {
         val cameras = _state.value.availableCameras
@@ -430,10 +748,94 @@ class CameraController(private val context: Context) {
             )
             
             // 重新绑定相机
-            lifecycleOwner?.let { owner ->
-                currentSurfaceProvider?.let { provider ->
-                    bindCamera(owner, provider)
+            rebindCamera()
+        }
+    }
+    
+    /**
+     * 切换到指定的镜头类型
+     * @param lensType 目标镜头类型
+     */
+    fun switchToLens(lensType: LensType) {
+        val cameras = _state.value.availableCameras
+        val currentLensType = _state.value.currentLensType
+        
+        if (currentLensType == lensType) return
+        
+        val targetCamera = cameras.find { it.lensType == lensType }
+        
+        targetCamera?.let { camera ->
+            Log.d(TAG, "Switching to lens: ${lensType}, cameraId: ${camera.cameraId}")
+            _state.value = _state.value.copy(
+                currentCameraId = camera.cameraId,
+                currentLensType = camera.lensType,
+                zoomRatio = 1f // 重置变焦
+            )
+            
+            // 重新绑定相机
+            rebindCamera()
+        } ?: Log.w(TAG, "Camera with lens type $lensType not found")
+    }
+    
+    /**
+     * 切换到下一个后置摄像头
+     * 按顺序循环切换：广角 -> 主摄 -> 长焦 -> 广角
+     */
+    fun switchBackCamera() {
+        val cameras = _state.value.availableCameras
+        val currentLensType = _state.value.currentLensType
+        
+        // 如果当前是前置，先切换到主摄
+        if (currentLensType == LensType.FRONT) {
+            switchToLens(LensType.BACK_MAIN)
+            return
+        }
+        
+        // 获取所有后置摄像头并按类型排序
+        val backCameras = cameras.filter { it.lensFacing == CameraCharacteristics.LENS_FACING_BACK }
+            .sortedBy { 
+                when (it.lensType) {
+                    LensType.BACK_ULTRA_WIDE -> 0
+                    LensType.BACK_MAIN -> 1
+                    LensType.BACK_TELEPHOTO -> 2
+                    else -> 3
                 }
+            }
+        
+        if (backCameras.isEmpty()) return
+        
+        // 找到当前摄像头的索引
+        val currentIndex = backCameras.indexOfFirst { it.lensType == currentLensType }
+        val nextIndex = (currentIndex + 1) % backCameras.size
+        val nextCamera = backCameras[nextIndex]
+        
+        Log.d(TAG, "Switching back camera from $currentLensType to ${nextCamera.lensType}")
+        
+        _state.value = _state.value.copy(
+            currentCameraId = nextCamera.cameraId,
+            currentLensType = nextCamera.lensType,
+            zoomRatio = 1f
+        )
+        
+        rebindCamera()
+    }
+    
+    /**
+     * 获取所有后置摄像头
+     */
+    fun getBackCameras(): List<CameraInfo> {
+        return _state.value.availableCameras.filter { 
+            it.lensFacing == CameraCharacteristics.LENS_FACING_BACK 
+        }
+    }
+    
+    /**
+     * 重新绑定相机
+     */
+    private fun rebindCamera() {
+        lifecycleOwner?.let { owner ->
+            currentSurfaceProvider?.let { provider ->
+                bindCamera(owner, provider)
             }
         }
     }

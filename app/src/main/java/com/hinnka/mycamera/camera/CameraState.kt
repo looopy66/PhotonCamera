@@ -48,9 +48,35 @@ data class CameraInfo(
     val exposureCompensationRange: Range<Int>,
     val exposureCompensationStep: Float,
     val maxZoom: Float,
+    val minZoom: Float = 1f,  // 最小变焦（广角时 < 1.0）
     val sensorOrientation: Int,
-    val activeArraySize: Rect?
-)
+    val activeArraySize: Rect?,
+    val focalLength: Float = 0f,  // 物理焦距 (mm)
+    val focalLength35mmEquivalent: Float = 0f,  // 35mm等效焦距
+    val zoomSteps: List<Float> = listOf(1f)  // 可用的变焦档位 (如 [0.5, 1.0, 2.0])
+) {
+    /**
+     * 获取镜头类型显示名称
+     */
+    fun getLensDisplayName(): String {
+        return when (lensType) {
+            LensType.FRONT -> "前置"
+            LensType.BACK_MAIN -> "主摄 (1x)"
+            LensType.BACK_ULTRA_WIDE -> "广角 (0.5x)"
+            LensType.BACK_TELEPHOTO -> "长焦 (${String.format("%.1f", focalLength35mmEquivalent / 24f)}x)"
+        }
+    }
+    
+    /**
+     * 是否支持广角（minZoom < 1）
+     */
+    fun hasWideAngle(): Boolean = minZoom < 0.9f
+    
+    /**
+     * 是否支持长焦（maxZoom > 2）
+     */
+    fun hasTelephoto(): Boolean = maxZoom > 2f
+}
 
 /**
  * 相机状态数据类
@@ -127,5 +153,19 @@ data class CameraState(
      */
     fun getMaxZoom(): Float {
         return getCurrentCameraInfo()?.maxZoom ?: 1.0f
+    }
+    
+    /**
+     * 获取最小变焦倍数
+     */
+    fun getMinZoom(): Float {
+        return getCurrentCameraInfo()?.minZoom ?: 1.0f
+    }
+    
+    /**
+     * 获取可用的变焦档位
+     */
+    fun getZoomSteps(): List<Float> {
+        return getCurrentCameraInfo()?.zoomSteps ?: listOf(1f)
     }
 }

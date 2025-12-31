@@ -148,10 +148,31 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
     
     /**
-     * 切换摄像头
+     * 切换摄像头（前后置切换）
      */
     fun switchCamera() {
         cameraController.switchCamera()
+    }
+    
+    /**
+     * 切换到指定的镜头类型
+     */
+    fun switchToLens(lensType: com.hinnka.mycamera.camera.LensType) {
+        cameraController.switchToLens(lensType)
+    }
+    
+    /**
+     * 切换到下一个后置摄像头
+     */
+    fun switchBackCamera() {
+        cameraController.switchBackCamera()
+    }
+    
+    /**
+     * 获取所有后置摄像头
+     */
+    fun getBackCameras(): List<com.hinnka.mycamera.camera.CameraInfo> {
+        return cameraController.getBackCameras()
     }
     
     /**
@@ -187,6 +208,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun setZoomRatio(ratio: Float) {
         cameraController.setZoomRatio(ratio)
+    }
+    
+    /**
+     * 设置到指定的变焦档位
+     */
+    fun setZoomStep(step: Float) {
+        cameraController.setZoomStep(step)
+    }
+    
+    /**
+     * 获取变焦档位列表
+     */
+    fun getZoomSteps(): List<Float> {
+        return cameraController.getZoomSteps()
     }
     
     /**
