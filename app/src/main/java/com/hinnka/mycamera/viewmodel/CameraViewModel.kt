@@ -2,23 +2,20 @@ package com.hinnka.mycamera.viewmodel
 
 import android.app.Application
 import android.content.ContentValues
+import android.graphics.SurfaceTexture
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
-import android.util.Size
-import android.view.Surface
-import androidx.camera.core.Preview
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewModelScope
 import com.hinnka.mycamera.camera.AspectRatio
-import com.hinnka.mycamera.camera.CameraController
+import com.hinnka.mycamera.camera.Camera2Controller
 import com.hinnka.mycamera.camera.CameraState
-import com.hinnka.mycamera.camera.CameraUtils
+import com.hinnka.mycamera.camera.LensType
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.LutManager
@@ -33,6 +30,7 @@ import java.util.*
 
 /**
  * 相机 ViewModel
+ * 使用 Camera2Controller 支持隐藏摄像头
  */
 class CameraViewModel(application: Application) : AndroidViewModel(application) {
     
@@ -40,7 +38,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         private const val TAG = "CameraViewModel"
     }
     
-    private val cameraController = CameraController(application)
+    private val cameraController = Camera2Controller(application)
     
     // LUT 管理器
     private val lutManager = LutManager(application)
@@ -57,14 +55,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     var availableLutList: List<LutInfo> by mutableStateOf(emptyList())
         private set
 
-    // 存储是否为横屏模式，而不是角度值，减少重组次数
+    // 存储是否为横屏模式
     var isLandscape by mutableStateOf(false)
         private set
 
     // 存储旋转角度，用于UI旋转
-    // 0: 竖屏正常, 90: 右侧朝上（顺时针90°）, 270: 左侧朝上（逆时针90°）
     var rotationDegrees by mutableStateOf(0f)
         private set
+    
+    // 保存当前的 SurfaceTexture 以便切换摄像头时重用
+    private var currentSurfaceTexture: SurfaceTexture? = null
 
     // 更新方向，只在横竖屏切换时才更新状态
     fun updateOrientation(orientation: Int) {
@@ -110,19 +110,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
     
     /**
-     * 绑定相机到生命周期（CameraX 新接口）
+     * 打开相机（Camera2 接口）
      */
-    fun bindCamera(lifecycleOwner: LifecycleOwner, surfaceProvider: Preview.SurfaceProvider) {
-        cameraController.bindCamera(lifecycleOwner, surfaceProvider)
-    }
-    
-    /**
-     * 打开相机（旧接口，已弃用）
-     * @deprecated 使用 bindCamera(LifecycleOwner, SurfaceProvider) 代替
-     */
-    @Deprecated("Use bindCamera instead", ReplaceWith("bindCamera(lifecycleOwner, surfaceProvider)"))
-    fun openCamera(surface: Surface) {
-        cameraController.openCamera(surface)
+    fun openCamera(surfaceTexture: SurfaceTexture) {
+        currentSurfaceTexture = surfaceTexture
+        cameraController.openCamera(surfaceTexture)
     }
     
     /**
@@ -134,10 +126,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     
     /**
      * 检查相机状态并在必要时恢复
-     * 用于从后台切换回 App 时调用
      */
     fun checkAndRecoverCamera() {
         cameraController.checkAndRecoverCamera()
+        // 如果有保存的 SurfaceTexture，重新打开相机
+        currentSurfaceTexture?.let { texture ->
+            if (!state.value.isPreviewActive) {
+                cameraController.openCamera(texture)
+            }
+        }
     }
     
     /**
@@ -152,20 +149,53 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun switchCamera() {
         cameraController.switchCamera()
+        reopenCamera()
     }
     
     /**
      * 切换到指定的镜头类型
      */
-    fun switchToLens(lensType: com.hinnka.mycamera.camera.LensType) {
+    fun switchToLens(lensType: LensType) {
         cameraController.switchToLens(lensType)
+        reopenCamera()
     }
     
     /**
      * 切换到下一个后置摄像头
      */
     fun switchBackCamera() {
-        cameraController.switchBackCamera()
+        val backCameras = getBackCameras().sortedBy { 
+            when (it.lensType) {
+                LensType.BACK_ULTRA_WIDE -> 0
+                LensType.BACK_MAIN -> 1
+                LensType.BACK_TELEPHOTO -> 2
+                else -> 3
+            }
+        }
+        
+        if (backCameras.isEmpty()) return
+        
+        val currentLensType = state.value.currentLensType
+        
+        if (currentLensType == LensType.FRONT) {
+            switchToLens(LensType.BACK_MAIN)
+            return
+        }
+        
+        val currentIndex = backCameras.indexOfFirst { it.lensType == currentLensType }
+        val nextIndex = (currentIndex + 1) % backCameras.size
+        val nextCamera = backCameras[nextIndex]
+        
+        switchToLens(nextCamera.lensType)
+    }
+    
+    /**
+     * 重新打开相机（切换摄像头后使用）
+     */
+    private fun reopenCamera() {
+        currentSurfaceTexture?.let { texture ->
+            cameraController.openCamera(texture)
+        }
     }
     
     /**
@@ -214,14 +244,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 设置到指定的变焦档位
      */
     fun setZoomStep(step: Float) {
-        cameraController.setZoomStep(step)
+        setZoomRatio(step)
     }
     
     /**
      * 获取变焦档位列表
+     * Camera2 不支持通过变焦切换物理摄像头，返回空列表
      */
     fun getZoomSteps(): List<Float> {
-        return cameraController.getZoomSteps()
+        return emptyList()
     }
     
     /**
@@ -242,8 +273,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     
     /**
      * 设置当前 LUT
-     * 
-     * @param lutId LUT ID，传 null 表示移除 LUT
      */
     fun setLut(lutId: String?) {
         currentLutId = lutId

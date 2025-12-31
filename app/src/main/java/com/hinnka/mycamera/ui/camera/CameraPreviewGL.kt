@@ -1,8 +1,8 @@
 package com.hinnka.mycamera.ui.camera
 
+import android.graphics.SurfaceTexture
 import android.util.Size
 import android.view.Surface
-import androidx.camera.core.Preview
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -19,19 +19,20 @@ import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.ui.components.FocusIndicator
 
 /**
- * 相机预览组件 - OpenGL ES 版本（CameraX 适配）
+ * 相机预览组件 - OpenGL ES 版本（Camera2 适配）
  * 
  * 使用 GLSurfaceView 渲染相机预览，支持实时 3D LUT 滤镜
  */
 @Composable
 fun CameraPreviewGL(
     aspectRatio: AspectRatio,
+    previewSize: Size,
     currentLut: LutConfig?,
     lutIntensity: Float,
     focusPoint: Pair<Float, Float>?,
     isFocusing: Boolean,
     focusSuccess: Boolean?,
-    onSurfaceProviderReady: (Preview.SurfaceProvider) -> Unit,
+    onSurfaceTextureReady: (SurfaceTexture) -> Unit,
     onSurfaceDestroyed: () -> Unit,
     onTap: (Float, Float, Int, Int) -> Unit,
     modifier: Modifier = Modifier
@@ -65,6 +66,9 @@ fun CameraPreviewGL(
 
         var viewWidth by remember { mutableIntStateOf(0) }
         var viewHeight by remember { mutableIntStateOf(0) }
+        
+        // 标记是否已经通知过 SurfaceTexture
+        var surfaceTextureNotified by remember { mutableStateOf(false) }
 
         Box(
             modifier = Modifier
@@ -81,13 +85,20 @@ fun CameraPreviewGL(
             AndroidView(
                 factory = { ctx ->
                     CameraGLSurfaceView(ctx).apply {
-                        
-                        // CameraX SurfaceProvider 准备好时通知
-                        this.onSurfaceProviderReady = { surfaceProvider ->
-                            onSurfaceProviderReady(surfaceProvider)
+                        this.onSurfaceReady = { _ ->
+
+                            // SurfaceTexture 已经准备好，可以开始预览
+                            getSurfaceTexture()?.let { surfaceTexture ->
+                                setPreviewSize(previewSize.width, previewSize.height)
+                                if (!surfaceTextureNotified) {
+                                    surfaceTextureNotified = true
+                                    onSurfaceTextureReady(surfaceTexture)
+                                }
+                            }
                         }
                         
                         this.onSurfaceDestroyed = {
+                            surfaceTextureNotified = false
                             onSurfaceDestroyed()
                         }
                     }
@@ -95,6 +106,15 @@ fun CameraPreviewGL(
                 update = { glSurfaceView ->
                     viewWidth = glSurfaceView.width
                     viewHeight = glSurfaceView.height
+                    
+                    // 如果尺寸有变化且 SurfaceTexture 已准备好，重新通知
+                    if (viewWidth > 0 && viewHeight > 0 && !surfaceTextureNotified) {
+                        glSurfaceView.getSurfaceTexture()?.let { surfaceTexture ->
+                            glSurfaceView.setPreviewSize(previewSize.width, previewSize.height)
+                            surfaceTextureNotified = true
+                            onSurfaceTextureReady(surfaceTexture)
+                        }
+                    }
                     
                     // 更新 LUT 设置
                     if (currentLut != null) {

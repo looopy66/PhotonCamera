@@ -5,7 +5,6 @@
 * 多语言支持
 * 名字：Photon Camera,中文名光子相机
 * 支持切换摄像头
-    对于多后置摄像头的手机，需要查询物理 ID 列表，如果仍然只查询到 1 枚后置摄像头，使用设置 CaptureRequest.CONTROL_ZOOM_RATIO（Android 11+）或 SCALER_CROP_REGION 时进行变焦切换
 * 支持设置曝光补偿
 * 支持手动调整 ISO，快门
 * 曝光补偿，ISO，快门等调整模拟物理旋钮的操作手感

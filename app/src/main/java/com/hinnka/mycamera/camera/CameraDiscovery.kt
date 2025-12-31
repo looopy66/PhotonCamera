@@ -1,0 +1,389 @@
+package com.hinnka.mycamera.camera
+
+import android.content.Context
+import android.hardware.camera2.CameraAccessException
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.os.Build
+import android.util.Log
+import android.util.Range
+
+/**
+ * 相机发现器
+ * 
+ * 负责发现和枚举设备上的所有可用摄像头，包括：
+ * - 通过 CameraX intrinsicZoomRatio 识别广角/长焦
+ * - 通过暴力探测 Camera ID 0-5 发现隐藏的物理摄像头
+ * - 处理厂商特定的兼容性问题
+ */
+class CameraDiscovery(private val context: Context) {
+    
+    companion object {
+        private const val TAG = "CameraDiscovery"
+        
+        // 探测的最大 Camera ID
+        private const val MAX_PROBE_ID = 6
+        
+        // 需要跳过探测的厂商
+        private val SKIP_PROBE_MANUFACTURERS = setOf("huawei", "honor")
+        
+        // Vivo 需要跳过探测的机型
+        private val VIVO_SKIP_MODELS = setOf("V1914A", "V2023EA")
+    }
+    
+    private val cameraManager: CameraManager by lazy {
+        context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+    }
+    
+    // 缓存已发现的摄像头 ID 列表
+    private var cachedCameraIds: List<String>? = null
+
+    /**
+     * 发现所有可用的摄像头（不依赖 CameraX）
+     * 
+     * 纯粹使用 Camera2 API，包括：
+     * - 系统返回的摄像头
+     * - 通过暴力探测发现的隐藏摄像头
+     * 
+     * @return 摄像头信息列表，按类型分类
+     */
+    fun discoverAllCameras(): List<CameraInfo> {
+        val cameras = mutableListOf<CameraInfo>()
+        
+        // 获取完整的 Camera ID 列表（包括探测的隐藏摄像头）
+        val allCameraIds = getAllCameraIds()
+        Log.d(TAG, "Camera2 discovered IDs: $allCameraIds")
+        
+        // 构建摄像头信息
+        val backCameras = mutableListOf<CameraInfoWithZoom>()
+        var frontCamera: CameraInfo? = null
+        
+        for (cameraId in allCameraIds) {
+            try {
+                val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+                val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING) ?: continue
+                
+                // 计算 intrinsicZoomRatio
+                val intrinsicZoomRatio = calculateIntrinsicZoomRatio(cameraId, characteristics, lensFacing)
+                
+                val info = createCameraInfo(cameraId, characteristics, lensFacing, intrinsicZoomRatio)
+                
+                when (lensFacing) {
+                    CameraCharacteristics.LENS_FACING_BACK -> {
+                        backCameras.add(CameraInfoWithZoom(info, intrinsicZoomRatio))
+                    }
+                    CameraCharacteristics.LENS_FACING_FRONT -> {
+                        if (frontCamera == null) {
+                            frontCamera = info.copy(lensType = LensType.FRONT)
+                        }
+                    }
+                }
+                
+                Log.d(TAG, "Camera2: $cameraId: facing=$lensFacing, intrinsicZoom=$intrinsicZoomRatio")
+                
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to get camera $cameraId info", e)
+            }
+        }
+        
+        // 根据 intrinsicZoomRatio 分类后置摄像头
+        val classifiedBackCameras = classifyBackCameras(backCameras)
+        cameras.addAll(classifiedBackCameras)
+        
+        // 添加前置摄像头
+        frontCamera?.let { cameras.add(it) }
+        
+        Log.d(TAG, "Camera2 final list:")
+        cameras.forEach { cam ->
+            Log.d(TAG, "  - ${cam.cameraId}: ${cam.lensType}, intrinsicZoom=${cam.intrinsicZoomRatio}")
+        }
+        
+        return cameras
+    }
+
+    /**
+     * 获取所有 Camera ID，包括通过探测发现的隐藏摄像头
+     */
+    private fun getAllCameraIds(): List<String> {
+        // 使用缓存
+        cachedCameraIds?.let { return it }
+        
+        val systemCameraIds = try {
+            cameraManager.cameraIdList.toList()
+        } catch (e: CameraAccessException) {
+            Log.e(TAG, "Failed to get camera ID list", e)
+            emptyList()
+        }
+        
+        Log.d(TAG, "System camera IDs: $systemCameraIds")
+        
+        // 如果系统已经返回了足够多的摄像头，或者需要跳过探测，直接返回
+        if (systemCameraIds.size > 2 || shouldSkipProbing()) {
+            cachedCameraIds = systemCameraIds
+            return systemCameraIds
+        }
+        
+        // 探测隐藏的摄像头
+        val probedIds = probeCameraIds(systemCameraIds)
+        val allIds = (systemCameraIds + probedIds).distinct()
+        
+        Log.d(TAG, "After probing: $allIds (probed: $probedIds)")
+        
+        cachedCameraIds = allIds
+        return allIds
+    }
+    
+    /**
+     * 检查是否应该跳过摄像头探测
+     * 某些厂商的设备在探测不存在的摄像头时可能崩溃
+     */
+    private fun shouldSkipProbing(): Boolean {
+        val manufacturer = Build.MANUFACTURER.lowercase()
+        
+        // Huawei / Honor 跳过
+        if (SKIP_PROBE_MANUFACTURERS.any { manufacturer.contains(it) }) {
+            Log.d(TAG, "Skipping probe for manufacturer: $manufacturer")
+            return true
+        }
+        
+        // Vivo 特殊处理
+        if (manufacturer.contains("vivo")) {
+            // Android 10 及以下跳过
+            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
+                Log.d(TAG, "Skipping probe for Vivo on Android ${Build.VERSION.SDK_INT}")
+                return true
+            }
+            
+            // 特定机型跳过
+            if (VIVO_SKIP_MODELS.contains(Build.MODEL)) {
+                Log.d(TAG, "Skipping probe for Vivo model: ${Build.MODEL}")
+                return true
+            }
+        }
+        
+        return false
+    }
+    
+    /**
+     * 暴力探测摄像头 ID 0-5
+     * 某些设备的广角/长焦摄像头不会出现在系统 API 返回的列表中
+     */
+    private fun probeCameraIds(existingIds: List<String>): List<String> {
+        val existingSet = existingIds.toSet()
+        val foundIds = mutableListOf<String>()
+        
+        for (id in 0 until MAX_PROBE_ID) {
+            val cameraId = id.toString()
+            
+            if (existingSet.contains(cameraId)) {
+                continue
+            }
+            
+            try {
+                val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+                val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING)
+                
+                if (lensFacing != null) {
+                    // 计算 intrinsicZoomRatio 来判断是否是有意义的摄像头
+                    val intrinsicZoomRatio = calculateIntrinsicZoomRatio(cameraId, characteristics, lensFacing)
+                    
+                    // 只有 intrinsicZoomRatio != 1.0 的才是广角/长焦
+                    if (intrinsicZoomRatio != 1f) {
+                        Log.d(TAG, "Probed camera $cameraId: intrinsicZoom=$intrinsicZoomRatio")
+                        foundIds.add(cameraId)
+                    } else {
+                        Log.d(TAG, "Probed camera $cameraId: skipped (intrinsicZoom=1.0)")
+                    }
+                }
+            } catch (e: Exception) {
+                // 该 ID 不存在或无法访问，忽略
+                Log.v(TAG, "Probe camera $cameraId failed: ${e.message}")
+            }
+        }
+        
+        return foundIds
+    }
+    
+    /**
+     * 计算摄像头的固有变焦比例
+     * 
+     * intrinsicZoomRatio = 设备默认视角 / 该摄像头视角
+     * 
+     * - 主摄返回 ~1.0
+     * - 广角返回 < 1.0 (如 0.5, 0.6)
+     * - 长焦返回 > 1.0 (如 2.0, 3.0)
+     */
+    private fun calculateIntrinsicZoomRatio(
+        cameraId: String,
+        characteristics: CameraCharacteristics,
+        lensFacing: Int
+    ): Float {
+        try {
+            // 获取该摄像头的视角
+            val focalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+            val sensorSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+            
+            if (focalLengths == null || focalLengths.isEmpty() || sensorSize == null) {
+                return 1f
+            }
+            
+            val focalLength = focalLengths.first()
+            val viewAngle = focalLengthToViewAngle(focalLength, sensorSize.width)
+            
+            // 获取设备默认视角（主摄视角）
+            val defaultViewAngle = getDefaultViewAngle(lensFacing)
+            
+            if (viewAngle <= 0 || defaultViewAngle <= 0) {
+                return 1f
+            }
+            
+            return defaultViewAngle / viewAngle
+            
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to calculate intrinsicZoomRatio for camera $cameraId", e)
+            return 1f
+        }
+    }
+    
+    /**
+     * 获取设备默认视角（主摄视角）
+     */
+    private fun getDefaultViewAngle(lensFacing: Int): Float {
+        try {
+            for (cameraId in cameraManager.cameraIdList) {
+                val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+                val facing = characteristics.get(CameraCharacteristics.LENS_FACING) ?: continue
+                
+                if (facing != lensFacing) continue
+                
+                val focalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                val sensorSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                
+                if (focalLengths != null && focalLengths.isNotEmpty() && sensorSize != null) {
+                    return focalLengthToViewAngle(focalLengths.first(), sensorSize.width)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to get default view angle", e)
+        }
+        
+        return 0f
+    }
+    
+    /**
+     * 焦距转视角（度）
+     * viewAngle = 2 * atan(sensorWidth / (2 * focalLength))
+     */
+    private fun focalLengthToViewAngle(focalLength: Float, sensorWidth: Float): Float {
+        if (focalLength <= 0 || sensorWidth <= 0) return 0f
+        return Math.toDegrees(2 * kotlin.math.atan((sensorWidth / (2 * focalLength)).toDouble())).toFloat()
+    }
+    
+    /**
+     * 根据 intrinsicZoomRatio 分类后置摄像头
+     */
+    private fun classifyBackCameras(cameras: List<CameraInfoWithZoom>): List<CameraInfo> {
+        if (cameras.isEmpty()) return emptyList()
+        if (cameras.size == 1) {
+            return listOf(cameras.first().info.copy(lensType = LensType.BACK_MAIN))
+        }
+        
+        // 按 intrinsicZoomRatio 排序
+        val sorted = cameras.sortedBy { it.intrinsicZoomRatio }
+        
+        // 找到最接近 1.0 的作为主摄
+        val mainCameraIndex = sorted.indices.minByOrNull { kotlin.math.abs(sorted[it].intrinsicZoomRatio - 1f) } ?: 0
+        
+        return sorted.mapIndexed { index, camera ->
+            val lensType = when {
+                index < mainCameraIndex -> LensType.BACK_ULTRA_WIDE  // 小于主摄的是广角
+                index > mainCameraIndex -> LensType.BACK_TELEPHOTO   // 大于主摄的是长焦
+                else -> LensType.BACK_MAIN
+            }
+            camera.info.copy(lensType = lensType)
+        }
+    }
+    
+    /**
+     * 创建 CameraInfo
+     */
+    private fun createCameraInfo(
+        cameraId: String,
+        characteristics: CameraCharacteristics,
+        lensFacing: Int,
+        intrinsicZoomRatio: Float
+    ): CameraInfo {
+        // 焦距信息
+        val focalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+        val focalLength = focalLengths?.firstOrNull() ?: 0f
+        
+        // 计算 35mm 等效焦距
+        val sensorSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+        val focalLength35mm = if (sensorSize != null && focalLength > 0) {
+            focalLength * (36f / sensorSize.width)
+        } else {
+            0f
+        }
+        
+        // ISO 范围
+        val isoRange = characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+        
+        // 曝光时间范围
+        val exposureTimeRange = characteristics.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+        
+        // 曝光补偿范围
+        val exposureCompensationRange = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
+            ?: Range(0, 0)
+        
+        // 曝光补偿步长
+        val exposureCompensationStep = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0f
+        
+        // 最大数字变焦
+        val maxZoom = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
+        
+        // 传感器方向
+        val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        
+        // 活动区域大小
+        val activeArraySize = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+        
+        return CameraInfo(
+            cameraId = cameraId,
+            lensFacing = lensFacing,
+            lensType = LensType.BACK_MAIN, // 临时，后续分类
+            physicalCameraIds = emptyList(),
+            isoRange = isoRange,
+            exposureTimeRange = exposureTimeRange,
+            exposureCompensationRange = exposureCompensationRange,
+            exposureCompensationStep = exposureCompensationStep,
+            maxZoom = maxZoom,
+            minZoom = 1f,
+            sensorOrientation = sensorOrientation,
+            activeArraySize = activeArraySize,
+            focalLength = focalLength,
+            focalLength35mmEquivalent = focalLength35mm,
+            zoomSteps = listOf(1f),
+            intrinsicZoomRatio = intrinsicZoomRatio
+        )
+    }
+    
+    /**
+     * 清除缓存
+     */
+    fun clearCache() {
+        cachedCameraIds = null
+    }
+    
+    // 内部数据类
+    private data class CameraXInfo(
+        val cameraId: String,
+        val intrinsicZoomRatio: Float,
+        val minZoom: Float,
+        val maxZoom: Float
+    )
+    
+    private data class CameraInfoWithZoom(
+        val info: CameraInfo,
+        val intrinsicZoomRatio: Float
+    )
+}

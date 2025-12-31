@@ -5,13 +5,9 @@ import android.graphics.SurfaceTexture
 import android.opengl.GLSurfaceView
 import android.util.AttributeSet
 import android.util.Log
-import android.util.Size
 import android.view.Surface
-import androidx.camera.core.Preview
-import androidx.camera.core.SurfaceRequest
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutRenderer
-import java.util.concurrent.Executor
 
 /**
  * 相机预览 GLSurfaceView
@@ -22,25 +18,17 @@ import java.util.concurrent.Executor
 class CameraGLSurfaceView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
-) : GLSurfaceView(context, attrs), Preview.SurfaceProvider {
+) : GLSurfaceView(context, attrs) {
     
     companion object {
         private const val TAG = "CameraGLSurfaceView"
     }
     
     private val renderer: LutRenderer = LutRenderer()
-    
-    // 回调 - 保留用于兼容（已弃用）
-    @Deprecated("Use getSurfaceProvider() instead")
+
     var onSurfaceReady: ((Surface) -> Unit)? = null
     var onSurfaceDestroyed: (() -> Unit)? = null
-    
-    // CameraX SurfaceProvider 相关
-    private var currentSurfaceRequest: SurfaceRequest? = null
     private var currentSurface: Surface? = null
-    
-    // SurfaceProvider 可用回调
-    var onSurfaceProviderReady: ((Preview.SurfaceProvider) -> Unit)? = null
     
     init {
         // 设置 OpenGL ES 3.0
@@ -59,10 +47,6 @@ class CameraGLSurfaceView @JvmOverloads constructor(
             
             // 通知 SurfaceProvider 已准备好
             post {
-                onSurfaceProviderReady?.invoke(this)
-                
-                // 兼容旧接口
-                @Suppress("DEPRECATION")
                 onSurfaceReady?.invoke(currentSurface!!)
             }
         }
@@ -77,72 +61,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         
         Log.d(TAG, "CameraGLSurfaceView initialized")
     }
-    
-    /**
-     * CameraX Preview.SurfaceProvider 接口实现
-     * 
-     * 当 CameraX 需要 Surface 时会调用此方法
-     */
-    override fun onSurfaceRequested(request: SurfaceRequest) {
-        Log.d(TAG, "onSurfaceRequested: ${request.resolution}")
-        
-        // 保存当前请求
-        currentSurfaceRequest = request
-        
-        // 更新预览尺寸
-        val resolution = request.resolution
-        queueEvent {
-            renderer.setPreviewSize(resolution.width, resolution.height)
-        }
-        
-        // 等待 Surface 准备好
-        val surface = currentSurface
-        if (surface != null) {
-            // Surface 已准备好，提供给 CameraX
-            request.provideSurface(surface, { runnable -> post(runnable) }) { result ->
-                Log.d(TAG, "Surface result: ${result.resultCode}")
-                when (result.resultCode) {
-                    SurfaceRequest.Result.RESULT_SURFACE_USED_SUCCESSFULLY -> {
-                        Log.d(TAG, "Surface used successfully")
-                    }
-                    SurfaceRequest.Result.RESULT_REQUEST_CANCELLED -> {
-                        Log.d(TAG, "Surface request cancelled")
-                    }
-                    SurfaceRequest.Result.RESULT_INVALID_SURFACE -> {
-                        Log.e(TAG, "Invalid surface")
-                    }
-                    else -> {
-                        Log.w(TAG, "Unknown result code: ${result.resultCode}")
-                    }
-                }
-            }
-        } else {
-            // Surface 还没准备好，等待渲染器回调
-            Log.d(TAG, "Surface not ready yet, waiting...")
-            renderer.onSurfaceTextureAvailable = { surfaceTexture ->
-                currentSurface = Surface(surfaceTexture)
-                
-                // 提供 Surface 给 CameraX
-                request.provideSurface(currentSurface!!, { runnable -> post(runnable) }) { result ->
-                    Log.d(TAG, "Surface result (delayed): ${result.resultCode}")
-                }
-                
-                // 通知 SurfaceProvider 已准备好
-                post {
-                    onSurfaceProviderReady?.invoke(this)
-                    
-                    @Suppress("DEPRECATION")
-                    onSurfaceReady?.invoke(currentSurface!!)
-                }
-            }
-        }
-    }
-    
-    /**
-     * 获取 SurfaceProvider（用于 CameraX 绑定）
-     */
-    fun getSurfaceProvider(): Preview.SurfaceProvider = this
-    
+
     /**
      * 设置预览尺寸
      */
@@ -224,7 +143,6 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         // 释放 Surface
         currentSurface?.release()
         currentSurface = null
-        currentSurfaceRequest = null
         
         // 在 GL 线程中释放资源
         queueEvent {

@@ -1,8 +1,7 @@
 package com.hinnka.mycamera.ui.camera
 
+import android.graphics.SurfaceTexture
 import android.util.Log
-import android.view.Surface
-import androidx.camera.core.Preview
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
@@ -20,17 +19,18 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.layout
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.application
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.hinnka.mycamera.camera.CameraState
-import com.hinnka.mycamera.ui.components.ZoomStepSelector
+import com.hinnka.mycamera.camera.CameraUtils
+import com.hinnka.mycamera.camera.LensType
+import com.hinnka.mycamera.ui.components.BackCameraSelector
 import com.hinnka.mycamera.ui.components.LutControlPanel
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import kotlin.math.abs
@@ -51,25 +51,20 @@ fun CameraScreen(
     viewModel: CameraViewModel,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val state by viewModel.state.collectAsState()
-    val lifecycleOwner = LocalLifecycleOwner.current
-
-    var surfaceProvider by remember { mutableStateOf<Preview.SurfaceProvider?>(null) }
     
-    // 当 surfaceProvider 准备好时绑定相机
-    LaunchedEffect(surfaceProvider) {
-        surfaceProvider?.let {
-            viewModel.bindCamera(lifecycleOwner, it)
-        }
-    }
+    // 标记相机是否已打开
+    var cameraOpened by remember { mutableStateOf(false) }
     
     // 从后台返回时检查并恢复相机
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
-        // 只有在 surfaceProvider 已经存在时才检查恢复
-        if (surfaceProvider != null) {
+        if (cameraOpened) {
             viewModel.checkAndRecoverCamera()
         }
     }
+
+    val previewSize = CameraUtils.getFixedPreviewSize(context, state.currentCameraId)
     
     Box(
         modifier = modifier
@@ -79,17 +74,19 @@ fun CameraScreen(
         // 相机预览
         CameraPreviewGL(
             aspectRatio = state.aspectRatio,
+            previewSize = previewSize,
             currentLut = viewModel.currentLutConfig,
             lutIntensity = state.lutIntensity,
             focusPoint = state.focusPoint,
             isFocusing = state.isFocusing,
             focusSuccess = state.focusSuccess,
-            onSurfaceProviderReady = { provider ->
-                surfaceProvider = provider
+            onSurfaceTextureReady = { surfaceTexture ->
+                viewModel.openCamera(surfaceTexture)
+                cameraOpened = true
             },
             onSurfaceDestroyed = { 
                 viewModel.closeCamera()
-                surfaceProvider = null
+                cameraOpened = false
             },
             onTap = { x, y, w, h ->
                 viewModel.focusOnPoint(x, y, w, h)
@@ -97,19 +94,21 @@ fun CameraScreen(
             modifier = Modifier.fillMaxSize()
         )
         
-        // 变焦档位选择器（显示在预览上方）
-        val zoomSteps = viewModel.getZoomSteps()
-        if (zoomSteps.size > 1 && !viewModel.isLandscape) {
+        // 后置摄像头选择器（只有多个后置摄像头时显示）
+        val backCameras = viewModel.getBackCameras()
+        if (backCameras.size > 1 && state.currentLensType != LensType.FRONT) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 80.dp),
+                    .padding(top = if (viewModel.isLandscape) 16.dp else 80.dp),
                 contentAlignment = Alignment.TopCenter
             ) {
-                ZoomStepSelector(
-                    zoomSteps = zoomSteps,
-                    currentZoom = state.zoomRatio,
-                    onZoomSelected = { viewModel.setZoomStep(it) }
+                BackCameraSelector(
+                    backCameras = backCameras,
+                    currentLensType = state.currentLensType,
+                    onLensSelected = { lensType ->
+                        viewModel.switchToLens(lensType)
+                    }
                 )
             }
         }
@@ -259,12 +258,14 @@ fun LandscapeControlsContent(
                 .fillMaxHeight(),
             contentAlignment = Alignment.Center
         ) {
-            val zoomSteps = viewModel.getZoomSteps()
-            if (zoomSteps.size > 1) {
-                ZoomStepSelector(
-                    zoomSteps = zoomSteps,
-                    currentZoom = state.zoomRatio,
-                    onZoomSelected = { viewModel.setZoomStep(it) }
+            val backCameras = viewModel.getBackCameras()
+            if (backCameras.size > 1 && state.currentLensType != LensType.FRONT) {
+                BackCameraSelector(
+                    backCameras = backCameras,
+                    currentLensType = state.currentLensType,
+                    onLensSelected = { lensType ->
+                        viewModel.switchToLens(lensType)
+                    }
                 )
             }
         }

@@ -53,7 +53,8 @@ data class CameraInfo(
     val activeArraySize: Rect?,
     val focalLength: Float = 0f,  // 物理焦距 (mm)
     val focalLength35mmEquivalent: Float = 0f,  // 35mm等效焦距
-    val zoomSteps: List<Float> = listOf(1f)  // 可用的变焦档位 (如 [0.5, 1.0, 2.0])
+    val zoomSteps: List<Float> = listOf(1f),  // 可用的变焦档位 (如 [0.5, 1.0, 2.0])
+    val intrinsicZoomRatio: Float = 1f  // 固有变焦比例 (CameraX 1.3.0+)
 ) {
     /**
      * 获取镜头类型显示名称
