@@ -43,9 +43,8 @@ object ExifWriter {
             exif.setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, dateTime)
             
             // ========== 图像方向 ==========
-            // 由于我们在 Camera2 拍照时已经设置了 JPEG_ORIENTATION，
-            // 硬件返回的图片字节流已经旋转到正确方向，
-            // 所以 EXIF 中的方向标志应设为 NORMAL (1)，避免查看器进行二次旋转。
+            // 由于我们在保存前已经物理旋转了图片字节流（归一化），
+            // 此时图片已经是正的，所以 EXIF 方向标志必须设为 NORMAL (1)。
             exif.setAttribute(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL.toString())
             
             // ========== 图像尺寸 ==========

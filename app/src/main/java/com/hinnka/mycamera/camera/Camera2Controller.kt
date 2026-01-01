@@ -1,6 +1,5 @@
 package com.hinnka.mycamera.camera
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.ImageFormat
@@ -9,17 +8,17 @@ import android.hardware.camera2.*
 import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.SessionConfiguration
 import android.media.ImageReader
-import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
-import android.util.Range
 import android.util.Size
 import android.view.Surface
-import androidx.annotation.RequiresPermission
+import androidx.exifinterface.media.ExifInterface
+import com.hinnka.mycamera.utils.BitmapUtils
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.io.ByteArrayInputStream
 import java.util.concurrent.Executors
 
 /**
@@ -147,17 +146,34 @@ class Camera2Controller(private val context: Context) {
                     val image = reader.acquireLatestImage()
                     image?.let {
                         val buffer = it.planes[0].buffer
-                        val bytes = ByteArray(buffer.remaining())
-                        buffer.get(bytes)
-                        val width = it.width
-                        val height = it.height
+                        var width = it.width
+                        var height = it.height
+                        val bytes = ByteArray(buffer.remaining()).also { buffer.get(it) }
                         it.close()
-                        
+
+                        val orientation = try {
+                            val exif = ExifInterface(ByteArrayInputStream(bytes))
+                            exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+                        } catch (e: Exception) {
+                            ExifInterface.ORIENTATION_NORMAL
+                        }
+
+                        // 0. 在源头归一化：物理旋转图片字节流
+                        val normalizedBytes = BitmapUtils.normalizeJpegOrientation(bytes, orientation)
+
+                        if (orientation == ExifInterface.ORIENTATION_ROTATE_90 ||
+                            orientation == ExifInterface.ORIENTATION_ROTATE_270) {
+                            // 交换宽高
+                            val temp = width
+                            width = height
+                            height = temp
+                        }
+
                         // 构建 CaptureInfo
                         val captureInfo = buildCaptureInfo(lastCaptureResult, width, height)
                         
                         _state.value = _state.value.copy(isCapturing = false)
-                        onImageCaptured?.invoke(bytes, captureInfo)
+                        onImageCaptured?.invoke(normalizedBytes, captureInfo)
                     }
                 }, cameraHandler)
             }
@@ -707,7 +723,9 @@ class Camera2Controller(private val context: Context) {
             focalLength35mm = focalLength35mm,
             whiteBalance = whiteBalance,
             flashState = flashState,
-            orientation = getJpegOrientation(),
+            // 由于我们在 setOnImageAvailableListener 中已经对 bytes 进行了归一化，
+            // 传给下游的方向永远是 NORMAL (1)
+            orientation = ExifInterface.ORIENTATION_NORMAL,
             imageWidth = imageWidth,
             imageHeight = imageHeight,
             captureTime = System.currentTimeMillis()
