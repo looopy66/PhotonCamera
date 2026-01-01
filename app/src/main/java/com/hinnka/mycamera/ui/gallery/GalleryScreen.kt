@@ -295,7 +295,7 @@ private fun PhotoGridItem(
             model = ImageRequest.Builder(context)
                 .data(photo.thumbnailUri)
                 .crossfade(true)
-                .transformations(viewModel.getLutTransformation(photo.metadata))
+                .transformations(viewModel.getPhotoTransformation(photo.metadata))
                 .build(),
             contentDescription = photo.displayName,
             contentScale = ContentScale.Crop,

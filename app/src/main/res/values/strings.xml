@@ -51,4 +51,10 @@
     <string name="intensity">Intensity</string>
     <string name="original">Original</string>
     <string name="export_confirm">Export photo with LUT applied?</string>
+    
+    <!-- Frame Watermark -->
+    <string name="frame">Frame</string>
+    <string name="none">None</string>
+    <string name="show_app_branding">Show App Branding</string>
+    <string name="export_with_frame_confirm">Export photo with frame watermark?</string>
 </resources>

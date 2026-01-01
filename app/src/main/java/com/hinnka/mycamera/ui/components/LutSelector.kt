@@ -274,3 +274,241 @@ fun LutControlPanel(
         }
     }
 }
+
+/**
+ * 完整编辑控制面板
+ * 
+ * 包含 LUT 和边框选择器
+ */
+@Composable
+fun EditControlPanel(
+    // LUT 相关
+    availableLuts: List<LutInfo>,
+    currentLutId: String?,
+    lutIntensity: Float,
+    onLutSelected: (String?) -> Unit,
+    onIntensityChange: (Float) -> Unit,
+    // 边框相关
+    availableFrames: List<com.hinnka.mycamera.frame.FrameInfo>,
+    currentFrameId: String?,
+    showAppBranding: Boolean,
+    onFrameSelected: (String?) -> Unit,
+    onBrandingToggle: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(
+                Color.Black.copy(alpha = 0.7f),
+                RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
+            )
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // 滤镜标题
+        Text(
+            text = "滤镜",
+            color = Color.White,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold
+        )
+        
+        // LUT 选择器
+        LutSelector(
+            availableLuts = availableLuts,
+            currentLutId = currentLutId,
+            onLutSelected = onLutSelected
+        )
+        
+        // 强度滑块（仅当选择了 LUT 时显示）
+        if (currentLutId != null) {
+            LutIntensitySlider(
+                intensity = lutIntensity,
+                onIntensityChange = onIntensityChange,
+                enabled = true
+            )
+        }
+        
+        Spacer(modifier = Modifier.height(8.dp))
+        
+        // 边框标题
+        Text(
+            text = "边框",
+            color = Color.White,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold
+        )
+        
+        // 边框选择器
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // "无边框" 选项
+            FrameItem(
+                name = "无",
+                isSelected = currentFrameId == null,
+                onClick = { onFrameSelected(null) },
+                isNone = true
+            )
+            
+            // 边框列表
+            availableFrames.forEach { frame ->
+                FrameItem(
+                    name = frame.name,
+                    isSelected = currentFrameId == frame.id,
+                    onClick = { onFrameSelected(frame.id) }
+                )
+            }
+        }
+        
+        // App 品牌开关（仅当选择了边框时显示）
+        if (currentFrameId != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Color.Black.copy(alpha = 0.6f),
+                        RoundedCornerShape(8.dp)
+                    )
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "显示 App 品牌",
+                    color = Color.White,
+                    fontSize = 12.sp
+                )
+                
+                androidx.compose.material3.Switch(
+                    checked = showAppBranding,
+                    onCheckedChange = onBrandingToggle,
+                    colors = androidx.compose.material3.SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = Color.White.copy(alpha = 0.5f),
+                        uncheckedThumbColor = Color.Gray,
+                        uncheckedTrackColor = Color.Gray.copy(alpha = 0.3f)
+                    )
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 单个边框选项
+ */
+@Composable
+private fun FrameItem(
+    name: String,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    isNone: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    val backgroundColor = if (isSelected) {
+        Color.White.copy(alpha = 0.3f)
+    } else {
+        Color.Black.copy(alpha = 0.5f)
+    }
+    
+    val borderColor = if (isSelected) {
+        Color.White
+    } else {
+        Color.Gray.copy(alpha = 0.5f)
+    }
+    
+    Column(
+        modifier = modifier
+            .width(72.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(backgroundColor)
+            .border(
+                width = if (isSelected) 2.dp else 1.dp,
+                color = borderColor,
+                shape = RoundedCornerShape(8.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        // 预览区域
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(if (isNone) Color.DarkGray else Color.White.copy(alpha = 0.2f))
+                .then(
+                    if (!isNone) {
+                        Modifier.border(
+                            width = 2.dp,
+                            color = Color.White.copy(alpha = 0.5f),
+                            shape = RoundedCornerShape(4.dp)
+                        )
+                    } else Modifier
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isNone) {
+                Icon(
+                    imageVector = Icons.Default.FilterNone,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.7f),
+                    modifier = Modifier.size(24.dp)
+                )
+            } else {
+                // 模拟边框预览
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(4.dp)
+                        .background(Color.Gray.copy(alpha = 0.5f))
+                )
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(12.dp)
+                        .background(Color.White.copy(alpha = 0.8f))
+                )
+            }
+            
+            if (isSelected) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.4f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = "Selected",
+                        tint = Color.White,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+        }
+        
+        Spacer(modifier = Modifier.height(4.dp))
+        
+        // 名称
+        Text(
+            text = name,
+            color = Color.White,
+            fontSize = 10.sp,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+

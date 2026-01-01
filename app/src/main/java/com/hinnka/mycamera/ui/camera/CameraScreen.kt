@@ -30,7 +30,7 @@ import com.hinnka.mycamera.camera.CameraUtils
 import com.hinnka.mycamera.camera.LensType
 import com.hinnka.mycamera.ui.components.BackCameraSelector
 import com.hinnka.mycamera.ui.components.GalleryThumbnail
-import com.hinnka.mycamera.ui.components.LutControlPanel
+import com.hinnka.mycamera.ui.components.EditControlPanel
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlin.math.abs
@@ -271,12 +271,17 @@ fun LandscapeControlsContent(
                         modifier = Modifier.fillMaxSize()
                     )
                 } else if (activePanel == ActivePanel.FILTERS) {
-                    LutControlPanel(
+                    EditControlPanel(
                         availableLuts = viewModel.availableLutList,
                         currentLutId = viewModel.currentLutId,
                         lutIntensity = state.lutIntensity,
                         onLutSelected = { viewModel.setLut(it) },
                         onIntensityChange = { viewModel.setLutIntensity(it) },
+                        availableFrames = viewModel.availableFrameList,
+                        currentFrameId = viewModel.currentFrameId,
+                        showAppBranding = viewModel.currentShowAppBranding,
+                        onFrameSelected = { viewModel.setFrame(it) },
+                        onBrandingToggle = { viewModel.setShowAppBranding(it) },
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -424,12 +429,17 @@ fun PortraitControls(
                     onAutoExposureToggle = onAutoExposureToggle
                 )
             } else if (activePanel == ActivePanel.FILTERS) {
-                LutControlPanel(
+                EditControlPanel(
                     availableLuts = viewModel.availableLutList,
                     currentLutId = viewModel.currentLutId,
                     lutIntensity = state.lutIntensity,
                     onLutSelected = { viewModel.setLut(it) },
-                    onIntensityChange = { viewModel.setLutIntensity(it) }
+                    onIntensityChange = { viewModel.setLutIntensity(it) },
+                    availableFrames = viewModel.availableFrameList,
+                    currentFrameId = viewModel.currentFrameId,
+                    showAppBranding = viewModel.currentShowAppBranding,
+                    onFrameSelected = { viewModel.setFrame(it) },
+                    onBrandingToggle = { viewModel.setShowAppBranding(it) }
                 )
             }
         }

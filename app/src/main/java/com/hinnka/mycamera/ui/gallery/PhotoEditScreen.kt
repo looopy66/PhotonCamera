@@ -69,8 +69,12 @@ fun PhotoEditScreen(
     // 预览 Bitmap 状态
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
     
+    // 边框编辑状态
+    val editFrameId = viewModel.editFrameId
+    val editShowAppBranding = viewModel.editShowAppBranding
+    
     // 当编辑参数变化时更新预览
-    LaunchedEffect(currentPhoto, editLutId, editLutConfig, editLutIntensity, rotation, brightness) {
+    LaunchedEffect(currentPhoto, editLutId, editLutConfig, editLutIntensity, rotation, brightness, editFrameId, editShowAppBranding) {
         if (currentPhoto == null) return@LaunchedEffect
         
         isLoadingPreview = true
@@ -291,6 +295,69 @@ fun PhotoEditScreen(
                                 color = Color.White.copy(alpha = 0.7f),
                                 fontSize = 12.sp,
                                 modifier = Modifier.width(40.dp)
+                            )
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    // 边框水印选择器
+                    Text(
+                        text = stringResource(R.string.frame),
+                        color = Color.White,
+                        fontSize = 16.sp
+                    )
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    val availableFrames = viewModel.availableFrames
+                    
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // 无边框选项
+                        item {
+                            LutOption(
+                                name = stringResource(R.string.none),
+                                isSelected = editFrameId == null,
+                                onClick = { viewModel.setEditFrame(null) }
+                            )
+                        }
+                        
+                        // 边框选项
+                        items(availableFrames) { frame ->
+                            LutOption(
+                                name = frame.name,
+                                isSelected = editFrameId == frame.id,
+                                onClick = { viewModel.setEditFrame(frame.id) }
+                            )
+                        }
+                    }
+                    
+                    // App 品牌开关（仅当选择了边框时显示）
+                    if (editFrameId != null) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = stringResource(R.string.show_app_branding),
+                                color = Color.White,
+                                fontSize = 14.sp
+                            )
+                            
+                            Switch(
+                                checked = editShowAppBranding,
+                                onCheckedChange = { viewModel.setShowAppBranding(it) },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = AccentOrange,
+                                    checkedTrackColor = AccentOrange.copy(alpha = 0.5f),
+                                    uncheckedThumbColor = Color.Gray,
+                                    uncheckedTrackColor = Color.Gray.copy(alpha = 0.3f)
+                                )
                             )
                         }
                     }

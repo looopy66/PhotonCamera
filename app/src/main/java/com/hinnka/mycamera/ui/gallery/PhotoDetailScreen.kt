@@ -313,7 +313,7 @@ private fun ZoomableImage(
             model = ImageRequest.Builder(context)
                 .data(photo.uri)
                 .crossfade(true)
-                .transformations(viewModel.getLutTransformation(photo.metadata))
+                .transformations(viewModel.getPhotoTransformation(photo.metadata))
                 .build(),
             contentDescription = photo.displayName,
             contentScale = ContentScale.Fit,

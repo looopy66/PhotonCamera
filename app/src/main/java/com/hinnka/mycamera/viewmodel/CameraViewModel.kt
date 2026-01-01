@@ -16,6 +16,10 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.Camera2Controller
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.LensType
+import com.hinnka.mycamera.frame.ExifMetadata
+import com.hinnka.mycamera.frame.FrameInfo
+import com.hinnka.mycamera.frame.FrameManager
+import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.gallery.PhotoMetadata
 import com.hinnka.mycamera.gallery.PhotoManager
 import com.hinnka.mycamera.lut.LutConfig
@@ -50,6 +54,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val lutManager = LutManager(application)
     private val lutImageProcessor = LutImageProcessor()
     
+    // 边框管理器
+    private val frameManager = FrameManager(application)
+    private val frameRenderer = FrameRenderer(application)
+    
     val state: StateFlow<CameraState> = cameraController.state
     
     // 照片保存完成事件
@@ -64,6 +72,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         private set
     
     var availableLutList: List<LutInfo> by mutableStateOf(emptyList())
+        private set
+    
+    // 边框相关状态
+    var currentFrameId: String? by mutableStateOf(null)
+        private set
+    
+    var currentShowAppBranding by mutableStateOf(true)
+        private set
+    
+    var availableFrameList: List<FrameInfo> by mutableStateOf(emptyList())
         private set
 
     // 存储是否为横屏模式
@@ -118,6 +136,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 初始化 LUT 管理器
         lutManager.initialize()
         availableLutList = lutManager.getAvailableLuts()
+        
+        // 初始化边框管理器
+        frameManager.initialize()
+        availableFrameList = frameManager.getAvailableFrames()
     }
     
     /**
@@ -320,6 +342,22 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         lutManager.preloadLut(id)
     }
     
+    // ==================== 边框相关方法 ====================
+    
+    /**
+     * 设置当前边框
+     */
+    fun setFrame(frameId: String?) {
+        currentFrameId = frameId
+    }
+    
+    /**
+     * 设置是否显示 App 品牌
+     */
+    fun setShowAppBranding(show: Boolean) {
+        currentShowAppBranding = show
+    }
+    
     /**
      * 保存图片
      */
@@ -331,11 +369,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val lutIntensityToSave = state.value.lutIntensity
         val lutConfigToSave = currentLutConfig
         
+        // 保存当前边框信息用于元数据
+        val frameIdToSave = currentFrameId
+        val showAppBrandingToSave = currentShowAppBranding
+        
         try {
-            // 保存 LUT 元数据到应用私有目录
+            // 保存 LUT 和边框元数据到应用私有目录
             val metadata = PhotoMetadata(
                 lutId = lutIdToSave,
-                lutIntensity = lutIntensityToSave
+                lutIntensity = lutIntensityToSave,
+                frameId = frameIdToSave,
+                showAppBranding = showAppBrandingToSave
             )
             
             // 生成预览图/缩略图源（缩小比例以提高性能）
@@ -343,17 +387,32 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 val options = android.graphics.BitmapFactory.Options().apply {
                     inSampleSize = 4 // 缩小比例，减小内存占用和处理时间
                 }
-                val bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+                var bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
                 if (bitmap != null) {
-                    // 如果有 LUT，在此处应用，此预览图将作为 baked preview 保存
-                    val processed = if (lutIdToSave != null && lutConfigToSave != null) {
+                    // 如果有 LUT，应用 LUT
+                    if (lutIdToSave != null && lutConfigToSave != null) {
                         val result = lutImageProcessor.applyLut(bitmap, lutConfigToSave, lutIntensityToSave)
                         if (result != bitmap) bitmap.recycle()
-                        result
-                    } else {
-                        bitmap
+                        bitmap = result
                     }
-                    processed
+                    
+                    // 如果有边框，应用边框
+                    if (frameIdToSave != null) {
+                        val template = frameManager.loadTemplate(frameIdToSave)
+                        if (template != null) {
+                            val exifMetadata = ExifMetadata.createDefault(bitmap.width, bitmap.height)
+                            val framedBitmap = frameRenderer.render(
+                                bitmap,
+                                template,
+                                exifMetadata,
+                                showAppBrandingToSave
+                            )
+                            if (framedBitmap != bitmap) bitmap.recycle()
+                            bitmap = framedBitmap
+                        }
+                    }
+                    
+                    bitmap
                 } else null
             }
             
@@ -363,7 +422,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             previewBitmap?.recycle()
             
             if (photoId != null) {
-                Log.d(TAG, "Image saved to private storage: $photoId, LUT: $lutIdToSave, Intensity: $lutIntensityToSave")
+                Log.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
                 _imageSavedEvent.emit(Unit)
             } else {
                 Log.e(TAG, "Failed to save image via PhotoManager")
@@ -378,5 +437,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.release()
         lutManager.clearCache()
         lutImageProcessor.release()
+        frameManager.clearCache()
     }
 }

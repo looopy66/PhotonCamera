@@ -52,4 +52,10 @@
     <string name="intensity">强度</string>
     <string name="original">原图</string>
     <string name="export_confirm">导出应用滤镜后的照片？</string>
+    
+    <!-- Frame Watermark -->
+    <string name="frame">边框</string>
+    <string name="none">无</string>
+    <string name="show_app_branding">显示 App 品牌</string>
+    <string name="export_with_frame_confirm">导出带边框水印的照片？</string>
 </resources>

@@ -12,14 +12,17 @@ import java.io.File
 /**
  * 照片编辑元数据
  * 
- * 保存 LUT 和编辑信息，用于非破坏性编辑
+ * 保存 LUT、边框水印和编辑信息，用于非破坏性编辑
  */
 data class PhotoMetadata(
-    val version: Int = 1,
+    val version: Int = 2,
     val lutId: String? = null,
     val lutIntensity: Float = 1f,
     val brightness: Float = 1f,
-    val rotation: Float = 0f
+    val rotation: Float = 0f,
+    // 边框水印配置
+    val frameId: String? = null,
+    val showAppBranding: Boolean = true
 ) {
     fun toJson(): String {
         return JSONObject().apply {
@@ -28,6 +31,8 @@ data class PhotoMetadata(
             put("lutIntensity", lutIntensity.toDouble())
             put("brightness", brightness.toDouble())
             put("rotation", rotation.toDouble())
+            put("frameId", frameId ?: JSONObject.NULL)
+            put("showAppBranding", showAppBranding)
         }.toString(2)
     }
     
@@ -40,7 +45,9 @@ data class PhotoMetadata(
                     lutId = if (obj.isNull("lutId")) null else obj.optString("lutId"),
                     lutIntensity = obj.optDouble("lutIntensity", 1.0).toFloat(),
                     brightness = obj.optDouble("brightness", 1.0).toFloat(),
-                    rotation = obj.optDouble("rotation", 0.0).toFloat()
+                    rotation = obj.optDouble("rotation", 0.0).toFloat(),
+                    frameId = if (obj.isNull("frameId")) null else obj.optString("frameId"),
+                    showAppBranding = obj.optBoolean("showAppBranding", true)
                 )
             } catch (e: Exception) {
                 Log.e("PhotoMetadata", "Failed to parse JSON", e)
@@ -49,7 +56,3 @@ data class PhotoMetadata(
         }
     }
 }
-
-
-// PhotoMetadataManager removed, replaced by PhotoManager.
-

@@ -1,0 +1,72 @@
+{
+  "id": "classic_white",
+  "name": "经典白框",
+  "version": 1,
+  "layout": {
+    "position": "BOTTOM",
+    "height": 80,
+    "backgroundColor": "#FFFFFF",
+    "padding": 20
+  },
+  "elements": [
+    {
+      "type": "text",
+      "textType": "BRAND",
+      "alignment": "START",
+      "fontSize": 16,
+      "color": "#333333",
+      "fontWeight": "BOLD"
+    },
+    {
+      "type": "text",
+      "textType": "DEVICE_MODEL",
+      "alignment": "START",
+      "fontSize": 12,
+      "color": "#666666"
+    },
+    {
+      "type": "divider",
+      "orientation": "VERTICAL",
+      "alignment": "START",
+      "length": 24,
+      "thickness": 1,
+      "color": "#CCCCCC",
+      "margin": 12
+    },
+    {
+      "type": "text",
+      "textType": "ISO",
+      "alignment": "START",
+      "fontSize": 12,
+      "color": "#666666"
+    },
+    {
+      "type": "text",
+      "textType": "SHUTTER_SPEED",
+      "alignment": "START",
+      "fontSize": 12,
+      "color": "#666666"
+    },
+    {
+      "type": "text",
+      "textType": "FOCAL_LENGTH",
+      "alignment": "START",
+      "fontSize": 12,
+      "color": "#666666"
+    },
+    {
+      "type": "logo",
+      "logoType": "APP",
+      "alignment": "END",
+      "size": 28
+    },
+    {
+      "type": "text",
+      "textType": "DATE",
+      "alignment": "END",
+      "fontSize": 11,
+      "color": "#999999",
+      "format": "yyyy.MM.dd"
+    }
+  ]
+}

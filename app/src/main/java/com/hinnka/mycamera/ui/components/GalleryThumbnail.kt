@@ -46,8 +46,8 @@ fun GalleryThumbnail(
         contentAlignment = Alignment.Center
     ) {
         if (latestPhoto != null) {
-            // 显示最近的照片缩略图，优先使用带 LUT 的预览图
-            val imageSource = if (latestPhoto.metadata?.lutId != null) {
+            // 显示最近的照片缩略图，优先使用带 LUT/边框 的预览图
+            val imageSource = if (latestPhoto.metadata?.lutId != null || latestPhoto.metadata?.frameId != null) {
                 latestPhoto.previewUri
             } else {
                 latestPhoto.thumbnailUri

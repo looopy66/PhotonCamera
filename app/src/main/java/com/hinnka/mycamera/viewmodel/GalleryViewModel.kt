@@ -27,11 +27,16 @@ import com.hinnka.mycamera.gallery.GalleryRepository
 import com.hinnka.mycamera.gallery.PhotoData
 import com.hinnka.mycamera.gallery.PhotoMetadata
 import com.hinnka.mycamera.gallery.PhotoManager
+import com.hinnka.mycamera.frame.ExifMetadata
+import com.hinnka.mycamera.frame.FrameInfo
+import com.hinnka.mycamera.frame.FrameManager
+import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.LutManager
 import com.hinnka.mycamera.lut.LutTransformation
+import com.hinnka.mycamera.lut.PhotoTransformation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -55,6 +60,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private val repository = GalleryRepository(application)
     private val lutManager = LutManager(application)
     private val lutImageProcessor = LutImageProcessor()
+    private val frameManager = FrameManager(application)
+    private val frameRenderer = FrameRenderer(application)
     
     // 照片列表
     private val _photos = MutableStateFlow<List<PhotoData>>(emptyList())
@@ -101,6 +108,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     var availableLuts: List<LutInfo> by mutableStateOf(emptyList())
         private set
     
+    // 边框编辑状态
+    var editFrameId: String? by mutableStateOf(null)
+        private set
+    var editShowAppBranding by mutableStateOf(true)
+        private set
+    
+    // 可用的边框列表
+    var availableFrames: List<FrameInfo> by mutableStateOf(emptyList())
+        private set
+    
     // 最新照片（用于相机界面显示入口）
     private val _latestPhoto = MutableStateFlow<PhotoData?>(null)
     val latestPhoto: StateFlow<PhotoData?> = _latestPhoto.asStateFlow()
@@ -109,6 +126,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         loadPhotos()
         lutManager.initialize()
         availableLuts = lutManager.getAvailableLuts()
+        frameManager.initialize()
+        availableFrames = frameManager.getAvailableFrames()
     }
     
     /**
@@ -162,6 +181,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editLutIntensity = metadata.lutIntensity
                 editBrightness = metadata.brightness
                 editRotation = metadata.rotation
+                editFrameId = metadata.frameId
+                editShowAppBranding = metadata.showAppBranding
                 
                 // 加载 LUT 配置
                 if (metadata.lutId != null) {
@@ -335,12 +356,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editLutIntensity = metadata.lutIntensity
             editBrightness = metadata.brightness
             editRotation = metadata.rotation
+            editFrameId = metadata.frameId
+            editShowAppBranding = metadata.showAppBranding
         } ?: run {
             editLutId = null
             editLutIntensity = 1f
             editBrightness = 1f
             editRotation = 0f
             editLutConfig = null
+            editFrameId = null
+            editShowAppBranding = true
         }
     }
     
@@ -354,6 +379,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editLutId = null
         editLutIntensity = 1f
         editLutConfig = null
+        editFrameId = null
+        editShowAppBranding = true
     }
     
     /**
@@ -395,6 +422,20 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
     
     /**
+     * 设置边框
+     */
+    fun setEditFrame(frameId: String?) {
+        editFrameId = frameId
+    }
+    
+    /**
+     * 设置是否显示 App 品牌
+     */
+    fun setShowAppBranding(show: Boolean) {
+        editShowAppBranding = show
+    }
+    
+    /**
      * 获取指定照片的 LUT 转换器
      */
     fun getLutTransformation(metadata: PhotoMetadata?): LutTransformation {
@@ -407,7 +448,22 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
     
     /**
-     * 获取应用 LUT 后的预览 Bitmap
+     * 获取指定照片的完整转换器（LUT + 边框）
+     */
+    fun getPhotoTransformation(metadata: PhotoMetadata?): PhotoTransformation {
+        return PhotoTransformation(
+            lutId = metadata?.lutId,
+            lutIntensity = metadata?.lutIntensity ?: 1f,
+            lutManager = lutManager,
+            lutImageProcessor = lutImageProcessor,
+            frameId = metadata?.frameId,
+            showAppBranding = metadata?.showAppBranding ?: true,
+            frameManager = frameManager,
+            frameRenderer = frameRenderer
+        )
+    }
+    /**
+     * 获取应用 LUT 和边框后的预览 Bitmap
      */
     suspend fun getPreviewBitmap(photo: PhotoData): Bitmap? {
         return withContext(Dispatchers.IO) {
@@ -431,11 +487,29 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
                 
                 // 应用旋转和亮度
-                val finalBitmap = applyEdits(processedBitmap, editRotation, editBrightness)
+                var finalBitmap = applyEdits(processedBitmap, editRotation, editBrightness)
                 
                 // 如果产生了新的 bitmap，释放中间的
                 if (finalBitmap != processedBitmap) {
                     processedBitmap.recycle()
+                }
+                
+                // 应用边框水印
+                if (editFrameId != null) {
+                    val template = frameManager.loadTemplate(editFrameId!!)
+                    if (template != null) {
+                        val exifMetadata = ExifMetadata.createDefault(finalBitmap.width, finalBitmap.height)
+                        val framedBitmap = frameRenderer.render(
+                            finalBitmap,
+                            template,
+                            exifMetadata,
+                            editShowAppBranding
+                        )
+                        if (framedBitmap != finalBitmap) {
+                            finalBitmap.recycle()
+                        }
+                        finalBitmap = framedBitmap
+                    }
                 }
                 
                 finalBitmap
@@ -457,12 +531,30 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     lutId = editLutId,
                     lutIntensity = editLutIntensity,
                     brightness = editBrightness,
-                    rotation = editRotation
+                    rotation = editRotation,
+                    frameId = editFrameId,
+                    showAppBranding = editShowAppBranding
                 )
                 val success = PhotoManager.saveMetadata(context, photo.id, metadata)
                 
                 if (success) {
                     currentPhotoMetadata = metadata
+                    
+                    // 更新 photos 列表中对应照片的 metadata，触发 UI 刷新
+                    val updatedPhotos = _photos.value.map { p ->
+                        if (p.id == photo.id) {
+                            p.copy(metadata = metadata)
+                        } else {
+                            p
+                        }
+                    }
+                    _photos.value = updatedPhotos
+                    
+                    // 同步更新 latestPhoto
+                    if (_latestPhoto.value?.id == photo.id) {
+                        _latestPhoto.value = _latestPhoto.value?.copy(metadata = metadata)
+                    }
+                    
                     exitEditMode()
                 }
                 onComplete(success)
@@ -618,6 +710,29 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         processedBitmap.recycle()
                     }
                     processedBitmap = editedBitmap
+                }
+                
+                // 应用边框水印
+                if (metadata?.frameId != null) {
+                    val template = withContext(Dispatchers.IO) {
+                        frameManager.loadTemplate(metadata.frameId)
+                    }
+                    if (template != null) {
+                        val exifMetadata = ExifMetadata.createDefault(
+                            processedBitmap.width,
+                            processedBitmap.height
+                        )
+                        val framedBitmap = frameRenderer.render(
+                            processedBitmap,
+                            template,
+                            exifMetadata,
+                            metadata.showAppBranding
+                        )
+                        if (framedBitmap != processedBitmap) {
+                            processedBitmap.recycle()
+                        }
+                        processedBitmap = framedBitmap
+                    }
                 }
                 
                 // 保存到 Pictures 目录
