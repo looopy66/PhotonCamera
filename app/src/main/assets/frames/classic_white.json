@@ -14,59 +14,71 @@
       "textType": "BRAND",
       "alignment": "START",
       "fontSize": 16,
-      "color": "#333333",
-      "fontWeight": "BOLD"
+      "color": "#000000",
+      "fontWeight": "BOLD",
+      "line": 0
     },
     {
       "type": "text",
       "textType": "DEVICE_MODEL",
       "alignment": "START",
-      "fontSize": 12,
-      "color": "#666666"
-    },
-    {
-      "type": "divider",
-      "orientation": "VERTICAL",
-      "alignment": "START",
-      "length": 24,
-      "thickness": 1,
-      "color": "#CCCCCC",
-      "margin": 12
+      "fontSize": 16,
+      "color": "#000000",
+      "fontWeight": "BOLD",
+      "line": 0
     },
     {
       "type": "text",
-      "textType": "ISO",
+      "textType": "DATETIME",
       "alignment": "START",
       "fontSize": 12,
-      "color": "#666666"
-    },
-    {
-      "type": "text",
-      "textType": "SHUTTER_SPEED",
-      "alignment": "START",
-      "fontSize": 12,
-      "color": "#666666"
-    },
-    {
-      "type": "text",
-      "textType": "FOCAL_LENGTH",
-      "alignment": "START",
-      "fontSize": 12,
-      "color": "#666666"
+      "color": "#999999",
+      "format": "yyyy.MM.dd HH:mm:ss",
+      "line": 1
     },
     {
       "type": "logo",
       "logoType": "APP",
       "alignment": "END",
-      "size": 28
+      "size": 32,
+      "line": -1
+    },
+    {
+      "type": "divider",
+      "orientation": "VERTICAL",
+      "alignment": "END",
+      "length": 36,
+      "thickness": 1,
+      "color": "#E0E0E0",
+      "margin": 8,
+      "line": -1
     },
     {
       "type": "text",
-      "textType": "DATE",
+      "textType": "FOCAL_LENGTH_35MM",
       "alignment": "END",
-      "fontSize": 11,
-      "color": "#999999",
-      "format": "yyyy.MM.dd"
+      "fontSize": 16,
+      "color": "#000000",
+      "fontWeight": "BOLD",
+      "line": -1
+    },
+    {
+      "type": "text",
+      "textType": "SHUTTER_SPEED",
+      "alignment": "END",
+      "fontSize": 16,
+      "color": "#000000",
+      "fontWeight": "BOLD",
+      "line": -1
+    },
+    {
+      "type": "text",
+      "textType": "ISO",
+      "alignment": "END",
+      "fontSize": 16,
+      "color": "#000000",
+      "fontWeight": "BOLD",
+      "line": -1
     }
   ]
 }

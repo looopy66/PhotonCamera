@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.ThumbnailUtils
 import android.util.Log
+import com.hinnka.mycamera.camera.CaptureInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -59,12 +60,19 @@ object PhotoManager {
 
     /**
      * 保存新拍摄的照片
+     * 
+     * @param context Context
+     * @param bytes JPEG 图片数据
+     * @param metadata 编辑元数据（LUT、边框等）
+     * @param previewBitmap 预览图（用于生成缩略图）
+     * @param captureInfo 拍摄信息（用于写入 EXIF）
      */
     suspend fun savePhoto(
         context: Context, 
         bytes: ByteArray, 
         metadata: PhotoMetadata,
-        previewBitmap: Bitmap? = null
+        previewBitmap: Bitmap? = null,
+        captureInfo: CaptureInfo? = null
     ): String? {
         return withContext(Dispatchers.IO) {
             try {
@@ -74,12 +82,17 @@ object PhotoManager {
                 // 1. 保存原图
                 val photoFile = File(photoDir, PHOTO_FILE)
                 photoFile.writeBytes(bytes)
+                
+                // 2. 写入 EXIF 元数据
+                captureInfo?.let { info ->
+                    ExifWriter.writeExif(photoFile, info)
+                }
 
-                // 2. 保存元数据
+                // 3. 保存编辑元数据（LUT/边框配置）
                 val metadataFile = File(photoDir, METADATA_FILE)
                 metadataFile.writeText(metadata.toJson())
 
-                // 3. 生成并保存缩略图
+                // 4. 生成并保存缩略图
                 val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
                 if (previewBitmap != null) {
                     // 从预览图生成缩略图，更高效
@@ -89,7 +102,7 @@ object PhotoManager {
                     generateThumbnail(photoFile, thumbnailFile)
                 }
                 
-                // 4. 保存 LUT 预览图（如果有）
+                // 5. 保存 LUT 预览图（如果有）
                 if (previewBitmap != null) {
                     val previewFile = File(photoDir, PREVIEW_FILE)
                     FileOutputStream(previewFile).use { out ->

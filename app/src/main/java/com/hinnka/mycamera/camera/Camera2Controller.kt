@@ -58,8 +58,11 @@ class Camera2Controller(private val context: Context) {
     // 设备旋转角度
     private var deviceRotation: Int = 0
     
-    // 图片拍摄回调
-    var onImageCaptured: ((ByteArray) -> Unit)? = null
+    // 最后一次拍摄结果，用于提取 EXIF 信息
+    private var lastCaptureResult: TotalCaptureResult? = null
+    
+    // 图片拍摄回调（携带 CaptureInfo）
+    var onImageCaptured: ((ByteArray, CaptureInfo) -> Unit)? = null
     
     // ==================== 初始化 ====================
     
@@ -146,10 +149,15 @@ class Camera2Controller(private val context: Context) {
                         val buffer = it.planes[0].buffer
                         val bytes = ByteArray(buffer.remaining())
                         buffer.get(bytes)
+                        val width = it.width
+                        val height = it.height
                         it.close()
                         
+                        // 构建 CaptureInfo
+                        val captureInfo = buildCaptureInfo(lastCaptureResult, width, height)
+                        
                         _state.value = _state.value.copy(isCapturing = false)
-                        onImageCaptured?.invoke(bytes)
+                        onImageCaptured?.invoke(bytes, captureInfo)
                     }
                 }, cameraHandler)
             }
@@ -589,6 +597,8 @@ class Camera2Controller(private val context: Context) {
                     request: CaptureRequest,
                     result: TotalCaptureResult
                 ) {
+                    // 保存拍摄结果用于提取 EXIF
+                    lastCaptureResult = result
                     Log.d(TAG, "Capture completed")
                 }
                 
@@ -631,6 +641,99 @@ class Camera2Controller(private val context: Context) {
             jpegOrientation
         } catch (e: Exception) {
             0
+        }
+    }
+    
+    /**
+     * 构建 CaptureInfo
+     * 
+     * 从 TotalCaptureResult 和 CameraCharacteristics 提取拍摄信息
+     */
+    private fun buildCaptureInfo(
+        result: TotalCaptureResult?,
+        imageWidth: Int,
+        imageHeight: Int
+    ): CaptureInfo {
+        val cameraId = _state.value.currentCameraId
+        
+        // 从 CameraCharacteristics 获取镜头固定信息
+        var aperture: Float? = null
+        var focalLength: Float? = null
+        var focalLength35mm: Int? = null
+        
+        try {
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            
+            // 光圈值（取第一个可用光圈）
+            val apertures = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)
+            aperture = apertures?.firstOrNull()
+            
+            // 焦距（取第一个可用焦距）
+            val focalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+            focalLength = focalLengths?.firstOrNull()
+            
+            // 计算等效35mm焦距
+            focalLength?.let { fl ->
+                focalLength35mm = calculate35mmEquivalent(characteristics, fl)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get camera characteristics for EXIF", e)
+        }
+        
+        // 从 TotalCaptureResult 获取曝光信息
+        val exposureTime = result?.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+        val iso = result?.get(CaptureResult.SENSOR_SENSITIVITY)
+        val whiteBalance = result?.get(CaptureResult.CONTROL_AWB_MODE)
+        val flashState = result?.get(CaptureResult.FLASH_STATE)
+        
+        // 如果有实时的光圈/焦距，使用实时值
+        result?.get(CaptureResult.LENS_APERTURE)?.let { aperture = it }
+        result?.get(CaptureResult.LENS_FOCAL_LENGTH)?.let { 
+            focalLength = it
+            // 重新计算35mm等效焦距
+            try {
+                val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+                focalLength35mm = calculate35mmEquivalent(characteristics, it)
+            } catch (e: Exception) {
+                // 忽略
+            }
+        }
+        
+        return CaptureInfo(
+            exposureTime = exposureTime,
+            iso = iso,
+            aperture = aperture,
+            focalLength = focalLength,
+            focalLength35mm = focalLength35mm,
+            whiteBalance = whiteBalance,
+            flashState = flashState,
+            orientation = getJpegOrientation(),
+            imageWidth = imageWidth,
+            imageHeight = imageHeight,
+            captureTime = System.currentTimeMillis()
+        )
+    }
+    
+    /**
+     * 计算等效35mm焦距
+     * 
+     * 基于传感器尺寸计算裁切系数
+     */
+    private fun calculate35mmEquivalent(
+        characteristics: CameraCharacteristics,
+        focalLength: Float
+    ): Int? {
+        return try {
+            val sensorSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+            if (sensorSize != null) {
+                // 35mm 全画幅传感器宽度为 36mm
+                val cropFactor = 36f / sensorSize.width
+                (focalLength * cropFactor).toInt()
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            null
         }
     }
     

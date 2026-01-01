@@ -5,38 +5,18 @@ import android.content.ContentValues
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import androidx.core.content.FileProvider
-import java.io.File
-import android.graphics.Canvas
-import android.graphics.ColorMatrix
-import android.graphics.ColorMatrixColorFilter
-import android.graphics.Matrix
-import android.graphics.Paint
-import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.hinnka.mycamera.gallery.GalleryRepository
-import com.hinnka.mycamera.gallery.PhotoData
-import com.hinnka.mycamera.gallery.PhotoMetadata
-import com.hinnka.mycamera.gallery.PhotoManager
-import com.hinnka.mycamera.frame.ExifMetadata
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.frame.FrameManager
 import com.hinnka.mycamera.frame.FrameRenderer
-import com.hinnka.mycamera.lut.LutConfig
-import com.hinnka.mycamera.lut.LutImageProcessor
-import com.hinnka.mycamera.lut.LutInfo
-import com.hinnka.mycamera.lut.LutManager
-import com.hinnka.mycamera.lut.LutTransformation
-import com.hinnka.mycamera.lut.PhotoTransformation
+import com.hinnka.mycamera.gallery.*
+import com.hinnka.mycamera.lut.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -44,8 +24,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.util.*
 
 /**
  * 相册 ViewModel
@@ -62,6 +41,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private val lutImageProcessor = LutImageProcessor()
     private val frameManager = FrameManager(application)
     private val frameRenderer = FrameRenderer(application)
+    private val photoProcessor = PhotoProcessor(lutManager, lutImageProcessor, frameManager, frameRenderer)
     
     // 照片列表
     private val _photos = MutableStateFlow<List<PhotoData>>(emptyList())
@@ -436,30 +416,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
     
     /**
-     * 获取指定照片的 LUT 转换器
-     */
-    fun getLutTransformation(metadata: PhotoMetadata?): LutTransformation {
-        return LutTransformation(
-            lutId = metadata?.lutId,
-            intensity = metadata?.lutIntensity ?: 1f,
-            lutManager = lutManager,
-            lutImageProcessor = lutImageProcessor
-        )
-    }
-    
-    /**
      * 获取指定照片的完整转换器（LUT + 边框）
      */
-    fun getPhotoTransformation(metadata: PhotoMetadata?): PhotoTransformation {
+    fun getPhotoTransformation(photo: PhotoData): PhotoTransformation {
+        val context = getApplication<Application>()
         return PhotoTransformation(
-            lutId = metadata?.lutId,
-            lutIntensity = metadata?.lutIntensity ?: 1f,
-            lutManager = lutManager,
-            lutImageProcessor = lutImageProcessor,
-            frameId = metadata?.frameId,
-            showAppBranding = metadata?.showAppBranding ?: true,
-            frameManager = frameManager,
-            frameRenderer = frameRenderer
+            context = context,
+            uri = photo.uri,
+            metadata = photo.metadata ?: PhotoMetadata(),
+            photoProcessor = photoProcessor
         )
     }
     /**
@@ -475,44 +440,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 
                 if (bitmap == null) return@withContext null
                 
-                // 应用 LUT
-                val lutConfig = editLutConfig
-                var processedBitmap = bitmap
-                if (lutConfig != null && editLutIntensity > 0f) {
-                    processedBitmap = lutImageProcessor.applyLut(bitmap, lutConfig, editLutIntensity)
-                    // 如果产生了新的 bitmap，释放原始的
-                    if (processedBitmap != bitmap) {
-                        bitmap.recycle()
-                    }
-                }
+                val metadata = PhotoMetadata(
+                    lutId = editLutId,
+                    lutIntensity = editLutIntensity,
+                    brightness = editBrightness,
+                    rotation = editRotation,
+                    frameId = editFrameId,
+                    showAppBranding = editShowAppBranding
+                )
                 
-                // 应用旋转和亮度
-                var finalBitmap = applyEdits(processedBitmap, editRotation, editBrightness)
-                
-                // 如果产生了新的 bitmap，释放中间的
-                if (finalBitmap != processedBitmap) {
-                    processedBitmap.recycle()
-                }
-                
-                // 应用边框水印
-                if (editFrameId != null) {
-                    val template = frameManager.loadTemplate(editFrameId!!)
-                    if (template != null) {
-                        val exifMetadata = ExifMetadata.createDefault(finalBitmap.width, finalBitmap.height)
-                        val framedBitmap = frameRenderer.render(
-                            finalBitmap,
-                            template,
-                            exifMetadata,
-                            editShowAppBranding
-                        )
-                        if (framedBitmap != finalBitmap) {
-                            finalBitmap.recycle()
-                        }
-                        finalBitmap = framedBitmap
-                    }
-                }
-                
-                finalBitmap
+                photoProcessor.process(context, bitmap, metadata, photo.uri)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to create preview", e)
                 null
@@ -569,110 +506,53 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 保存编辑（导出烘焙后的图片）
      */
     fun saveEdit(photo: PhotoData, onComplete: (Boolean) -> Unit = {}) {
-        viewModelScope.launch {
-            try {
-                val context = getApplication<Application>()
-                
-                // 读取原图
-                val inputStream = context.contentResolver.openInputStream(photo.uri)
-                val originalBitmap = BitmapFactory.decodeStream(inputStream)
-                inputStream?.close()
-                
-                if (originalBitmap == null) {
-                    onComplete(false)
-                    return@launch
+        val metadata = PhotoMetadata(
+            lutId = editLutId,
+            lutIntensity = editLutIntensity,
+            brightness = editBrightness,
+            rotation = editRotation,
+            frameId = editFrameId,
+            showAppBranding = editShowAppBranding
+        )
+        exportPhotoInternal(
+            photo = photo,
+            metadata = metadata,
+            directory = Environment.DIRECTORY_DCIM + "/PhotonCamera",
+            onComplete = { success ->
+                if (success) {
+                    exitEditMode()
+                    loadPhotos()
                 }
-                
-                // 应用 LUT
-                var processedBitmap = originalBitmap
-                val lutConfig = editLutConfig
-                if (lutConfig != null && editLutIntensity > 0f) {
-                    processedBitmap = lutImageProcessor.applyLut(originalBitmap, lutConfig, editLutIntensity)
-                    if (processedBitmap != originalBitmap) {
-                        originalBitmap.recycle()
-                    }
-                }
-                
-                // 应用编辑
-                val editedBitmap = withContext(Dispatchers.Default) {
-                    applyEdits(processedBitmap, editRotation, editBrightness)
-                }
-                if (editedBitmap != processedBitmap) {
-                    processedBitmap.recycle()
-                }
-                
-                // 保存到新文件
-                val filename = "IMG_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}_EDIT.jpg"
-                val contentValues = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
-                    put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/PhotonCamera")
-                }
-                
-                val uri = context.contentResolver.insert(
-                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                    contentValues
-                )
-                
-                uri?.let {
-                    context.contentResolver.openOutputStream(it)?.use { outputStream ->
-                        editedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
-                    }
-                }
-                
-                editedBitmap.recycle()
-                
-                exitEditMode()
-                loadPhotos()
-                onComplete(true)
-                
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to save edited photo", e)
-                onComplete(false)
+                onComplete(success)
             }
-        }
+        )
     }
-    
-    /**
-     * 应用编辑效果
-     */
-    private fun applyEdits(bitmap: Bitmap, rotation: Float, brightness: Float): Bitmap {
-        val matrix = Matrix()
-        
-        // 旋转
-        if (rotation != 0f) {
-            matrix.postRotate(rotation)
-        }
-        
-        var result = if (rotation != 0f) {
-            Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-        } else {
-            bitmap
-        }
-        
-        // 亮度调整
-        if (brightness != 1f) {
-            val adjustedBitmap = Bitmap.createBitmap(result.width, result.height, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(adjustedBitmap)
-            val paint = Paint()
-            val colorMatrix = ColorMatrix().apply {
-                setScale(brightness, brightness, brightness, 1f)
-            }
-            paint.colorFilter = ColorMatrixColorFilter(colorMatrix)
-            canvas.drawBitmap(result, 0f, 0f, paint)
-            if (result != bitmap) {
-                result.recycle()
-            }
-            result = adjustedBitmap
-        }
-        
-        return result
-    }
-    
+
     /**
      * 导出照片到公共目录（带 LUT 烘焙）
      */
     fun exportPhoto(photo: PhotoData, onComplete: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            val metadata = PhotoManager.loadMetadata(getApplication(), photo.id) ?: PhotoMetadata()
+            exportPhotoInternal(
+                photo = photo,
+                metadata = metadata,
+                directory = Environment.DIRECTORY_DCIM + "/PhotonCamera",
+                onComplete = onComplete
+            )
+        }
+    }
+
+    /**
+     * 内部导出逻辑实现
+     */
+    private fun exportPhotoInternal(
+        photo: PhotoData,
+        metadata: PhotoMetadata,
+        directory: String,
+        filenameSuffix: String = "",
+        onComplete: (Boolean) -> Unit = {}
+    ) {
         viewModelScope.launch {
             try {
                 val context = getApplication<Application>()
@@ -687,60 +567,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     return@launch
                 }
                 
-                // 加载元数据并应用 LUT
-                val metadata = PhotoManager.loadMetadata(context, photo.id)
-                var processedBitmap = bitmap
+                // 处理照片
+                val processedBitmap = photoProcessor.process(context, bitmap, metadata, photo.uri)
                 
-                if (metadata?.lutId != null) {
-                    val lutConfig = withContext(Dispatchers.IO) {
-                        lutManager.loadLut(metadata.lutId)
-                    }
-                    if (lutConfig != null) {
-                        processedBitmap = lutImageProcessor.applyLut(bitmap, lutConfig, metadata.lutIntensity)
-                        if (processedBitmap != bitmap) {
-                            bitmap.recycle()
-                        }
-                    }
-                }
-                
-                // 应用其他编辑
-                if (metadata != null && (metadata.rotation != 0f || metadata.brightness != 1f)) {
-                    val editedBitmap = applyEdits(processedBitmap, metadata.rotation, metadata.brightness)
-                    if (editedBitmap != processedBitmap) {
-                        processedBitmap.recycle()
-                    }
-                    processedBitmap = editedBitmap
-                }
-                
-                // 应用边框水印
-                if (metadata?.frameId != null) {
-                    val template = withContext(Dispatchers.IO) {
-                        frameManager.loadTemplate(metadata.frameId)
-                    }
-                    if (template != null) {
-                        val exifMetadata = ExifMetadata.createDefault(
-                            processedBitmap.width,
-                            processedBitmap.height
-                        )
-                        val framedBitmap = frameRenderer.render(
-                            processedBitmap,
-                            template,
-                            exifMetadata,
-                            metadata.showAppBranding
-                        )
-                        if (framedBitmap != processedBitmap) {
-                            processedBitmap.recycle()
-                        }
-                        processedBitmap = framedBitmap
-                    }
-                }
-                
-                // 保存到 Pictures 目录
-                val filename = "PhotonCamera_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.jpg"
+                // 保存到指定目录
+                val filename = "PhotonCamera_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}$filenameSuffix.jpg"
                 val contentValues = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
                     put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES)
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, directory)
                 }
                 
                 val uri = context.contentResolver.insert(

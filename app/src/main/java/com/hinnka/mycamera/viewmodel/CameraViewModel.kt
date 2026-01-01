@@ -15,6 +15,7 @@ import androidx.lifecycle.viewModelScope
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.Camera2Controller
 import com.hinnka.mycamera.camera.CameraState
+import com.hinnka.mycamera.camera.CaptureInfo
 import com.hinnka.mycamera.camera.LensType
 import com.hinnka.mycamera.frame.ExifMetadata
 import com.hinnka.mycamera.frame.FrameInfo
@@ -26,6 +27,7 @@ import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.LutManager
+import com.hinnka.mycamera.gallery.PhotoProcessor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -57,7 +59,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     // 边框管理器
     private val frameManager = FrameManager(application)
     private val frameRenderer = FrameRenderer(application)
-    
+    private val photoProcessor = PhotoProcessor(lutManager, lutImageProcessor, frameManager, frameRenderer)
+
     val state: StateFlow<CameraState> = cameraController.state
     
     // 照片保存完成事件
@@ -73,14 +76,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     
     var availableLutList: List<LutInfo> by mutableStateOf(emptyList())
         private set
-    
+
     // 边框相关状态
     var currentFrameId: String? by mutableStateOf(null)
         private set
-    
+
     var currentShowAppBranding by mutableStateOf(true)
         private set
-    
+
     var availableFrameList: List<FrameInfo> by mutableStateOf(emptyList())
         private set
 
@@ -127,16 +130,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     
     init {
         cameraController.initialize()
-        cameraController.onImageCaptured = { bytes ->
+        cameraController.onImageCaptured = { bytes, captureInfo ->
             viewModelScope.launch {
-                saveImage(bytes)
+                saveImage(bytes, captureInfo)
             }
         }
         
         // 初始化 LUT 管理器
         lutManager.initialize()
         availableLutList = lutManager.getAvailableLuts()
-        
+
         // 初始化边框管理器
         frameManager.initialize()
         availableFrameList = frameManager.getAvailableFrames()
@@ -343,25 +346,25 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
     
     // ==================== 边框相关方法 ====================
-    
+
     /**
      * 设置当前边框
      */
     fun setFrame(frameId: String?) {
         currentFrameId = frameId
     }
-    
+
     /**
      * 设置是否显示 App 品牌
      */
     fun setShowAppBranding(show: Boolean) {
         currentShowAppBranding = show
     }
-    
+
     /**
      * 保存图片
      */
-    private suspend fun saveImage(bytes: ByteArray) {
+    private suspend fun saveImage(bytes: ByteArray, captureInfo: CaptureInfo) {
         val context = getApplication<Application>()
         
         // 保存当前 LUT 信息用于元数据
@@ -372,7 +375,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 保存当前边框信息用于元数据
         val frameIdToSave = currentFrameId
         val showAppBrandingToSave = currentShowAppBranding
-        
+
         try {
             // 保存 LUT 和边框元数据到应用私有目录
             val metadata = PhotoMetadata(
@@ -387,37 +390,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 val options = android.graphics.BitmapFactory.Options().apply {
                     inSampleSize = 4 // 缩小比例，减小内存占用和处理时间
                 }
-                var bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+                val bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
                 if (bitmap != null) {
-                    // 如果有 LUT，应用 LUT
-                    if (lutIdToSave != null && lutConfigToSave != null) {
-                        val result = lutImageProcessor.applyLut(bitmap, lutConfigToSave, lutIntensityToSave)
-                        if (result != bitmap) bitmap.recycle()
-                        bitmap = result
-                    }
+                    val exifMetadata = ExifMetadata(
+                        deviceModel = captureInfo.model,
+                        brand = captureInfo.make.replaceFirstChar { it.uppercase() },
+                        dateTaken = captureInfo.captureTime,
+                        iso = captureInfo.iso,
+                        shutterSpeed = captureInfo.formatExposureTime(),
+                        focalLength = captureInfo.formatFocalLength(),
+                        focalLength35mm = captureInfo.formatFocalLength35mm(),
+                        aperture = captureInfo.formatAperture(),
+                        width = captureInfo.imageWidth,
+                        height = captureInfo.imageHeight
+                    )
                     
-                    // 如果有边框，应用边框
-                    if (frameIdToSave != null) {
-                        val template = frameManager.loadTemplate(frameIdToSave)
-                        if (template != null) {
-                            val exifMetadata = ExifMetadata.createDefault(bitmap.width, bitmap.height)
-                            val framedBitmap = frameRenderer.render(
-                                bitmap,
-                                template,
-                                exifMetadata,
-                                showAppBrandingToSave
-                            )
-                            if (framedBitmap != bitmap) bitmap.recycle()
-                            bitmap = framedBitmap
-                        }
-                    }
-                    
-                    bitmap
+                    photoProcessor.process(context, bitmap, metadata, exifMetadata = exifMetadata)
                 } else null
             }
             
-            // 使用 PhotoManager 统一管理保存
-            val photoId = PhotoManager.savePhoto(context, bytes, metadata, previewBitmap)
+            // 使用 PhotoManager 统一管理保存，并写入 EXIF
+            val photoId = PhotoManager.savePhoto(context, bytes, metadata, previewBitmap, captureInfo)
             
             previewBitmap?.recycle()
             

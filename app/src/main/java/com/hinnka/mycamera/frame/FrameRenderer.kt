@@ -2,13 +2,17 @@ package com.hinnka.mycamera.frame
 
 import android.content.Context
 import android.graphics.*
+import android.net.Uri
 import android.os.Build
 import android.util.Log
 import android.util.TypedValue
 import androidx.core.graphics.drawable.toBitmap
+import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.R
 import java.text.SimpleDateFormat
 import java.util.*
+import androidx.core.graphics.createBitmap
+import kotlin.math.min
 
 /**
  * EXIF 元数据
@@ -23,6 +27,7 @@ data class ExifMetadata(
     val iso: Int? = null,
     val shutterSpeed: String? = null,
     val focalLength: String? = null,
+    val focalLength35mm: String? = null,
     val aperture: String? = null,
     val width: Int = 0,
     val height: Int = 0
@@ -42,6 +47,83 @@ data class ExifMetadata(
                 width = width,
                 height = height
             )
+        }
+
+        /**
+         * 从指定的 URI 加载 EXIF 元数据
+         */
+        fun fromUri(context: Context, uri: Uri): ExifMetadata {
+            return try {
+                context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                    val exif = ExifInterface(inputStream)
+                    
+                    val model = exif.getAttribute(ExifInterface.TAG_MODEL)
+                    val make = exif.getAttribute(ExifInterface.TAG_MAKE)
+                    val dateStr = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL) ?: exif.getAttribute(ExifInterface.TAG_DATETIME)
+                    
+                    val iso = exif.getAttributeInt(ExifInterface.TAG_ISO_SPEED_RATINGS, 0).takeIf { it > 0 }
+                        ?: exif.getAttributeInt(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY, 0).takeIf { it > 0 }
+                    
+                    val shutterSpeed = exif.getAttribute(ExifInterface.TAG_EXPOSURE_TIME)?.let {
+                        try {
+                            val time = it.toDouble()
+                            if (time >= 1.0) {
+                                "${time.toInt()}\""
+                            } else {
+                                "1/${(1.0 / time).toInt()}"
+                            }
+                        } catch (e: Exception) {
+                            it
+                        }
+                    }
+                    
+                    val aperture = exif.getAttribute(ExifInterface.TAG_F_NUMBER)?.let { "f/$it" }
+                    val focalLength = exif.getAttribute(ExifInterface.TAG_FOCAL_LENGTH)?.let {
+                        try {
+                            // ExifInterface 返回的焦距通常是 "24.5/1" 或 "24.5"
+                            if (it.contains("/")) {
+                                val parts = it.split("/")
+                                (parts[0].toDouble() / parts[1].toDouble()).toInt().toString() + "mm"
+                            } else {
+                                it.toDouble().toInt().toString() + "mm"
+                            }
+                        } catch (e: Exception) {
+                            it + "mm"
+                        }
+                    }
+                    val focalLength35mm = exif.getAttributeInt(ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM, 0)
+                        .takeIf { it > 0 }?.let { "${it}mm" }
+
+                    val width = exif.getAttributeInt(ExifInterface.TAG_IMAGE_WIDTH, 0)
+                        .let { if (it == 0) exif.getAttributeInt(ExifInterface.TAG_PIXEL_X_DIMENSION, 0) else it }
+                    val height = exif.getAttributeInt(ExifInterface.TAG_IMAGE_LENGTH, 0)
+                        .let { if (it == 0) exif.getAttributeInt(ExifInterface.TAG_PIXEL_Y_DIMENSION, 0) else it }
+
+                    val dateTaken = dateStr?.let {
+                        try {
+                            SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).parse(it)?.time
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
+
+                    ExifMetadata(
+                        deviceModel = model,
+                        brand = make?.replaceFirstChar { it.uppercase() },
+                        dateTaken = dateTaken,
+                        iso = iso,
+                        shutterSpeed = shutterSpeed,
+                        focalLength = focalLength,
+                        focalLength35mm = focalLength35mm,
+                        aperture = aperture,
+                        width = width,
+                        height = height
+                    )
+                } ?: createDefault(0, 0)
+            } catch (e: Exception) {
+                Log.e("ExifMetadata", "Failed to load EXIF from $uri", e)
+                createDefault(0, 0)
+            }
         }
     }
 }
@@ -78,11 +160,15 @@ class FrameRenderer(private val context: Context) {
         originalBitmap: Bitmap,
         template: FrameTemplate,
         metadata: ExifMetadata,
-        showAppBranding: Boolean = true
+        showAppBranding: Boolean = true,
     ): Bitmap {
         val layout = template.layout
-        val frameHeight = dpToPx(layout.heightDp)
-        val padding = dpToPx(layout.paddingDp)
+        
+        val expectedHeight = min(originalBitmap.width, originalBitmap.height) * 0.08f
+        val scale = expectedHeight / dpToPx(80) // 以 80dp 为基准高度计算缩放比例
+        
+        val frameHeight = (dpToPx(layout.heightDp) * scale).toInt()
+        val padding = (dpToPx(layout.paddingDp) * scale).toInt()
         
         // 计算输出尺寸
         val outputWidth = originalBitmap.width
@@ -93,7 +179,7 @@ class FrameRenderer(private val context: Context) {
         }
         
         // 创建输出 Bitmap
-        val output = Bitmap.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
+        val output = createBitmap(outputWidth, outputHeight)
         val canvas = Canvas(output)
         
         // 绘制背景
@@ -117,7 +203,8 @@ class FrameRenderer(private val context: Context) {
                     top = originalBitmap.height.toFloat(),
                     right = (outputWidth - padding).toFloat(),
                     bottom = outputHeight.toFloat(),
-                    frameHeight = frameHeight
+                    frameHeight = frameHeight,
+                    scale = scale
                 )
             }
             FramePosition.TOP -> {
@@ -127,7 +214,8 @@ class FrameRenderer(private val context: Context) {
                     top = 0f,
                     right = (outputWidth - padding).toFloat(),
                     bottom = frameHeight.toFloat(),
-                    frameHeight = frameHeight
+                    frameHeight = frameHeight,
+                    scale = scale
                 )
             }
             FramePosition.BOTH -> {
@@ -138,7 +226,8 @@ class FrameRenderer(private val context: Context) {
                     top = 0f,
                     right = (outputWidth - padding).toFloat(),
                     bottom = frameHeight.toFloat(),
-                    frameHeight = frameHeight
+                    frameHeight = frameHeight,
+                    scale = scale
                 )
                 // 底部
                 drawFrameContent(
@@ -147,7 +236,8 @@ class FrameRenderer(private val context: Context) {
                     top = (originalBitmap.height + frameHeight).toFloat(),
                     right = (outputWidth - padding).toFloat(),
                     bottom = outputHeight.toFloat(),
-                    frameHeight = frameHeight
+                    frameHeight = frameHeight,
+                    scale = scale
                 )
             }
         }
@@ -155,9 +245,6 @@ class FrameRenderer(private val context: Context) {
         return output
     }
     
-    /**
-     * 绘制边框内容
-     */
     private fun drawFrameContent(
         canvas: Canvas,
         elements: List<FrameElement>,
@@ -167,33 +254,59 @@ class FrameRenderer(private val context: Context) {
         top: Float,
         right: Float,
         bottom: Float,
-        frameHeight: Int
+        frameHeight: Int,
+        scale: Float = 1f
     ) {
         // 将元素按对齐方式分组
         val startElements = elements.filter { getAlignment(it) == ElementAlignment.START }
         val centerElements = elements.filter { getAlignment(it) == ElementAlignment.CENTER }
         val endElements = elements.filter { getAlignment(it) == ElementAlignment.END }
-        
-        val centerY = top + frameHeight / 2f
-        
+
+        /**
+         * 绘制元素组
+         */
+        fun drawGroup(groupElements: List<FrameElement>, initialX: Float, leftToRight: Boolean) {
+            val lines = groupElements.map { getLine(it) }.filter { it >= 0 }.distinct()
+            val hasMultipleLines = lines.size > 1
+            
+            val currentXPerLine = mutableMapOf<Int, Float>()
+            
+            for (element in if (leftToRight) groupElements else groupElements.reversed()) {
+                val line = getLine(element)
+                
+                val centerY = when {
+                    line == -1 -> top + frameHeight / 2f
+                    !hasMultipleLines -> top + frameHeight / 2f
+                    line == 0 -> top + frameHeight * 0.35f
+                    line == 1 -> top + frameHeight * 0.65f
+                    else -> top + frameHeight / 2f
+                }
+                
+                val x = currentXPerLine.getOrDefault(line, initialX)
+                val width = drawElement(canvas, element, metadata, showAppBranding, x, centerY, leftToRight, scale)
+                
+                val nextX = if (leftToRight) x + width else x - width
+                
+                if (line == -1) {
+                    // 全局居中元素，推进所有行的 X 坐标
+                    currentXPerLine[-1] = nextX
+                    currentXPerLine[0] = nextX
+                    currentXPerLine[1] = nextX
+                } else {
+                    currentXPerLine[line] = nextX
+                }
+            }
+        }
+
         // 绘制左侧元素
-        var currentX = left
-        for (element in startElements) {
-            currentX = drawElement(canvas, element, metadata, showAppBranding, currentX, centerY, true)
-        }
+        drawGroup(startElements, left, true)
         
-        // 绘制右侧元素（从右向左）
-        currentX = right
-        for (element in endElements.reversed()) {
-            currentX = drawElement(canvas, element, metadata, showAppBranding, currentX, centerY, false)
-        }
+        // 绘制右侧元素
+        drawGroup(endElements, right, false)
         
         // 绘制中间元素
-        val centerWidth = measureElementsWidth(centerElements, metadata, showAppBranding)
-        currentX = left + (right - left - centerWidth) / 2f
-        for (element in centerElements) {
-            currentX = drawElement(canvas, element, metadata, showAppBranding, currentX, centerY, true)
-        }
+        val centerWidth = measureElementsWidth(centerElements, metadata, showAppBranding, scale)
+        drawGroup(centerElements, left + (right - left - centerWidth) / 2f, true)
     }
     
     /**
@@ -207,6 +320,18 @@ class FrameRenderer(private val context: Context) {
             is FrameElement.Spacer -> ElementAlignment.START
         }
     }
+
+    /**
+     * 获取元素行号
+     */
+    private fun getLine(element: FrameElement): Int {
+        return when (element) {
+            is FrameElement.Text -> element.line
+            is FrameElement.Logo -> element.line
+            is FrameElement.Divider -> element.line
+            is FrameElement.Spacer -> element.line
+        }
+    }
     
     /**
      * 测量元素组的总宽度
@@ -214,13 +339,25 @@ class FrameRenderer(private val context: Context) {
     private fun measureElementsWidth(
         elements: List<FrameElement>,
         metadata: ExifMetadata,
-        showAppBranding: Boolean
+        showAppBranding: Boolean,
+        scale: Float = 1f
     ): Float {
-        var totalWidth = 0f
+        val xPerLine = mutableMapOf<Int, Float>()
         for (element in elements) {
-            totalWidth += measureElementWidth(element, metadata, showAppBranding)
+            val line = getLine(element)
+            val width = measureElementWidth(element, metadata, showAppBranding, scale)
+            
+            if (line == -1) {
+                val max = (xPerLine.values.maxOrNull() ?: 0f) + width
+                xPerLine[-1] = max
+                xPerLine[0] = max
+                xPerLine[1] = max
+            } else {
+                val current = xPerLine.getOrDefault(line, 0f)
+                xPerLine[line] = current + width
+            }
         }
-        return totalWidth
+        return xPerLine.values.maxOrNull() ?: 0f
     }
     
     /**
@@ -229,27 +366,28 @@ class FrameRenderer(private val context: Context) {
     private fun measureElementWidth(
         element: FrameElement,
         metadata: ExifMetadata,
-        showAppBranding: Boolean
+        showAppBranding: Boolean,
+        scale: Float = 1f
     ): Float {
         return when (element) {
             is FrameElement.Text -> {
                 val text = getTextContent(element, metadata, showAppBranding) ?: return 0f
-                textPaint.textSize = spToPx(element.fontSizeSp).toFloat()
+                textPaint.textSize = spToPx(element.fontSizeSp) * scale
                 textPaint.typeface = getTypeface(element.fontWeight)
-                textPaint.measureText(text) + dpToPx(8)
+                textPaint.measureText(text) + dpToPx(8) * scale
             }
             is FrameElement.Logo -> {
-                dpToPx(element.sizeDp).toFloat() + dpToPx(8)
+                (dpToPx(element.sizeDp) + dpToPx(8)) * scale
             }
             is FrameElement.Divider -> {
                 if (element.orientation == DividerOrientation.VERTICAL) {
-                    dpToPx(element.thicknessDp).toFloat() + dpToPx(element.marginDp * 2)
+                    (dpToPx(element.thicknessDp) + dpToPx(element.marginDp * 2)) * scale
                 } else {
                     0f
                 }
             }
             is FrameElement.Spacer -> {
-                dpToPx(element.widthDp).toFloat()
+                dpToPx(element.widthDp) * scale
             }
         }
     }
@@ -266,16 +404,14 @@ class FrameRenderer(private val context: Context) {
         showAppBranding: Boolean,
         x: Float,
         centerY: Float,
-        leftToRight: Boolean
+        leftToRight: Boolean,
+        scale: Float = 1f
     ): Float {
         return when (element) {
-            is FrameElement.Text -> drawTextElement(canvas, element, metadata, showAppBranding, x, centerY, leftToRight)
-            is FrameElement.Logo -> drawLogoElement(canvas, element, showAppBranding, x, centerY, leftToRight, metadata)
-            is FrameElement.Divider -> drawDividerElement(canvas, element, x, centerY, leftToRight)
-            is FrameElement.Spacer -> {
-                val width = dpToPx(element.widthDp)
-                if (leftToRight) x + width else x - width
-            }
+            is FrameElement.Text -> drawTextElement(canvas, element, metadata, showAppBranding, x, centerY, leftToRight, scale)
+            is FrameElement.Logo -> drawLogoElement(canvas, element, showAppBranding, x, centerY, leftToRight, metadata, scale)
+            is FrameElement.Divider -> drawDividerElement(canvas, element, x, centerY, leftToRight, scale)
+            is FrameElement.Spacer -> dpToPx(element.widthDp) * scale
         }
     }
     
@@ -289,12 +425,13 @@ class FrameRenderer(private val context: Context) {
         showAppBranding: Boolean,
         x: Float,
         centerY: Float,
-        leftToRight: Boolean
+        leftToRight: Boolean,
+        scale: Float = 1f
     ): Float {
         val text = getTextContent(element, metadata, showAppBranding) ?: return x
         
         textPaint.color = element.color
-        textPaint.textSize = spToPx(element.fontSizeSp).toFloat()
+        textPaint.textSize = spToPx(element.fontSizeSp) * scale
         textPaint.typeface = getTypeface(element.fontWeight)
         
         val textWidth = textPaint.measureText(text)
@@ -304,8 +441,8 @@ class FrameRenderer(private val context: Context) {
         val drawX = if (leftToRight) x else x - textWidth
         canvas.drawText(text, drawX, textY, textPaint)
         
-        val spacing = dpToPx(8)
-        return if (leftToRight) x + textWidth + spacing else x - textWidth - spacing
+        val spacing = dpToPx(8) * scale
+        return textWidth + spacing
     }
     
     /**
@@ -332,6 +469,7 @@ class FrameRenderer(private val context: Context) {
             TextType.ISO -> metadata.iso?.let { "ISO $it" }
             TextType.SHUTTER_SPEED -> metadata.shutterSpeed
             TextType.FOCAL_LENGTH -> metadata.focalLength
+            TextType.FOCAL_LENGTH_35MM -> metadata.focalLength35mm
             TextType.APERTURE -> metadata.aperture
             TextType.RESOLUTION -> metadata.resolution
             TextType.CUSTOM -> element.format
@@ -353,24 +491,40 @@ class FrameRenderer(private val context: Context) {
         x: Float,
         centerY: Float,
         leftToRight: Boolean,
-        metadata: ExifMetadata? = null
+        metadata: ExifMetadata? = null,
+        scale: Float = 1f
     ): Float {
         // 如果是 App Logo 且不显示品牌，则跳过
         if (element.logoType == LogoType.APP && !showAppBranding) {
             return x
         }
         
-        val size = dpToPx(element.sizeDp)
+        val size = (dpToPx(element.sizeDp) * scale).toInt()
         
         // 获取对应的 drawable
         val drawableRes = when (element.logoType) {
-            LogoType.APP -> R.mipmap.ic_launcher
+            LogoType.APP -> R.mipmap.ic_launcher_round
             LogoType.BRAND -> getBrandLogoDrawable(metadata?.brand)
         }
         
         try {
             val drawable = context.getDrawable(drawableRes) ?: return x
-            val bitmap = drawable.toBitmap(size, size)
+            val intrinsicW = drawable.intrinsicWidth
+            val intrinsicH = drawable.intrinsicHeight
+            val (bmpW, bmpH) = if (intrinsicW > 0 && intrinsicH > 0) {
+                val ratio = intrinsicW.toFloat() / intrinsicH.toFloat()
+                if (ratio >= 1f) {
+                    // 宽大于高，以目标 size 为宽，按比例计算高
+                    size to (size / ratio).toInt()
+                } else {
+                    // 高大于宽，以目标 size 为高，按比例计算宽
+                    (size * ratio).toInt() to size
+                }
+            } else {
+                // 无内在尺寸，退回到方形
+                size to size
+            }
+            val bitmap = drawable.toBitmap(bmpW.coerceAtLeast(1), bmpH.coerceAtLeast(1))
             
             // 应用 tint 颜色
             val tintedBitmap = if (element.tint != null) {
@@ -386,15 +540,15 @@ class FrameRenderer(private val context: Context) {
             }
             
             val drawX = if (leftToRight) x else x - size
-            val drawY = centerY - size / 2f
+            val drawY = centerY - bitmap.height / 2f
             
             canvas.drawBitmap(tintedBitmap, drawX, drawY, null)
             
-            val spacing = dpToPx(8)
-            return if (leftToRight) x + size + spacing else x - size - spacing
+            val spacing = dpToPx(8) * scale
+            return (size + spacing)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to draw logo", e)
-            return x
+            return 0f
         }
     }
     
@@ -413,19 +567,11 @@ class FrameRenderer(private val context: Context) {
         val resourceName = when (brandLower) {
             "samsung" -> "ic_brand_samsung"
             "xiaomi", "redmi", "poco" -> "ic_brand_xiaomi"
-            "huawei", "honor" -> "ic_brand_huawei"
+            "huawei" -> "ic_brand_huawei"
+            "honor" -> "ic_brand_honor"
             "oppo", "realme", "oneplus" -> "ic_brand_oppo"
             "vivo", "iqoo" -> "ic_brand_vivo"
-            "google", "pixel" -> "ic_brand_google"
-            "sony" -> "ic_brand_sony"
             "apple" -> "ic_brand_apple"
-            "motorola", "moto" -> "ic_brand_motorola"
-            "nokia" -> "ic_brand_nokia"
-            "asus", "rog" -> "ic_brand_asus"
-            "lg" -> "ic_brand_lg"
-            "lenovo" -> "ic_brand_lenovo"
-            "zte", "nubia" -> "ic_brand_zte"
-            "meizu" -> "ic_brand_meizu"
             else -> null
         }
         
@@ -449,13 +595,14 @@ class FrameRenderer(private val context: Context) {
         element: FrameElement.Divider,
         x: Float,
         centerY: Float,
-        leftToRight: Boolean
+        leftToRight: Boolean,
+        scale: Float = 1f
     ): Float {
         linePaint.color = element.color
-        linePaint.strokeWidth = dpToPx(element.thicknessDp).toFloat()
+        linePaint.strokeWidth = dpToPx(element.thicknessDp) * scale
         
-        val length = dpToPx(element.lengthDp)
-        val margin = dpToPx(element.marginDp)
+        val length = dpToPx(element.lengthDp) * scale
+        val margin = dpToPx(element.marginDp) * scale
         
         val drawX = if (leftToRight) x + margin else x - margin
         
@@ -465,7 +612,7 @@ class FrameRenderer(private val context: Context) {
                 drawX, centerY + length / 2f,
                 linePaint
             )
-            return if (leftToRight) drawX + margin else drawX - margin
+            return margin * 2 + linePaint.strokeWidth
         } else {
             // 水平线（通常不常用）
             canvas.drawLine(
@@ -473,7 +620,7 @@ class FrameRenderer(private val context: Context) {
                 drawX + length / 2f, centerY,
                 linePaint
             )
-            return x
+            return length + margin * 2
         }
     }
     

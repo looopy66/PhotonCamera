@@ -153,7 +153,8 @@ object FrameTemplateParser {
             fontWeight = FontWeight.valueOf(obj.optString("fontWeight", "NORMAL")),
             format = obj.optString("format").takeIf { it.isNotEmpty() },
             prefix = obj.optString("prefix").takeIf { it.isNotEmpty() },
-            suffix = obj.optString("suffix").takeIf { it.isNotEmpty() }
+            suffix = obj.optString("suffix").takeIf { it.isNotEmpty() },
+            line = obj.optInt("line", 0)
         )
     }
     
@@ -165,7 +166,8 @@ object FrameTemplateParser {
             logoType = LogoType.valueOf(obj.getString("logoType")),
             alignment = ElementAlignment.valueOf(obj.optString("alignment", "CENTER")),
             sizeDp = obj.optInt("size", 24),
-            tint = obj.optString("tint").takeIf { it.isNotEmpty() }?.let { parseColor(it) }
+            tint = obj.optString("tint").takeIf { it.isNotEmpty() }?.let { parseColor(it) },
+            line = obj.optInt("line", 0)
         )
     }
     
@@ -179,7 +181,8 @@ object FrameTemplateParser {
             lengthDp = obj.optInt("length", 16),
             thicknessDp = obj.optInt("thickness", 1),
             color = parseColor(obj.optString("color", "#CCCCCC")),
-            marginDp = obj.optInt("margin", 8)
+            marginDp = obj.optInt("margin", 8),
+            line = obj.optInt("line", 0)
         )
     }
     
@@ -188,7 +191,8 @@ object FrameTemplateParser {
      */
     private fun parseSpacerElement(obj: JSONObject): FrameElement.Spacer {
         return FrameElement.Spacer(
-            widthDp = obj.optInt("width", 8)
+            widthDp = obj.optInt("width", 8),
+            line = obj.optInt("line", 0)
         )
     }
     

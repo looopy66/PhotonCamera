@@ -74,7 +74,8 @@ sealed class FrameElement {
         val fontWeight: FontWeight = FontWeight.NORMAL,
         val format: String? = null,
         val prefix: String? = null,
-        val suffix: String? = null
+        val suffix: String? = null,
+        val line: Int = 0
     ) : FrameElement()
     
     /**
@@ -84,7 +85,8 @@ sealed class FrameElement {
         val logoType: LogoType,
         val alignment: ElementAlignment = ElementAlignment.CENTER,
         val sizeDp: Int = 24,
-        val tint: Int? = null
+        val tint: Int? = null,
+        val line: Int = 0
     ) : FrameElement()
     
     /**
@@ -96,14 +98,16 @@ sealed class FrameElement {
         val lengthDp: Int = 16,
         val thicknessDp: Int = 1,
         val color: Int = Color.LTGRAY,
-        val marginDp: Int = 8
+        val marginDp: Int = 8,
+        val line: Int = 0
     ) : FrameElement()
     
     /**
      * 间距元素
      */
     data class Spacer(
-        val widthDp: Int = 8
+        val widthDp: Int = 8,
+        val line: Int = 0
     ) : FrameElement()
 }
 
@@ -120,6 +124,7 @@ enum class TextType {
     ISO,              // ISO 感光度
     SHUTTER_SPEED,    // 快门速度
     FOCAL_LENGTH,     // 焦距
+    FOCAL_LENGTH_35MM,     // 35mm等效焦距
     APERTURE,         // 光圈值
     RESOLUTION,       // 分辨率
     CUSTOM,           // 自定义文本

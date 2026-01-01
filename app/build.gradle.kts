@@ -59,6 +59,8 @@ dependencies {
     // Navigation Compose
     implementation(libs.androidx.navigation.compose)
     
+    // ExifInterface for writing EXIF metadata
+    implementation(libs.androidx.exifinterface)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
