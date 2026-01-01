@@ -20,7 +20,10 @@ import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.LutManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -44,6 +47,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val lutManager = LutManager(application)
     
     val state: StateFlow<CameraState> = cameraController.state
+    
+    // 照片保存完成事件
+    private val _imageSavedEvent = MutableSharedFlow<Unit>()
+    val imageSavedEvent: SharedFlow<Unit> = _imageSavedEvent.asSharedFlow()
     
     // LUT 相关状态
     var currentLutConfig: LutConfig? by mutableStateOf(null)
@@ -312,7 +319,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * 保存图片
      */
-    private fun saveImage(bytes: ByteArray) {
+    private suspend fun saveImage(bytes: ByteArray) {
         val context = getApplication<Application>()
         val filename = "IMG_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.jpg"
         
@@ -335,6 +342,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         outputStream.write(bytes)
                     }
                     Log.d(TAG, "Image saved: $uri")
+                    _imageSavedEvent.emit(Unit)
                 }
             } else {
                 // 低版本直接写文件
@@ -351,6 +359,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     outputStream.write(bytes)
                 }
                 Log.d(TAG, "Image saved: ${file.absolutePath}")
+                _imageSavedEvent.emit(Unit)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save image", e)

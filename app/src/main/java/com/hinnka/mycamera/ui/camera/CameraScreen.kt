@@ -67,6 +67,13 @@ fun CameraScreen(
         }
         galleryViewModel.refreshLatestPhoto()
     }
+    
+    // 监听照片保存完成事件，立即刷新缩略图
+    LaunchedEffect(Unit) {
+        viewModel.imageSavedEvent.collect {
+            galleryViewModel.refreshLatestPhoto()
+        }
+    }
 
     val previewSize = CameraUtils.getFixedPreviewSize(context, state.currentCameraId)
     
