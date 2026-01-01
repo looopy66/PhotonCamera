@@ -3,13 +3,14 @@ package com.hinnka.mycamera
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.util.Log
 import android.view.OrientationEventListener
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,15 +32,31 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.hinnka.mycamera.ui.camera.CameraScreen
+import com.hinnka.mycamera.ui.gallery.GalleryScreen
+import com.hinnka.mycamera.ui.gallery.PhotoDetailScreen
+import com.hinnka.mycamera.ui.gallery.PhotoEditScreen
 import com.hinnka.mycamera.ui.theme.PhotonCameraTheme
 import com.hinnka.mycamera.viewmodel.CameraViewModel
+import com.hinnka.mycamera.viewmodel.GalleryViewModel
 
+/**
+ * 应用屏幕枚举
+ */
+enum class Screen {
+    CAMERA,
+    GALLERY,
+    PHOTO_DETAIL,
+    PHOTO_EDIT
+}
 
 class MainActivity : ComponentActivity() {
     
-    private val viewModel: CameraViewModel by viewModels()
+    private val cameraViewModel: CameraViewModel by viewModels()
+    private val galleryViewModel: GalleryViewModel by viewModels()
     
     private var hasCameraPermission by mutableStateOf(false)
+    private var currentScreen by mutableStateOf(Screen.CAMERA)
+    private var photoDetailIndex by mutableStateOf(0)
     
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -53,7 +70,7 @@ class MainActivity : ComponentActivity() {
         // 启用全屏模式
         enableEdgeToEdge()
         hideSystemUI()
-        orientationListen(viewModel)
+        orientationListen(cameraViewModel)
         
         // 检查相机权限
         hasCameraPermission = ContextCompat.checkSelfPermission(
@@ -67,7 +84,49 @@ class MainActivity : ComponentActivity() {
                     color = Color.Black
                 ) {
                     if (hasCameraPermission) {
-                        CameraScreen(viewModel = viewModel)
+                        when (currentScreen) {
+                            Screen.CAMERA -> {
+                                CameraScreen(
+                                    viewModel = cameraViewModel,
+                                    galleryViewModel = galleryViewModel,
+                                    onGalleryClick = {
+                                        currentScreen = Screen.GALLERY
+                                    }
+                                )
+                            }
+                            Screen.GALLERY -> {
+                                GalleryScreen(
+                                    viewModel = galleryViewModel,
+                                    onBack = {
+                                        currentScreen = Screen.CAMERA
+                                    },
+                                    onPhotoClick = { index ->
+                                        photoDetailIndex = index
+                                        currentScreen = Screen.PHOTO_DETAIL
+                                    }
+                                )
+                            }
+                            Screen.PHOTO_DETAIL -> {
+                                PhotoDetailScreen(
+                                    viewModel = galleryViewModel,
+                                    initialIndex = photoDetailIndex,
+                                    onBack = {
+                                        currentScreen = Screen.GALLERY
+                                    },
+                                    onEdit = {
+                                        currentScreen = Screen.PHOTO_EDIT
+                                    }
+                                )
+                            }
+                            Screen.PHOTO_EDIT -> {
+                                PhotoEditScreen(
+                                    viewModel = galleryViewModel,
+                                    onBack = {
+                                        currentScreen = Screen.PHOTO_DETAIL
+                                    }
+                                )
+                            }
+                        }
                     } else {
                         PermissionScreen(
                             onRequestPermission = {
@@ -77,6 +136,19 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+    
+    @Deprecated("Use OnBackPressedDispatcher instead")
+    override fun onBackPressed() {
+        when (currentScreen) {
+            Screen.GALLERY -> currentScreen = Screen.CAMERA
+            Screen.PHOTO_DETAIL -> currentScreen = Screen.GALLERY
+            Screen.PHOTO_EDIT -> {
+                galleryViewModel.exitEditMode()
+                currentScreen = Screen.PHOTO_DETAIL
+            }
+            Screen.CAMERA -> super.onBackPressed()
         }
     }
     

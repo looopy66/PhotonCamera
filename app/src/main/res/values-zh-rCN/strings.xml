@@ -30,4 +30,22 @@
     
     <!-- Zoom -->
     <string name="zoom">变焦</string>
+    
+    <!-- Gallery -->
+    <string name="gallery">相册</string>
+    <string name="photo_detail">照片详情</string>
+    <string name="share">分享</string>
+    <string name="delete">删除</string>
+    <string name="export">导出</string>
+    <string name="edit">编辑</string>
+    <string name="select_all">全选</string>
+    <string name="cancel">取消</string>
+    <string name="save">保存</string>
+    <string name="rotate">旋转</string>
+    <string name="crop">裁剪</string>
+    <string name="brightness">亮度</string>
+    <string name="delete_confirm">删除这张照片？</string>
+    <string name="delete_multiple_confirm">删除 %d 张照片？</string>
+    <string name="no_photos">还没有照片</string>
+    <string name="photo_info">照片信息</string>
 </resources>

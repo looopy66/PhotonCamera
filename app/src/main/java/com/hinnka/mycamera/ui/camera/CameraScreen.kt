@@ -1,7 +1,6 @@
 package com.hinnka.mycamera.ui.camera
 
 import android.graphics.SurfaceTexture
-import android.util.Log
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
@@ -25,14 +24,15 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.application
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.CameraUtils
 import com.hinnka.mycamera.camera.LensType
 import com.hinnka.mycamera.ui.components.BackCameraSelector
+import com.hinnka.mycamera.ui.components.GalleryThumbnail
 import com.hinnka.mycamera.ui.components.LutControlPanel
 import com.hinnka.mycamera.viewmodel.CameraViewModel
+import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
@@ -49,19 +49,23 @@ enum class ActivePanel {
 @Composable
 fun CameraScreen(
     viewModel: CameraViewModel,
+    galleryViewModel: GalleryViewModel,
+    onGalleryClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val state by viewModel.state.collectAsState()
+    val latestPhoto by galleryViewModel.latestPhoto.collectAsState()
     
     // 标记相机是否已打开
     var cameraOpened by remember { mutableStateOf(false) }
     
-    // 从后台返回时检查并恢复相机
+    // 从后台返回时检查并恢复相机，刷新最新照片
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         if (cameraOpened) {
             viewModel.checkAndRecoverCamera()
         }
+        galleryViewModel.refreshLatestPhoto()
     }
 
     val previewSize = CameraUtils.getFixedPreviewSize(context, state.currentCameraId)
@@ -114,14 +118,24 @@ fun CameraScreen(
         }
         
         // 控制层
-        Controls(state, viewModel)
+        Controls(
+            state = state,
+            viewModel = viewModel,
+            latestPhotoUri = latestPhoto?.uri,
+            onGalleryClick = {
+                galleryViewModel.loadPhotos()
+                onGalleryClick()
+            }
+        )
     }
 }
 
 @Composable
 fun Controls(
     state: CameraState,
-    viewModel: CameraViewModel
+    viewModel: CameraViewModel,
+    latestPhotoUri: android.net.Uri?,
+    onGalleryClick: () -> Unit
 ) {
     var activePanel by remember { mutableStateOf(ActivePanel.SETTINGS) }
 
@@ -145,7 +159,9 @@ fun Controls(
                 onShutterSpeedChange = { viewModel.setShutterSpeed(it) },
                 onZoomChange = { viewModel.setZoomRatio(it) },
                 onAspectRatioChange = { viewModel.setAspectRatio(it) },
-                onAutoExposureToggle = { viewModel.setAutoExposure(it) }
+                onAutoExposureToggle = { viewModel.setAutoExposure(it) },
+                latestPhotoUri = latestPhotoUri,
+                onGalleryClick = onGalleryClick
             )
         }
     } else {
@@ -161,7 +177,9 @@ fun Controls(
             onShutterSpeedChange = { viewModel.setShutterSpeed(it) },
             onZoomChange = { viewModel.setZoomRatio(it) },
             onAspectRatioChange = { viewModel.setAspectRatio(it) },
-            onAutoExposureToggle = { viewModel.setAutoExposure(it) }
+            onAutoExposureToggle = { viewModel.setAutoExposure(it) },
+            latestPhotoUri = latestPhotoUri,
+            onGalleryClick = onGalleryClick
         )
     }
 }
@@ -212,7 +230,9 @@ fun LandscapeControlsContent(
     onShutterSpeedChange: (Long) -> Unit,
     onZoomChange: (Float) -> Unit,
     onAspectRatioChange: (com.hinnka.mycamera.camera.AspectRatio) -> Unit,
-    onAutoExposureToggle: (Boolean) -> Unit
+    onAutoExposureToggle: (Boolean) -> Unit,
+    latestPhotoUri: android.net.Uri?,
+    onGalleryClick: () -> Unit
 ) {
     // 横屏布局：左侧控制面板，右侧按钮
     // 直接填充父容器，让旋转后的布局自动适应
@@ -278,6 +298,12 @@ fun LandscapeControlsContent(
             verticalArrangement = Arrangement.SpaceEvenly,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // 相册入口
+            GalleryThumbnail(
+                latestPhotoUri = latestPhotoUri,
+                onClick = onGalleryClick
+            )
+            
             // 设置按钮
             IconButton(
                 onClick = { 
@@ -363,6 +389,8 @@ fun PortraitControls(
     onZoomChange: (Float) -> Unit,
     onAspectRatioChange: (com.hinnka.mycamera.camera.AspectRatio) -> Unit,
     onAutoExposureToggle: (Boolean) -> Unit,
+    latestPhotoUri: android.net.Uri?,
+    onGalleryClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -403,6 +431,12 @@ fun PortraitControls(
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // 相册入口
+            GalleryThumbnail(
+                latestPhotoUri = latestPhotoUri,
+                onClick = onGalleryClick
+            )
+            
             // 设置按钮
             IconButton(
                 onClick = { 

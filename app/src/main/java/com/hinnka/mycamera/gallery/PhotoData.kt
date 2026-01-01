@@ -1,0 +1,42 @@
+package com.hinnka.mycamera.gallery
+
+import android.net.Uri
+
+/**
+ * 照片数据模型
+ */
+data class PhotoData(
+    val id: Long,
+    val uri: Uri,
+    val displayName: String,
+    val dateAdded: Long,
+    val dateTaken: Long?,
+    val size: Long,
+    val width: Int,
+    val height: Int
+) {
+    /**
+     * 格式化的拍摄时间
+     */
+    fun getFormattedDate(): String {
+        val date = dateTaken ?: (dateAdded * 1000)
+        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
+        return sdf.format(java.util.Date(date))
+    }
+    
+    /**
+     * 格式化的文件大小
+     */
+    fun getFormattedSize(): String {
+        return when {
+            size < 1024 -> "$size B"
+            size < 1024 * 1024 -> "${size / 1024} KB"
+            else -> String.format("%.1f MB", size / (1024.0 * 1024.0))
+        }
+    }
+    
+    /**
+     * 分辨率字符串
+     */
+    fun getResolution(): String = "${width}x${height}"
+}

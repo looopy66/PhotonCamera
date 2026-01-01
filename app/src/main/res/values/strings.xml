@@ -29,4 +29,22 @@
     
     <!-- Zoom -->
     <string name="zoom">Zoom</string>
+    
+    <!-- Gallery -->
+    <string name="gallery">Gallery</string>
+    <string name="photo_detail">Photo Detail</string>
+    <string name="share">Share</string>
+    <string name="delete">Delete</string>
+    <string name="export">Export</string>
+    <string name="edit">Edit</string>
+    <string name="select_all">Select All</string>
+    <string name="cancel">Cancel</string>
+    <string name="save">Save</string>
+    <string name="rotate">Rotate</string>
+    <string name="crop">Crop</string>
+    <string name="brightness">Brightness</string>
+    <string name="delete_confirm">Delete this photo?</string>
+    <string name="delete_multiple_confirm">Delete %d photos?</string>
+    <string name="no_photos">No photos yet</string>
+    <string name="photo_info">Photo Info</string>
 </resources>
