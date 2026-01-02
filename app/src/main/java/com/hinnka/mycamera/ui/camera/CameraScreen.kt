@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.ui.camera
 
+import android.util.Log
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -27,8 +28,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.CameraUtils
-import com.hinnka.mycamera.ui.components.GalleryThumbnail
 import com.hinnka.mycamera.ui.components.EditControlPanel
+import com.hinnka.mycamera.ui.components.GalleryThumbnail
 import com.hinnka.mycamera.ui.components.HistogramView
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
@@ -163,10 +164,11 @@ fun CameraScreen(
             
             // Zoom Control Bar (Overlay at bottom of preview)
             ZoomControlBar(
-                zoomRatio = state.zoomRatio,
-                maxZoom = state.getMaxZoom(),
-                minZoom = state.getMinZoom(),
+                zoomRatio = viewModel.zoomRatioByMain,
+                availableCameras = state.availableCameras,
+                currentCameraId = state.getCurrentCameraInfo()?.cameraId ?: "0",
                 onZoomChange = { viewModel.setZoomRatio(it) },
+                onLensSwitch = { lenId -> viewModel.switchToLens(lenId) },
                 onFilterClick = { 
                      // Toggle Filter Panel
                      activePanel = if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS

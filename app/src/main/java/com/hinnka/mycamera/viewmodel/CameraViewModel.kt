@@ -6,6 +6,7 @@ import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraMetadata
 import android.util.Log
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
@@ -84,6 +85,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     var availableFrameList: List<FrameInfo> by mutableStateOf(emptyList())
         private set
+
+    var zoomRatioByMain by mutableFloatStateOf(1f)
     
     // 保存当前的 SurfaceTexture 以便切换摄像头时重用
     private var currentSurfaceTexture: SurfaceTexture? = null
@@ -180,43 +183,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun switchCamera() {
         cameraController.switchCamera()
         reopenCamera()
+        zoomRatioByMain = 1f
     }
     
     /**
      * 切换到指定的镜头类型
      */
-    fun switchToLens(lensType: LensType) {
-        cameraController.switchToLens(lensType)
+    fun switchToLens(cameraId: String) {
+        cameraController.switchToCameraId(cameraId)
         reopenCamera()
-    }
-    
-    /**
-     * 切换到下一个后置摄像头
-     */
-    fun switchBackCamera() {
-        val backCameras = getBackCameras().sortedBy { 
-            when (it.lensType) {
-                LensType.BACK_ULTRA_WIDE -> 0
-                LensType.BACK_MAIN -> 1
-                LensType.BACK_TELEPHOTO -> 2
-                else -> 3
-            }
-        }
-        
-        if (backCameras.isEmpty()) return
-        
-        val currentLensType = state.value.currentLensType
-        
-        if (currentLensType == LensType.FRONT) {
-            switchToLens(LensType.BACK_MAIN)
-            return
-        }
-        
-        val currentIndex = backCameras.indexOfFirst { it.lensType == currentLensType }
-        val nextIndex = (currentIndex + 1) % backCameras.size
-        val nextCamera = backCameras[nextIndex]
-        
-        switchToLens(nextCamera.lensType)
     }
     
     /**
@@ -267,22 +242,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 设置变焦倍数
      */
     fun setZoomRatio(ratio: Float) {
-        cameraController.setZoomRatio(ratio)
-    }
-    
-    /**
-     * 设置到指定的变焦档位
-     */
-    fun setZoomStep(step: Float) {
-        setZoomRatio(step)
-    }
-    
-    /**
-     * 获取变焦档位列表
-     * Camera2 不支持通过变焦切换物理摄像头，返回空列表
-     */
-    fun getZoomSteps(): List<Float> {
-        return emptyList()
+        zoomRatioByMain = ratio
+        val cameraInfo = state.value.getCurrentCameraInfo()
+        val intrinsicZoomRatio = cameraInfo?.intrinsicZoomRatio ?: 1.0f
+        cameraController.setZoomRatio(ratio / intrinsicZoomRatio)
     }
     
     /**

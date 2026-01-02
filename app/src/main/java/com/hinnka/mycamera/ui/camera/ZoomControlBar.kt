@@ -1,44 +1,62 @@
 package com.hinnka.mycamera.ui.camera
 
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.Canvas
+import android.util.Log
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.camera.CameraInfo
+import com.hinnka.mycamera.camera.LensType
 import kotlin.math.abs
 import kotlin.math.roundToInt
+
+/**
+ * 显示模式：变焦倍率 or 35mm等效焦距
+ */
+enum class ZoomDisplayMode {
+    ZOOM_RATIO,      // 显示 0.6x, 1x, 2x 等
+    FOCAL_LENGTH     // 显示 35mm, 50mm, 85mm 等
+}
 
 @Composable
 fun ZoomControlBar(
     zoomRatio: Float,
-    maxZoom: Float,
-    minZoom: Float,
+    availableCameras: List<CameraInfo>,
+    currentCameraId: String,
     onZoomChange: (Float) -> Unit,
-    onZoomStop: () -> Unit = {},
+    onLensSwitch: (String) -> Unit,
     onFilterClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // 显示模式状态
+    var displayMode by remember { mutableStateOf(ZoomDisplayMode.FOCAL_LENGTH) }
+
+    val currentCameraIdState by rememberUpdatedState(currentCameraId)
+
+    val currentCamera = availableCameras.find { it.cameraId == currentCameraId }
+
+    // 获取当前相机信息
+    val mainCamera = availableCameras.find { it.lensType == if (currentCamera?.lensType == LensType.FRONT) LensType.FRONT else LensType.BACK_MAIN }
+    
+    // 根据可用相机计算变焦档位
+    val zoomStops = calculateZoomStops(availableCameras, currentCamera)
+    
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -46,7 +64,30 @@ fun ZoomControlBar(
             .height(32.dp),
         contentAlignment = Alignment.Center
     ) {
-        // Filter Button (Right aligned)
+        // Display Mode Toggle (Left)
+        IconButton(
+            onClick = { 
+                displayMode = if (displayMode == ZoomDisplayMode.ZOOM_RATIO) {
+                    ZoomDisplayMode.FOCAL_LENGTH
+                } else {
+                    ZoomDisplayMode.ZOOM_RATIO
+                }
+            },
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .size(32.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.SwapHoriz,
+                contentDescription = "Toggle Display Mode",
+                modifier = Modifier.size(32.dp)
+                    .background(Color.Black.copy(alpha = 0.3f), CircleShape)
+                    .padding(8.dp),
+                tint = Color.White
+            )
+        }
+        
+        // Filter Button (Right)
         IconButton(
             onClick = onFilterClick,
             modifier = Modifier
@@ -64,69 +105,147 @@ fun ZoomControlBar(
         }
 
         // Zoom Ruler (Center)
-        // We define a fixed set of zoom stops for simplicity, similar to the image: 0.6, 1x, 2, 3, 10
-        val stops = listOf(0.6f, 1f, 2f, 3f, 5f, 10f).filter { it <= maxZoom && it >= minZoom }
-        
         ZoomRuler(
             zoomRatio = zoomRatio,
-            stops = stops,
-            onZoomChange = onZoomChange,
-            modifier = Modifier
-                .fillMaxWidth(0.7f) // Leave room for filter button
-                .fillMaxHeight()
+            stops = zoomStops,
+            mainCamera = mainCamera,
+            displayMode = displayMode,
+            onZoomChange = { newZoom ->
+                // 检查是否需要切换镜头
+                val camera = findOptimalLens(newZoom, availableCameras, currentCameraIdState)
+                if (camera != null && camera.cameraId != currentCameraIdState) {
+                    onLensSwitch(camera.cameraId)
+                }
+                onZoomChange(newZoom)
+            },
+            modifier = Modifier.fillMaxHeight()
         )
     }
+}
+
+/**
+ * 计算变焦档位
+ */
+private fun calculateZoomStops(
+    cameras: List<CameraInfo>,
+    currentCamera: CameraInfo?
+): List<Float> {
+    val stops = mutableSetOf<Float>()
+
+    if (currentCamera?.lensType == LensType.FRONT) {
+        // 添加各个镜头的固有变焦比例
+        cameras.filter { it.lensType == LensType.FRONT }.forEach { camera ->
+            if (camera.intrinsicZoomRatio > 0) {
+                stops.add(camera.intrinsicZoomRatio)
+            }
+        }
+        stops.add(2f)
+        return stops.sorted()
+    }
+    
+    // 添加各个镜头的固有变焦比例
+    cameras.filter { it.lensType != LensType.FRONT }.forEach { camera ->
+        if (camera.intrinsicZoomRatio > 0) {
+            stops.add(camera.intrinsicZoomRatio)
+        }
+    }
+
+    val mainCamera = cameras.find { it.lensType == LensType.BACK_MAIN } ?: return stops.sorted()
+
+    stops.add(35f / mainCamera.focalLength35mmEquivalent)
+    stops.add(50f / mainCamera.focalLength35mmEquivalent)
+    stops.add(85f / mainCamera.focalLength35mmEquivalent)
+    stops.add(200f / mainCamera.focalLength35mmEquivalent)
+    return stops.sorted()
+}
+
+/**
+ * 根据变焦倍率找到最佳镜头
+ */
+private fun findOptimalLens(
+    targetZoom: Float,
+    cameras: List<CameraInfo>,
+    currentCameraId: String
+): CameraInfo? {
+    val currentLensType = cameras.find { it.cameraId == currentCameraId }?.lensType
+    val zoomableCameras = cameras.filter { if (currentLensType == LensType.FRONT) it.lensType == LensType.FRONT else it.lensType != LensType.FRONT }
+    if (zoomableCameras.isEmpty()) return null
+    return zoomableCameras.filter { it.intrinsicZoomRatio <= targetZoom }.sortedByDescending { it.intrinsicZoomRatio }.getOrNull(0)
 }
 
 @Composable
 fun ZoomRuler(
     zoomRatio: Float,
     stops: List<Float>,
+    mainCamera: CameraInfo?,
+    displayMode: ZoomDisplayMode,
     onZoomChange: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val textMeasurer = rememberTextMeasurer()
     val activeColor = Color(0xFFFFD700)
     val inactiveColor = Color.White.copy(alpha = 0.5f)
 
-    Canvas(
+    val stopsState by rememberUpdatedState(stops)
+
+    Row(
         modifier = modifier
-            .background(Color.Black.copy(alpha = 0.3f), RoundedCornerShape(20.dp))
+            .background(Color.Black.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
             .pointerInput(Unit) {
-            detectTapGestures { offset ->
-                // Simple tap to nearest stop logic could be added here
-                // For now, let's just use drag
-                val width = size.width
-                val stepWidth = width / stops.size
-                val index = (offset.x / stepWidth).toInt().coerceIn(0, stops.lastIndex)
-                onZoomChange(stops[index])
-            }
-        }
+                detectTapGestures { offset ->
+                    val width = size.width
+                    val stepWidth = width / stopsState.size
+                    val index = (offset.x / stepWidth).toInt().coerceIn(0, stopsState.lastIndex)
+                    onZoomChange(stopsState[index])
+                }
+            },
+        horizontalArrangement = Arrangement.SpaceAround,
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        val width = size.width
-        val height = size.height
-        val stepWidth = width / stops.size
-        
-        stops.forEachIndexed { index, stop ->
-            val isSelected = abs(stop - zoomRatio) < 0.1f
-            val x = stepWidth * index + stepWidth / 2
-            
-            // Draw text
-            val text = "${stop}x".replace(".0x", "x")
+        stops.forEachIndexed { _, stop ->
+            val isSelected = abs(stop - zoomRatio) <= 0.1f
+
+            // 显示文本
+            val text = when (displayMode) {
+                ZoomDisplayMode.ZOOM_RATIO -> {
+                    formatZoomRatio(stop)
+                }
+                ZoomDisplayMode.FOCAL_LENGTH -> {
+                    zoomRatioToFocalLength(stop, mainCamera)
+                }
+            }
+
             val style = TextStyle(
-                fontSize = if (isSelected) 13.sp else 9.sp,
+                fontSize = if (isSelected) 13.sp else 10.sp,
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                 color = if (isSelected) activeColor else inactiveColor
             )
-            
-            val textLayoutResult = textMeasurer.measure(text, style)
-            val textWidth = textLayoutResult.size.width
-            val textHeight = textLayoutResult.size.height
-            
-            drawText(
-                textLayoutResult = textLayoutResult,
-                topLeft = Offset(x - textWidth / 2, height / 2 - textHeight / 2)
+
+            Text(text, style = style, modifier = Modifier
+                .padding(horizontal = 8.dp)
             )
         }
     }
+}
+
+/**
+ * 格式化变焦倍率显示
+ */
+private fun formatZoomRatio(ratio: Float): String {
+    val rounded = (ratio * 10).roundToInt() / 10f
+    return if (rounded == rounded.toInt().toFloat()) {
+        "${ratio.toInt()}x"
+    } else {
+        String.format("%.1fx", rounded)
+    }
+}
+
+/**
+ * 变焦倍率转换为35mm等效焦距
+ */
+private fun zoomRatioToFocalLength(zoomRatio: Float, mainCamera: CameraInfo?): String {
+    if (mainCamera == null || mainCamera.focalLength35mmEquivalent <= 0) {
+        // 默认主摄为23mm等效
+        return (23f * zoomRatio).toInt().toString()
+    }
+    return (mainCamera.focalLength35mmEquivalent * zoomRatio).roundToInt().toString()
 }

@@ -333,6 +333,8 @@ class Camera2Controller(private val context: Context) {
             
         } catch (e: CameraAccessException) {
             Log.e(TAG, "Failed to start preview", e)
+        } catch (e: IllegalStateException) {
+            Log.e(TAG, "Failed to start preview - illegal state", e)
         }
     }
     
