@@ -47,14 +47,6 @@ fun LutSelector(
             .padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // "无滤镜" 选项
-        LutItem(
-            name = "原图",
-            isSelected = currentLutId == null,
-            onClick = { onLutSelected(null) },
-            isNone = true
-        )
-        
         // LUT 列表
         availableLuts.forEach { lut ->
             LutItem(
@@ -264,14 +256,12 @@ fun LutControlPanel(
             onLutSelected = onLutSelected
         )
         
-        // 强度滑块（仅当选择了 LUT 时显示）
-        if (currentLutId != null) {
-            LutIntensitySlider(
-                intensity = lutIntensity,
-                onIntensityChange = onIntensityChange,
-                enabled = true
-            )
-        }
+        // 强度滑块（LUT 始终可用）
+        LutIntensitySlider(
+            intensity = lutIntensity,
+            onIntensityChange = onIntensityChange,
+            enabled = true
+        )
     }
 }
 
@@ -321,14 +311,12 @@ fun EditControlPanel(
             onLutSelected = onLutSelected
         )
         
-        // 强度滑块（仅当选择了 LUT 时显示）
-        if (currentLutId != null) {
-            LutIntensitySlider(
-                intensity = lutIntensity,
-                onIntensityChange = onIntensityChange,
-                enabled = true
-            )
-        }
+        // 强度滑块（LUT 始终可用）
+        LutIntensitySlider(
+            intensity = lutIntensity,
+            onIntensityChange = onIntensityChange,
+            enabled = true
+        )
         
         Spacer(modifier = Modifier.height(8.dp))
         

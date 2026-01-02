@@ -153,6 +153,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 // 应用保存的 LUT 配置
                 if (prefs.lutId != null) {
                     setLut(prefs.lutId)
+                } else {
+                    // 如果没有保存的 LUT，使用默认的 Photon LUT
+                    setLut("Photon")
                 }
                 setLutIntensity(prefs.lutIntensity)
                 
@@ -161,6 +164,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     currentFrameId = prefs.frameId
                 }
                 currentShowAppBranding = prefs.showAppBranding
+            } else {
+                // 如果没有任何偏好设置，使用默认的 Photon LUT
+                setLut("Photon")
             }
         }
     }

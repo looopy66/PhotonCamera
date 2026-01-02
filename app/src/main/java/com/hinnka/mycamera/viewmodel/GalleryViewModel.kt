@@ -157,7 +157,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             
             // 更新编辑状态
             currentPhotoMetadata?.let { metadata ->
-                editLutId = metadata.lutId
+                editLutId = metadata.lutId ?: "Photon"
                 editLutIntensity = metadata.lutIntensity
                 editBrightness = metadata.brightness
                 editRotation = metadata.rotation
@@ -165,9 +165,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editShowAppBranding = metadata.showAppBranding
                 
                 // 加载 LUT 配置
-                if (metadata.lutId != null) {
+                editLutId?.let { id ->
                     editLutConfig = withContext(Dispatchers.IO) {
-                        lutManager.loadLut(metadata.lutId)
+                        lutManager.loadLut(id)
                     }
                 }
             }
@@ -332,20 +332,28 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         isEditing = true
         // 从当前元数据恢复编辑状态
         currentPhotoMetadata?.let { metadata ->
-            editLutId = metadata.lutId
+            editLutId = metadata.lutId ?: "Photon"
             editLutIntensity = metadata.lutIntensity
             editBrightness = metadata.brightness
             editRotation = metadata.rotation
             editFrameId = metadata.frameId
             editShowAppBranding = metadata.showAppBranding
         } ?: run {
-            editLutId = null
+            editLutId = "Photon"
             editLutIntensity = 1f
             editBrightness = 1f
             editRotation = 0f
-            editLutConfig = null
             editFrameId = null
             editShowAppBranding = true
+        }
+        
+        // 加载当前编辑的 LUT 配置
+        editLutId?.let { id ->
+            viewModelScope.launch {
+                editLutConfig = withContext(Dispatchers.IO) {
+                    lutManager.loadLut(id)
+                }
+            }
         }
     }
     
@@ -356,7 +364,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         isEditing = false
         editRotation = 0f
         editBrightness = 1f
-        editLutId = null
+        editLutId = "Photon"
         editLutIntensity = 1f
         editLutConfig = null
         editFrameId = null

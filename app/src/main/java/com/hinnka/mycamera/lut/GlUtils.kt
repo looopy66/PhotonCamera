@@ -93,6 +93,9 @@ object GlUtils {
         
         GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, textureId)
         
+        // 设置像素对齐为 1 字节（支持非 4 字节对齐的尺寸，如 33）
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
+        
         // 设置纹理参数
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
@@ -115,6 +118,9 @@ object GlUtils {
             GLES30.GL_UNSIGNED_BYTE,
             buffer
         )
+        
+        // 恢复默认对齐
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 4)
         
         GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, 0)
         

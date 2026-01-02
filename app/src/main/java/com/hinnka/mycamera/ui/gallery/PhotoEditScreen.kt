@@ -244,15 +244,6 @@ fun PhotoEditScreen(
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        // 无 LUT 选项
-                        item {
-                            LutOption(
-                                name = stringResource(R.string.original),
-                                isSelected = editLutId == null,
-                                onClick = { viewModel.setEditLut(null) }
-                            )
-                        }
-                        
                         // LUT 选项
                         items(availableLuts) { lut ->
                             LutOption(
@@ -263,40 +254,38 @@ fun PhotoEditScreen(
                         }
                     }
                     
-                    // LUT 强度滑块（仅当选择了 LUT 时显示）
-                    if (editLutId != null) {
-                        Spacer(modifier = Modifier.height(12.dp))
+                    // LUT 强度滑块（LUT 始终可用）
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = stringResource(R.string.intensity),
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            modifier = Modifier.width(60.dp)
+                        )
                         
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = stringResource(R.string.intensity),
-                                color = Color.White,
-                                fontSize = 14.sp,
-                                modifier = Modifier.width(60.dp)
-                            )
-                            
-                            Slider(
-                                value = editLutIntensity,
-                                onValueChange = { viewModel.updateEditLutIntensity(it) },
-                                valueRange = 0f..1f,
-                                colors = SliderDefaults.colors(
-                                    thumbColor = AccentOrange,
-                                    activeTrackColor = AccentOrange,
-                                    inactiveTrackColor = Color.White.copy(alpha = 0.3f)
-                                ),
-                                modifier = Modifier.weight(1f)
-                            )
-                            
-                            Text(
-                                text = "${(editLutIntensity * 100).toInt()}%",
-                                color = Color.White.copy(alpha = 0.7f),
-                                fontSize = 12.sp,
-                                modifier = Modifier.width(40.dp)
-                            )
-                        }
+                        Slider(
+                            value = editLutIntensity,
+                            onValueChange = { viewModel.updateEditLutIntensity(it) },
+                            valueRange = 0f..1f,
+                            colors = SliderDefaults.colors(
+                                thumbColor = AccentOrange,
+                                activeTrackColor = AccentOrange,
+                                inactiveTrackColor = Color.White.copy(alpha = 0.3f)
+                            ),
+                            modifier = Modifier.weight(1f)
+                        )
+                        
+                        Text(
+                            text = "${(editLutIntensity * 100).toInt()}%",
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 12.sp,
+                            modifier = Modifier.width(40.dp)
+                        )
                     }
                     
                     Spacer(modifier = Modifier.height(16.dp))

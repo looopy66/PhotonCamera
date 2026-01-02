@@ -295,6 +295,10 @@ class LutImageProcessor {
         }
         
         GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, lutTextureId)
+        
+        // 设置像素对齐为 1 字节（支持非 4 字节对齐的尺寸，如 33）
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
+        
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
@@ -307,6 +311,9 @@ class LutImageProcessor {
             lutConfig.size, lutConfig.size, lutConfig.size,
             0, GLES30.GL_RGB, GLES30.GL_UNSIGNED_BYTE, buffer
         )
+        
+        // 恢复默认对齐
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 4)
     }
     
     private fun initShaderProgram() {
