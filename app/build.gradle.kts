@@ -61,6 +61,9 @@ dependencies {
     
     // ExifInterface for writing EXIF metadata
     implementation(libs.androidx.exifinterface)
+    
+    // DataStore for user preferences
+    implementation("androidx.datastore:datastore-preferences:1.0.0")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

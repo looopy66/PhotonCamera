@@ -110,7 +110,7 @@ object BitmapUtils {
 
         return try {
             // A. 创建局部解码器
-            decoder = BitmapRegionDecoder.newInstance(bytes, 0, bytes.size)
+            decoder = BitmapRegionDecoder.newInstance(bytes, 0, bytes.size, false)
             // B. 解码裁切区域 (无缩放，高质量)
             rawCroppedBitmap = decoder.decodeRegion(cropRect, null)
             // C. 应用物理旋转

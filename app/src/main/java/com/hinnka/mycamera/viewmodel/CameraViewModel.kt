@@ -14,6 +14,7 @@ import com.hinnka.mycamera.frame.ExifMetadata
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.frame.FrameManager
 import com.hinnka.mycamera.frame.FrameRenderer
+import com.hinnka.mycamera.data.UserPreferencesRepository
 import com.hinnka.mycamera.gallery.PhotoManager
 import com.hinnka.mycamera.gallery.PhotoMetadata
 import com.hinnka.mycamera.gallery.PhotoProcessor
@@ -26,6 +27,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -40,6 +42,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
     
     private val cameraController = Camera2Controller(application)
+    
+    // 用户偏好设置仓库
+    private val userPreferencesRepository = UserPreferencesRepository(application)
     
     // LUT 管理器
     private val lutManager = LutManager(application)
@@ -132,6 +137,32 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 初始化边框管理器
         frameManager.initialize()
         availableFrameList = frameManager.getAvailableFrames()
+        
+        // 加载用户偏好设置
+        viewModelScope.launch {
+            val prefs = userPreferencesRepository.userPreferences.firstOrNull()
+            if (prefs != null) {
+                // 应用保存的画面比例
+                try {
+                    val savedAspectRatio = AspectRatio.valueOf(prefs.aspectRatio)
+                    cameraController.setAspectRatio(savedAspectRatio)
+                } catch (e: IllegalArgumentException) {
+                    // 如果保存的值无效，使用默认值
+                }
+                
+                // 应用保存的 LUT 配置
+                if (prefs.lutId != null) {
+                    setLut(prefs.lutId)
+                }
+                setLutIntensity(prefs.lutIntensity)
+                
+                // 应用保存的边框配置
+                if (prefs.frameId != null) {
+                    currentFrameId = prefs.frameId
+                }
+                currentShowAppBranding = prefs.showAppBranding
+            }
+        }
     }
     
     /**
@@ -285,6 +316,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun setAspectRatio(ratio: AspectRatio) {
         cameraController.setAspectRatio(ratio)
+        // 保存到用户偏好设置
+        viewModelScope.launch {
+            userPreferencesRepository.saveAspectRatio(ratio.name)
+        }
     }
     
     /**
@@ -303,13 +338,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         currentLutId = lutId
         if (lutId == null) {
             currentLutConfig = null
-            return
+        } else {
+            viewModelScope.launch {
+                currentLutConfig = withContext(Dispatchers.IO) {
+                    lutManager.loadLut(lutId)
+                }
+            }
         }
         
+        // 保存到用户偏好设置
         viewModelScope.launch {
-            currentLutConfig = withContext(Dispatchers.IO) {
-                lutManager.loadLut(lutId)
-            }
+            userPreferencesRepository.saveLutConfig(lutId, state.value.lutIntensity)
         }
     }
     
@@ -318,6 +357,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun setLutIntensity(intensity: Float) {
         cameraController.setLutIntensity(intensity)
+        // 保存到用户偏好设置
+        viewModelScope.launch {
+            userPreferencesRepository.saveLutIntensity(intensity)
+        }
     }
     
     /**
@@ -341,6 +384,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun setFrame(frameId: String?) {
         currentFrameId = frameId
+        // 保存到用户偏好设置
+        viewModelScope.launch {
+            userPreferencesRepository.saveFrameConfig(frameId, currentShowAppBranding)
+        }
     }
 
     /**
@@ -348,6 +395,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun setShowAppBranding(show: Boolean) {
         currentShowAppBranding = show
+        // 保存到用户偏好设置
+        viewModelScope.launch {
+            userPreferencesRepository.saveShowAppBranding(show)
+        }
     }
 
     /**
