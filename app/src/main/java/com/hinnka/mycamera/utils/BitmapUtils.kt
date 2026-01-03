@@ -1,8 +1,10 @@
 package com.hinnka.mycamera.utils
 
 import android.graphics.*
+import android.media.Image
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import kotlin.math.floor
 
@@ -18,6 +20,89 @@ object BitmapUtils {
      */
     fun getBitmap(byteArray: ByteArray): Bitmap {
         return BitmapFactory.decodeByteArray(byteArray, 0, byteArray.size)
+    }
+
+    fun imageToBitmapAndRotate(image: Image): Bitmap {
+        val plane = image.planes[0]
+        val buffer = plane.buffer
+        val bytes = ByteArray(buffer.remaining())
+        buffer.get(bytes)
+
+        val orientation = try {
+            val exif = ExifInterface(ByteArrayInputStream(bytes))
+            exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+        } catch (e: Exception) {
+            ExifInterface.ORIENTATION_NORMAL
+        }
+
+        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+        val width = options.outWidth
+        val height = options.outHeight
+        // 2. 准备旋转矩阵 & 判断宽高交换
+        val matrix = Matrix()
+        var isSwapped = false
+
+        when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> {
+                matrix.postRotate(90f)
+                isSwapped = true
+            }
+            ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+            ExifInterface.ORIENTATION_ROTATE_270 -> {
+                matrix.postRotate(270f)
+                isSwapped = true
+            }
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> {
+                matrix.postRotate(90f)
+                matrix.postScale(-1f, 1f)
+                isSwapped = true
+            }
+            ExifInterface.ORIENTATION_TRANSVERSE -> {
+                matrix.postRotate(270f)
+                matrix.postScale(-1f, 1f)
+                isSwapped = true
+            }
+        }
+
+        val visualWidth = if (isSwapped) height else width
+        val visualHeight = if (isSwapped) width else height
+
+        val cropRect = Rect(0, 0, visualWidth, visualHeight)
+
+        // 6. 开始处理：Bytes -> Region -> Bitmap -> Rotate -> Bytes
+        var decoder: BitmapRegionDecoder? = null
+        var rawCroppedBitmap: Bitmap
+        var finalBitmap: Bitmap
+
+        return try {
+            // A. 创建局部解码器
+            decoder = BitmapRegionDecoder.newInstance(bytes, 0, bytes.size, false)
+            // B. 解码裁切区域 (无缩放，高质量)
+            rawCroppedBitmap = decoder.decodeRegion(cropRect, null)
+            // C. 应用物理旋转
+            if (matrix.isIdentity) {
+                finalBitmap = rawCroppedBitmap
+            } else {
+                finalBitmap = Bitmap.createBitmap(
+                    rawCroppedBitmap, 0, 0,
+                    rawCroppedBitmap.width, rawCroppedBitmap.height,
+                    matrix, true
+                )
+                // 立即回收旧图，节省内存
+                if (rawCroppedBitmap != finalBitmap) {
+                    rawCroppedBitmap.recycle()
+                }
+            }
+            finalBitmap
+        } catch (e: Exception) {
+            e.printStackTrace()
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        } finally {
+            decoder?.recycle()
+        }
     }
 
     /**

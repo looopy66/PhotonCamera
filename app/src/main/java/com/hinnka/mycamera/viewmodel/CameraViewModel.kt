@@ -1,9 +1,8 @@
 package com.hinnka.mycamera.viewmodel
 
 import android.app.Application
-import android.graphics.BitmapFactory
 import android.graphics.SurfaceTexture
-import android.hardware.camera2.CameraMetadata
+import android.media.Image
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -11,12 +10,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.hinnka.mycamera.camera.*
+import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.camera.Camera2Controller
+import com.hinnka.mycamera.camera.CameraState
+import com.hinnka.mycamera.camera.CaptureInfo
+import com.hinnka.mycamera.data.UserPreferencesRepository
 import com.hinnka.mycamera.frame.ExifMetadata
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.frame.FrameManager
 import com.hinnka.mycamera.frame.FrameRenderer
-import com.hinnka.mycamera.data.UserPreferencesRepository
 import com.hinnka.mycamera.gallery.PhotoManager
 import com.hinnka.mycamera.gallery.PhotoMetadata
 import com.hinnka.mycamera.gallery.PhotoProcessor
@@ -24,12 +26,10 @@ import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.LutManager
+import com.hinnka.mycamera.utils.BitmapUtils
+import com.hinnka.mycamera.utils.BitmapUtils.toByteArray
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -93,9 +93,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     
     init {
         cameraController.initialize()
-        cameraController.onImageCaptured = { bytes, captureInfo ->
+        cameraController.onImageCaptured = { image, captureInfo ->
             viewModelScope.launch {
-                saveImage(bytes, captureInfo)
+                saveImage(image, captureInfo)
             }
         }
         
@@ -361,7 +361,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * 保存图片
      */
-    private suspend fun saveImage(bytes: ByteArray, captureInfo: CaptureInfo) {
+    private suspend fun saveImage(image: Image, captureInfo: CaptureInfo) {
         val context = getApplication<Application>()
         
         // 保存当前 LUT 信息用于元数据
@@ -373,6 +373,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val showAppBrandingToSave = currentShowAppBranding
 
         try {
+            // Step 1: 将 Image 转换为 bitmap 字节数组（带方向纠正）
+            val bitmap = withContext(Dispatchers.Default) {
+                BitmapUtils.imageToBitmapAndRotate(image = image)
+            }
+            
+            // 关闭 Image 资源
+            image.close()
+            
             // 保存 LUT 和边框元数据到应用私有目录
             val metadata = PhotoMetadata(
                 lutId = lutIdToSave,
@@ -383,32 +391,29 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             
             // 生成预览图/缩略图源（缩小比例以提高性能）
             val previewBitmap = withContext(Dispatchers.Default) {
-                val options = BitmapFactory.Options().apply {
-                    inSampleSize = 4 // 缩小比例，减小内存占用和处理时间
-                }
-                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
-                if (bitmap != null) {
-                    val exifMetadata = ExifMetadata(
-                        deviceModel = captureInfo.model,
-                        brand = captureInfo.make.replaceFirstChar { it.uppercase() },
-                        dateTaken = captureInfo.captureTime,
-                        iso = captureInfo.iso,
-                        shutterSpeed = captureInfo.formatExposureTime(),
-                        focalLength = captureInfo.formatFocalLength(),
-                        focalLength35mm = captureInfo.formatFocalLength35mm(),
-                        aperture = captureInfo.formatAperture(),
-                        width = captureInfo.imageWidth,
-                        height = captureInfo.imageHeight
-                    )
-                    
-                    photoProcessor.process(context, bitmap, metadata, exifMetadata = exifMetadata)
-                } else null
+//                val options = BitmapFactory.Options().apply {
+//                    inSampleSize = (min(captureInfo.imageWidth, captureInfo.imageHeight) / 1080f).roundToInt()
+//                }
+                val exifMetadata = ExifMetadata(
+                    deviceModel = captureInfo.model,
+                    brand = captureInfo.make.replaceFirstChar { it.uppercase() },
+                    dateTaken = captureInfo.captureTime,
+                    iso = captureInfo.iso,
+                    shutterSpeed = captureInfo.formatExposureTime(),
+                    focalLength = captureInfo.formatFocalLength(),
+                    focalLength35mm = captureInfo.formatFocalLength35mm(),
+                    aperture = captureInfo.formatAperture(),
+                    width = captureInfo.imageWidth,
+                    height = captureInfo.imageHeight
+                )
+
+                photoProcessor.process(context, bitmap, metadata, exifMetadata = exifMetadata)
             }
             
             // 使用 PhotoManager 统一管理保存，并写入 EXIF
-            val photoId = PhotoManager.savePhoto(context, bytes, metadata, previewBitmap, captureInfo)
+            val photoId = PhotoManager.savePhoto(context, bitmap.toByteArray(), metadata, previewBitmap, captureInfo)
             
-            previewBitmap?.recycle()
+            previewBitmap.recycle()
             
             if (photoId != null) {
                 Log.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
@@ -418,6 +423,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save image", e)
+            // 确保即使出错也关闭 Image
+            try {
+                image.close()
+            } catch (ex: Exception) {
+                // Image 可能已经关闭
+            }
         }
     }
     

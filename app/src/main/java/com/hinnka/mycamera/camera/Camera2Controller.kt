@@ -3,11 +3,13 @@ package com.hinnka.mycamera.camera
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.ImageFormat
+import android.graphics.Rect
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
 import android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
 import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.SessionConfiguration
+import android.media.Image
 import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
@@ -15,14 +17,13 @@ import android.util.Log
 import android.util.Size
 import android.view.Surface
 import androidx.exifinterface.media.ExifInterface
-import com.hinnka.mycamera.utils.BitmapUtils
-import com.hinnka.mycamera.utils.BitmapUtils.toByteArray
 import com.hinnka.mycamera.utils.OrientationObserver
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.io.ByteArrayInputStream
 import java.util.concurrent.Executors
+import kotlin.math.floor
+
 
 /**
  * Camera2 相机控制器
@@ -58,14 +59,11 @@ class Camera2Controller(private val context: Context) {
     private val _state = MutableStateFlow(CameraState())
     val state: StateFlow<CameraState> = _state.asStateFlow()
     
-    // 设备旋转角度
-    private var deviceRotation: Int = 0
-    
     // 最后一次拍摄结果，用于提取 EXIF 信息
     private var lastCaptureResult: TotalCaptureResult? = null
     
     // 图片拍摄回调（携带 CaptureInfo）
-    var onImageCaptured: ((ByteArray, CaptureInfo) -> Unit)? = null
+    var onImageCaptured: ((Image, CaptureInfo) -> Unit)? = null
 
     private val previewCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(
@@ -168,6 +166,9 @@ class Camera2Controller(private val context: Context) {
         try {
             // 配置 SurfaceTexture
             previewSurface = Surface(surfaceTexture)
+
+//            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+//            HighResolutionHelper.logResolutionCapabilities(characteristics)
             
             // 创建 ImageReader 用于拍照
             val captureSize = getBestCaptureSize(cameraId)
@@ -181,30 +182,15 @@ class Camera2Controller(private val context: Context) {
                     val image = reader.acquireLatestImage()
                     image?.let {
                         _state.value = _state.value.copy(isCapturing = false)
-                        val buffer = it.planes[0].buffer
-                        val bytes = ByteArray(buffer.remaining()).also { buffer.get(it) }
-                        it.close()
+                        val width = it.width
+                        val height = it.height
 
-                        val orientation = try {
-                            val exif = ExifInterface(ByteArrayInputStream(bytes))
-                            exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
-                        } catch (e: Exception) {
-                            ExifInterface.ORIENTATION_NORMAL
-                        }
+                        // 构建 CaptureInfo (包含正确的传感器方向)
+                        val captureInfo = buildCaptureInfo(lastCaptureResult, width, height)
 
-                        // 0. 在源头归一化：物理旋转图片字节流
-                        val finalBitmap = BitmapUtils.cropAndRotate(bytes, _state.value.aspectRatio, orientation)
-
-                        val finalWidth = finalBitmap.width
-                        val finalHeight = finalBitmap.height
-
-                        val normalizedBytes = finalBitmap.toByteArray()
-                        finalBitmap.recycle()
-
-                        // 构建 CaptureInfo
-                        val captureInfo = buildCaptureInfo(lastCaptureResult, finalWidth, finalHeight)
-
-                        onImageCaptured?.invoke(normalizedBytes, captureInfo)
+                        // 传递完整的 Image 对象和 CaptureInfo
+                        // 注意：调用者负责关闭 Image
+                        onImageCaptured?.invoke(it, captureInfo)
                     }
                 }, cameraHandler)
             }
@@ -290,6 +276,8 @@ class Camera2Controller(private val context: Context) {
                 
                 // 设置自动曝光
                 set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+
+                setupFlatProfileRequest(this)
             }
             
             val surfaces = mutableListOf(surface, reader.surface)
@@ -336,6 +324,35 @@ class Camera2Controller(private val context: Context) {
         } catch (e: IllegalStateException) {
             Log.e(TAG, "Failed to start preview - illegal state", e)
         }
+    }
+
+    private fun setupFlatProfileRequest(builder: CaptureRequest.Builder) {
+        // 1. 禁用所有场景特效
+//        builder.set(CaptureRequest.CONTROL_SCENE_MODE, CaptureRequest.CONTROL_SCENE_MODE_DISABLED)
+//        builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
+//        builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
+
+        // 2. 强制使用矩阵色彩校正（去除厂商滤镜倾向）
+//        builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
+
+        // 3. 覆盖 Tone Mapping（关键：去除 S 曲线）
+//        builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_PRESET_CURVE)
+//        builder.set(CaptureRequest.TONEMAP_PRESET_CURVE, CaptureRequest.TONEMAP_PRESET_CURVE_SRGB)
+//
+//        // 生成标准 Gamma 2.2 曲线 (比纯线性更接近人眼感知的“标准灰片”)
+//        // 如果直接用 Linear，画面会极其暗，LUT 很难拉回来
+//        val curvePoints = FloatArray(64 * 2) // 64个控制点
+//        for (i in 0 until 64) {
+//            val input = i / 63.0f
+//            val output = input.toDouble().pow(1.0 / 2.2).toFloat() // Gamma 2.2
+//            curvePoints[i * 2] = input
+//            curvePoints[i * 2 + 1] = output
+//        }
+//        val gammaCurve = TonemapCurve(curvePoints, curvePoints, curvePoints)
+//        builder.set(CaptureRequest.TONEMAP_CURVE, gammaCurve)
+
+        // 4. 关闭锐化
+//        builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
     }
     
     /**
@@ -654,9 +671,70 @@ class Camera2Controller(private val context: Context) {
      * 设置画面比例
      */
     fun setAspectRatio(ratio: AspectRatio) {
+        val cameraId = _state.value.currentCameraId
+        if (cameraId.isEmpty()) return
         _state.value = _state.value.copy(aspectRatio = ratio)
+
+        try {
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val sensorRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
+
+            val width = sensorRect.width()
+            val height = sensorRect.height()
+
+            val targetRatio = ratio.getValue(true) // 总是返回 长边/短边
+            var finalW: Int
+            var finalH: Int
+
+            // 判断是横图还是竖图
+            if (width > height) {
+                // 横图
+                val expectedWidth = height * targetRatio
+                if (expectedWidth <= width) {
+                    finalH = height
+                    finalW = floor(expectedWidth).toInt()
+                } else {
+                    finalW = width
+                    finalH = floor(width / targetRatio).toInt()
+                }
+            } else {
+                // 竖图
+                val expectedHeight = width * targetRatio
+                if (expectedHeight <= height) {
+                    finalW = width
+                    finalH = floor(expectedHeight).toInt()
+                } else {
+                    finalH = height
+                    finalW = floor(height / targetRatio).toInt()
+                }
+            }
+
+            // 居中裁切
+            val x = (width - finalW) / 2
+            val y = (height - finalH) / 2
+
+            // 边界安全检查
+            val safeX = x.coerceAtLeast(0)
+            val safeY = y.coerceAtLeast(0)
+            val safeW = finalW.coerceAtMost(width - safeX)
+            val safeH = finalH.coerceAtMost(height - safeY)
+
+            val cropRect = Rect(
+                safeX,
+                safeY,
+                safeX + safeW,
+                safeY + safeH
+            )
+
+            previewRequestBuilder?.apply {
+                set(CaptureRequest.SCALER_CROP_REGION, cropRect)
+                updatePreview()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to setAspectRatio", e)
+        }
     }
-    
+
     /**
      * 设置 LUT 强度
      */
@@ -695,6 +773,7 @@ class Camera2Controller(private val context: Context) {
                 // 设置 JPEG 方向
                 set(CaptureRequest.JPEG_ORIENTATION, getJpegOrientation())
                 set(CaptureRequest.JPEG_QUALITY, 95.toByte())
+                setupFlatProfileRequest(this)
             }
             
             captureSession?.capture(captureBuilder.build(), object : CameraCaptureSession.CaptureCallback() {
@@ -813,7 +892,6 @@ class Camera2Controller(private val context: Context) {
             focalLength35mm = focalLength35mm,
             whiteBalance = whiteBalance,
             flashState = flashState,
-            // 由于我们在 setOnImageAvailableListener 中已经对 bytes 进行了归一化，
             // 传给下游的方向永远是 NORMAL (1)
             orientation = ExifInterface.ORIENTATION_NORMAL,
             imageWidth = imageWidth,
