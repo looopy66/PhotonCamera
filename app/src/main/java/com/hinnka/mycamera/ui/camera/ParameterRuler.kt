@@ -29,7 +29,7 @@ import kotlin.math.*
  */
 enum class CameraParameter {
     EXPOSURE_COMPENSATION,  // AE
-    SHUTTER_SPEED,         // SEC
+    SHUTTER_SPEED,         // Tv
     ISO,                   // ISO
     APERTURE,              // Av
     WHITE_BALANCE          // AWB
@@ -52,21 +52,20 @@ fun ParameterRuler(
     modifier: Modifier = Modifier
 ) {
     val yellow = Color(0xFFFFD700)
-    val backgroundColor = Color.Black.copy(alpha = 0.7f)
+    val backgroundColor = Color.Black.copy(alpha = 0.95f)
 
     val currentValueState by rememberUpdatedState(currentValue)
-    var selectedValue by remember { mutableStateOf(currentValue) }
+    var selectedValue by remember(parameter) { mutableStateOf(currentValue) }
+    val scaleValues = remember(parameter, minValue, maxValue) {
+        getScaleValues(parameter, minValue, maxValue)
+    }
     
     Box(
         modifier = modifier
+            .padding(8.dp)
             .fillMaxWidth()
             .height(48.dp)
-            .padding(horizontal = 8.dp)
-            .background(backgroundColor, RoundedCornerShape(20.dp))
-            .pointerInput(Unit) {
-                // Detect tap outside to dismiss
-                detectTapGestures { }
-            }
+            .background(backgroundColor, RoundedCornerShape(24.dp))
     ) {
         Row(
             modifier = Modifier.fillMaxSize(),
@@ -99,38 +98,30 @@ fun ParameterRuler(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
-                    .padding(horizontal = 8.dp)
+                    .padding(horizontal = 16.dp)
                     .pointerInput(minValue, maxValue) {
-                        coroutineScope {
-                            launch {
-                                detectTapGestures {
-                                    if (isAdjustable) {
-                                        val scaleValues = getScaleValues(parameter, minValue, maxValue)
-                                        val width = size.width
-                                        val stepWidth = width / scaleValues.size
-                                        val index = (it.x / stepWidth).toInt().coerceIn(0, scaleValues.lastIndex)
-                                        selectedValue = scaleValues[index]
-                                        if (selectedValue != currentValueState) {
-                                            onValueChange(selectedValue)
-                                        }
-                                    }
+                        detectTapGestures {
+                            if (isAdjustable) {
+                                val width = size.width
+                                val stepWidth = width / scaleValues.size
+                                val index = (it.x / stepWidth).toInt().coerceIn(0, scaleValues.lastIndex)
+                                selectedValue = scaleValues[index]
+                                if (selectedValue != currentValueState) {
+                                    onValueChange(selectedValue)
                                 }
                             }
-                            launch {
-                                detectDragGestures(
-                                    onDragEnd = {
-                                        if (selectedValue != currentValueState) {
-                                            onValueChange(selectedValue)
-                                        }
-                                    }) { change, _ ->
-                                    if (isAdjustable) {
-                                        change.consume()
-                                        val scaleValues = getScaleValues(parameter, minValue, maxValue)
-                                        val width = size.width
-                                        val stepWidth = width / scaleValues.size
-                                        val index = (change.position.x / stepWidth).toInt().coerceIn(0, scaleValues.lastIndex)
-                                        selectedValue = scaleValues[index]
-                                    }
+                        }
+                    }
+                    .pointerInput(minValue, maxValue) {
+                        detectDragGestures { change, _ ->
+                            if (isAdjustable) {
+                                change.consume()
+                                val width = size.width
+                                val stepWidth = width / scaleValues.size
+                                val index = (change.position.x / stepWidth).toInt().coerceIn(0, scaleValues.lastIndex)
+                                selectedValue = scaleValues[index]
+                                if (selectedValue != currentValueState) {
+                                    onValueChange(selectedValue)
                                 }
                             }
                         }
@@ -168,41 +159,47 @@ private fun RulerScale(
         
         Row(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(vertical = 8.dp),
+                .padding(vertical = 8.dp)
+                .fillMaxSize(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            Log.d("Ruler", "RulerScale: $isAdjustable $currentValue $scaleValues")
             scaleValues.forEachIndexed { index, value ->
-                val isCurrent = isAdjustable && (value * 10).toInt() == (currentValue * 10).toInt()
+                val isCurrent = isAdjustable && (value * 10).roundToInt() == (currentValue * 10).roundToInt()
+
+                Log.d("Ruler", "RulerScale: $isCurrent")
                 
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.weight(1f)
+                    verticalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxHeight().weight(1f)
                 ) {
-                    // Tick mark
-                    Box(
-                        modifier = Modifier
-                            .width(if (isCurrent) 2.dp else 1.dp)
-                            .height(if (isCurrent) 12.dp else 8.dp)
-                            .background(
-                                if (isCurrent) yellow else Color.White.copy(alpha = 0.6f),
-                                RoundedCornerShape(1.dp)
-                            )
-                    )
-                    
-                    Spacer(modifier = Modifier.height(2.dp))
-                    
+
                     // Label
                     Text(
                         text = if (isCurrent || index == 0 || index == scaleValues.size - 1 || value == 0f) formatParameterValue(parameter, value) else "",
-                        fontSize = if (isCurrent) 10.sp else 8.sp,
+                        fontSize = if (isCurrent) 12.sp else 10.sp,
                         fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
                         color = if (isCurrent) yellow else Color.White.copy(alpha = 0.6f),
                         overflow = TextOverflow.Visible,
                         softWrap = false,
-                        textAlign = TextAlign.Center
+                        textAlign = TextAlign.Center,
+                        lineHeight = if (isCurrent) 12.sp else 10.sp,
                     )
+
+                    // Tick mark
+                    Box(modifier = Modifier.height(13.dp), contentAlignment = Alignment.BottomCenter) {
+                        Spacer(
+                            modifier = Modifier
+                                .width(if (isCurrent) 2.dp else 1.dp)
+                                .height(if (isCurrent) 13.dp else 9.dp)
+                                .background(
+                                    if (isCurrent) yellow else Color.White.copy(alpha = 0.6f),
+                                    RoundedCornerShape(1.dp)
+                                )
+                        )
+                    }
                 }
             }
         }
@@ -215,9 +212,8 @@ private fun RulerScale(
 private fun getScaleValues(parameter: CameraParameter, minValue: Float, maxValue: Float): List<Float> {
     return when (parameter) {
         CameraParameter.EXPOSURE_COMPENSATION -> {
-            generateSequence(-9f) { it + 1f }
-                .takeWhile { it <= 9f }
-                .map { it * 0.33f }
+            generateSequence(minValue) { it + 1 / 3f }
+                .takeWhile { it <= maxValue }
                 .filter { it in minValue..maxValue }
                 .toList()
         }

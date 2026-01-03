@@ -113,7 +113,7 @@ data class CameraState(
     val zoomRatio: Float = 1.0f,
     
     // 画面比例
-    val aspectRatio: AspectRatio = AspectRatio.RATIO_3_2,
+    val aspectRatio: AspectRatio = AspectRatio.RATIO_4_3,
     
     // 设备方向
     val deviceRotation: Int = 0, // 0, 90, 180, 270
@@ -145,6 +145,10 @@ data class CameraState(
      */
     fun getExposureCompensationRange(): Range<Int> {
         return getCurrentCameraInfo()?.exposureCompensationRange ?: Range(0, 0)
+    }
+
+    fun getExposureCompensationStep(): Float {
+        return getCurrentCameraInfo()?.exposureCompensationStep ?: 0.333f
     }
     
     /**

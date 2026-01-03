@@ -3,6 +3,7 @@ package com.hinnka.mycamera.ui.camera
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,13 +19,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.CameraUtils
 import com.hinnka.mycamera.ui.components.EditControlPanel
@@ -35,6 +42,7 @@ import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
@@ -56,6 +64,8 @@ fun CameraScreen(
     val context = LocalContext.current
     val state by viewModel.state.collectAsState()
     val latestPhoto by galleryViewModel.latestPhoto.collectAsState()
+
+    val backgroundColor = Color(0xFF434A5D)
     
     // 标记相机是否已打开
     var cameraOpened by remember { mutableStateOf(false) }
@@ -84,7 +94,7 @@ fun CameraScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(backgroundColor)
     ) {
         // 顶部控制条
         CameraTopBar(
@@ -99,14 +109,23 @@ fun CameraScreen(
                 viewModel.saveShowHistogram(!viewModel.showHistogram)
             },
             showGrid = true, // TODO: State
-            onGridToggle = { /* TODO */ },
+            onGridToggle = {
+                viewModel.setAspectRatio(when (state.aspectRatio) {
+                    AspectRatio.RATIO_4_3 -> AspectRatio.RATIO_16_9
+                    AspectRatio.RATIO_16_9 -> AspectRatio.RATIO_1_1
+                    AspectRatio.RATIO_1_1 -> AspectRatio.RATIO_4_3
+                    else -> AspectRatio.RATIO_4_3
+                })
+            },
             onSettingsClick = { /* TODO */ }
         )
 
         Box(
             modifier = Modifier
-                .weight(1f)
+                .padding(8.dp)
                 .fillMaxWidth()
+                .aspectRatio(3 / 4f)
+                .background(Color.Black),
         ) {
             // 相机预览
             CameraPreviewGL(
@@ -131,135 +150,149 @@ fun CameraScreen(
                 modifier = Modifier.fillMaxSize()
             )
             
-            // 实时直方图 (Overlaid on preview if enabled)
-            if (state.histogram != null && viewModel.showHistogram) {
-                HistogramView(
-                    histogram = state.histogram,
-                    modifier = Modifier
-                        .padding(16.dp)
-                        .size(80.dp, 40.dp)
-                        .align(Alignment.TopStart)
-                        .autoRotate(dx = -20.dp, dy = 20.dp)
+            Box(modifier = Modifier.fillMaxWidth().aspectRatio(3 / 4f).align(Alignment.Center)) {
+                // 实时直方图 (Overlaid on preview if enabled)
+                if (state.histogram != null && viewModel.showHistogram) {
+                    HistogramView(
+                        histogram = state.histogram,
+                        modifier = Modifier
+                            .padding(16.dp)
+                            .size(80.dp, 40.dp)
+                            .align(Alignment.TopStart)
+                            .autoRotate(dx = -20.dp, dy = 20.dp)
+                    )
+                }
+
+                if (activePanel == ActivePanel.FILTERS) {
+                    EditControlPanel(
+                        availableLuts = viewModel.availableLutList,
+                        currentLutId = viewModel.currentLutId,
+                        lutIntensity = state.lutIntensity,
+                        onLutSelected = { viewModel.setLut(it) },
+                        onIntensityChange = { viewModel.setLutIntensity(it) },
+                        availableFrames = viewModel.availableFrameList,
+                        currentFrameId = viewModel.currentFrameId,
+                        showAppBranding = viewModel.currentShowAppBranding,
+                        onFrameSelected = { viewModel.setFrame(it) },
+                        onBrandingToggle = { viewModel.setShowAppBranding(it) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp)
+                            .background(Color.Black)
+                    )
+                }
+
+                // Zoom Control Bar (Overlay at bottom of preview)
+                ZoomControlBar(
+                    zoomRatio = viewModel.zoomRatioByMain,
+                    availableCameras = state.availableCameras,
+                    currentCameraId = state.getCurrentCameraInfo()?.cameraId ?: "0",
+                    onZoomChange = { viewModel.setZoomRatio(it) },
+                    onLensSwitch = { lenId -> viewModel.switchToLens(lenId) },
+                    onFilterClick = {
+                        // Toggle Filter Panel
+                        activePanel = if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
+                    },
+                    modifier = Modifier.align(Alignment.BottomCenter)
                 )
             }
 
-            if (activePanel == ActivePanel.FILTERS) {
-                EditControlPanel(
-                    availableLuts = viewModel.availableLutList,
-                    currentLutId = viewModel.currentLutId,
-                    lutIntensity = state.lutIntensity,
-                    onLutSelected = { viewModel.setLut(it) },
-                    onIntensityChange = { viewModel.setLutIntensity(it) },
-                    availableFrames = viewModel.availableFrameList,
-                    currentFrameId = viewModel.currentFrameId,
-                    showAppBranding = viewModel.currentShowAppBranding,
-                    onFrameSelected = { viewModel.setFrame(it) },
-                    onBrandingToggle = { viewModel.setShowAppBranding(it) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(200.dp)
-                        .background(Color.Black)
-                )
-            }
-            
-            // Zoom Control Bar (Overlay at bottom of preview)
-            ZoomControlBar(
-                zoomRatio = viewModel.zoomRatioByMain,
-                availableCameras = state.availableCameras,
-                currentCameraId = state.getCurrentCameraInfo()?.cameraId ?: "0",
-                onZoomChange = { viewModel.setZoomRatio(it) },
-                onLensSwitch = { lenId -> viewModel.switchToLens(lenId) },
-                onFilterClick = { 
-                     // Toggle Filter Panel
-                     activePanel = if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
-                },
-                modifier = Modifier.align(Alignment.BottomCenter)
-            )
-        }
-
-        // Parameter Ruler (shown above CameraParameterBar when a parameter is selected)
-        selectedParameter?.let { param ->
-            ParameterRuler(
-                parameter = param,
-                currentValue = when (param) {
-                    CameraParameter.EXPOSURE_COMPENSATION -> state.exposureCompensation * 0.33f
-                    CameraParameter.SHUTTER_SPEED -> state.shutterSpeed.toFloat()
-                    CameraParameter.ISO -> state.iso.toFloat()
-                    CameraParameter.APERTURE -> state.aperture
-                    CameraParameter.WHITE_BALANCE -> state.awbTemperature.toFloat()
-                },
-                minValue = when (param) {
-                    CameraParameter.EXPOSURE_COMPENSATION -> -3f
-                    CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().lower.toFloat()
-                    CameraParameter.ISO -> state.getIsoRange().lower.toFloat()
-                    CameraParameter.APERTURE -> state.aperture // Fixed
-                    CameraParameter.WHITE_BALANCE -> 2500f
-                },
-                maxValue = when (param) {
-                    CameraParameter.EXPOSURE_COMPENSATION -> 3f
-                    CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().upper.toFloat()
-                    CameraParameter.ISO -> state.getIsoRange().upper.toFloat()
-                    CameraParameter.APERTURE -> state.aperture // Fixed
-                    CameraParameter.WHITE_BALANCE -> 8000f
-                },
-                isAdjustable = when (param) {
-                    CameraParameter.EXPOSURE_COMPENSATION -> state.isAutoExposure
-                    CameraParameter.SHUTTER_SPEED -> !state.isAutoExposure
-                    CameraParameter.ISO -> !state.isAutoExposure
-                    CameraParameter.APERTURE -> false
-                    CameraParameter.WHITE_BALANCE -> state.awbMode != android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
-                },
-                showAutoButton = when (param) {
-                    CameraParameter.SHUTTER_SPEED, CameraParameter.ISO, CameraParameter.WHITE_BALANCE -> true
-                    else -> false
-                },
-                onValueChange = { value ->
-                    when (param) {
-                        CameraParameter.EXPOSURE_COMPENSATION -> viewModel.setExposureCompensation((value / 0.33f).toInt())
-                        CameraParameter.SHUTTER_SPEED -> viewModel.setShutterSpeed(value.toLong())
-                        CameraParameter.ISO -> viewModel.setIso(value.toInt())
-                        CameraParameter.APERTURE -> {} // Not adjustable
-                        CameraParameter.WHITE_BALANCE -> viewModel.setAwbTemperature(value.toInt())
-                    }
-                },
-                onAutoModeToggle = {
-                    when (param) {
-                        CameraParameter.SHUTTER_SPEED -> viewModel.setAutoExposure(!state.isAutoExposure)
-                        CameraParameter.ISO -> viewModel.setAutoExposure(!state.isAutoExposure)
-                        CameraParameter.WHITE_BALANCE -> {
-                            if (state.awbMode == android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO) {
-                                viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_OFF)
-                            } else {
-                                viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO)
+            Box(modifier = Modifier.align(Alignment.BottomCenter)) {
+                // Parameter Ruler (shown above CameraParameterBar when a parameter is selected)
+                selectedParameter?.let { param ->
+                    ParameterRuler(
+                        parameter = param,
+                        currentValue = when (param) {
+                            CameraParameter.EXPOSURE_COMPENSATION -> state.exposureCompensation * state.getExposureCompensationStep()
+                            CameraParameter.SHUTTER_SPEED -> state.shutterSpeed.toFloat()
+                            CameraParameter.ISO -> state.iso.toFloat()
+                            CameraParameter.APERTURE -> state.aperture
+                            CameraParameter.WHITE_BALANCE -> state.awbTemperature.toFloat()
+                        },
+                        minValue = when (param) {
+                            CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().lower * state.getExposureCompensationStep()
+                            CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().lower.toFloat()
+                            CameraParameter.ISO -> state.getIsoRange().lower.toFloat()
+                            CameraParameter.APERTURE -> state.aperture // Fixed
+                            CameraParameter.WHITE_BALANCE -> 2500f
+                        },
+                        maxValue = when (param) {
+                            CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().upper * state.getExposureCompensationStep()
+                            CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().upper.toFloat()
+                            CameraParameter.ISO -> state.getIsoRange().upper.toFloat()
+                            CameraParameter.APERTURE -> state.aperture // Fixed
+                            CameraParameter.WHITE_BALANCE -> 8000f
+                        },
+                        isAdjustable = when (param) {
+                            CameraParameter.EXPOSURE_COMPENSATION -> state.isAutoExposure
+                            CameraParameter.SHUTTER_SPEED -> !state.isAutoExposure
+                            CameraParameter.ISO -> !state.isAutoExposure
+                            CameraParameter.APERTURE -> false
+                            CameraParameter.WHITE_BALANCE -> state.awbMode != android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
+                        },
+                        showAutoButton = when (param) {
+                            CameraParameter.SHUTTER_SPEED, CameraParameter.ISO, CameraParameter.WHITE_BALANCE -> true
+                            else -> false
+                        },
+                        onValueChange = { value ->
+                            when (param) {
+                                CameraParameter.EXPOSURE_COMPENSATION -> viewModel.setExposureCompensation((value / state.getExposureCompensationStep()).roundToInt())
+                                CameraParameter.SHUTTER_SPEED -> viewModel.setShutterSpeed(value.toLong())
+                                CameraParameter.ISO -> viewModel.setIso(value.toInt())
+                                CameraParameter.APERTURE -> {} // Not adjustable
+                                CameraParameter.WHITE_BALANCE -> viewModel.setAwbTemperature(value.toInt())
                             }
-                        }
-                        else -> {}
-                    }
-                },
-                onDismiss = { selectedParameter = null }
+                        },
+                        onAutoModeToggle = {
+                            when (param) {
+                                CameraParameter.SHUTTER_SPEED -> viewModel.setAutoExposure(!state.isAutoExposure)
+                                CameraParameter.ISO -> viewModel.setAutoExposure(!state.isAutoExposure)
+                                CameraParameter.WHITE_BALANCE -> {
+                                    if (state.awbMode == android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO) {
+                                        viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_OFF)
+                                    } else {
+                                        viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO)
+                                    }
+                                }
+                                else -> {}
+                            }
+                        },
+                        onDismiss = { selectedParameter = null }
+                    )
+                }
+            }
+
+            CornerOverlay(
+                modifier = Modifier.fillMaxSize(),
+                radius = 16.dp,
+                color = backgroundColor
             )
         }
 
-        CameraParameterBar(
-            state = state,
-            selectedParameter = selectedParameter,
-            onParameterClick = { param ->
-                // Toggle selection: if clicking the same parameter, deselect it; otherwise select new one
-                selectedParameter = if (selectedParameter == param) null else param
-            }
-        )
+        Column(modifier = Modifier.fillMaxWidth().weight(1f)) {
+            CameraParameterBar(
+                state = state,
+                selectedParameter = selectedParameter,
+                onParameterClick = { param ->
+                    // Toggle selection: if clicking the same parameter, deselect it; otherwise select new one
+                    selectedParameter = if (selectedParameter == param) null else param
+                }
+            )
 
-        // 底部控制层
-        Controls(
-            state = state,
-            viewModel = viewModel,
-            galleryViewModel = galleryViewModel,
-            latestPhoto = latestPhoto,
-            onGalleryClick = {
-                galleryViewModel.loadPhotos()
-                onGalleryClick()
+            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                // 底部控制层
+                Controls(
+                    state = state,
+                    viewModel = viewModel,
+                    galleryViewModel = galleryViewModel,
+                    latestPhoto = latestPhoto,
+                    onGalleryClick = {
+                        galleryViewModel.loadPhotos()
+                        onGalleryClick()
+                    }
+                )
             }
-        )
+        }
     }
 }
 
@@ -361,7 +394,7 @@ fun CaptureButton(
                     .padding(12.dp)
                     .fillMaxSize()
                     .clip(CircleShape)
-                    .background(Color.Black)
+                    .background(Color(0xFF434A5D))
             )
         }
     }
@@ -414,3 +447,28 @@ fun Modifier.autoRotate(dx: Dp = 0.dp, dy: Dp = 0.dp): Modifier = composed {
     }
 }
 
+@Composable
+fun CornerOverlay(
+    modifier: Modifier = Modifier,
+    radius: Dp,
+    color: Color = Color.Black
+) {
+    Canvas(modifier = modifier) {
+        val path = Path().apply {
+            // 创建一个全屏矩形
+            addRect(Rect(0f, 0f, size.width, size.height))
+            // 减去中间的圆角矩形
+            val roundedRect = Path().apply {
+                addRoundRect(
+                    RoundRect(
+                        rect = Rect(0f, 0f, size.width, size.height),
+                        cornerRadius = CornerRadius(radius.toPx())
+                    )
+                )
+            }
+            // 关键：计算差集 (全屏 - 圆角矩形 = 四个角)
+            op(this, roundedRect, PathOperation.Difference)
+        }
+        drawPath(path, color)
+    }
+}

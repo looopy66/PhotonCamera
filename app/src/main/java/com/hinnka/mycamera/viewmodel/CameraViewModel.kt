@@ -381,6 +381,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 保存当前 LUT 信息用于元数据
         val lutIdToSave = currentLutId
         val lutIntensityToSave = state.value.lutIntensity
+
+        val aspectRatio = state.value.aspectRatio
         
         // 保存当前边框信息用于元数据
         val frameIdToSave = currentFrameId
@@ -389,7 +391,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         try {
             // Step 1: 将 Image 转换为 bitmap 字节数组（带方向纠正）
             val bitmap = withContext(Dispatchers.Default) {
-                BitmapUtils.imageToBitmapAndRotate(image = image)
+                BitmapUtils.imageToBitmapAndRotate(image = image, aspectRatio)
             }
             
             // 关闭 Image 资源

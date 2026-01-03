@@ -7,6 +7,7 @@ import android.graphics.Rect
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
 import android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
+import android.hardware.camera2.params.MeteringRectangle
 import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.SessionConfiguration
 import android.media.Image
@@ -17,12 +18,14 @@ import android.util.Log
 import android.util.Size
 import android.view.Surface
 import androidx.exifinterface.media.ExifInterface
+import com.hinnka.mycamera.ui.camera.CameraScreen
 import com.hinnka.mycamera.utils.OrientationObserver
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.Executors
 import kotlin.math.floor
+import kotlin.math.roundToInt
 
 
 /**
@@ -346,8 +349,8 @@ class Camera2Controller(private val context: Context) {
 //        builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
 
         // 3. 覆盖 Tone Mapping（关键：去除 S 曲线）
-//        builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_PRESET_CURVE)
-//        builder.set(CaptureRequest.TONEMAP_PRESET_CURVE, CaptureRequest.TONEMAP_PRESET_CURVE_SRGB)
+        builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_PRESET_CURVE)
+        builder.set(CaptureRequest.TONEMAP_PRESET_CURVE, CaptureRequest.TONEMAP_PRESET_CURVE_SRGB)
 //
 //        // 生成标准 Gamma 2.2 曲线 (比纯线性更接近人眼感知的“标准灰片”)
 //        // 如果直接用 Linear，画面会极其暗，LUT 很难拉回来
@@ -469,6 +472,7 @@ class Camera2Controller(private val context: Context) {
         _state.value = _state.value.copy(exposureCompensation = clampedValue)
         
         previewRequestBuilder?.apply {
+            set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
             set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, clampedValue)
             updatePreview()
         }
@@ -729,65 +733,6 @@ class Camera2Controller(private val context: Context) {
         val cameraId = _state.value.currentCameraId
         if (cameraId.isEmpty()) return
         _state.value = _state.value.copy(aspectRatio = ratio)
-
-        try {
-            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
-            val sensorRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
-
-            val width = sensorRect.width()
-            val height = sensorRect.height()
-
-            val targetRatio = ratio.getValue(true) // 总是返回 长边/短边
-            var finalW: Int
-            var finalH: Int
-
-            // 判断是横图还是竖图
-            if (width > height) {
-                // 横图
-                val expectedWidth = height * targetRatio
-                if (expectedWidth <= width) {
-                    finalH = height
-                    finalW = floor(expectedWidth).toInt()
-                } else {
-                    finalW = width
-                    finalH = floor(width / targetRatio).toInt()
-                }
-            } else {
-                // 竖图
-                val expectedHeight = width * targetRatio
-                if (expectedHeight <= height) {
-                    finalW = width
-                    finalH = floor(expectedHeight).toInt()
-                } else {
-                    finalH = height
-                    finalW = floor(height / targetRatio).toInt()
-                }
-            }
-
-            // 居中裁切
-            val x = (width - finalW) / 2
-            val y = (height - finalH) / 2
-
-            // 边界安全检查
-            val safeX = x.coerceAtLeast(0)
-            val safeY = y.coerceAtLeast(0)
-            val safeW = finalW.coerceAtMost(width - safeX)
-            val safeH = finalH.coerceAtMost(height - safeY)
-
-            val cropRect = Rect(
-                safeX,
-                safeY,
-                safeX + safeW,
-                safeY + safeH
-            )
-
-            previewRequestBuilder?.apply {
-                set(CaptureRequest.SCALER_CROP_REGION, cropRect)
-                updatePreview()
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to setAspectRatio", e)
-        }
     }
 
     /**

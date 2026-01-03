@@ -31,14 +31,14 @@ fun CameraParameterBar(
     ) {
         ParameterItem(
             label = "AE",
-            value = String.format("%.1f", state.exposureCompensation * 0.33f),
+            value = String.format("%.1f", state.exposureCompensation * state.getExposureCompensationStep()),
             labelColor = yellow,
             isSelected = selectedParameter == CameraParameter.EXPOSURE_COMPENSATION,
             isEnabled = state.isAutoExposure, // Only available in auto exposure mode
             onClick = { onParameterClick(CameraParameter.EXPOSURE_COMPENSATION) }
         )
         ParameterItem(
-            label = "SEC",
+            label = "Tv",
             value = "1/${(1_000_000_000.0 / state.shutterSpeed).toInt()}",
             labelColor = yellow,
             isSelected = selectedParameter == CameraParameter.SHUTTER_SPEED,
