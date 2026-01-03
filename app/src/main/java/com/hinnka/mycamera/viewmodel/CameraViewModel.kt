@@ -218,13 +218,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
     
     /**
-     * 设置自动曝光
-     */
-    fun setAutoExposure(enabled: Boolean) {
-        cameraController.setAutoExposure(enabled)
-    }
-    
-    /**
      * 设置 ISO
      */
     fun setIso(value: Int) {
@@ -273,6 +266,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             2 -> 0
             else -> 0
         })
+    }
+
+    /**
+     * 设置曝光自动模式
+     */
+    fun setAutoExposure(enabled: Boolean) {
+        cameraController.setAutoExposure(enabled)
+    }
+    
+    /**
+     * 设置白平衡模式
+     */
+    fun setAwbMode(mode: Int) {
+        cameraController.setAwbMode(mode)
+    }
+    
+    /**
+     * 设置白平衡色温
+     */
+    fun setAwbTemperature(kelvin: Int) {
+        cameraController.setAwbTemperature(kelvin)
     }
     
     // ==================== LUT 相关方法 ====================

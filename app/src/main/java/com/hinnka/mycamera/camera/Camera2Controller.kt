@@ -85,12 +85,15 @@ class Camera2Controller(private val context: Context) {
             val awbMode = result.get(CaptureResult.CONTROL_AWB_MODE) ?: CONTROL_AWB_MODE_AUTO
 //            val flashMode = result.get(CaptureResult.FLASH_MODE) ?: CameraMetadata.FLASH_MODE_OFF
 
+            val aperture = result.get(CaptureResult.LENS_APERTURE)
+
             _state.value = _state.value.copy(
                 iso = iso ?: 100,
                 shutterSpeed = exposureTimeNs ?: (1_000_000_000L / 60),
                 exposureCompensation = exposureCompensation,
                 isAutoExposure = isAutoExposure,
                 awbMode = awbMode,
+                aperture = aperture ?: 2f,
 //                flashMode = flashMode,
             )
         }
@@ -273,9 +276,16 @@ class Camera2Controller(private val context: Context) {
                 
                 // 设置连续自动对焦
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                
-                // 设置自动曝光
-                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+
+                if (state.value.isAutoExposure) {
+                    // 设置自动曝光
+                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                } else {
+                    // 手动曝光
+                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+                    set(CaptureRequest.SENSOR_SENSITIVITY, state.value.iso)
+                    set(CaptureRequest.SENSOR_EXPOSURE_TIME, state.value.shutterSpeed)
+                }
 
                 setupFlatProfileRequest(this)
             }
@@ -465,25 +475,6 @@ class Camera2Controller(private val context: Context) {
     }
     
     /**
-     * 设置自动曝光模式
-     */
-    fun setAutoExposure(enabled: Boolean) {
-        _state.value = _state.value.copy(isAutoExposure = enabled)
-        
-        previewRequestBuilder?.apply {
-            if (enabled) {
-                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-            } else {
-                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-                // 应用当前的 ISO 和快门速度
-                set(CaptureRequest.SENSOR_SENSITIVITY, _state.value.iso)
-                set(CaptureRequest.SENSOR_EXPOSURE_TIME, _state.value.shutterSpeed)
-            }
-            updatePreview()
-        }
-    }
-    
-    /**
      * 设置 ISO
      */
     fun setIso(value: Int) {
@@ -525,22 +516,86 @@ class Camera2Controller(private val context: Context) {
         previewRequestBuilder?.apply {
             when (value) {
                 CameraMetadata.FLASH_MODE_OFF -> {
-                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    if (state.value.isAutoExposure) {
+                        set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    }
                     set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
                 }
                 CameraMetadata.FLASH_MODE_SINGLE -> {
-                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
+                    if (state.value.isAutoExposure) {
+                        set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
+                    }
                     set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_SINGLE)
                 }
                 CameraMetadata.FLASH_MODE_TORCH -> {
-                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    if (state.value.isAutoExposure) {
+                        set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    }
                     set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_TORCH)
                 }
                 else -> {
-                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    if (state.value.isAutoExposure) {
+                        set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    }
                     set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
                 }
             }
+            updatePreview()
+        }
+    }
+
+    /**
+     * 设置自动曝光模式
+     */
+    fun setAutoExposure(enabled: Boolean) {
+        _state.value = _state.value.copy(isAutoExposure = enabled)
+
+        previewRequestBuilder?.apply {
+            if (enabled) {
+                // 恢复自动曝光
+                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+            } else {
+                // 手动曝光
+                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+                set(CaptureRequest.SENSOR_SENSITIVITY, _state.value.iso)
+                set(CaptureRequest.SENSOR_EXPOSURE_TIME, _state.value.shutterSpeed)
+            }
+            updatePreview()
+        }
+    }
+    
+    /**
+     * 设置白平衡模式
+     */
+    fun setAwbMode(mode: Int) {
+        _state.value = _state.value.copy(awbMode = mode)
+        
+        previewRequestBuilder?.apply {
+            set(CaptureRequest.CONTROL_AWB_MODE, mode)
+            if (mode == CameraMetadata.CONTROL_AWB_MODE_OFF) {
+                // 手动白平衡，应用色温
+                // Note: Camera2 doesn't directly support color temperature
+                // This would require RggbChannelVector which is more complex
+                // For now, just set AWB to OFF
+            }
+            updatePreview()
+        }
+    }
+    
+    /**
+     * 设置白平衡色温
+     * Note: Camera2 API 不直接支持色温设置，这里仅保存状态
+     * 实际应用需要转换为 RggbChannelVector
+     */
+    fun setAwbTemperature(kelvin: Int) {
+        _state.value = _state.value.copy(awbTemperature = kelvin)
+        
+        // TODO: 将色温转换为 RggbChannelVector 并应用
+        // 这需要复杂的色温到RGB增益的转换
+        previewRequestBuilder?.apply {
+            set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_OFF)
+            // set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
+            // set(CaptureRequest.COLOR_CORRECTION_GAINS, convertKelvinToRggbGains(kelvin))
             updatePreview()
         }
     }

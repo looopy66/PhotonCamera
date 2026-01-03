@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.ui.camera
 
 import android.hardware.camera2.CameraMetadata
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -11,11 +12,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.camera.CameraState
-import com.hinnka.mycamera.camera.CameraUtils
 
 @Composable
 fun CameraParameterBar(
     state: CameraState,
+    selectedParameter: CameraParameter?,
+    onParameterClick: (CameraParameter) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val yellow = Color(0xFFFFD700) // Design uses a yellow/gold color for labels
@@ -27,21 +29,50 @@ fun CameraParameterBar(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        ParameterItem("AE", String.format("%.1f", state.exposureCompensation * 0.33f), yellow)
-        ParameterItem("SEC", "1/${(1_000_000_000.0 / state.shutterSpeed).toInt()}", yellow)
-        ParameterItem("ISO", state.iso.toString(), yellow)
-        ParameterItem("AWB", when (state.awbMode) {
-            CameraMetadata.CONTROL_AWB_MODE_OFF -> "OFF"
-            CameraMetadata.CONTROL_AWB_MODE_AUTO -> "AUTO"
-            CameraMetadata.CONTROL_AWB_MODE_INCANDESCENT -> "INC"
-            CameraMetadata.CONTROL_AWB_MODE_FLUORESCENT -> "FLUOR"
-            CameraMetadata.CONTROL_AWB_MODE_WARM_FLUORESCENT -> "W-FLUOR"
-            CameraMetadata.CONTROL_AWB_MODE_DAYLIGHT -> "DAY"
-            CameraMetadata.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT -> "CLOUD"
-            CameraMetadata.CONTROL_AWB_MODE_TWILIGHT -> "TWIL"
-            CameraMetadata.CONTROL_AWB_MODE_SHADE -> "SHADE"
-            else -> "UNK"
-        }, yellow)
+        ParameterItem(
+            label = "AE",
+            value = String.format("%.1f", state.exposureCompensation * 0.33f),
+            labelColor = yellow,
+            isSelected = selectedParameter == CameraParameter.EXPOSURE_COMPENSATION,
+            isEnabled = state.isAutoExposure, // Only available in auto exposure mode
+            onClick = { onParameterClick(CameraParameter.EXPOSURE_COMPENSATION) }
+        )
+        ParameterItem(
+            label = "SEC",
+            value = "1/${(1_000_000_000.0 / state.shutterSpeed).toInt()}",
+            labelColor = yellow,
+            isSelected = selectedParameter == CameraParameter.SHUTTER_SPEED,
+            isEnabled = true,
+            onClick = { onParameterClick(CameraParameter.SHUTTER_SPEED) }
+        )
+        ParameterItem(
+            label = "ISO",
+            value = state.iso.toString(),
+            labelColor = yellow,
+            isSelected = selectedParameter == CameraParameter.ISO,
+            isEnabled = true,
+            onClick = { onParameterClick(CameraParameter.ISO) }
+        )
+        ParameterItem(
+            label = "Av",
+            value = String.format("f/%.1f", state.aperture),
+            labelColor = yellow,
+            isSelected = selectedParameter == CameraParameter.APERTURE,
+            isEnabled = false, // Usually fixed on mobile cameras
+            onClick = { onParameterClick(CameraParameter.APERTURE) }
+        )
+        ParameterItem(
+            label = "AWB",
+            value = when (state.awbMode) {
+                CameraMetadata.CONTROL_AWB_MODE_OFF -> "${state.awbTemperature}K"
+                CameraMetadata.CONTROL_AWB_MODE_AUTO -> "AUTO"
+                else -> "UNK"
+            },
+            labelColor = yellow,
+            isSelected = selectedParameter == CameraParameter.WHITE_BALANCE,
+            isEnabled = true,
+            onClick = { onParameterClick(CameraParameter.WHITE_BALANCE) }
+        )
     }
 }
 
@@ -50,22 +81,35 @@ private fun ParameterItem(
     label: String,
     value: String,
     labelColor: Color,
+    isSelected: Boolean,
+    isEnabled: Boolean,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = modifier.size(64.dp).autoRotate()
+        modifier = modifier
+            .size(64.dp)
+            .autoRotate()
+            .then(
+                if (isEnabled) {
+                    Modifier.clickable { onClick() }
+                } else {
+                    Modifier
+                }
+            )
     ) {
         Text(
             text = label,
-            color = labelColor,
-            fontSize = 10.sp
+            color = if (isSelected) Color(0xFFFFD700) else labelColor.copy(alpha = if (isEnabled) 1f else 0.5f),
+            fontSize = 10.sp,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
         )
         Text(
             text = value,
-            color = Color.White,
+            color = if (isSelected) Color(0xFFFFD700) else Color.White.copy(alpha = if (isEnabled) 1f else 0.5f),
             fontSize = 11.sp,
-            fontWeight = FontWeight.Bold
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Bold
         )
     }
 }

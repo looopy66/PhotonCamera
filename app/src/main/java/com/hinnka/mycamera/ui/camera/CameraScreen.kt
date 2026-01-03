@@ -1,6 +1,5 @@
 package com.hinnka.mycamera.ui.camera
 
-import android.util.Log
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -63,6 +62,7 @@ fun CameraScreen(
     
     // UI State
     var activePanel by remember { mutableStateOf(ActivePanel.NONE) }
+    var selectedParameter by remember { mutableStateOf<CameraParameter?>(null) }
     
     // 从后台返回时检查并恢复相机，刷新最新照片
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
@@ -177,7 +177,77 @@ fun CameraScreen(
             )
         }
 
-        CameraParameterBar(state = state)
+        // Parameter Ruler (shown above CameraParameterBar when a parameter is selected)
+        selectedParameter?.let { param ->
+            ParameterRuler(
+                parameter = param,
+                currentValue = when (param) {
+                    CameraParameter.EXPOSURE_COMPENSATION -> state.exposureCompensation * 0.33f
+                    CameraParameter.SHUTTER_SPEED -> state.shutterSpeed.toFloat()
+                    CameraParameter.ISO -> state.iso.toFloat()
+                    CameraParameter.APERTURE -> state.aperture
+                    CameraParameter.WHITE_BALANCE -> state.awbTemperature.toFloat()
+                },
+                minValue = when (param) {
+                    CameraParameter.EXPOSURE_COMPENSATION -> -3f
+                    CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().lower.toFloat()
+                    CameraParameter.ISO -> state.getIsoRange().lower.toFloat()
+                    CameraParameter.APERTURE -> state.aperture // Fixed
+                    CameraParameter.WHITE_BALANCE -> 2500f
+                },
+                maxValue = when (param) {
+                    CameraParameter.EXPOSURE_COMPENSATION -> 3f
+                    CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().upper.toFloat()
+                    CameraParameter.ISO -> state.getIsoRange().upper.toFloat()
+                    CameraParameter.APERTURE -> state.aperture // Fixed
+                    CameraParameter.WHITE_BALANCE -> 8000f
+                },
+                isAdjustable = when (param) {
+                    CameraParameter.EXPOSURE_COMPENSATION -> state.isAutoExposure
+                    CameraParameter.SHUTTER_SPEED -> !state.isAutoExposure
+                    CameraParameter.ISO -> !state.isAutoExposure
+                    CameraParameter.APERTURE -> false
+                    CameraParameter.WHITE_BALANCE -> state.awbMode != android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
+                },
+                showAutoButton = when (param) {
+                    CameraParameter.SHUTTER_SPEED, CameraParameter.ISO, CameraParameter.WHITE_BALANCE -> true
+                    else -> false
+                },
+                onValueChange = { value ->
+                    when (param) {
+                        CameraParameter.EXPOSURE_COMPENSATION -> viewModel.setExposureCompensation((value / 0.33f).toInt())
+                        CameraParameter.SHUTTER_SPEED -> viewModel.setShutterSpeed(value.toLong())
+                        CameraParameter.ISO -> viewModel.setIso(value.toInt())
+                        CameraParameter.APERTURE -> {} // Not adjustable
+                        CameraParameter.WHITE_BALANCE -> viewModel.setAwbTemperature(value.toInt())
+                    }
+                },
+                onAutoModeToggle = {
+                    when (param) {
+                        CameraParameter.SHUTTER_SPEED -> viewModel.setAutoExposure(!state.isAutoExposure)
+                        CameraParameter.ISO -> viewModel.setAutoExposure(!state.isAutoExposure)
+                        CameraParameter.WHITE_BALANCE -> {
+                            if (state.awbMode == android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO) {
+                                viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_OFF)
+                            } else {
+                                viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO)
+                            }
+                        }
+                        else -> {}
+                    }
+                },
+                onDismiss = { selectedParameter = null }
+            )
+        }
+
+        CameraParameterBar(
+            state = state,
+            selectedParameter = selectedParameter,
+            onParameterClick = { param ->
+                // Toggle selection: if clicking the same parameter, deselect it; otherwise select new one
+                selectedParameter = if (selectedParameter == param) null else param
+            }
+        )
 
         // 底部控制层
         Controls(

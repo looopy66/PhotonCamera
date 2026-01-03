@@ -1,6 +1,5 @@
 package com.hinnka.mycamera.ui.camera
 
-import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -217,12 +216,12 @@ fun ZoomRuler(
             val style = TextStyle(
                 fontSize = if (isSelected) 13.sp else 10.sp,
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                color = if (isSelected) activeColor else inactiveColor
+                color = if (isSelected) activeColor else inactiveColor,
             )
 
-            Text(text, style = style, modifier = Modifier
-                .padding(horizontal = 8.dp)
-            )
+            Box(modifier = Modifier.size(32.dp).autoRotate(), contentAlignment = Alignment.Center) {
+                Text(text, style = style)
+            }
         }
     }
 }

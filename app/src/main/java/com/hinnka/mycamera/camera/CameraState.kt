@@ -96,6 +96,9 @@ data class CameraState(
     val shutterSpeed: Long = 1_000_000_000L / 60, // 1/60s in nanoseconds
 
     val awbMode: Int = 1, // 自动白平衡模式
+    val awbTemperature: Int = 5000, // 色温 (K)
+
+    val aperture: Float = 2.0f, // 光圈值 (f-number)
     
     // 对焦
     val isAutoFocus: Boolean = true,
