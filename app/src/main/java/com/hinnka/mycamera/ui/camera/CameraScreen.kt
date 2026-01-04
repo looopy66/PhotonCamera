@@ -37,6 +37,7 @@ import com.hinnka.mycamera.camera.CameraUtils
 import com.hinnka.mycamera.ui.components.EditControlPanel
 import com.hinnka.mycamera.ui.components.GalleryThumbnail
 import com.hinnka.mycamera.ui.components.HistogramView
+import com.hinnka.mycamera.ui.components.LutControlPanel
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
@@ -164,21 +165,13 @@ fun CameraScreen(
                 }
 
                 if (activePanel == ActivePanel.FILTERS) {
-                    EditControlPanel(
+                    LutControlPanel(
                         availableLuts = viewModel.availableLutList,
                         currentLutId = viewModel.currentLutId,
                         lutIntensity = state.lutIntensity,
                         onLutSelected = { viewModel.setLut(it) },
                         onIntensityChange = { viewModel.setLutIntensity(it) },
-                        availableFrames = viewModel.availableFrameList,
-                        currentFrameId = viewModel.currentFrameId,
-                        showAppBranding = viewModel.currentShowAppBranding,
-                        onFrameSelected = { viewModel.setFrame(it) },
-                        onBrandingToggle = { viewModel.setShowAppBranding(it) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(200.dp)
-                            .background(Color.Black)
+                        modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter).padding(bottom = 48.dp)
                     )
                 }
 
@@ -198,6 +191,7 @@ fun CameraScreen(
             }
 
             Box(modifier = Modifier.align(Alignment.BottomCenter)) {
+
                 // Parameter Ruler (shown above CameraParameterBar when a parameter is selected)
                 selectedParameter?.let { param ->
                     ParameterRuler(

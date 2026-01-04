@@ -1,19 +1,12 @@
 package com.hinnka.mycamera.ui.components
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FilterNone
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -30,7 +23,7 @@ import com.hinnka.mycamera.lut.LutInfo
 
 /**
  * LUT 选择器组件
- * 
+ *
  * 显示可用的 LUT 列表，支持选择和预览
  */
 @Composable
@@ -45,7 +38,7 @@ fun LutSelector(
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
             .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         // LUT 列表
         availableLuts.forEach { lut ->
@@ -74,16 +67,16 @@ private fun LutItem(
     } else {
         Color.Black.copy(alpha = 0.5f)
     }
-    
+
     val borderColor = if (isSelected) {
         Color.White
     } else {
         Color.Gray.copy(alpha = 0.5f)
     }
-    
+
     Column(
         modifier = modifier
-            .width(72.dp)
+            .width(60.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(backgroundColor)
             .border(
@@ -99,7 +92,7 @@ private fun LutItem(
         // 预览区域
         Box(
             modifier = Modifier
-                .size(56.dp)
+                .size(44.dp)
                 .clip(RoundedCornerShape(4.dp))
                 .then(
                     if (isNone) {
@@ -127,7 +120,7 @@ private fun LutItem(
                     modifier = Modifier.size(24.dp)
                 )
             }
-            
+
             if (isSelected) {
                 Box(
                     modifier = Modifier
@@ -144,14 +137,14 @@ private fun LutItem(
                 }
             }
         }
-        
+
         Spacer(modifier = Modifier.height(4.dp))
-        
+
         // 名称
         Text(
             text = name,
             color = Color.White,
-            fontSize = 10.sp,
+            fontSize = 9.sp,
             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -178,7 +171,7 @@ fun LutIntensitySlider(
                 Color.Black.copy(alpha = 0.6f),
                 RoundedCornerShape(8.dp)
             )
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .padding(horizontal = 8.dp, vertical = 8.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -190,7 +183,7 @@ fun LutIntensitySlider(
                 color = if (enabled) Color.White else Color.Gray,
                 fontSize = 12.sp
             )
-            
+
             Text(
                 text = "${(intensity * 100).toInt()}%",
                 color = if (enabled) Color.White else Color.Gray,
@@ -198,20 +191,18 @@ fun LutIntensitySlider(
                 fontWeight = FontWeight.Bold
             )
         }
-        
-        Slider(
+
+        CustomSliderThinThumb(
             value = intensity,
             onValueChange = onIntensityChange,
             enabled = enabled,
             valueRange = 0f..1f,
-            colors = SliderDefaults.colors(
-                thumbColor = Color.White,
-                activeTrackColor = Color.White,
-                inactiveTrackColor = Color.Gray.copy(alpha = 0.5f),
-                disabledThumbColor = Color.Gray,
-                disabledActiveTrackColor = Color.Gray.copy(alpha = 0.5f),
-                disabledInactiveTrackColor = Color.Gray.copy(alpha = 0.3f)
-            ),
+            thumbWidth = 3.dp,
+            thumbHeight = 22.dp,
+            trackHeight = 4.dp,
+            activeTrackColor = Color.White,
+            inactiveTrackColor = Color.Gray.copy(alpha = 0.5f),
+            thumbColor = Color.White,
             modifier = Modifier.fillMaxWidth()
         )
     }
@@ -219,7 +210,7 @@ fun LutIntensitySlider(
 
 /**
  * LUT 控制面板
- * 
+ *
  * 包含 LUT 选择器和强度滑块
  */
 @Composable
@@ -234,40 +225,28 @@ fun LutControlPanel(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(
-                Color.Black.copy(alpha = 0.7f),
-                RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
-            )
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // 标题
-        Text(
-            text = "滤镜",
-            color = Color.White,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold
-        )
-        
-        // LUT 选择器
-        LutSelector(
-            availableLuts = availableLuts,
-            currentLutId = currentLutId,
-            onLutSelected = onLutSelected
-        )
-        
         // 强度滑块（LUT 始终可用）
         LutIntensitySlider(
             intensity = lutIntensity,
             onIntensityChange = onIntensityChange,
             enabled = true
         )
+
+        // LUT 选择器
+        LutSelector(
+            availableLuts = availableLuts,
+            currentLutId = currentLutId,
+            onLutSelected = onLutSelected
+        )
     }
 }
 
 /**
  * 完整编辑控制面板
- * 
+ *
  * 包含 LUT 和边框选择器
  */
 @Composable
@@ -281,60 +260,56 @@ fun EditControlPanel(
     // 边框相关
     availableFrames: List<com.hinnka.mycamera.frame.FrameInfo>,
     currentFrameId: String?,
-    showAppBranding: Boolean,
     onFrameSelected: (String?) -> Unit,
-    onBrandingToggle: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
         modifier = modifier
             .fillMaxWidth()
             .background(
-                Color.Black.copy(alpha = 0.7f),
+                Color.Black.copy(alpha = 0.3f),
                 RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
             )
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         // 滤镜标题
         Text(
             text = "滤镜",
             color = Color.White,
-            fontSize = 16.sp,
+            fontSize = 14.sp,
             fontWeight = FontWeight.Bold
         )
-        
+
         // LUT 选择器
         LutSelector(
             availableLuts = availableLuts,
             currentLutId = currentLutId,
             onLutSelected = onLutSelected
         )
-        
+
         // 强度滑块（LUT 始终可用）
         LutIntensitySlider(
             intensity = lutIntensity,
             onIntensityChange = onIntensityChange,
             enabled = true
         )
-        
-        Spacer(modifier = Modifier.height(8.dp))
-        
+
         // 边框标题
         Text(
             text = "边框",
             color = Color.White,
-            fontSize = 16.sp,
+            fontSize = 14.sp,
             fontWeight = FontWeight.Bold
         )
-        
+
         // 边框选择器
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
                 .padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             // "无边框" 选项
             FrameItem(
@@ -343,45 +318,13 @@ fun EditControlPanel(
                 onClick = { onFrameSelected(null) },
                 isNone = true
             )
-            
+
             // 边框列表
             availableFrames.forEach { frame ->
                 FrameItem(
                     name = frame.name,
                     isSelected = currentFrameId == frame.id,
                     onClick = { onFrameSelected(frame.id) }
-                )
-            }
-        }
-        
-        // App 品牌开关（仅当选择了边框时显示）
-        if (currentFrameId != null) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(
-                        Color.Black.copy(alpha = 0.6f),
-                        RoundedCornerShape(8.dp)
-                    )
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "显示 App 品牌",
-                    color = Color.White,
-                    fontSize = 12.sp
-                )
-                
-                androidx.compose.material3.Switch(
-                    checked = showAppBranding,
-                    onCheckedChange = onBrandingToggle,
-                    colors = androidx.compose.material3.SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = Color.White.copy(alpha = 0.5f),
-                        uncheckedThumbColor = Color.Gray,
-                        uncheckedTrackColor = Color.Gray.copy(alpha = 0.3f)
-                    )
                 )
             }
         }
@@ -404,16 +347,16 @@ private fun FrameItem(
     } else {
         Color.Black.copy(alpha = 0.5f)
     }
-    
+
     val borderColor = if (isSelected) {
         Color.White
     } else {
         Color.Gray.copy(alpha = 0.5f)
     }
-    
+
     Column(
         modifier = modifier
-            .width(72.dp)
+            .width(60.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(backgroundColor)
             .border(
@@ -429,7 +372,7 @@ private fun FrameItem(
         // 预览区域
         Box(
             modifier = Modifier
-                .size(56.dp)
+                .size(44.dp)
                 .clip(RoundedCornerShape(4.dp))
                 .background(if (isNone) Color.DarkGray else Color.White.copy(alpha = 0.2f))
                 .then(
@@ -466,7 +409,7 @@ private fun FrameItem(
                         .background(Color.White.copy(alpha = 0.8f))
                 )
             }
-            
+
             if (isSelected) {
                 Box(
                     modifier = Modifier
@@ -483,14 +426,14 @@ private fun FrameItem(
                 }
             }
         }
-        
+
         Spacer(modifier = Modifier.height(4.dp))
-        
+
         // 名称
         Text(
             text = name,
             color = Color.White,
-            fontSize = 10.sp,
+            fontSize = 9.sp,
             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
