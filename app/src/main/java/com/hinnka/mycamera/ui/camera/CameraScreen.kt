@@ -214,14 +214,14 @@ fun CameraScreen(
                             CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().lower.toFloat()
                             CameraParameter.ISO -> state.getIsoRange().lower.toFloat()
                             CameraParameter.APERTURE -> state.aperture // Fixed
-                            CameraParameter.WHITE_BALANCE -> 2500f
+                            CameraParameter.WHITE_BALANCE -> 2000f
                         },
                         maxValue = when (param) {
                             CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().upper * state.getExposureCompensationStep()
                             CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().upper.toFloat()
                             CameraParameter.ISO -> state.getIsoRange().upper.toFloat()
                             CameraParameter.APERTURE -> state.aperture // Fixed
-                            CameraParameter.WHITE_BALANCE -> 8000f
+                            CameraParameter.WHITE_BALANCE -> 10000f
                         },
                         isAdjustable = when (param) {
                             CameraParameter.EXPOSURE_COMPENSATION -> state.isAutoExposure

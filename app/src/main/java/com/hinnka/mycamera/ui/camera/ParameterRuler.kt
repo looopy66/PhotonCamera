@@ -164,11 +164,8 @@ private fun RulerScale(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Log.d("Ruler", "RulerScale: $isAdjustable $currentValue $scaleValues")
             scaleValues.forEachIndexed { index, value ->
                 val isCurrent = isAdjustable && (value * 10).roundToInt() == (currentValue * 10).roundToInt()
-
-                Log.d("Ruler", "RulerScale: $isCurrent")
                 
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -249,8 +246,10 @@ private fun getScaleValues(parameter: CameraParameter, minValue: Float, maxValue
         }
         CameraParameter.WHITE_BALANCE -> {
             // Color temperature presets
-            listOf(2500f, 3500f, 5000f, 6500f, 8000f)
+            generateSequence(minValue) { it + 500f }
+                .takeWhile { it <= maxValue }
                 .filter { it in minValue..maxValue }
+                .toList()
         }
         CameraParameter.APERTURE -> {
             // Aperture values (usually fixed on mobile)

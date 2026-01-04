@@ -3,12 +3,10 @@ package com.hinnka.mycamera.camera
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.ImageFormat
-import android.graphics.Rect
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
-import android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
-import android.hardware.camera2.params.MeteringRectangle
 import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.RggbChannelVector
 import android.hardware.camera2.params.SessionConfiguration
 import android.media.Image
 import android.media.ImageReader
@@ -18,14 +16,13 @@ import android.util.Log
 import android.util.Size
 import android.view.Surface
 import androidx.exifinterface.media.ExifInterface
-import com.hinnka.mycamera.ui.camera.CameraScreen
 import com.hinnka.mycamera.utils.OrientationObserver
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.Executors
-import kotlin.math.floor
-import kotlin.math.roundToInt
+import kotlin.math.ln
+import kotlin.math.pow
 
 
 /**
@@ -85,7 +82,7 @@ class Camera2Controller(private val context: Context) {
             val aeMode = result.get(CaptureResult.CONTROL_AE_MODE)
             val isAutoExposure = aeMode == CaptureResult.CONTROL_AE_MODE_ON || aeMode == CaptureResult.CONTROL_AE_MODE_ON_AUTO_FLASH
             val exposureCompensation = result.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION) ?: 0
-            val awbMode = result.get(CaptureResult.CONTROL_AWB_MODE) ?: CONTROL_AWB_MODE_AUTO
+            val awbMode = result.get(CaptureResult.CONTROL_AWB_MODE) ?: CameraMetadata.CONTROL_AWB_MODE_AUTO
 //            val flashMode = result.get(CaptureResult.FLASH_MODE) ?: CameraMetadata.FLASH_MODE_OFF
 
             val aperture = result.get(CaptureResult.LENS_APERTURE)
@@ -569,6 +566,46 @@ class Camera2Controller(private val context: Context) {
     }
     
     /**
+     * 检查当前相机是否支持手动白平衡控制
+     * 
+     * 只有 FULL 或 LEVEL_3 级别的设备才支持 COLOR_CORRECTION_GAINS
+     */
+    private fun supportsManualWhiteBalance(): Boolean {
+        val cameraId = _state.value.currentCameraId
+        if (cameraId.isEmpty()) return false
+        
+        return try {
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val hardwareLevel = characteristics.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
+            
+            val isSupported = hardwareLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL ||
+                    hardwareLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3
+            
+            Log.d(TAG, "Hardware level: $hardwareLevel, Manual WB supported: $isSupported")
+            isSupported
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to check hardware level", e)
+            false
+        }
+    }
+    
+    /**
+     * 获取当前相机支持的 AWB 模式列表
+     */
+    private fun getSupportedAwbModes(): IntArray {
+        val cameraId = _state.value.currentCameraId
+        if (cameraId.isEmpty()) return intArrayOf(CameraMetadata.CONTROL_AWB_MODE_AUTO)
+        
+        return try {
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            characteristics.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)
+                ?: intArrayOf(CameraMetadata.CONTROL_AWB_MODE_AUTO)
+        } catch (e: Exception) {
+            intArrayOf(CameraMetadata.CONTROL_AWB_MODE_AUTO)
+        }
+    }
+    
+    /**
      * 设置白平衡模式
      */
     fun setAwbMode(mode: Int) {
@@ -576,32 +613,179 @@ class Camera2Controller(private val context: Context) {
         
         previewRequestBuilder?.apply {
             set(CaptureRequest.CONTROL_AWB_MODE, mode)
-            if (mode == CameraMetadata.CONTROL_AWB_MODE_OFF) {
-                // 手动白平衡，应用色温
-                // Note: Camera2 doesn't directly support color temperature
-                // This would require RggbChannelVector which is more complex
-                // For now, just set AWB to OFF
+            if (mode == CameraMetadata.CONTROL_AWB_MODE_OFF && supportsManualWhiteBalance()) {
+                // 手动白平衡，应用当前色温
+                set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
+                
+                val gains = kelvinToRggbGains(_state.value.awbTemperature)
+                set(CaptureRequest.COLOR_CORRECTION_GAINS, gains)
+                Log.d(TAG, "Manual AWB enabled with temperature: ${_state.value.awbTemperature}K")
+            } else {
+                set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
             }
             updatePreview()
         }
     }
     
     /**
-     * 设置白平衡色温
-     * Note: Camera2 API 不直接支持色温设置，这里仅保存状态
-     * 实际应用需要转换为 RggbChannelVector
+     * 设置白平衡色温（Kelvin）
+     * 
+     * 对于支持 FULL 级别的设备: 使用 RggbChannelVector 精确控制
+     * 对于不支持的设备: 使用最接近的预设 AWB 模式
+     * 
+     * 有效范围: 2000K (暖) - 10000K (冷)
      */
     fun setAwbTemperature(kelvin: Int) {
-        _state.value = _state.value.copy(awbTemperature = kelvin)
+        val clampedKelvin = kelvin.coerceIn(2000, 10000)
         
-        // TODO: 将色温转换为 RggbChannelVector 并应用
-        // 这需要复杂的色温到RGB增益的转换
-        previewRequestBuilder?.apply {
-            set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_OFF)
-            // set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
-            // set(CaptureRequest.COLOR_CORRECTION_GAINS, convertKelvinToRggbGains(kelvin))
-            updatePreview()
+        if (supportsManualWhiteBalance()) {
+            // 设备支持手动白平衡 - 使用精确的 RggbChannelVector
+            _state.value = _state.value.copy(
+                awbTemperature = clampedKelvin,
+                awbMode = CameraMetadata.CONTROL_AWB_MODE_OFF
+            )
+            
+            previewRequestBuilder?.apply {
+                set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_OFF)
+                set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
+                
+                val gains = kelvinToRggbGains(clampedKelvin)
+                set(CaptureRequest.COLOR_CORRECTION_GAINS, gains)
+                Log.d(TAG, "AWB temperature set to: ${clampedKelvin}K (manual), gains: R=${gains.red}, G=${gains.greenEven}, B=${gains.blue}")
+                updatePreview()
+            }
+        } else {
+            // 设备不支持手动白平衡 - 使用预设 AWB 模式近似
+            val presetMode = kelvinToPresetAwbMode(clampedKelvin)
+            
+            _state.value = _state.value.copy(
+                awbTemperature = clampedKelvin,
+                awbMode = presetMode
+            )
+            
+            previewRequestBuilder?.apply {
+                set(CaptureRequest.CONTROL_AWB_MODE, presetMode)
+                set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
+                Log.d(TAG, "AWB temperature set to: ${clampedKelvin}K (preset mode: ${getAwbModeName(presetMode)})")
+                updatePreview()
+            }
         }
+    }
+    
+    /**
+     * 将色温转换为最接近的预设 AWB 模式
+     * 
+     * 预设模式对应的近似色温:
+     * - INCANDESCENT (白炽灯): ~2700K
+     * - WARM_FLUORESCENT (暖色荧光灯): ~3000K
+     * - FLUORESCENT (荧光灯): ~4000K
+     * - DAYLIGHT (日光): ~5500K
+     * - CLOUDY_DAYLIGHT (阴天): ~6500K
+     * - TWILIGHT (黄昏): ~7500K
+     * - SHADE (阴影): ~9000K
+     */
+    private fun kelvinToPresetAwbMode(kelvin: Int): Int {
+        val supportedModes = getSupportedAwbModes()
+        
+        // 按色温从低到高排列的预设模式
+        val presetModes = listOf(
+            2700 to CameraMetadata.CONTROL_AWB_MODE_INCANDESCENT,
+            3000 to CameraMetadata.CONTROL_AWB_MODE_WARM_FLUORESCENT,
+            4000 to CameraMetadata.CONTROL_AWB_MODE_FLUORESCENT,
+            5500 to CameraMetadata.CONTROL_AWB_MODE_DAYLIGHT,
+            6500 to CameraMetadata.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT,
+            7500 to CameraMetadata.CONTROL_AWB_MODE_TWILIGHT,
+            9000 to CameraMetadata.CONTROL_AWB_MODE_SHADE
+        )
+        
+        // 找到最接近的预设模式（且设备支持）
+        var closestMode = CameraMetadata.CONTROL_AWB_MODE_AUTO
+        var closestDistance = Int.MAX_VALUE
+        
+        for ((presetKelvin, mode) in presetModes) {
+            if (mode in supportedModes) {
+                val distance = kotlin.math.abs(kelvin - presetKelvin)
+                if (distance < closestDistance) {
+                    closestDistance = distance
+                    closestMode = mode
+                }
+            }
+        }
+        
+        return closestMode
+    }
+    
+    /**
+     * 获取 AWB 模式的可读名称（用于日志）
+     */
+    private fun getAwbModeName(mode: Int): String {
+        return when (mode) {
+            CameraMetadata.CONTROL_AWB_MODE_AUTO -> "AUTO"
+            CameraMetadata.CONTROL_AWB_MODE_INCANDESCENT -> "INCANDESCENT"
+            CameraMetadata.CONTROL_AWB_MODE_WARM_FLUORESCENT -> "WARM_FLUORESCENT"
+            CameraMetadata.CONTROL_AWB_MODE_FLUORESCENT -> "FLUORESCENT"
+            CameraMetadata.CONTROL_AWB_MODE_DAYLIGHT -> "DAYLIGHT"
+            CameraMetadata.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT -> "CLOUDY_DAYLIGHT"
+            CameraMetadata.CONTROL_AWB_MODE_TWILIGHT -> "TWILIGHT"
+            CameraMetadata.CONTROL_AWB_MODE_SHADE -> "SHADE"
+            CameraMetadata.CONTROL_AWB_MODE_OFF -> "OFF"
+            else -> "UNKNOWN($mode)"
+        }
+    }
+    
+    /**
+     * 将色温(Kelvin)转换为 RggbChannelVector
+     * 
+     * 基于 Tanner Helland 算法 + Camera2 特定的增益系数
+     * 参考: https://stackoverflow.com/questions/35439159/camera2-api-set-custom-white-balance-temperature-color
+     * 
+     * @param kelvin 色温值 (2000-10000K)
+     * @return RggbChannelVector 白平衡增益
+     */
+    private fun kelvinToRggbGains(kelvin: Int): RggbChannelVector {
+        val temperature = kelvin / 100.0f
+        
+        var red: Float
+        var green: Float
+        var blue: Float
+        
+        // 计算红色分量
+        if (temperature <= 66) {
+            red = 255f
+        } else {
+            red = (329.698727446 * (temperature - 60.0).pow(-0.1332047592)).toFloat()
+            red = red.coerceIn(0f, 255f)
+        }
+        
+        // 计算绿色分量
+        if (temperature <= 66) {
+            green = (99.4708025861 * ln(temperature.toDouble()) - 161.1195681661).toFloat()
+        } else {
+            green = (288.1221695283 * (temperature - 60.0).pow(-0.0755148492)).toFloat()
+        }
+        green = green.coerceIn(0f, 255f)
+        
+        // 计算蓝色分量
+        if (temperature >= 66) {
+            blue = 255f
+        } else if (temperature <= 19) {
+            blue = 0f
+        } else {
+            blue = (138.5177312231 * ln((temperature - 10).toDouble()) - 305.0447927307).toFloat()
+            blue = blue.coerceIn(0f, 255f)
+        }
+        
+        Log.d(TAG, "kelvinToRggbGains: ${kelvin}K -> RGB($red, $green, $blue)")
+        
+        // Camera2 特定的增益计算：
+        // 红色和蓝色通道乘以2，绿色通道保持归一化
+        // 这是 StackOverflow 上验证过的正确算法
+        return RggbChannelVector(
+            (red / 255f) * 2f,
+            green / 255f,
+            green / 255f,
+            (blue / 255f) * 2f
+        )
     }
     
     /**
