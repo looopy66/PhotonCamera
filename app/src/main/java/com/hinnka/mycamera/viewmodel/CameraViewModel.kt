@@ -501,6 +501,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 保存当前边框信息用于元数据
         val frameIdToSave = currentFrameId
         val showAppBrandingToSave = currentShowAppBranding
+        
+        // 获取是否自动保存设置
+        val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
 
         try {
             // 计算旋转角度
@@ -530,10 +533,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 showAppBranding = showAppBrandingToSave
             )
             
-            // 生成预览图/缩略图源（缩小比例以提高性能）
-            val previewBitmap = withContext(Dispatchers.Default) {
-                val inSampleSize = (min(bitmap.width, bitmap.height) / 1080f).roundToInt()
-                val scaledBitmap = Bitmap.createScaledBitmap(bitmap, bitmap.width / inSampleSize, bitmap.height / inSampleSize, false)
+            val previewBitmap: Bitmap
+            
+            if (shouldAutoSave) {
+                // 如果开启自动保存，先处理图片，再导出到系统相册
                 val exifMetadata = ExifMetadata(
                     deviceModel = captureInfo.model,
                     brand = captureInfo.make.replaceFirstChar { it.uppercase() },
@@ -546,7 +549,59 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     width = captureInfo.imageWidth,
                     height = captureInfo.imageHeight
                 )
-                photoProcessor.process(context, scaledBitmap, metadata, exifMetadata = exifMetadata)
+                
+                // 处理完整图片（应用 LUT 和边框）
+                val processedBitmap = withContext(Dispatchers.Default) {
+                    photoProcessor.process(context, bitmap, metadata, exifMetadata = exifMetadata)
+                }
+                
+                // 导出到系统相册
+                withContext(Dispatchers.IO) {
+                    val filename = "PhotonCamera_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())}.jpg"
+                    val contentValues = android.content.ContentValues().apply {
+                        put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                        put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+                        put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DCIM + "/PhotonCamera")
+                    }
+                    
+                    val uri = context.contentResolver.insert(
+                        android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                        contentValues
+                    )
+                    
+                    uri?.let {
+                        context.contentResolver.openOutputStream(it)?.use { outputStream ->
+                            processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                        }
+                    }
+                }
+                
+                // 使用导出的图片生成预览图
+                previewBitmap = withContext(Dispatchers.Default) {
+                    val inSampleSize = (min(processedBitmap.width, processedBitmap.height) / 1080f).roundToInt()
+                    Bitmap.createScaledBitmap(processedBitmap, processedBitmap.width / inSampleSize, processedBitmap.height / inSampleSize, false)
+                }
+                
+                processedBitmap.recycle()
+            } else {
+                // 原有逻辑：生成预览图/缩略图源（缩小比例以提高性能）
+                previewBitmap = withContext(Dispatchers.Default) {
+                    val inSampleSize = (min(bitmap.width, bitmap.height) / 1080f).roundToInt()
+                    val scaledBitmap = Bitmap.createScaledBitmap(bitmap, bitmap.width / inSampleSize, bitmap.height / inSampleSize, false)
+                    val exifMetadata = ExifMetadata(
+                        deviceModel = captureInfo.model,
+                        brand = captureInfo.make.replaceFirstChar { it.uppercase() },
+                        dateTaken = captureInfo.captureTime,
+                        iso = captureInfo.iso,
+                        shutterSpeed = captureInfo.formatExposureTime(),
+                        focalLength = captureInfo.formatFocalLength(),
+                        focalLength35mm = captureInfo.formatFocalLength35mm(),
+                        aperture = captureInfo.formatAperture(),
+                        width = captureInfo.imageWidth,
+                        height = captureInfo.imageHeight
+                    )
+                    photoProcessor.process(context, scaledBitmap, metadata, exifMetadata = exifMetadata)
+                }
             }
             
             // 使用 PhotoManager 统一管理保存，并写入 EXIF
@@ -555,7 +610,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             previewBitmap.recycle()
             
             if (photoId != null) {
-                Log.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
+                Log.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave, AutoSave: $shouldAutoSave")
                 _imageSavedEvent.emit(Unit)
             } else {
                 Log.e(TAG, "Failed to save image via PhotoManager")
