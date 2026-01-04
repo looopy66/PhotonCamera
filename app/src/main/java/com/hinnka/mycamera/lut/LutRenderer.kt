@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.lut
 
+import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
 import android.opengl.GLES11Ext
 import android.opengl.GLES30
@@ -91,6 +92,11 @@ class LutRenderer : GLSurfaceView.Renderer {
     // 回调
     var onSurfaceTextureAvailable: ((SurfaceTexture) -> Unit)? = null
     var onRequestRender: (() -> Unit)? = null
+    var onPreviewFrameCaptured: ((Bitmap) -> Unit)? = null
+    
+    // 预览帧捕获标志
+    private var shouldCapturePreview = false
+    private val captureSize = 128 // 预览图尺寸
     
     /**
      * Surface 创建时调用
@@ -233,6 +239,12 @@ class LutRenderer : GLSurfaceView.Renderer {
         GLES30.glDisableVertexAttribArray(aTexCoordLocation)
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
         GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
+        
+        // 捕获预览帧（如果需要）
+        if (shouldCapturePreview) {
+            shouldCapturePreview = false
+            capturePreviewFrameInternal()
+        }
         
         GlUtils.checkGlError("onDrawFrame")
     }
@@ -399,6 +411,61 @@ class LutRenderer : GLSurfaceView.Renderer {
         }
         
         Log.d(TAG, "MVP matrix updated: viewport=${viewportWidth}x${viewportHeight}, preview=${previewWidth}x${previewHeight}")
+    }
+    
+    /**
+     * 请求捕获预览帧
+     * 会在下一帧渲染后捕获并通过回调返回
+     */
+    fun capturePreviewFrame() {
+        shouldCapturePreview = true
+    }
+    
+    /**
+     * 内部方法：捕获当前帧为小尺寸 Bitmap
+     * 必须在 GL 线程中调用
+     */
+    private fun capturePreviewFrameInternal() {
+        try {
+            // 计算缩放比例以保持宽高比
+            val scale = captureSize.toFloat() / maxOf(viewportWidth, viewportHeight)
+            val scaledWidth = (viewportWidth * scale).toInt()
+            val scaledHeight = (viewportHeight * scale).toInt()
+            
+            // 读取像素（从当前帧缓冲）
+            val buffer = ByteBuffer.allocateDirect(scaledWidth * scaledHeight * 4)
+            buffer.order(ByteOrder.nativeOrder())
+            
+            // 使用 glReadPixels 读取缩小的区域
+            // 注意：这会读取整个视口，然后我们在 Bitmap 创建时缩小
+            val fullBuffer = ByteBuffer.allocateDirect(viewportWidth * viewportHeight * 4)
+            fullBuffer.order(ByteOrder.nativeOrder())
+            GLES30.glReadPixels(
+                0, 0, viewportWidth, viewportHeight,
+                GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, fullBuffer
+            )
+            fullBuffer.position(0)
+            
+            // 创建原始大小的 Bitmap
+            val fullBitmap = Bitmap.createBitmap(viewportWidth, viewportHeight, Bitmap.Config.ARGB_8888)
+            fullBitmap.copyPixelsFromBuffer(fullBuffer)
+            
+            // 翻转 Y 轴（OpenGL 坐标系与 Android 不同）
+            val matrix = android.graphics.Matrix()
+            matrix.preScale(1f, -1f)
+            val flippedBitmap = Bitmap.createBitmap(fullBitmap, 0, 0, viewportWidth, viewportHeight, matrix, false)
+            fullBitmap.recycle()
+            
+            // 缩小到目标尺寸
+            val scaledBitmap = Bitmap.createScaledBitmap(flippedBitmap, scaledWidth, scaledHeight, true)
+            flippedBitmap.recycle()
+            
+            // 通过回调返回
+            onPreviewFrameCaptured?.invoke(scaledBitmap)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to capture preview frame", e)
+        }
     }
     
     /**

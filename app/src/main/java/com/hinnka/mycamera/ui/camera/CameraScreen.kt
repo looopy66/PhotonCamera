@@ -75,6 +75,13 @@ fun CameraScreen(
     var activePanel by remember { mutableStateOf(ActivePanel.NONE) }
     var selectedParameter by remember { mutableStateOf<CameraParameter?>(null) }
     
+    // 当打开滤镜面板时，生成预览图
+    LaunchedEffect(activePanel) {
+        if (activePanel == ActivePanel.FILTERS) {
+            viewModel.captureAndGenerateLutPreviews()
+        }
+    }
+    
     // 从后台返回时检查并恢复相机，刷新最新照片
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         if (cameraOpened) {
@@ -162,6 +169,7 @@ fun CameraScreen(
                         availableLuts = viewModel.availableLutList,
                         currentLutId = viewModel.currentLutId,
                         lutIntensity = state.lutIntensity,
+                        lutPreviewBitmaps = viewModel.lutPreviewBitmaps,
                         onLutSelected = { viewModel.setLut(it) },
                         onIntensityChange = { viewModel.setLutIntensity(it) },
                         modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter).padding(bottom = 48.dp)

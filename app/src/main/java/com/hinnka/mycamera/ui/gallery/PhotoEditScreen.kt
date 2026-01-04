@@ -9,6 +9,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -68,6 +69,7 @@ fun PhotoEditScreen(
     
     // 预览 Bitmap 状态
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var lutPreviews by remember { mutableStateOf<List<Bitmap?>>(emptyList()) }
     
     // 边框编辑状态
     val editFrameId = viewModel.editFrameId
@@ -80,6 +82,9 @@ fun PhotoEditScreen(
         isLoadingPreview = true
         previewBitmap = withContext(Dispatchers.IO) {
             viewModel.getPreviewBitmap(currentPhoto)
+        }
+        lutPreviews = withContext(Dispatchers.IO) {
+            viewModel.loadLutPreviews(currentPhoto)
         }
         isLoadingPreview = false
     }
@@ -245,9 +250,10 @@ fun PhotoEditScreen(
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         // LUT 选项
-                        items(availableLuts) { lut ->
+                        itemsIndexed(availableLuts) { index, lut ->
                             LutOption(
                                 name = lut.name,
+                                previewBitmap = lutPreviews.getOrNull(index),
                                 isSelected = editLutId == lut.id,
                                 onClick = { viewModel.setEditLut(lut.id) }
                             )
@@ -469,6 +475,7 @@ fun PhotoEditScreen(
 @Composable
 private fun LutOption(
     name: String,
+    previewBitmap: Bitmap? = null,
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
@@ -492,11 +499,20 @@ private fun LutOption(
                 ),
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = name.take(2).uppercase(),
-                color = if (isSelected) AccentOrange else Color.White,
-                fontSize = 16.sp
-            )
+            if (previewBitmap != null) {
+                Image(
+                    bitmap = previewBitmap.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Text(
+                    text = name.take(2).uppercase(),
+                    color = if (isSelected) AccentOrange else Color.White.copy(alpha = 0.7f),
+                    fontSize = 16.sp
+                )
+            }
         }
         
         Spacer(modifier = Modifier.height(4.dp))

@@ -82,6 +82,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     
     var availableLutList: List<LutInfo> by mutableStateOf(emptyList())
         private set
+    
+    // LUT 预览图缓存（lutId -> 预览Bitmap）
+    var lutPreviewBitmaps: Map<String, Bitmap> by mutableStateOf(emptyMap())
+        private set
+    
+    // 原始预览帧（用于生成 LUT 预览）
+    private var rawPreviewFrame: Bitmap? = null
+    
+    // 是否正在生成预览
+    private var isGeneratingPreviews = false
 
     // 边框相关状态
     var currentFrameId: String? by mutableStateOf(null)
@@ -384,6 +394,119 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         lutManager.preloadLut(id)
     }
     
+    /**
+     * 从相机捕获预览帧并生成所有 LUT 的预览图
+     */
+    fun captureAndGenerateLutPreviews() {
+        if (isGeneratingPreviews) {
+            Log.d(TAG, "Already generating previews, skipping")
+            return
+        }
+        
+        isGeneratingPreviews = true
+        
+        // 设置回调接收原始 YUV 预览帧
+        cameraController.onPreviewFrameCaptured = { bitmap ->
+            viewModelScope.launch(Dispatchers.Default) {
+                try {
+                    // 保存原始帧
+                    rawPreviewFrame?.recycle()
+                    rawPreviewFrame = bitmap
+                    
+                    // 生成所有 LUT 预览
+                    val newPreviews = mutableMapOf<String, Bitmap>()
+                    
+                    availableLutList.forEach { lutInfo ->
+                        val lutConfig = withContext(Dispatchers.IO) {
+                            lutManager.loadLut(lutInfo.id)
+                        }
+                        
+                        if (lutConfig != null) {
+                            val previewBitmap = lutImageProcessor.applyLut(
+                                bitmap = bitmap.copy(Bitmap.Config.ARGB_8888, false),
+                                lutConfig = lutConfig,
+                                intensity = 1.0f
+                            )
+                            newPreviews[lutInfo.id] = previewBitmap
+                        }
+                    }
+                    
+                    // 更新预览图
+                    withContext(Dispatchers.Main) {
+                        lutPreviewBitmaps.values.forEach { it.recycle() }
+                        lutPreviewBitmaps = newPreviews
+                        isGeneratingPreviews = false
+                        Log.d(TAG, "Generated ${newPreviews.size} LUT previews from YUV")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to generate LUT previews", e)
+                    isGeneratingPreviews = false
+                }
+            }
+        }
+        
+        // 触发捕获
+        cameraController.capturePreviewFrame()
+    }
+    
+    /**
+     * 将 YUV Image 转换为 Bitmap
+     */
+    private fun yuvImageToBitmap(image: Image): Bitmap? {
+        return try {
+            val planes = image.planes
+            val yPlane = planes[0]
+            val uPlane = planes[1]
+            val vPlane = planes[2]
+            
+            val yBuffer = yPlane.buffer
+            val uBuffer = uPlane.buffer
+            val vBuffer = vPlane.buffer
+            
+            val ySize = yBuffer.remaining()
+            val uSize = uBuffer.remaining()
+            val vSize = vBuffer.remaining()
+            
+            val nv21 = ByteArray(ySize + uSize + vSize)
+            
+            // 复制 Y 数据
+            yBuffer.get(nv21, 0, ySize)
+            
+            // 交织 U 和 V 数据为 NV21 格式
+            val pixelStride = vPlane.pixelStride
+            val rowStride = vPlane.rowStride
+            var pos = ySize
+            
+            for (row in 0 until image.height / 2) {
+                for (col in 0 until image.width / 2) {
+                    val vuPos = row * rowStride + col * pixelStride
+                    nv21[pos++] = vBuffer.get(vuPos)
+                    nv21[pos++] = uBuffer.get(vuPos)
+                }
+            }
+            
+            // 使用 android.graphics.YuvImage 转换为 Bitmap
+            val yuvImage = android.graphics.YuvImage(nv21, android.graphics.ImageFormat.NV21, image.width, image.height, null)
+            val out = java.io.ByteArrayOutputStream()
+            yuvImage.compressToJpeg(android.graphics.Rect(0, 0, image.width, image.height), 100, out)
+            val imageBytes = out.toByteArray()
+            android.graphics.BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to convert YUV to Bitmap", e)
+            null
+        }
+    }
+    
+    /**
+     * 清除 LUT 预览缓存
+     */
+    fun clearLutPreviews() {
+        lutPreviewBitmaps.values.forEach { it.recycle() }
+        lutPreviewBitmaps = emptyMap()
+        rawPreviewFrame?.recycle()
+        rawPreviewFrame = null
+    }
+    
     // ==================== 边框相关方法 ====================
 
     /**
@@ -633,5 +756,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         lutImageProcessor.release()
         frameManager.clearCache()
         shutterSoundPlayer.release()
+        
+        // 清理 LUT 预览图
+        clearLutPreviews()
     }
 }

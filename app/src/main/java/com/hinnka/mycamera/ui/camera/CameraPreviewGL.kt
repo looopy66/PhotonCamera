@@ -35,6 +35,7 @@ fun CameraPreviewGL(
     onSurfaceTextureReady: (SurfaceTexture) -> Unit,
     onSurfaceDestroyed: () -> Unit,
     onTap: (Float, Float, Int, Int) -> Unit,
+    onGLSurfaceViewReady: ((CameraGLSurfaceView) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     // 计算预览区域尺寸，保持目标比例
@@ -101,6 +102,9 @@ fun CameraPreviewGL(
                             surfaceTextureNotified = false
                             onSurfaceDestroyed()
                         }
+                        
+                        // 通知 GLSurfaceView 已准备好
+                        onGLSurfaceViewReady?.invoke(this)
                     }
                 },
                 update = { glSurfaceView ->

@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.ui.components
 
+import android.graphics.Bitmap
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -14,6 +15,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -30,6 +33,7 @@ import com.hinnka.mycamera.lut.LutInfo
 fun LutSelector(
     availableLuts: List<LutInfo>,
     currentLutId: String?,
+    lutPreviewBitmaps: Map<String, Bitmap> = emptyMap(),
     onLutSelected: (String?) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -44,6 +48,7 @@ fun LutSelector(
         availableLuts.forEach { lut ->
             LutItem(
                 name = lut.name,
+                previewBitmap = lutPreviewBitmaps[lut.id],
                 isSelected = currentLutId == lut.id,
                 onClick = { onLutSelected(lut.id) }
             )
@@ -57,6 +62,7 @@ fun LutSelector(
 @Composable
 private fun LutItem(
     name: String,
+    previewBitmap: Bitmap?,
     isSelected: Boolean,
     onClick: () -> Unit,
     isNone: Boolean = false,
@@ -97,8 +103,11 @@ private fun LutItem(
                 .then(
                     if (isNone) {
                         Modifier.background(Color.DarkGray)
+                    } else if (previewBitmap != null) {
+                        // 显示真实预览图
+                        Modifier
                     } else {
-                        // 模拟滤镜预览的渐变色
+                        // 占位符：模拟滤镜预览的渐变色
                         Modifier.background(
                             Brush.linearGradient(
                                 colors = listOf(
@@ -112,6 +121,15 @@ private fun LutItem(
                 ),
             contentAlignment = Alignment.Center
         ) {
+            // 显示预览图片
+            if (!isNone && previewBitmap != null) {
+                Image(
+                    bitmap = previewBitmap.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
             if (isNone) {
                 Icon(
                     imageVector = Icons.Default.FilterNone,
@@ -218,6 +236,7 @@ fun LutControlPanel(
     availableLuts: List<LutInfo>,
     currentLutId: String?,
     lutIntensity: Float,
+    lutPreviewBitmaps: Map<String, Bitmap> = emptyMap(),
     onLutSelected: (String?) -> Unit,
     onIntensityChange: (Float) -> Unit,
     modifier: Modifier = Modifier
@@ -239,6 +258,7 @@ fun LutControlPanel(
         LutSelector(
             availableLuts = availableLuts,
             currentLutId = currentLutId,
+            lutPreviewBitmaps = lutPreviewBitmaps,
             onLutSelected = onLutSelected
         )
     }

@@ -25,6 +25,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.collections.set
+import kotlin.math.max
 
 /**
  * 相册 ViewModel
@@ -171,6 +173,32 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
             }
+        }
+    }
+
+    suspend fun loadLutPreviews(photo: PhotoData): List<Bitmap?> {
+        val context = getApplication<Application>()
+        val inputStream = context.contentResolver.openInputStream(photo.uri)
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = max(photo.width, photo.height) / 128
+        }
+        val bitmap = BitmapFactory.decodeStream(inputStream, null, options)
+        inputStream?.close()
+
+        if (bitmap == null) return emptyList()
+
+        return availableLuts.map { lutInfo ->
+            val lutConfig = withContext(Dispatchers.IO) {
+                lutManager.loadLut(lutInfo.id)
+            }
+
+            if (lutConfig != null) {
+                lutImageProcessor.applyLut(
+                    bitmap = bitmap.copy(Bitmap.Config.ARGB_8888, false),
+                    lutConfig = lutConfig,
+                    intensity = 1.0f
+                )
+            } else null
         }
     }
     

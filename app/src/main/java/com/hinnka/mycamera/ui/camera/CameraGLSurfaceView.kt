@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.ui.camera
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
 import android.opengl.GLSurfaceView
 import android.util.AttributeSet
@@ -122,6 +123,23 @@ class CameraGLSurfaceView @JvmOverloads constructor(
      * 获取 SurfaceTexture
      */
     fun getSurfaceTexture(): SurfaceTexture? = renderer.getSurfaceTexture()
+    
+    /**
+     * 捕获预览帧
+     * @param callback 捕获完成后的回调，在主线程调用
+     */
+    fun capturePreviewFrame(callback: (Bitmap) -> Unit) {
+        renderer.onPreviewFrameCaptured = { bitmap ->
+            // 在主线程回调
+            post {
+                callback(bitmap)
+            }
+        }
+        queueEvent {
+            renderer.capturePreviewFrame()
+            requestRender()
+        }
+    }
     
     override fun onPause() {
         super.onPause()

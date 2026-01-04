@@ -2,6 +2,7 @@ package com.hinnka.mycamera.camera
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
@@ -17,6 +18,7 @@ import android.util.Size
 import android.view.Surface
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.utils.OrientationObserver
+import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -67,6 +69,10 @@ class Camera2Controller(private val context: Context) {
     
     // 快门音效播放回调
     var onPlayShutterSound: (() -> Unit)? = null
+    
+    // 预览帧捕获回调（用于 LUT 预览生成）
+    var onPreviewFrameCaptured: ((Bitmap) -> Unit)? = null
+    private var shouldCapturePreviewFrame = false
 
     private val previewCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(
@@ -225,6 +231,25 @@ class Camera2Controller(private val context: Context) {
                             }
                         }
                         _state.value = _state.value.copy(histogram = histogram)
+
+                        // 计算旋转角度
+                        val sensorOrientation = getSensorOrientation()
+                        val lensFacing = getLensFacing()
+                        val deviceRotation = OrientationObserver.rotationDegrees.toInt()
+
+                        val rotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+                            (sensorOrientation - deviceRotation + 360) % 360
+                        } else {
+                            (sensorOrientation + deviceRotation) % 360
+                        }
+
+                        val bitmap = YuvProcessor.processAndToBitmap(image, AspectRatio.RATIO_1_1, rotation)
+                        
+                        if (shouldCapturePreviewFrame) {
+                            shouldCapturePreviewFrame = false
+                            onPreviewFrameCaptured?.invoke(bitmap)
+                            return@setOnImageAvailableListener
+                        }
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to calculate histogram", e)
                     } finally {
@@ -1167,6 +1192,14 @@ class Camera2Controller(private val context: Context) {
         } catch (e: Exception) {
             null
         }
+    }
+    
+    /**
+     * 请求捕获下一帧预览帧（原始 YUV）
+     * 捕获的帧将通过 onPreviewFrameCaptured 回调传递
+     */
+    fun capturePreviewFrame() {
+        shouldCapturePreviewFrame = true
     }
     
     // ==================== 生命周期 ====================
