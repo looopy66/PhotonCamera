@@ -64,6 +64,9 @@ class Camera2Controller(private val context: Context) {
     
     // 图片拍摄回调（携带 CaptureInfo）
     var onImageCaptured: ((Image, CaptureInfo) -> Unit)? = null
+    
+    // 快门音效播放回调
+    var onPlayShutterSound: (() -> Unit)? = null
 
     private val previewCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(
@@ -990,6 +993,9 @@ class Camera2Controller(private val context: Context) {
     fun capture() {
         val device = cameraDevice ?: return
         val reader = imageReader ?: return
+        
+        // 播放快门音效
+        onPlayShutterSound?.invoke()
         
         _state.value = _state.value.copy(isCapturing = true)
         

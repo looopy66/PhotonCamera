@@ -31,6 +31,7 @@ import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.LutManager
 import com.hinnka.mycamera.utils.BitmapUtils.toByteArray
 import com.hinnka.mycamera.utils.OrientationObserver
+import com.hinnka.mycamera.utils.ShutterSoundPlayer
 import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
@@ -62,6 +63,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val frameManager = FrameManager(application)
     private val frameRenderer = FrameRenderer(application)
     private val photoProcessor = PhotoProcessor(lutManager, lutImageProcessor, frameManager, frameRenderer)
+    
+    // 快门音效播放器
+    private val shutterSoundPlayer = ShutterSoundPlayer(application)
 
     val state: StateFlow<CameraState> = cameraController.state
     
@@ -108,6 +112,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.onImageCaptured = { image, captureInfo ->
             viewModelScope.launch {
                 saveImage(image, captureInfo)
+            }
+        }
+        
+        // 设置快门音效回调
+        cameraController.onPlayShutterSound = {
+            viewModelScope.launch {
+                val enabled = shutterSoundEnabled.firstOrNull() ?: true
+                if (enabled) {
+                    shutterSoundPlayer.play()
+                }
             }
         }
         
@@ -561,5 +575,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         lutManager.clearCache()
         lutImageProcessor.release()
         frameManager.clearCache()
+        shutterSoundPlayer.release()
     }
 }
