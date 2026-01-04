@@ -3,6 +3,7 @@ package com.hinnka.mycamera
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -32,6 +34,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -46,6 +49,8 @@ import com.hinnka.mycamera.ui.theme.PhotonCameraTheme
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 /**
  * 路由常量
@@ -104,6 +109,32 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        // 检查是否是音量键
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            // 同步获取音量键拍摄设置状态并判断是否拦截
+            return try {
+                kotlinx.coroutines.runBlocking {
+                    val volumeKeyCaptureEnabled = cameraViewModel.volumeKeyCapture.first()
+                    
+                    if (volumeKeyCaptureEnabled) {
+                        // 在协程中触发拍照
+                        lifecycleScope.launch {
+                            cameraViewModel.capture()
+                        }
+                        true  // 拦截事件
+                    } else {
+                        false  // 不拦截，让系统处理音量调节
+                    }
+                }
+            } catch (e: Exception) {
+                false  // 出错时不拦截
+            }
+        }
+        
+        return super.onKeyDown(keyCode, event)
     }
 
     private fun hideSystemUI() {
