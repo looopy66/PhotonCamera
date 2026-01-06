@@ -2,131 +2,17 @@ package com.hinnka.mycamera.frame
 
 import android.content.Context
 import android.graphics.*
-import android.net.Uri
-import android.os.Build
 import android.util.Log
 import android.util.TypedValue
 import androidx.core.graphics.drawable.toBitmap
-import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.R
+import com.hinnka.mycamera.gallery.PhotoMetadata
 import java.text.SimpleDateFormat
 import java.util.*
 import androidx.core.graphics.createBitmap
+import kotlin.math.max
 import kotlin.math.min
 
-/**
- * EXIF 元数据
- * 
- * 从照片中提取的拍摄信息
- */
-data class ExifMetadata(
-    val deviceModel: String? = null,
-    val brand: String? = null,
-    val dateTaken: Long? = null,
-    val location: String? = null,
-    val iso: Int? = null,
-    val shutterSpeed: String? = null,
-    val focalLength: String? = null,
-    val focalLength35mm: String? = null,
-    val aperture: String? = null,
-    val width: Int = 0,
-    val height: Int = 0
-) {
-    val resolution: String
-        get() = "${width}x${height}"
-    
-    companion object {
-        /**
-         * 从系统信息创建默认元数据
-         */
-        fun createDefault(width: Int, height: Int): ExifMetadata {
-            return ExifMetadata(
-                deviceModel = Build.MODEL,
-                brand = Build.MANUFACTURER.replaceFirstChar { it.uppercase() },
-                dateTaken = System.currentTimeMillis(),
-                width = width,
-                height = height
-            )
-        }
-
-        /**
-         * 从指定的 URI 加载 EXIF 元数据
-         */
-        fun fromUri(context: Context, uri: Uri): ExifMetadata {
-            return try {
-                context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                    val exif = ExifInterface(inputStream)
-                    
-                    val model = exif.getAttribute(ExifInterface.TAG_MODEL)
-                    val make = exif.getAttribute(ExifInterface.TAG_MAKE)
-                    val dateStr = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL) ?: exif.getAttribute(ExifInterface.TAG_DATETIME)
-                    
-                    val iso = exif.getAttributeInt(ExifInterface.TAG_ISO_SPEED_RATINGS, 0).takeIf { it > 0 }
-                        ?: exif.getAttributeInt(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY, 0).takeIf { it > 0 }
-                    
-                    val shutterSpeed = exif.getAttribute(ExifInterface.TAG_EXPOSURE_TIME)?.let {
-                        try {
-                            val time = it.toDouble()
-                            if (time >= 1.0) {
-                                "${time.toInt()}\""
-                            } else {
-                                "1/${(1.0 / time).toInt()}"
-                            }
-                        } catch (e: Exception) {
-                            it
-                        }
-                    }
-                    
-                    val aperture = exif.getAttribute(ExifInterface.TAG_F_NUMBER)?.let { "f/$it" }
-                    val focalLength = exif.getAttribute(ExifInterface.TAG_FOCAL_LENGTH)?.let {
-                        try {
-                            // ExifInterface 返回的焦距通常是 "24.5/1" 或 "24.5"
-                            if (it.contains("/")) {
-                                val parts = it.split("/")
-                                (parts[0].toDouble() / parts[1].toDouble()).toInt().toString() + "mm"
-                            } else {
-                                it.toDouble().toInt().toString() + "mm"
-                            }
-                        } catch (e: Exception) {
-                            it + "mm"
-                        }
-                    }
-                    val focalLength35mm = exif.getAttributeInt(ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM, 0)
-                        .takeIf { it > 0 }?.let { "${it}mm" }
-
-                    val width = exif.getAttributeInt(ExifInterface.TAG_IMAGE_WIDTH, 0)
-                        .let { if (it == 0) exif.getAttributeInt(ExifInterface.TAG_PIXEL_X_DIMENSION, 0) else it }
-                    val height = exif.getAttributeInt(ExifInterface.TAG_IMAGE_LENGTH, 0)
-                        .let { if (it == 0) exif.getAttributeInt(ExifInterface.TAG_PIXEL_Y_DIMENSION, 0) else it }
-
-                    val dateTaken = dateStr?.let {
-                        try {
-                            SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).parse(it)?.time
-                        } catch (e: Exception) {
-                            null
-                        }
-                    }
-
-                    ExifMetadata(
-                        deviceModel = model,
-                        brand = make?.replaceFirstChar { it.uppercase() },
-                        dateTaken = dateTaken,
-                        iso = iso,
-                        shutterSpeed = shutterSpeed,
-                        focalLength = focalLength,
-                        focalLength35mm = focalLength35mm,
-                        aperture = aperture,
-                        width = width,
-                        height = height
-                    )
-                } ?: createDefault(0, 0)
-            } catch (e: Exception) {
-                Log.e("ExifMetadata", "Failed to load EXIF from $uri", e)
-                createDefault(0, 0)
-            }
-        }
-    }
-}
 
 /**
  * 边框渲染器
@@ -159,12 +45,15 @@ class FrameRenderer(private val context: Context) {
     fun render(
         originalBitmap: Bitmap,
         template: FrameTemplate,
-        metadata: ExifMetadata,
+        metadata: PhotoMetadata,
         showAppBranding: Boolean = true,
     ): Bitmap {
+
+        Log.d(TAG, "render: $metadata")
+
         val layout = template.layout
         
-        val expectedHeight = min(originalBitmap.width, originalBitmap.height) * 0.08f
+        val expectedHeight = originalBitmap.height * 0.08f
         val scale = expectedHeight / dpToPx(80) // 以 80dp 为基准高度计算缩放比例
         
         val frameHeight = (dpToPx(layout.heightDp) * scale).toInt()
@@ -248,7 +137,7 @@ class FrameRenderer(private val context: Context) {
     private fun drawFrameContent(
         canvas: Canvas,
         elements: List<FrameElement>,
-        metadata: ExifMetadata,
+        metadata: PhotoMetadata,
         showAppBranding: Boolean,
         left: Float,
         top: Float,
@@ -338,7 +227,7 @@ class FrameRenderer(private val context: Context) {
      */
     private fun measureElementsWidth(
         elements: List<FrameElement>,
-        metadata: ExifMetadata,
+        metadata: PhotoMetadata,
         showAppBranding: Boolean,
         scale: Float = 1f
     ): Float {
@@ -365,7 +254,7 @@ class FrameRenderer(private val context: Context) {
      */
     private fun measureElementWidth(
         element: FrameElement,
-        metadata: ExifMetadata,
+        metadata: PhotoMetadata,
         showAppBranding: Boolean,
         scale: Float = 1f
     ): Float {
@@ -400,7 +289,7 @@ class FrameRenderer(private val context: Context) {
     private fun drawElement(
         canvas: Canvas,
         element: FrameElement,
-        metadata: ExifMetadata,
+        metadata: PhotoMetadata,
         showAppBranding: Boolean,
         x: Float,
         centerY: Float,
@@ -421,7 +310,7 @@ class FrameRenderer(private val context: Context) {
     private fun drawTextElement(
         canvas: Canvas,
         element: FrameElement.Text,
-        metadata: ExifMetadata,
+        metadata: PhotoMetadata,
         showAppBranding: Boolean,
         x: Float,
         centerY: Float,
@@ -450,7 +339,7 @@ class FrameRenderer(private val context: Context) {
      */
     private fun getTextContent(
         element: FrameElement.Text,
-        metadata: ExifMetadata,
+        metadata: PhotoMetadata,
         showAppBranding: Boolean
     ): String? {
         val content = when (element.textType) {
@@ -491,7 +380,7 @@ class FrameRenderer(private val context: Context) {
         x: Float,
         centerY: Float,
         leftToRight: Boolean,
-        metadata: ExifMetadata? = null,
+        metadata: PhotoMetadata? = null,
         scale: Float = 1f
     ): Float {
         // 如果是 App Logo 且不显示品牌，则跳过
@@ -639,7 +528,7 @@ class FrameRenderer(private val context: Context) {
         val scaledBitmap = Bitmap.createScaledBitmap(originalBitmap, scaledWidth, scaledHeight, true)
         
         // 渲染边框
-        val metadata = ExifMetadata.createDefault(scaledWidth, scaledHeight)
+        val metadata = PhotoMetadata.createDefault(scaledWidth, scaledHeight)
         return render(scaledBitmap, template, metadata, showAppBranding = true)
     }
     

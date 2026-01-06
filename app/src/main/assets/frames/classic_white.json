@@ -11,46 +11,28 @@
   "elements": [
     {
       "type": "text",
-      "textType": "BRAND",
-      "alignment": "START",
-      "fontSize": 16,
-      "color": "#000000",
-      "fontWeight": "BOLD",
-      "line": 0
-    },
-    {
-      "type": "text",
       "textType": "DEVICE_MODEL",
       "alignment": "START",
       "fontSize": 16,
       "color": "#000000",
       "fontWeight": "BOLD",
-      "line": 0
-    },
-    {
-      "type": "text",
-      "textType": "DATETIME",
-      "alignment": "START",
-      "fontSize": 12,
-      "color": "#999999",
-      "format": "yyyy.MM.dd HH:mm:ss",
-      "line": 1
-    },
-    {
-      "type": "logo",
-      "logoType": "APP",
-      "alignment": "END",
-      "size": 32,
       "line": -1
     },
     {
       "type": "divider",
       "orientation": "VERTICAL",
-      "alignment": "END",
+      "alignment": "START",
       "length": 36,
       "thickness": 1,
       "color": "#E0E0E0",
       "margin": 8,
+      "line": -1
+    },
+    {
+      "type": "logo",
+      "logoType": "BRAND",
+      "alignment": "START",
+      "size": 48,
       "line": -1
     },
     {
@@ -60,7 +42,7 @@
       "fontSize": 16,
       "color": "#000000",
       "fontWeight": "BOLD",
-      "line": -1
+      "line": 0
     },
     {
       "type": "text",
@@ -69,7 +51,7 @@
       "fontSize": 16,
       "color": "#000000",
       "fontWeight": "BOLD",
-      "line": -1
+      "line": 0
     },
     {
       "type": "text",
@@ -78,7 +60,16 @@
       "fontSize": 16,
       "color": "#000000",
       "fontWeight": "BOLD",
-      "line": -1
+      "line": 0
+    },
+    {
+      "type": "text",
+      "textType": "DATETIME",
+      "alignment": "END",
+      "fontSize": 12,
+      "color": "#999999",
+      "format": "yyyy.MM.dd HH:mm:ss",
+      "line": 1
     }
   ]
 }

@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.camera
 
 import android.os.Build
+import com.hinnka.mycamera.utils.DeviceUtil
 
 /**
  * 拍摄信息
@@ -19,7 +20,7 @@ data class CaptureInfo(
     
     // 设备信息
     val make: String = Build.MANUFACTURER,
-    val model: String = Build.MODEL,
+    val model: String = DeviceUtil.model,
     val software: String = "PhotonCamera",
     
     // 拍摄参数
@@ -66,7 +67,7 @@ data class CaptureInfo(
         return if (f == f.toInt().toFloat()) {
             "f/${f.toInt()}"
         } else {
-            "f/$f"
+            "f/${String.format("%.1f", f)}"
         }
     }
     

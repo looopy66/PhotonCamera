@@ -584,7 +584,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 
                 if (bitmap == null) return@withContext null
                 
-                val metadata = PhotoMetadata(
+                val metadata = (photo.metadata ?: PhotoMetadata()).copy(
                     lutId = editLutId,
                     lutIntensity = editLutIntensity,
                     brightness = editBrightness,

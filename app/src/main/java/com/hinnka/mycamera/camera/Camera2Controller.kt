@@ -1283,10 +1283,10 @@ class Camera2Controller(private val context: Context) {
         }
         
         // 从 TotalCaptureResult 获取曝光信息
-        val exposureTime = result?.get(CaptureResult.SENSOR_EXPOSURE_TIME)
-        val iso = result?.get(CaptureResult.SENSOR_SENSITIVITY)
-        val whiteBalance = result?.get(CaptureResult.CONTROL_AWB_MODE)
-        val flashState = result?.get(CaptureResult.FLASH_STATE)
+        val exposureTime = result?.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: _state.value.shutterSpeed
+        val iso = result?.get(CaptureResult.SENSOR_SENSITIVITY) ?: _state.value.iso
+        val whiteBalance = result?.get(CaptureResult.CONTROL_AWB_MODE) ?: _state.value.awbTemperature
+        val flashState = result?.get(CaptureResult.FLASH_STATE) ?: _state.value.flashMode
         
         // 如果有实时的光圈/焦距，使用实时值
         result?.get(CaptureResult.LENS_APERTURE)?.let { aperture = it }

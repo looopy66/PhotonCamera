@@ -18,7 +18,6 @@ import com.hinnka.mycamera.camera.Camera2Controller
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.CaptureInfo
 import com.hinnka.mycamera.data.UserPreferencesRepository
-import com.hinnka.mycamera.frame.ExifMetadata
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.frame.FrameManager
 import com.hinnka.mycamera.frame.FrameRenderer
@@ -655,8 +654,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // 关闭 Image 资源
             image.close()
             
-            // 公共 ExifMetadata，只创建一次
-            val exifMetadata = ExifMetadata(
+            // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
+            val metadata = PhotoMetadata(
+                // 编辑配置
+                lutId = lutIdToSave,
+                lutIntensity = lutIntensityToSave,
+                frameId = frameIdToSave,
+                showAppBranding = showAppBrandingToSave,
+                // 拍摄信息 (来自 captureInfo)
                 deviceModel = captureInfo.model,
                 brand = captureInfo.make.replaceFirstChar { it.uppercase() },
                 dateTaken = captureInfo.captureTime,
@@ -665,18 +670,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 focalLength = captureInfo.formatFocalLength(),
                 focalLength35mm = captureInfo.formatFocalLength35mm(),
                 aperture = captureInfo.formatAperture(),
-                width = captureInfo.imageWidth,
-                height = captureInfo.imageHeight
             )
-            
-            // 保存 LUT 和边框元数据
-            val metadata = PhotoMetadata(
-                lutId = lutIdToSave,
-                lutIntensity = lutIntensityToSave,
-                frameId = frameIdToSave,
-                showAppBranding = showAppBrandingToSave
-            )
-            
+
             val previewBitmap: Bitmap
             
             if (shouldAutoSave) {
@@ -684,7 +679,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 
                 // 处理完整图片（应用 LUT 和边框）
                 val processedBitmap = withContext(Dispatchers.Default) {
-                    photoProcessor.process(context, bitmap, metadata, exifMetadata = exifMetadata)
+                    photoProcessor.process(context, bitmap, metadata)
                 }
                 
                 // 生成预览图（从已处理的图片缩放）
@@ -739,7 +734,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 previewBitmap = withContext(Dispatchers.Default) {
                     val inSampleSize = (min(bitmap.width, bitmap.height) / 1080f).roundToInt().coerceAtLeast(1)
                     val scaledBitmap = Bitmap.createScaledBitmap(bitmap, bitmap.width / inSampleSize, bitmap.height / inSampleSize, false)
-                    photoProcessor.process(context, scaledBitmap, metadata, exifMetadata = exifMetadata)
+                    photoProcessor.process(context, scaledBitmap, metadata)
                 }
                 
                 // 使用 PhotoManager 统一管理保存，并写入 EXIF

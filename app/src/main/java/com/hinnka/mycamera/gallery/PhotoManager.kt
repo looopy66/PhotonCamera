@@ -74,7 +74,7 @@ object PhotoManager {
         bitmap: Bitmap,
         metadata: PhotoMetadata,
         previewBitmap: Bitmap? = null,
-        captureInfo: CaptureInfo? = null
+        captureInfo: CaptureInfo? = null,
     ): String? {
         return withContext(Dispatchers.IO) {
             try {
@@ -87,9 +87,12 @@ object PhotoManager {
                 val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
                 val previewFile = File(photoDir, PREVIEW_FILE)
                 
-                // 预先计算元数据（避免在协程中访问可能被回收的 bitmap）
-                val metadataWithDimens = metadata.copy(width = bitmap.width, height = bitmap.height)
-                val metadataJson = metadataWithDimens.toJson()
+                // 预先计算元数据（避免在协程中访问可能被回收的 bitmap
+                val metadataWithInfo = metadata.copy(
+                    width = bitmap.width,
+                    height = bitmap.height,
+                )
+                val metadataJson = metadataWithInfo.toJson()
                 
                 // 并行执行所有 IO 操作
                 coroutineScope {
@@ -99,7 +102,10 @@ object PhotoManager {
                             bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
                         }
                         // EXIF 必须在原图保存后写入
-                        captureInfo?.let { info ->
+                        captureInfo?.copy(
+                            imageWidth = bitmap.width,
+                            imageHeight = bitmap.height,
+                        )?.let { info ->
                             ExifWriter.writeExif(photoFile, info)
                         }
                     }

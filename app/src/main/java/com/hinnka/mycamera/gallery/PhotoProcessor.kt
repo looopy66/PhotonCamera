@@ -3,7 +3,6 @@ package com.hinnka.mycamera.gallery
 import android.content.Context
 import android.graphics.*
 import android.net.Uri
-import com.hinnka.mycamera.frame.ExifMetadata
 import com.hinnka.mycamera.frame.FrameManager
 import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.lut.LutImageProcessor
@@ -27,16 +26,15 @@ class PhotoProcessor(
      * 
      * @param context 上下文
      * @param input 输入 Bitmap
-     * @param metadata 照片元数据
-     * @param uri 照片 URI（用于提取 EXIF）
+     * @param metadata 照片元数据（包含编辑配置和拍摄信息）
+     * @param uri 照片 URI（用于提取 EXIF，仅在 metadata 中没有拍摄信息时使用）
      * @return 处理后的 Bitmap
      */
     suspend fun process(
         context: Context,
         input: Bitmap,
         metadata: PhotoMetadata,
-        uri: Uri? = null,
-        exifMetadata: ExifMetadata? = null
+        uri: Uri? = null
     ): Bitmap = withContext(Dispatchers.Default) {
         var result = input
         
@@ -62,15 +60,44 @@ class PhotoProcessor(
         if (metadata.frameId != null) {
             val template = frameManager.loadTemplate(metadata.frameId)
             if (template != null) {
-                val finalExifMetadata = exifMetadata ?: if (uri != null) {
-                    ExifMetadata.fromUri(context, uri)
+                // 如果 metadata 中没有拍摄信息，尝试从 URI 加载
+                val finalMetadata = if (metadata.deviceModel == null && uri != null) {
+                    // 从 URI 加载 EXIF 并合并到当前 metadata
+                    val exifData = PhotoMetadata.fromUri(context, uri)
+                    metadata.copy(
+                        deviceModel = exifData.deviceModel,
+                        brand = exifData.brand,
+                        dateTaken = exifData.dateTaken ?: metadata.dateTaken,
+                        location = exifData.location,
+                        iso = exifData.iso ?: metadata.iso,
+                        shutterSpeed = exifData.shutterSpeed ?: metadata.shutterSpeed,
+                        focalLength = exifData.focalLength ?: metadata.focalLength,
+                        focalLength35mm = exifData.focalLength35mm ?: metadata.focalLength35mm,
+                        aperture = exifData.aperture ?: metadata.aperture,
+                        width = if (result.width > 0) result.width else exifData.width,
+                        height = if (result.height > 0) result.height else exifData.height
+                    )
+                } else if (metadata.deviceModel == null) {
+                    // 如果没有任何来源，使用默认值
+                    metadata.copy(
+                        deviceModel = android.os.Build.MODEL,
+                        brand = android.os.Build.MANUFACTURER.replaceFirstChar { it.uppercase() },
+                        dateTaken = metadata.dateTaken ?: System.currentTimeMillis(),
+                        width = result.width,
+                        height = result.height
+                    )
                 } else {
-                    ExifMetadata.createDefault(result.width, result.height)
+                    // 使用现有 metadata，但确保尺寸正确
+                    metadata.copy(
+                        width = if (metadata.width > 0) metadata.width else result.width,
+                        height = if (metadata.height > 0) metadata.height else result.height
+                    )
                 }
+                
                 val framedResult = frameRenderer.render(
                     result,
                     template,
-                    finalExifMetadata,
+                    finalMetadata,
                     metadata.showAppBranding
                 )
                 if (framedResult != result && result != input) {

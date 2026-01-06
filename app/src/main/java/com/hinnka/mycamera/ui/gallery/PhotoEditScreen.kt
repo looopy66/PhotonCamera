@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.ui.gallery
 
 import android.graphics.Bitmap
+import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
