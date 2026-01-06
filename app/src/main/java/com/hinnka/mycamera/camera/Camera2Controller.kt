@@ -26,6 +26,7 @@ import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.pow
+import kotlin.math.roundToInt
 
 
 /**
@@ -209,7 +210,7 @@ class Camera2Controller(private val context: Context) {
                 }, cameraHandler)
             }
             
-            // 创建用于直方图计算的预览 ImageReader (低分辨率 YUV)
+            // 创建用于直方图计算/半自动测光/低分辨率预览的 ImageReader (低分辨率 YUV)
             previewImageReader = ImageReader.newInstance(320, 240, ImageFormat.YUV_420_888, 2).apply {
                 setOnImageAvailableListener({ reader ->
                     val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
@@ -1470,6 +1471,7 @@ class Camera2Controller(private val context: Context) {
         imageHeight: Int
     ): CaptureInfo {
         val cameraId = _state.value.currentCameraId
+        val zoomRatio = _state.value.zoomRatio
         
         // 从 CameraCharacteristics 获取镜头固定信息
         var aperture: Float? = null
@@ -1485,12 +1487,12 @@ class Camera2Controller(private val context: Context) {
             
             // 焦距（取第一个可用焦距）
             val focalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-            focalLength = focalLengths?.firstOrNull()
-            
-            // 计算等效35mm焦距
-            focalLength?.let { fl ->
-                focalLength35mm = calculate35mmEquivalent(characteristics, fl)
+            focalLengths?.firstOrNull()?.let {
+                focalLength = it * zoomRatio
+                // 计算等效35mm焦距
+                focalLength35mm = calculate35mmEquivalent(characteristics, it)?.times(zoomRatio)?.roundToInt()
             }
+
         } catch (e: Exception) {
             Log.e(TAG, "Failed to get camera characteristics for EXIF", e)
         }
@@ -1503,17 +1505,18 @@ class Camera2Controller(private val context: Context) {
         
         // 如果有实时的光圈/焦距，使用实时值
         result?.get(CaptureResult.LENS_APERTURE)?.let { aperture = it }
-        result?.get(CaptureResult.LENS_FOCAL_LENGTH)?.let { 
-            focalLength = it
+        result?.get(CaptureResult.LENS_FOCAL_LENGTH)?.let {
+            Log.d(TAG, "buildCaptureInfo: $zoomRatio")
+            focalLength = it * zoomRatio
             // 重新计算35mm等效焦距
             try {
                 val characteristics = cameraManager.getCameraCharacteristics(cameraId)
-                focalLength35mm = calculate35mmEquivalent(characteristics, it)
+                focalLength35mm = calculate35mmEquivalent(characteristics, it)?.times(zoomRatio)?.roundToInt()
             } catch (e: Exception) {
                 // 忽略
             }
         }
-        
+
         return CaptureInfo(
             exposureTime = exposureTime,
             iso = iso,
@@ -1526,7 +1529,7 @@ class Camera2Controller(private val context: Context) {
             orientation = ExifInterface.ORIENTATION_NORMAL,
             imageWidth = imageWidth,
             imageHeight = imageHeight,
-            captureTime = System.currentTimeMillis()
+            captureTime = System.currentTimeMillis(),
         )
     }
     

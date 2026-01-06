@@ -10,10 +10,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ImportExport
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.IosShare
+import androidx.compose.material.icons.filled.Output
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
@@ -57,7 +60,10 @@ fun PhotoDetailScreen(
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showInfoDialog by remember { mutableStateOf(false) }
     var isZoomed by remember { mutableStateOf(false) }
-    
+    var showExportDialog by remember { mutableStateOf(false) }
+    var isSaving by remember { mutableStateOf(false) }
+    val isSharing by viewModel.isSharing.collectAsState()
+
     val pagerState = rememberPagerState(
         initialPage = initialIndex,
         pageCount = { photos.size }
@@ -116,15 +122,24 @@ fun PhotoDetailScreen(
                     // 分享
                     IconButton(
                         onClick = { currentPhoto?.let { viewModel.sharePhoto(it) } },
+                        enabled = !isSharing && !isSaving,
                         modifier = Modifier
                             .size(56.dp)
                             .background(Color.White.copy(alpha = 0.1f), CircleShape)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Share,
-                            contentDescription = "Share",
-                            tint = Color.White
-                        )
+                        if (isSharing) {
+                            CircularProgressIndicator(
+                                color = Color.White,
+                                modifier = Modifier.size(24.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = "Share",
+                                tint = Color.White
+                            )
+                        }
                     }
                     
                     // 编辑
@@ -146,16 +161,24 @@ fun PhotoDetailScreen(
                     
                     // 导出
                     IconButton(
-                        onClick = { currentPhoto?.let { viewModel.exportPhoto(it) } },
+                        onClick = { currentPhoto?.let { showExportDialog = true } },
                         modifier = Modifier
                             .size(56.dp)
                             .background(Color.White.copy(alpha = 0.1f), CircleShape)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Save,
-                            contentDescription = "Export",
-                            tint = Color.White
-                        )
+                        if (isSaving) {
+                            CircularProgressIndicator(
+                                color = Color.White,
+                                modifier = Modifier.size(24.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Output,
+                                contentDescription = "Save",
+                                tint = AccentOrange
+                            )
+                        }
                     }
                     
                     // 删除
@@ -239,6 +262,43 @@ fun PhotoDetailScreen(
             textContentColor = Color.White
         )
     }
+
+    // 导出确认对话框
+    if (showExportDialog) {
+        AlertDialog(
+            onDismissRequest = { showExportDialog = false },
+            title = { Text(stringResource(R.string.export)) },
+            text = {
+                Text(stringResource(R.string.export_confirm))
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showExportDialog = false
+                        currentPhoto?.let {
+                            isSaving = true
+                            viewModel.exportPhoto(it) { success ->
+                                isSaving = false
+                                if (success) {
+                                    onBack()
+                                }
+                            }
+                        }
+                    }
+                ) {
+                    Text(stringResource(R.string.export), color = AccentOrange)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExportDialog = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+            containerColor = Color(0xFF2D2D2D),
+            titleContentColor = Color.White,
+            textContentColor = Color.White
+        )
+    }
     
     // 照片信息对话框
     if (showInfoDialog && currentPhoto != null) {
@@ -247,10 +307,15 @@ fun PhotoDetailScreen(
             title = { Text(stringResource(R.string.photo_info)) },
             text = {
                 Column {
-                    InfoRow("文件名", currentPhoto.displayName)
                     InfoRow("拍摄时间", currentPhoto.getFormattedDate())
                     InfoRow("分辨率", currentPhoto.getResolution())
                     InfoRow("文件大小", currentPhoto.getFormattedSize())
+                    currentPhoto.metadata?.let {
+                        InfoRow("焦距", it.focalLength35mm ?: "N/A")
+                        InfoRow("光圈", it.aperture ?: "N/A")
+                        InfoRow("ISO", it.iso?.toString() ?: "N/A")
+                        InfoRow("快门速度", it.shutterSpeed ?: "N/A")
+                    }
                 }
             },
             confirmButton = {

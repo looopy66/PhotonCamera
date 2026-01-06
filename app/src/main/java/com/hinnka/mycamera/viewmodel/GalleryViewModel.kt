@@ -26,6 +26,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.collections.set
@@ -54,8 +56,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     
     // 加载状态
     private val _isLoading = MutableStateFlow(false)
-    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
-    
+    val isLoading:StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    // 分享状态
+    private val _isSharing = MutableStateFlow(false)
+    val isSharing: StateFlow<Boolean> = _isSharing.asStateFlow()
+
     // 多选模式
     var isSelectionMode by mutableStateOf(false)
         private set
@@ -415,23 +421,32 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 分享照片
      */
     fun sharePhoto(photo: PhotoData) {
-        val context = getApplication<Application>()
-        val photoFile = PhotoManager.getPhotoFile(context, photo.id)
-        val shareUri = FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.fileprovider",
-            photoFile
-        )
-        
-        val shareIntent = Intent(Intent.ACTION_SEND).apply {
-            type = "image/jpeg"
-            putExtra(Intent.EXTRA_STREAM, shareUri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        viewModelScope.launch {
+            _isSharing.value = true
+            try {
+                val context = getApplication<Application>()
+                val sharedFile = prepareSharedPhoto(photo)
+                if (sharedFile != null) {
+                    val shareUri = FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        sharedFile
+                    )
+
+                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                        type = "image/jpeg"
+                        putExtra(Intent.EXTRA_STREAM, shareUri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    val chooser = Intent.createChooser(shareIntent, null).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(chooser)
+                }
+            } finally {
+                _isSharing.value = false
+            }
         }
-        val chooser = Intent.createChooser(shareIntent, null).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        context.startActivity(chooser)
     }
     
     /**
@@ -439,26 +454,35 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     fun shareSelectedPhotos() {
         if (selectedPhotos.isEmpty()) return
-        
-        val context = getApplication<Application>()
-        val uris = ArrayList(selectedPhotos.map { photo ->
-            val photoFile = PhotoManager.getPhotoFile(context, photo.id)
-            FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                photoFile
-            )
-        })
-        
-        val shareIntent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
-            type = "image/jpeg"
-            putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+        viewModelScope.launch {
+            _isSharing.value = true
+            try {
+                val context = getApplication<Application>()
+                val files = selectedPhotos.mapNotNull { prepareSharedPhoto(it) }
+                if (files.isNotEmpty()) {
+                    val uris = ArrayList(files.map { file ->
+                        FileProvider.getUriForFile(
+                            context,
+                            "${context.packageName}.fileprovider",
+                            file
+                        )
+                    })
+
+                    val shareIntent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                        type = "image/jpeg"
+                        putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    val chooser = Intent.createChooser(shareIntent, null).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(chooser)
+                }
+            } finally {
+                _isSharing.value = false
+            }
         }
-        val chooser = Intent.createChooser(shareIntent, null).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        context.startActivity(chooser)
     }
     
     /**
@@ -650,7 +674,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 保存编辑（导出烘焙后的图片）
      */
     fun saveEdit(photo: PhotoData, onComplete: (Boolean) -> Unit = {}) {
-        val metadata = PhotoMetadata(
+        val metadata = (photo.metadata ?: PhotoMetadata()).copy(
             lutId = editLutId,
             lutIntensity = editLutIntensity,
             brightness = editBrightness,
@@ -677,13 +701,47 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     fun exportPhoto(photo: PhotoData, onComplete: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
-            val metadata = PhotoManager.loadMetadata(getApplication(), photo.id) ?: PhotoMetadata()
+            val metadata = photo.metadata ?: PhotoManager.loadMetadata(getApplication(), photo.id) ?: PhotoMetadata()
             exportPhotoInternal(
                 photo = photo,
                 metadata = metadata,
                 directory = Environment.DIRECTORY_DCIM + "/PhotonCamera",
                 onComplete = onComplete
             )
+        }
+    }
+
+    private suspend fun prepareSharedPhoto(photo: PhotoData): File? = withContext(Dispatchers.IO) {
+        try {
+            val context = getApplication<Application>()
+            val metadata = photo.metadata ?: PhotoManager.loadMetadata(context, photo.id) ?: PhotoMetadata()
+
+            // 读取照片
+            val inputStream = context.contentResolver.openInputStream(photo.uri)
+            val bitmap = BitmapFactory.decodeStream(inputStream)
+            inputStream?.close()
+
+            if (bitmap == null) return@withContext null
+
+            // 处理照片
+            val processedBitmap = photoProcessor.process(context, bitmap, metadata, photo.uri)
+
+            // 保存到缓存目录
+            val sharedDir = File(context.cacheDir, "shared")
+            if (!sharedDir.exists()) sharedDir.mkdirs()
+
+            val sharedFile = File(sharedDir, "share_${photo.id}.jpg")
+            FileOutputStream(sharedFile).use { out ->
+                processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+            }
+
+            processedBitmap.recycle()
+            bitmap.recycle()
+
+            sharedFile
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to prepare shared photo", e)
+            null
         }
     }
 
