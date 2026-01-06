@@ -34,6 +34,8 @@ import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.utils.ShutterSoundPlayer
 import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -653,7 +655,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // 关闭 Image 资源
             image.close()
             
-            // 保存 LUT 和边框元数据到应用私有目录
+            // 公共 ExifMetadata，只创建一次
+            val exifMetadata = ExifMetadata(
+                deviceModel = captureInfo.model,
+                brand = captureInfo.make.replaceFirstChar { it.uppercase() },
+                dateTaken = captureInfo.captureTime,
+                iso = captureInfo.iso,
+                shutterSpeed = captureInfo.formatExposureTime(),
+                focalLength = captureInfo.formatFocalLength(),
+                focalLength35mm = captureInfo.formatFocalLength35mm(),
+                aperture = captureInfo.formatAperture(),
+                width = captureInfo.imageWidth,
+                height = captureInfo.imageHeight
+            )
+            
+            // 保存 LUT 和边框元数据
             val metadata = PhotoMetadata(
                 lutId = lutIdToSave,
                 lutIntensity = lutIntensityToSave,
@@ -664,84 +680,79 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val previewBitmap: Bitmap
             
             if (shouldAutoSave) {
-                // 如果开启自动保存，先处理图片，再导出到系统相册
-                val exifMetadata = ExifMetadata(
-                    deviceModel = captureInfo.model,
-                    brand = captureInfo.make.replaceFirstChar { it.uppercase() },
-                    dateTaken = captureInfo.captureTime,
-                    iso = captureInfo.iso,
-                    shutterSpeed = captureInfo.formatExposureTime(),
-                    focalLength = captureInfo.formatFocalLength(),
-                    focalLength35mm = captureInfo.formatFocalLength35mm(),
-                    aperture = captureInfo.formatAperture(),
-                    width = captureInfo.imageWidth,
-                    height = captureInfo.imageHeight
-                )
+                // 如果开启自动保存，先处理图片，再并行执行导出和本地保存
                 
                 // 处理完整图片（应用 LUT 和边框）
                 val processedBitmap = withContext(Dispatchers.Default) {
                     photoProcessor.process(context, bitmap, metadata, exifMetadata = exifMetadata)
                 }
                 
-                // 导出到系统相册
-                withContext(Dispatchers.IO) {
-                    val filename = "PhotonCamera_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())}.jpg"
-                    val contentValues = android.content.ContentValues().apply {
-                        put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, filename)
-                        put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-                        put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DCIM + "/PhotonCamera")
-                    }
-                    
-                    val uri = context.contentResolver.insert(
-                        android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                        contentValues
-                    )
-                    
-                    uri?.let {
-                        context.contentResolver.openOutputStream(it)?.use { outputStream ->
-                            processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
-                        }
-                    }
-                }
-                
-                // 使用导出的图片生成预览图
+                // 生成预览图（从已处理的图片缩放）
                 previewBitmap = withContext(Dispatchers.Default) {
-                    val inSampleSize = (min(processedBitmap.width, processedBitmap.height) / 1080f).roundToInt()
+                    val inSampleSize = (min(processedBitmap.width, processedBitmap.height) / 1080f).roundToInt().coerceAtLeast(1)
                     Bitmap.createScaledBitmap(processedBitmap, processedBitmap.width / inSampleSize, processedBitmap.height / inSampleSize, false)
                 }
                 
+                // 并行执行：导出到系统相册 + 保存到本地
+                coroutineScope {
+                    // 任务 1: 导出到系统相册
+                    val exportJob = async(Dispatchers.IO) {
+                        val filename = "PhotonCamera_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())}.jpg"
+                        val contentValues = android.content.ContentValues().apply {
+                            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+                            put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DCIM + "/PhotonCamera")
+                        }
+                        
+                        val uri = context.contentResolver.insert(
+                            android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                            contentValues
+                        )
+                        
+                        uri?.let {
+                            context.contentResolver.openOutputStream(it)?.use { outputStream ->
+                                processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                            }
+                        }
+                    }
+                    
+                    // 任务 2: 保存到本地（使用原始 bitmap）
+                    val saveLocalJob = async {
+                        PhotoManager.savePhoto(context, bitmap, metadata, previewBitmap, captureInfo)
+                    }
+                    
+                    exportJob.await()
+                    val photoId = saveLocalJob.await()
+                    
+                    if (photoId != null) {
+                        Log.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave, AutoSave: true")
+                        _imageSavedEvent.emit(Unit)
+                    } else {
+                        Log.e(TAG, "Failed to save image via PhotoManager")
+                    }
+                }
+                
                 processedBitmap.recycle()
+                previewBitmap.recycle()
             } else {
                 // 原有逻辑：生成预览图/缩略图源（缩小比例以提高性能）
                 previewBitmap = withContext(Dispatchers.Default) {
-                    val inSampleSize = (min(bitmap.width, bitmap.height) / 1080f).roundToInt()
+                    val inSampleSize = (min(bitmap.width, bitmap.height) / 1080f).roundToInt().coerceAtLeast(1)
                     val scaledBitmap = Bitmap.createScaledBitmap(bitmap, bitmap.width / inSampleSize, bitmap.height / inSampleSize, false)
-                    val exifMetadata = ExifMetadata(
-                        deviceModel = captureInfo.model,
-                        brand = captureInfo.make.replaceFirstChar { it.uppercase() },
-                        dateTaken = captureInfo.captureTime,
-                        iso = captureInfo.iso,
-                        shutterSpeed = captureInfo.formatExposureTime(),
-                        focalLength = captureInfo.formatFocalLength(),
-                        focalLength35mm = captureInfo.formatFocalLength35mm(),
-                        aperture = captureInfo.formatAperture(),
-                        width = captureInfo.imageWidth,
-                        height = captureInfo.imageHeight
-                    )
                     photoProcessor.process(context, scaledBitmap, metadata, exifMetadata = exifMetadata)
                 }
-            }
-            
-            // 使用 PhotoManager 统一管理保存，并写入 EXIF
-            val photoId = PhotoManager.savePhoto(context, bitmap, metadata, previewBitmap, captureInfo)
-            
-            previewBitmap.recycle()
-            
-            if (photoId != null) {
-                Log.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave, AutoSave: $shouldAutoSave")
-                _imageSavedEvent.emit(Unit)
-            } else {
-                Log.e(TAG, "Failed to save image via PhotoManager")
+                
+                // 使用 PhotoManager 统一管理保存，并写入 EXIF
+                val photoId = PhotoManager.savePhoto(context, bitmap, metadata, previewBitmap, captureInfo)
+                
+                previewBitmap.recycle()
+                
+                if (photoId != null) {
+                    Log.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave, AutoSave: false")
+                    _imageSavedEvent.emit(Unit)
+                } else {
+                    Log.e(TAG, "Failed to save image via PhotoManager")
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save image", e)

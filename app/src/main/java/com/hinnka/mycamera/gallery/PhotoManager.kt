@@ -7,6 +7,8 @@ import android.media.ThumbnailUtils
 import android.util.Log
 import com.hinnka.mycamera.camera.CaptureInfo
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
@@ -62,7 +64,7 @@ object PhotoManager {
      * 保存新拍摄的照片
      * 
      * @param context Context
-     * @param bytes JPEG 图片数据
+     * @param bitmap 原始 Bitmap 图片
      * @param metadata 编辑元数据（LUT、边框等）
      * @param previewBitmap 预览图（用于生成缩略图）
      * @param captureInfo 拍摄信息（用于写入 EXIF）
@@ -78,39 +80,61 @@ object PhotoManager {
             try {
                 val photoId = UUID.randomUUID().toString()
                 val photoDir = getPhotoDir(context, photoId)
-
-                // 1. 保存原图
+                
+                // 预先准备所有文件路径
                 val photoFile = File(photoDir, PHOTO_FILE)
-                FileOutputStream(photoFile).use { out ->
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
-                }
-                
-                // 2. 写入 EXIF 元数据
-                captureInfo?.let { info ->
-                    ExifWriter.writeExif(photoFile, info)
-                }
-
-                // 3. 保存编辑元数据（LUT/边框配置及尺寸信息）
                 val metadataFile = File(photoDir, METADATA_FILE)
-                val metadataWithDimens = metadata.copy(width = bitmap.width, height = bitmap.height)
-                metadataFile.writeText(metadataWithDimens.toJson())
-
-                // 4. 生成并保存缩略图
                 val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
-                if (previewBitmap != null) {
-                    // 从预览图生成缩略图，更高效
-                    saveThumbnail(previewBitmap, thumbnailFile)
-                } else {
-                    // 没有预览图（没开启 LUT），从原图生成
-                    generateThumbnail(photoFile, thumbnailFile)
-                }
+                val previewFile = File(photoDir, PREVIEW_FILE)
                 
-                // 5. 保存 LUT 预览图（如果有）
-                if (previewBitmap != null) {
-                    val previewFile = File(photoDir, PREVIEW_FILE)
-                    FileOutputStream(previewFile).use { out ->
-                        previewBitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                // 预先计算元数据（避免在协程中访问可能被回收的 bitmap）
+                val metadataWithDimens = metadata.copy(width = bitmap.width, height = bitmap.height)
+                val metadataJson = metadataWithDimens.toJson()
+                
+                // 并行执行所有 IO 操作
+                coroutineScope {
+                    // 任务 1: 保存原图 + 写入 EXIF
+                    val saveOriginalJob = async {
+                        FileOutputStream(photoFile).use { out ->
+                            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                        }
+                        // EXIF 必须在原图保存后写入
+                        captureInfo?.let { info ->
+                            ExifWriter.writeExif(photoFile, info)
+                        }
                     }
+                    
+                    // 任务 2: 保存元数据 JSON
+                    val saveMetadataJob = async {
+                        metadataFile.writeText(metadataJson)
+                    }
+                    
+                    // 任务 3: 生成并保存缩略图
+                    val saveThumbnailJob = async {
+                        if (previewBitmap != null) {
+                            // 从预览图生成缩略图，更高效
+                            saveThumbnail(previewBitmap, thumbnailFile)
+                        } else {
+                            // 没有预览图时，需要等原图保存完成后再生成
+                            saveOriginalJob.await()
+                            generateThumbnail(photoFile, thumbnailFile)
+                        }
+                    }
+                    
+                    // 任务 4: 保存 LUT 预览图
+                    val savePreviewJob = async {
+                        if (previewBitmap != null) {
+                            FileOutputStream(previewFile).use { out ->
+                                previewBitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                            }
+                        }
+                    }
+                    
+                    // 等待所有任务完成
+                    saveOriginalJob.await()
+                    saveMetadataJob.await()
+                    saveThumbnailJob.await()
+                    savePreviewJob.await()
                 }
 
                 Log.d(TAG, "Photo saved: $photoId")
