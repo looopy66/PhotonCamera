@@ -86,6 +86,7 @@ sealed class FrameElement {
         val alignment: ElementAlignment = ElementAlignment.CENTER,
         val sizeDp: Int = 24,
         val tint: Int? = null,
+        val marginDp: Int = 8,
         val line: Int = 0
     ) : FrameElement()
     

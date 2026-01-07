@@ -57,4 +57,5 @@
     <string name="none">None</string>
     <string name="show_app_branding">Show App Branding</string>
     <string name="export_with_frame_confirm">Export photo with frame watermark?</string>
+    <string name="import_photo">Import</string>
 </resources>

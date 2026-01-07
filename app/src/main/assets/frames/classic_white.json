@@ -32,8 +32,18 @@
       "type": "logo",
       "logoType": "BRAND",
       "alignment": "START",
-      "size": 48,
+      "size": 64,
+      "margin": 8,
       "line": -1
+    },
+    {
+      "type": "text",
+      "textType": "APERTURE",
+      "alignment": "END",
+      "fontSize": 16,
+      "color": "#000000",
+      "fontWeight": "BOLD",
+      "line": 0
     },
     {
       "type": "text",

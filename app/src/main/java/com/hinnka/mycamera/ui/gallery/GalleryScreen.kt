@@ -1,5 +1,7 @@
 package com.hinnka.mycamera.ui.gallery
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -24,6 +26,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -60,6 +63,12 @@ fun GalleryScreen(
     val isSharing by viewModel.isSharing.collectAsState()
     val isSelectionMode = viewModel.isSelectionMode
     val selectedPhotos = viewModel.selectedPhotos
+    
+    val launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let { viewModel.importPhoto(it) }
+    }
     
     var showDeleteDialog by remember { mutableStateOf(false) }
     
@@ -106,6 +115,14 @@ fun GalleryScreen(
                             Icon(
                                 imageVector = Icons.Default.SelectAll,
                                 contentDescription = "Select All",
+                                tint = Color.White
+                            )
+                        }
+                    } else {
+                        IconButton(onClick = { launcher.launch("image/*") }) {
+                            Icon(
+                                imageVector = Icons.Default.AddPhotoAlternate,
+                                contentDescription = "Import",
                                 tint = Color.White
                             )
                         }
@@ -335,6 +352,24 @@ private fun PhotoGridItem(
                     .padding(6.dp)
                     .size(24.dp)
             )
+        }
+        
+        // 导入标记
+        if (photo.metadata?.isImported == true) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(4.dp)
+                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(2.dp))
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = "Imported",
+                    color = Color.White,
+                    fontSize = 8.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                )
+            }
         }
     }
 }

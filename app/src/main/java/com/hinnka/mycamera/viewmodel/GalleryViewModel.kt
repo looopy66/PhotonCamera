@@ -6,6 +6,7 @@ import android.content.ContentValues
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
@@ -798,6 +799,20 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 Log.e(TAG, "Failed to export photo", e)
                 onComplete(false)
             }
+        }
+    }
+
+    /**
+     * 导入照片
+     */
+    fun importPhoto(uri: Uri) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            val photoId = PhotoManager.importPhoto(getApplication(), uri)
+            if (photoId != null) {
+                loadPhotos()
+            }
+            _isLoading.value = false
         }
     }
     

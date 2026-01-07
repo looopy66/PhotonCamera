@@ -387,6 +387,7 @@ class FrameRenderer(private val context: Context) {
         if (element.logoType == LogoType.APP && !showAppBranding) {
             return x
         }
+        val margin = dpToPx(element.marginDp) * scale
         
         val size = (dpToPx(element.sizeDp) * scale).toInt()
         
@@ -428,13 +429,13 @@ class FrameRenderer(private val context: Context) {
                 bitmap
             }
             
-            val drawX = if (leftToRight) x else x - size
+            val drawX = if (leftToRight) (x + margin) else (x - size - margin)
             val drawY = centerY - bitmap.height / 2f
             
             canvas.drawBitmap(tintedBitmap, drawX, drawY, null)
             
             val spacing = dpToPx(8) * scale
-            return (size + spacing)
+            return size + spacing + margin * 2
         } catch (e: Exception) {
             Log.e(TAG, "Failed to draw logo", e)
             return 0f
@@ -461,6 +462,17 @@ class FrameRenderer(private val context: Context) {
             "oppo", "realme", "oneplus" -> "ic_brand_oppo"
             "vivo", "iqoo" -> "ic_brand_vivo"
             "apple" -> "ic_brand_apple"
+            "sony" -> "ic_brand_sony"
+            "canon" -> "ic_brand_canon"
+            "dji" -> "ic_brand_dji"
+            "fujifilm" -> "ic_brand_fujifilm"
+            "hasselblad" -> "ic_brand_hasselblad"
+            "leica" -> "ic_brand_leica"
+            "nikon" -> "ic_brand_nikon"
+            "panasonic" -> "ic_brand_panasonic"
+            "olympus" -> "ic_brand_olympus"
+            "pentax" -> "ic_brand_pentax"
+            "ricoh" -> "ic_brand_ricoh"
             else -> null
         }
         

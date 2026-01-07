@@ -37,7 +37,8 @@ data class PhotoMetadata(
     val shutterSpeed: String? = null,
     val focalLength: String? = null,
     val focalLength35mm: String? = null,
-    val aperture: String? = null
+    val aperture: String? = null,
+    val isImported: Boolean = false
 ) {
     /**
      * 分辨率字符串 (用于边框水印显示)
@@ -66,6 +67,7 @@ data class PhotoMetadata(
             put("focalLength", focalLength ?: JSONObject.NULL)
             put("focalLength35mm", focalLength35mm ?: JSONObject.NULL)
             put("aperture", aperture ?: JSONObject.NULL)
+            put("isImported", isImported)
         }.toString(2)
     }
     
@@ -94,7 +96,8 @@ data class PhotoMetadata(
                     shutterSpeed = if (obj.isNull("shutterSpeed")) null else obj.optString("shutterSpeed"),
                     focalLength = if (obj.isNull("focalLength")) null else obj.optString("focalLength"),
                     focalLength35mm = if (obj.isNull("focalLength35mm")) null else obj.optString("focalLength35mm"),
-                    aperture = if (obj.isNull("aperture")) null else obj.optString("aperture")
+                    aperture = if (obj.isNull("aperture")) null else obj.optString("aperture"),
+                    isImported = obj.optBoolean("isImported", false)
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to parse JSON", e)
@@ -143,7 +146,7 @@ data class PhotoMetadata(
                         }
                     }
                     
-                    val aperture = exif.getAttributeDouble(ExifInterface.TAG_F_NUMBER, 0.0).takeIf { it > 0 }?.let { "f/${String.format("%.1f", it)}}" }
+                    val aperture = exif.getAttributeDouble(ExifInterface.TAG_F_NUMBER, 0.0).takeIf { it > 0 }?.let { "f/${String.format("%.1f", it)}" }
                     val focalLength = exif.getAttributeDouble(ExifInterface.TAG_FOCAL_LENGTH, 0.0).let {
                         "${it.toInt()}mm"
                     }
@@ -173,7 +176,8 @@ data class PhotoMetadata(
                         focalLength35mm = focalLength35mm,
                         aperture = aperture,
                         width = width,
-                        height = height
+                        height = height,
+                        isImported = true
                     )
                 } ?: createDefault(0, 0)
             } catch (e: Exception) {
