@@ -81,6 +81,7 @@ fun GalleryScreen(
     Scaffold(
         topBar = {
             TopAppBar(
+                modifier = Modifier.padding(top = 32.dp),
                 title = {
                     if (isSelectionMode) {
                         Text(

@@ -182,6 +182,9 @@ fun NavigationHost(
                 galleryViewModel = galleryViewModel,
                 onGalleryClick = {
                     navController.navigate(Routes.GALLERY)
+                    if (galleryViewModel.latestPhoto.value != null) {
+                        navController.navigate(Routes.photoDetail(0))
+                    }
                 },
                 onSettingsClick = {
                     navController.navigate(Routes.SETTINGS)

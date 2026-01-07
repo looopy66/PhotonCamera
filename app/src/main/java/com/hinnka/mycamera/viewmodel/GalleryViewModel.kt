@@ -259,6 +259,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
                 _latestPhoto.value = updatedPhoto
+
+                // Also update the photos list if it's not already in it
+                val currentPhotos = _photos.value
+                if (currentPhotos.none { it.id == updatedPhoto.id }) {
+                    _photos.value = listOf(updatedPhoto) + currentPhotos
+                }
             }
         }
     }
