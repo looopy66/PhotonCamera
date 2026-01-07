@@ -97,7 +97,7 @@ fun CameraScreen(
         }
     }
 
-    val previewSize = CameraUtils.getFixedPreviewSize(context, state.currentCameraId)
+    val previewSize by remember(state) { mutableStateOf(CameraUtils.getFixedPreviewSize(context, state.currentCameraId, state.aspectRatio)) }
     
     Column(
         modifier = modifier

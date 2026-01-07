@@ -56,7 +56,7 @@ fun ZoomControlBar(
     
     // 根据可用相机计算变焦档位
     val lensZoomStops = calculateLensZoomStops(availableCameras, currentCamera)
-    val zoomStops = (lensZoomStops + extraZoomStops(availableCameras, currentCamera)).sorted()
+    val zoomStops =  allZoomStops(lensZoomStops, mainCamera, currentCamera)
     
     Box(
         modifier = modifier
@@ -156,22 +156,30 @@ private fun calculateLensZoomStops(
 /**
  * 计算变焦档位
  */
-private fun extraZoomStops(
-    cameras: List<CameraInfo>,
+private fun allZoomStops(
+    lensZoomStops: List<Float>,
+    mainCamera: CameraInfo?,
     currentCamera: CameraInfo?
 ): List<Float> {
     val stops = mutableSetOf<Float>()
-    if (currentCamera?.lensType == LensType.FRONT) {
-        stops.add(2f)
-        return stops.toList()
-    }
-    val mainCamera = cameras.find { it.lensType == LensType.BACK_MAIN } ?: return stops.toList()
+    stops.addAll(lensZoomStops)
 
-    stops.add(35f / mainCamera.focalLength35mmEquivalent)
-    stops.add(50f / mainCamera.focalLength35mmEquivalent)
-    stops.add(85f / mainCamera.focalLength35mmEquivalent)
-    stops.add(200f / mainCamera.focalLength35mmEquivalent)
-    return stops.toList()
+    if (currentCamera?.lensType == LensType.FRONT) {
+        if (lensZoomStops.find { abs(it - 2f) <= 0.1f } == null) {
+            stops.add(2f)
+        }
+        return stops.sorted()
+    }
+
+    mainCamera ?: return stops.sorted()
+
+    listOf(35f, 50f, 85f, 200f).forEach { fl ->
+        val zoom = fl / mainCamera.focalLength35mmEquivalent
+        if (lensZoomStops.find { abs(it - zoom) <= 0.1f } == null) {
+            stops.add(zoom)
+        }
+    }
+    return stops.sorted()
 }
 
 /**

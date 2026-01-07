@@ -1,10 +1,12 @@
 package com.hinnka.mycamera.camera
 
 import android.content.Context
+import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.util.Size
+import kotlin.math.abs
 
 /**
  * 相机工具类
@@ -18,7 +20,8 @@ object CameraUtils {
      */
     fun getFixedPreviewSize(
         context: Context,
-        cameraId: String
+        cameraId: String,
+        aspectRatio: AspectRatio
     ): Size {
         val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
         val characteristics = cameraManager.getCameraCharacteristics(cameraId)
@@ -26,9 +29,7 @@ object CameraUtils {
             ?: return Size(1920, 1080)
 
         // 首先获取最大的拍照尺寸，以此作为传感器的原生比例
-        val captureSizes = map.getOutputSizes(android.graphics.ImageFormat.YUV_420_888)
-        val largestCaptureSize = captureSizes?.maxByOrNull { it.width * it.height } ?: Size(4032, 3024)
-        val sensorRatio = largestCaptureSize.width.toFloat() / largestCaptureSize.height
+        val sensorRatio = aspectRatio.getValue(true)
 
         val previewSizes = map.getOutputSizes(SurfaceTexture::class.java)?.toList() ?: emptyList()
 
@@ -46,6 +47,35 @@ object CameraUtils {
 
         // 如果没有比例完全匹配的，则选择高度 >= 1080 中最小的一个（之前的逻辑）
         return previewSizes.filter { it.height >= 1080 }.minByOrNull { it.width } ?: Size(1920, 1080)
+    }
+
+    /**
+     * 获取最佳拍照尺寸
+     */
+    fun getBestCaptureSize(context: Context, cameraId: String, aspectRatio: AspectRatio): Size {
+        return try {
+            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            val sizes = map?.getOutputSizes(ImageFormat.YUV_420_888) ?: arrayOf(Size(1920, 1080))
+            val sensorRatio = aspectRatio.getValue(true)
+
+            // 寻找比例最匹配传感器原生比例
+            val matchingSizes = sizes.filter {
+                val ratio = it.width.toFloat() / it.height
+                abs(ratio - sensorRatio) < 0.01
+            }
+
+            val bestMatching = matchingSizes.filter { it.height >= 2160 }.maxByOrNull { it.width * it.height }
+
+            if (bestMatching != null) return bestMatching
+
+            // 选择最大的尺寸
+            sizes.maxByOrNull { it.width * it.height } ?: Size(1920, 1080)
+        } catch (e: Exception) {
+//            Log.e(TAG, "Failed to get capture size", e)
+            Size(1920, 1080)
+        }
     }
     
     /**

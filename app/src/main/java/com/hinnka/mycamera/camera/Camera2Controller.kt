@@ -170,12 +170,13 @@ class Camera2Controller(private val context: Context) {
     @SuppressLint("MissingPermission")
     fun openCamera(surfaceTexture: SurfaceTexture) {
         val cameraId = _state.value.currentCameraId
+        val aspectRatio = _state.value.aspectRatio
         if (cameraId.isEmpty()) {
             Log.e(TAG, "No camera ID set")
             return
         }
 
-        val previewSize = CameraUtils.getFixedPreviewSize(context, cameraId)
+        val previewSize = CameraUtils.getFixedPreviewSize(context, cameraId, aspectRatio)
         surfaceTexture.setDefaultBufferSize(previewSize.width, previewSize.height)
         
         try {
@@ -186,7 +187,7 @@ class Camera2Controller(private val context: Context) {
 //            HighResolutionHelper.logResolutionCapabilities(characteristics)
             
             // 创建 ImageReader 用于拍照 (使用 YUV 格式)
-            val captureSize = getBestCaptureSize(cameraId)
+            val captureSize = CameraUtils.getBestCaptureSize(context, cameraId, aspectRatio)
             imageReader = ImageReader.newInstance(
                 captureSize.width,
                 captureSize.height,
@@ -726,22 +727,7 @@ class Camera2Controller(private val context: Context) {
         }
     }
     
-    /**
-     * 获取最佳拍照尺寸
-     */
-    private fun getBestCaptureSize(cameraId: String): Size {
-        return try {
-            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
-            val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            val sizes = map?.getOutputSizes(ImageFormat.YUV_420_888) ?: arrayOf(Size(1920, 1080))
-            
-            // 选择最大的尺寸
-            sizes.maxByOrNull { it.width * it.height } ?: Size(1920, 1080)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to get capture size", e)
-            Size(1920, 1080)
-        }
-    }
+
     
     /**
      * 获取传感器方向（供外部 YUV 处理使用）
