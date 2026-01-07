@@ -28,6 +28,17 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
+
+    flavorDimensions += "channel"
+    productFlavors {
+        create("google") {
+            dimension = "channel"
+        }
+        create("china") {
+            dimension = "channel"
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -75,6 +86,10 @@ dependencies {
     
     // DataStore for user preferences
     implementation("androidx.datastore:datastore-preferences:1.0.0")
+
+    // Bugly for china flavor
+    "chinaImplementation"("com.tencent.bugly:crashreport:latest.release")
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
