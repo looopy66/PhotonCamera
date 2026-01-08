@@ -22,10 +22,21 @@ data class FrameConfig(
  */
 data class FrameInfo(
     val id: String,
-    val name: String,
+    val nameMap: Map<String, String>,
     val previewResId: Int = 0,
     val isBuiltIn: Boolean = true
-)
+) {
+    /**
+     * 获取当前语言名称
+     */
+    val name: String
+        get() = getName()
+
+    fun getName(locale: java.util.Locale = java.util.Locale.getDefault()): String {
+        val language = if (locale.language == "zh") "zh" else "en"
+        return nameMap[language] ?: nameMap["en"] ?: id
+    }
+}
 
 /**
  * 边框模板定义
@@ -34,11 +45,16 @@ data class FrameInfo(
  */
 data class FrameTemplate(
     val id: String,
-    val name: String,
+    val nameMap: Map<String, String>,
     val version: Int = 1,
     val layout: FrameLayout,
     val elements: List<FrameElement>
-)
+) {
+    fun getName(locale: java.util.Locale = java.util.Locale.getDefault()): String {
+        val language = if (locale.language == "zh") "zh" else "en"
+        return nameMap[language] ?: nameMap["en"] ?: id
+    }
+}
 
 /**
  * 边框布局配置

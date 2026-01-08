@@ -1,0 +1,105 @@
+<resources>
+    <string name="app_name">Photon Camera</string>
+    
+    <!-- Camera Controls -->
+    <string name="capture">拍摄</string>
+    <string name="switch_camera">切换摄像头</string>
+    <string name="settings">设置</string>
+    <string name="flash">闪光灯</string>
+    <string name="timer">定时器</string>
+    <string name="histogram">直方图</string>
+    <string name="grid">网格</string>
+    <string name="back">返回</string>
+    
+    <!-- Exposure Controls -->
+    <string name="exposure_compensation">EV</string>
+    <string name="iso">ISO</string>
+    <string name="shutter_speed">快门</string>
+    <string name="auto">自动</string>
+    
+    <!-- Focus -->
+    <string name="focus">对焦</string>
+    <string name="tap_to_focus">点击对焦</string>
+    
+    <!-- Aspect Ratio -->
+    <string name="aspect_ratio">画面比例</string>
+    <string name="ratio_3_2">3:2</string>
+    <string name="ratio_4_3">4:3</string>
+    <string name="ratio_16_9">16:9</string>
+    <string name="ratio_1_1">1:1</string>
+    
+    <!-- Permissions -->
+    <string name="camera_permission_required">需要相机权限</string>
+    <string name="grant_permission">授予权限</string>
+    
+    <!-- Zoom -->
+    <string name="zoom">变焦</string>
+    
+    <!-- Gallery -->
+    <string name="gallery">相册</string>
+    <string name="photo_detail">照片详情</string>
+    <string name="share">分享</string>
+    <string name="delete">删除</string>
+    <string name="export">导出</string>
+    <string name="edit">编辑</string>
+    <string name="select_all">全选</string>
+    <string name="cancel">取消</string>
+    <string name="save">保存</string>
+    <string name="rotate">旋转</string>
+    <string name="crop">裁剪</string>
+    <string name="brightness">亮度</string>
+    <string name="delete_confirm">删除这张照片吗？</string>
+    <string name="delete_multiple_confirm">删除 %d 张照片吗？</string>
+    <string name="no_photos">暂无照片</string>
+    <string name="photo_info">照片信息</string>
+    <string name="filter">滤镜</string>
+    <string name="intensity">强度</string>
+    <string name="original">原图</string>
+    <string name="export_confirm">导出已应用滤镜的照片吗？</string>
+    <string name="items_selected">已选择 %d</string>
+    <string name="not_selected">未选择</string>
+    <string name="selected">已选择</string>
+    <string name="imported">导入</string>
+    <string name="photo_info_date">拍摄时间</string>
+    <string name="photo_info_resolution">分辨率</string>
+    <string name="photo_info_size">文件大小</string>
+    <string name="photo_info_focal_length">焦距</string>
+    <string name="photo_info_aperture">光圈</string>
+    <string name="photo_info_iso">ISO</string>
+    <string name="photo_info_shutter_speed">快门速度</string>
+    
+    <!-- Frame Watermark -->
+    <string name="frame">边框</string>
+    <string name="none">无</string>
+    <string name="show_app_branding">显示 App 品牌</string>
+    <string name="export_with_frame_confirm">导出带有边框水印的照片吗？</string>
+    <string name="import_photo">导入</string>
+    
+    <!-- Settings -->
+    <string name="settings_title">设置</string>
+    <string name="settings_section_capture">拍摄设置</string>
+    <string name="settings_section_display">显示设置</string>
+    <string name="settings_level_indicator">水平仪显示</string>
+    <string name="settings_level_description">在拍摄时显示水平仪，帮助保持画面水平</string>
+    <string name="settings_grid_lines">网格线显示</string>
+    <string name="settings_grid_description">在拍摄时显示网格线，辅助构图</string>
+    <string name="settings_section_frame">边框水印</string>
+    <string name="settings_frame_style">边框样式</string>
+    <string name="settings_frame_description">为拍摄的照片添加装饰性边框和水印</string>
+    <string name="settings_section_operation">拍摄操作</string>
+    <string name="settings_shutter_sound">快门声音</string>
+    <string name="settings_shutter_sound_description">拍照时播放快门声音</string>
+    <string name="settings_volume_key">音量键拍摄</string>
+    <string name="settings_volume_key_description">使用音量键进行拍摄</string>
+    <string name="settings_auto_save">拍摄后自动保存</string>
+    <string name="settings_auto_save_description">拍摄后自动保存照片，否则需要手动确认</string>
+    
+    <!-- LUT -->
+    <string name="filter_intensity">滤镜强度</string>
+    <string name="lut_intensity_none">关闭</string>
+    <string name="lut_intensity_low">低</string>
+    <string name="lut_intensity_medium">中</string>
+    <string name="lut_intensity_high">高</string>
+    <string name="filters_panel">滤镜面板</string>
+    <string name="toggle_display_mode">切换显示模式</string>
+</resources>

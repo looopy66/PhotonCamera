@@ -35,7 +35,7 @@
     {
       "id": "cc",
       "name": {
-        "en": "Fujifilm CC",
+        "en": "CC",
         "zh": "富士CC"
       },
       "path": "cc.plut"
@@ -43,7 +43,7 @@
     {
       "id": "nc",
       "name": {
-        "en": "Fujifilm NC",
+        "en": "NC",
         "zh": "富士NC"
       },
       "path": "nc.plut"
@@ -51,7 +51,7 @@
     {
       "id": "ricoh_positive",
       "name": {
-        "en": "RICOH Positive",
+        "en": "Positive",
         "zh": "理光正片"
       },
       "path": "ricoh_positive.plut"
@@ -59,7 +59,7 @@
     {
       "id": "ricoh_negative",
       "name": {
-        "en": "RICOH Negative",
+        "en": "Negative",
         "zh": "理光负片"
       },
       "path": "ricoh_negative.plut"

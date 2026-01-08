@@ -27,8 +27,10 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.hinnka.mycamera.R
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.hinnka.mycamera.camera.CameraState
@@ -360,7 +362,7 @@ fun Controls(
         ) {
             Icon(
                 imageVector = Icons.Default.Cameraswitch,
-                contentDescription = "Switch Camera",
+                contentDescription = stringResource(R.string.switch_camera),
                 tint = Color.White,
                 modifier = Modifier.size(32.dp)
             )

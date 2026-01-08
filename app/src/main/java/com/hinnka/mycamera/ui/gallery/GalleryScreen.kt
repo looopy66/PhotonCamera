@@ -86,7 +86,7 @@ fun GalleryScreen(
                 title = {
                     if (isSelectionMode) {
                         Text(
-                            text = "${selectedPhotos.size} 已选择",
+                            text = stringResource(R.string.items_selected, selectedPhotos.size),
                             color = Color.White
                         )
                     } else {
@@ -106,7 +106,7 @@ fun GalleryScreen(
                     }) {
                         Icon(
                             imageVector = if (isSelectionMode) Icons.Default.Close else Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
+                            contentDescription = stringResource(R.string.back),
                             tint = Color.White
                         )
                     }
@@ -116,7 +116,7 @@ fun GalleryScreen(
                         IconButton(onClick = { viewModel.toggleSelectAll() }) {
                             Icon(
                                 imageVector = Icons.Default.SelectAll,
-                                contentDescription = "Select All",
+                                contentDescription = stringResource(R.string.select_all),
                                 tint = Color.White
                             )
                         }
@@ -124,7 +124,7 @@ fun GalleryScreen(
                         IconButton(onClick = { launcher.launch("image/*") }) {
                             Icon(
                                 imageVector = Icons.Default.AddPhotoAlternate,
-                                contentDescription = "Import",
+                                contentDescription = stringResource(R.string.import_photo),
                                 tint = Color.White
                             )
                         }
@@ -159,7 +159,7 @@ fun GalleryScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Delete,
-                                contentDescription = "Delete",
+                                contentDescription = stringResource(R.string.delete),
                                 tint = Color.White,
                                 modifier = Modifier.size(28.dp)
                             )
@@ -185,7 +185,7 @@ fun GalleryScreen(
                             } else {
                                 Icon(
                                     imageVector = Icons.Default.Share,
-                                    contentDescription = "Share",
+                                    contentDescription = stringResource(R.string.share),
                                     tint = Color.White,
                                     modifier = Modifier.size(28.dp)
                                 )
@@ -348,7 +348,7 @@ private fun PhotoGridItem(
             
             Icon(
                 imageVector = if (isSelected) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
-                contentDescription = if (isSelected) "Selected" else "Not selected",
+                contentDescription = if (isSelected) stringResource(R.string.selected) else stringResource(R.string.not_selected),
                 tint = if (isSelected) AccentOrange else Color.White.copy(alpha = 0.7f),
                 modifier = Modifier
                     .align(Alignment.TopEnd)
@@ -367,7 +367,7 @@ private fun PhotoGridItem(
                     .padding(horizontal = 4.dp, vertical = 2.dp)
             ) {
                 Text(
-                    text = "Imported",
+                    text = stringResource(R.string.imported),
                     color = Color.White,
                     fontSize = 8.sp,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.Bold

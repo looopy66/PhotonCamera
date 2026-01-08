@@ -1,6 +1,9 @@
 {
     "id": "no_frame",
-    "name": "无框水印",
+    "name": {
+        "en": "Overlay",
+        "zh": "无框水印"
+    },
     "version": 1,
     "layout": {
         "position": "OVERLAY",

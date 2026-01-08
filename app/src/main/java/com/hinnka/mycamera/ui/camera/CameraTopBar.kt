@@ -3,9 +3,10 @@ package com.hinnka.mycamera.ui.camera
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.res.stringResource
+import com.hinnka.mycamera.R
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -43,7 +44,7 @@ fun CameraTopBar(
                     else -> Icons.Default.FlashOff
                 },
                 modifier = Modifier.size(20.dp).autoRotate(),
-                contentDescription = "Flash",
+                contentDescription = stringResource(R.string.flash),
                 tint = Color.White
             )
         }
@@ -62,7 +63,7 @@ fun CameraTopBar(
             } else {
                 Icon(
                     imageVector = Icons.Default.Timer,
-                    contentDescription = "Timer",
+                    contentDescription = stringResource(R.string.timer),
                     modifier = Modifier.size(20.dp).autoRotate(),
                     tint = Color.White
                 )
@@ -73,7 +74,7 @@ fun CameraTopBar(
         IconButton(onClick = onHistogramToggle) {
             Icon(
                 imageVector = Icons.Default.BarChart,
-                contentDescription = "Histogram",
+                contentDescription = stringResource(R.string.histogram),
                 modifier = Modifier.size(20.dp).autoRotate(),
                 tint = if (showHistogram) Color.Yellow else Color.White
             )
@@ -83,7 +84,7 @@ fun CameraTopBar(
         IconButton(onClick = onGridToggle) {
             Icon(
                 imageVector = Icons.Default.GridOn,
-                contentDescription = "Grid",
+                contentDescription = stringResource(R.string.grid),
                 modifier = Modifier.size(20.dp).autoRotate(),
                 tint = if (showGrid) Color.Yellow else Color.White
             )
@@ -93,7 +94,7 @@ fun CameraTopBar(
         IconButton(onClick = onSettingsClick) {
             Icon(
                 imageVector = Icons.Default.Settings,
-                contentDescription = "Settings",
+                contentDescription = stringResource(R.string.settings),
                 modifier = Modifier.size(20.dp).autoRotate(),
                 tint = Color.White
             )

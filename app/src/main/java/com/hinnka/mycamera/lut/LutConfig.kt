@@ -97,11 +97,11 @@ data class LutConfig(
 /**
  * LUT 强度预设
  */
-enum class LutIntensity(val value: Float, val displayName: String) {
-    NONE(0f, "关闭"),
-    LOW(0.33f, "低"),
-    MEDIUM(0.66f, "中"),
-    FULL(1.0f, "高");
+enum class LutIntensity(val value: Float, val displayRes: Int) {
+    NONE(0f, com.hinnka.mycamera.R.string.lut_intensity_none),
+    LOW(0.33f, com.hinnka.mycamera.R.string.lut_intensity_low),
+    MEDIUM(0.66f, com.hinnka.mycamera.R.string.lut_intensity_medium),
+    FULL(1.0f, com.hinnka.mycamera.R.string.lut_intensity_high);
     
     companion object {
         fun fromValue(value: Float): LutIntensity {
@@ -120,7 +120,11 @@ data class LutInfo(
     val isBuiltIn: Boolean = true,
     val isDefault: Boolean = false // 是否为默认 LUT
 ) {
-    // 获取显示名称（优先中文）
-    val name: String
-        get() = nameMap["zh"] ?: nameMap["en"] ?: id
+    /**
+     * 获取显示名称（优先当前系统语言）
+     */
+    fun getName(locale: java.util.Locale = java.util.Locale.getDefault()): String {
+        val language = if (locale.language == "zh") "zh" else "en"
+        return nameMap[language] ?: nameMap["en"] ?: id
+    }
 }

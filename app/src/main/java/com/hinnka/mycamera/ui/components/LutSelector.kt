@@ -22,6 +22,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.res.stringResource
+import com.hinnka.mycamera.R
 import com.hinnka.mycamera.lut.LutInfo
 
 /**
@@ -47,7 +49,7 @@ fun LutSelector(
         // LUT 列表
         availableLuts.forEach { lut ->
             LutItem(
-                name = lut.name,
+                name = lut.getName(),
                 previewBitmap = lutPreviewBitmaps[lut.id],
                 isSelected = currentLutId == lut.id,
                 onClick = { onLutSelected(lut.id) }
@@ -197,7 +199,7 @@ fun LutIntensitySlider(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "滤镜强度",
+                text = stringResource(R.string.filter_intensity),
                 color = if (enabled) Color.White else Color.Gray,
                 fontSize = 12.sp
             )

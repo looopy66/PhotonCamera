@@ -1,6 +1,9 @@
 {
     "id": "black_border",
-    "name": "品质黑框",
+    "name": {
+        "en": "Black",
+        "zh": "品质黑框"
+    },
     "version": 1,
     "layout": {
         "position": "BORDER",

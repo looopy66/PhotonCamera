@@ -1,6 +1,9 @@
 {
   "id": "classic_white",
-  "name": "经典白框",
+  "name": {
+    "en": "White",
+    "zh": "经典白框"
+  },
   "version": 1,
   "layout": {
     "position": "BOTTOM",

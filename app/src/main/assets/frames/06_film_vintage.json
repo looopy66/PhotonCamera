@@ -1,6 +1,9 @@
 {
     "id": "film_vintage",
-    "name": "复古胶片",
+    "name": {
+        "en": "Vintage",
+        "zh": "复古胶片"
+    },
     "version": 1,
     "layout": {
         "position": "BORDER",

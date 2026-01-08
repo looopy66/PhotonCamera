@@ -1,6 +1,9 @@
 {
     "id": "polaroid",
-    "name": "拍立得",
+    "name": {
+        "en": "Polaroid",
+        "zh": "拍立得"
+    },
     "version": 1,
     "layout": {
         "position": "BORDER",

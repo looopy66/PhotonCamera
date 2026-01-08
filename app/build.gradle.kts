@@ -7,6 +7,7 @@ plugins {
 android {
     namespace = "com.hinnka.mycamera"
     compileSdk = 36
+    ndkVersion = "27.0.12077973"
 
     defaultConfig {
         applicationId = "com.hinnka.mycamera"
@@ -19,6 +20,12 @@ android {
         
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
+
+        externalNativeBuild {
+            cmake {
+                arguments += "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384"
+            }
         }
     }
 

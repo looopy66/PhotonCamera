@@ -19,8 +19,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.CameraInfo
 import com.hinnka.mycamera.camera.LensType
 import kotlin.math.abs
@@ -80,7 +82,7 @@ fun ZoomControlBar(
         ) {
             Icon(
                 imageVector = Icons.Default.SwapHoriz,
-                contentDescription = "Toggle Display Mode",
+                contentDescription = stringResource(R.string.toggle_display_mode),
                 modifier = Modifier.size(32.dp)
                     .background(Color.Black.copy(alpha = 0.3f), CircleShape)
                     .padding(8.dp),
@@ -97,7 +99,7 @@ fun ZoomControlBar(
         ) {
             Icon(
                 imageVector = Icons.Default.AutoAwesome,
-                contentDescription = "Filters",
+                contentDescription = stringResource(R.string.filters_panel),
                 modifier = Modifier.size(32.dp)
                     .background(Color.Black.copy(alpha = 0.3f), CircleShape)
                     .padding(8.dp),

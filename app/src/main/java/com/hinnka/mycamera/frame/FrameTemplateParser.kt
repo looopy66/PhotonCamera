@@ -30,11 +30,10 @@ object FrameTemplateParser {
             for (fileName in files) {
                 if (fileName.endsWith(".json")) {
                     val id = fileName.removeSuffix(".json")
-                    val name = parseFrameName(context, "$TEMPLATES_FOLDER/$fileName") ?: id
                     frames.add(
                         FrameInfo(
                             id = id,
-                            name = name,
+                            nameMap = parseFrameNameMap(context, "$TEMPLATES_FOLDER/$fileName"),
                             isBuiltIn = true
                         )
                     )
@@ -48,15 +47,36 @@ object FrameTemplateParser {
     }
     
     /**
-     * 解析边框模板名称
+     * 解析边框模板名称映射
      */
-    private fun parseFrameName(context: Context, path: String): String? {
+    private fun parseFrameNameMap(context: Context, path: String): Map<String, String> {
         return try {
             val json = readAssetFile(context, path)
-            JSONObject(json).optString("name").takeIf { it.isNotEmpty() }
+            parseNameMap(JSONObject(json).opt("name"))
         } catch (e: Exception) {
-            null
+            emptyMap()
         }
+    }
+
+    /**
+     * 解析名称映射（支持 String 或 JSONObject）
+     */
+    private fun parseNameMap(nameObj: Any?): Map<String, String> {
+        val map = mutableMapOf<String, String>()
+        when (nameObj) {
+            is String -> {
+                map["en"] = nameObj
+                map["zh"] = nameObj
+            }
+            is JSONObject -> {
+                val keys = nameObj.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    map[key] = nameObj.getString(key)
+                }
+            }
+        }
+        return map
     }
     
     /**
@@ -92,7 +112,7 @@ object FrameTemplateParser {
         
         return FrameTemplate(
             id = obj.getString("id"),
-            name = obj.getString("name"),
+            nameMap = parseNameMap(obj.opt("name")),
             version = obj.optInt("version", 1),
             layout = parseLayout(obj.getJSONObject("layout")),
             elements = parseElements(obj.getJSONArray("elements"))

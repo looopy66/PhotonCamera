@@ -115,7 +115,7 @@ fun PhotoEditScreen(
                     }) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
+                            contentDescription = stringResource(R.string.back),
                             tint = Color.White
                         )
                     }
@@ -143,7 +143,7 @@ fun PhotoEditScreen(
                         } else {
                             Icon(
                                 imageVector = Icons.Default.Check,
-                                contentDescription = "Save",
+                                contentDescription = stringResource(R.string.save),
                                 tint = AccentOrange
                             )
                         }
@@ -186,7 +186,7 @@ fun PhotoEditScreen(
                 if (previewBitmap != null) {
                     Image(
                         bitmap = previewBitmap!!.asImageBitmap(),
-                        contentDescription = "Edit preview",
+                        contentDescription = stringResource(R.string.edit),
                         contentScale = ContentScale.Fit,
                         modifier = Modifier.fillMaxSize()
                     )
@@ -197,7 +197,7 @@ fun PhotoEditScreen(
                             .data(currentPhoto.uri)
                             .crossfade(true)
                             .build(),
-                        contentDescription = "Original",
+                        contentDescription = stringResource(R.string.original),
                         contentScale = ContentScale.Fit,
                         modifier = Modifier.fillMaxSize()
                     )
@@ -255,7 +255,7 @@ fun PhotoEditScreen(
                         // LUT 选项
                         itemsIndexed(availableLuts) { index, lut ->
                             LutOption(
-                                name = lut.name,
+                                name = lut.getName(),
                                 previewBitmap = lutPreviews.getOrNull(index),
                                 isSelected = editLutId == lut.id,
                                 onClick = { viewModel.setEditLut(lut.id) }

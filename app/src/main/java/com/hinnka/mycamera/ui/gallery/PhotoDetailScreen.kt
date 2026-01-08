@@ -90,7 +90,7 @@ fun PhotoDetailScreen(
                     IconButton(onClick = onBack) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
+                            contentDescription = stringResource(R.string.back),
                             tint = Color.White
                         )
                     }
@@ -99,7 +99,7 @@ fun PhotoDetailScreen(
                     IconButton(onClick = { showInfoDialog = true }) {
                         Icon(
                             imageVector = Icons.Default.Info,
-                            contentDescription = "Info",
+                            contentDescription = stringResource(R.string.photo_info),
                             tint = Color.White
                         )
                     }
@@ -137,7 +137,7 @@ fun PhotoDetailScreen(
                         } else {
                             Icon(
                                 imageVector = Icons.Default.Share,
-                                contentDescription = "Share",
+                                contentDescription = stringResource(R.string.share),
                                 tint = Color.White
                             )
                         }
@@ -155,7 +155,7 @@ fun PhotoDetailScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Edit,
-                            contentDescription = "Edit",
+                            contentDescription = stringResource(R.string.edit),
                             tint = Color.White
                         )
                     }
@@ -176,7 +176,7 @@ fun PhotoDetailScreen(
                         } else {
                             Icon(
                                 imageVector = Icons.Default.Output,
-                                contentDescription = "Save",
+                                contentDescription = stringResource(R.string.export),
                                 tint = AccentOrange
                             )
                         }
@@ -191,7 +191,7 @@ fun PhotoDetailScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Delete,
-                            contentDescription = "Delete",
+                            contentDescription = stringResource(R.string.delete),
                             tint = Color.Red
                         )
                     }
@@ -308,14 +308,14 @@ fun PhotoDetailScreen(
             title = { Text(stringResource(R.string.photo_info)) },
             text = {
                 Column {
-                    InfoRow("拍摄时间", currentPhoto.getFormattedDate())
-                    InfoRow("分辨率", currentPhoto.getResolution())
-                    InfoRow("文件大小", currentPhoto.getFormattedSize())
+                    InfoRow(stringResource(R.string.photo_info_date), currentPhoto.getFormattedDate())
+                    InfoRow(stringResource(R.string.photo_info_resolution), currentPhoto.getResolution())
+                    InfoRow(stringResource(R.string.photo_info_size), currentPhoto.getFormattedSize())
                     currentPhoto.metadata?.let {
-                        InfoRow("焦距", it.focalLength35mm ?: "N/A")
-                        InfoRow("光圈", it.aperture ?: "N/A")
-                        InfoRow("ISO", it.iso?.toString() ?: "N/A")
-                        InfoRow("快门速度", it.shutterSpeed ?: "N/A")
+                        InfoRow(stringResource(R.string.photo_info_focal_length), it.focalLength35mm ?: "N/A")
+                        InfoRow(stringResource(R.string.photo_info_aperture), it.aperture ?: "N/A")
+                        InfoRow(stringResource(R.string.photo_info_iso), it.iso?.toString() ?: "N/A")
+                        InfoRow(stringResource(R.string.photo_info_shutter_speed), it.shutterSpeed ?: "N/A")
                     }
                 }
             },

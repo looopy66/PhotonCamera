@@ -20,6 +20,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.res.stringResource
+import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.ui.camera.autoRotate
@@ -53,7 +55,7 @@ fun SettingsScreen(
         TopAppBar(
             title = {
                 Text(
-                    text = "设置",
+                    text = stringResource(R.string.settings_title),
                     color = Color.White,
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Medium
@@ -66,7 +68,7 @@ fun SettingsScreen(
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "返回",
+                        contentDescription = stringResource(R.string.back),
                         tint = Color.White
                     )
                 }
@@ -86,7 +88,7 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             // 画面比例设置
-            SettingsSection(title = "拍摄设置") {
+            SettingsSection(title = stringResource(R.string.settings_section_capture)) {
                 AspectRatioSetting(
                     currentRatio = state.aspectRatio,
                     onRatioSelected = { viewModel.setAspectRatio(it) }
@@ -96,10 +98,10 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(24.dp))
 
             // 显示设置
-            SettingsSection(title = "显示设置") {
+            SettingsSection(title = stringResource(R.string.settings_section_display)) {
                 SwitchSettingItem(
-                    title = "水平仪显示",
-                    description = "在拍摄时显示水平仪，帮助保持画面水平",
+                    title = stringResource(R.string.settings_level_indicator),
+                    description = stringResource(R.string.settings_level_description),
                     checked = showLevelIndicator,
                     onCheckedChange = { viewModel.setShowLevelIndicator(it) }
                 )
@@ -110,8 +112,8 @@ fun SettingsScreen(
                 )
 
                 SwitchSettingItem(
-                    title = "网格线显示",
-                    description = "在拍摄时显示网格线，辅助构图",
+                    title = stringResource(R.string.settings_grid_lines),
+                    description = stringResource(R.string.settings_grid_description),
                     checked = state.showGrid,
                     onCheckedChange = { viewModel.toggleGrid() }
                 )
@@ -120,7 +122,7 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(24.dp))
 
             // 边框水印设置
-            SettingsSection(title = "边框水印") {
+            SettingsSection(title = stringResource(R.string.settings_section_frame)) {
                 FrameWatermarkSetting(
                     currentFrameId = viewModel.currentFrameId,
                     availableFrames = viewModel.availableFrameList,
@@ -131,10 +133,10 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(24.dp))
 
             // 拍摄设置
-            SettingsSection(title = "拍摄操作") {
+            SettingsSection(title = stringResource(R.string.settings_section_operation)) {
                 SwitchSettingItem(
-                    title = "快门声音",
-                    description = "拍照时播放快门声音",
+                    title = stringResource(R.string.settings_shutter_sound),
+                    description = stringResource(R.string.settings_shutter_sound_description),
                     checked = shutterSoundEnabled,
                     onCheckedChange = { viewModel.setShutterSoundEnabled(it) }
                 )
@@ -145,8 +147,8 @@ fun SettingsScreen(
                 )
 
                 SwitchSettingItem(
-                    title = "音量键拍摄",
-                    description = "使用音量键进行拍摄",
+                    title = stringResource(R.string.settings_volume_key),
+                    description = stringResource(R.string.settings_volume_key_description),
                     checked = volumeKeyCapture,
                     onCheckedChange = { viewModel.setVolumeKeyCapture(it) }
                 )
@@ -157,8 +159,8 @@ fun SettingsScreen(
                 )
 
                 SwitchSettingItem(
-                    title = "拍摄后自动保存",
-                    description = "拍摄后自动保存照片，否则需要手动确认",
+                    title = stringResource(R.string.settings_auto_save),
+                    description = stringResource(R.string.settings_auto_save_description),
                     checked = autoSaveAfterCapture,
                     onCheckedChange = { viewModel.setAutoSaveAfterCapture(it) }
                 )
@@ -260,7 +262,7 @@ fun AspectRatioSetting(
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
-            text = "画面比例",
+            text = stringResource(R.string.aspect_ratio),
             color = Color.White,
             fontSize = 16.sp,
             fontWeight = FontWeight.Normal,
@@ -325,7 +327,7 @@ fun FrameWatermarkSetting(
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
-            text = "边框样式",
+            text = stringResource(R.string.settings_frame_style),
             color = Color.White,
             fontSize = 16.sp,
             fontWeight = FontWeight.Normal,
@@ -342,7 +344,7 @@ fun FrameWatermarkSetting(
         ) {
             // "无边框" 选项
             FrameItem(
-                name = "无",
+                name = stringResource(R.string.none),
                 isSelected = currentFrameId == null,
                 onClick = { onFrameSelected(null) },
                 isNone = true
@@ -361,7 +363,7 @@ fun FrameWatermarkSetting(
         Spacer(modifier = Modifier.height(12.dp))
 
         Text(
-            text = "为拍摄的照片添加装饰性边框和水印",
+            text = stringResource(R.string.settings_frame_description),
             color = Color.White.copy(alpha = 0.6f),
             fontSize = 13.sp
         )
@@ -457,7 +459,7 @@ private fun FrameItem(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Check,
-                        contentDescription = "Selected",
+                        contentDescription = stringResource(R.string.selected),
                         tint = Color.White,
                         modifier = Modifier.size(24.dp)
                     )
