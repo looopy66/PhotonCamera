@@ -507,7 +507,7 @@ class FrameRenderer(private val context: Context) {
         // 获取对应的 drawable
         val drawableRes = when (element.logoType) {
             LogoType.APP -> R.mipmap.ic_launcher_round
-            LogoType.BRAND -> getBrandLogoDrawable(metadata?.brand)
+            LogoType.BRAND -> getBrandLogoDrawable(metadata?.brand, element.light)
         }
 
         try {
@@ -557,7 +557,7 @@ class FrameRenderer(private val context: Context) {
         // 获取对应的 drawable
         val drawableRes = when (element.logoType) {
             LogoType.APP -> R.mipmap.ic_launcher_round
-            LogoType.BRAND -> getBrandLogoDrawable(metadata?.brand)
+            LogoType.BRAND -> getBrandLogoDrawable(metadata?.brand, element.light)
         }
         
         try {
@@ -565,23 +565,10 @@ class FrameRenderer(private val context: Context) {
             val (bmpW, bmpH) = measureLogoSize(element, metadata, scale)
             val bitmap = drawable.toBitmap(bmpW.coerceAtLeast(1), bmpH.coerceAtLeast(1))
             
-            // 应用 tint 颜色
-            val tintedBitmap = if (element.tint != null) {
-                val tinted = bitmap.copy(Bitmap.Config.ARGB_8888, true)
-                val canvas2 = Canvas(tinted)
-                val paint = Paint().apply {
-                    colorFilter = PorterDuffColorFilter(element.tint, PorterDuff.Mode.SRC_IN)
-                }
-                canvas2.drawBitmap(bitmap, 0f, 0f, paint)
-                tinted
-            } else {
-                bitmap
-            }
-            
             val drawX = if (leftToRight) (x + margin) else (x - size - margin)
             val drawY = centerY - bitmap.height / 2f
             
-            canvas.drawBitmap(tintedBitmap, drawX, drawY, null)
+            canvas.drawBitmap(bitmap, drawX, drawY, null)
             
             return bmpW + margin * 2
         } catch (e: Exception) {
@@ -597,43 +584,43 @@ class FrameRenderer(private val context: Context) {
      * 如 ic_brand_samsung.xml, ic_brand_xiaomi.xml 等
      * 未找到对应资源时使用通用图标
      */
-    private fun getBrandLogoDrawable(brand: String?): Int {
-        if (brand == null) return R.drawable.ic_brand_generic
+    private val logoMap = mapOf(
+        "samsung" to listOf(R.drawable.ic_brand_samsung, R.drawable.ic_brand_samsung),
+        "xiaomi" to listOf(R.drawable.ic_brand_xiaomi, R.drawable.ic_brand_xiaomi),
+        "redmi" to listOf(R.drawable.ic_brand_xiaomi, R.drawable.ic_brand_xiaomi),
+        "poco" to listOf(R.drawable.ic_brand_xiaomi, R.drawable.ic_brand_xiaomi),
+        "huawei" to listOf(R.drawable.ic_brand_huawei, R.drawable.ic_brand_huawei_light),
+        "honor" to listOf(R.drawable.ic_brand_honor, R.drawable.ic_brand_honor_light),
+        "oppo" to listOf(R.drawable.ic_brand_oppo, R.drawable.ic_brand_oppo),
+        "realme" to listOf(R.drawable.ic_brand_oppo, R.drawable.ic_brand_oppo),
+        "oneplus" to listOf(R.drawable.ic_brand_oppo, R.drawable.ic_brand_oppo),
+        "vivo" to listOf(R.drawable.ic_brand_vivo, R.drawable.ic_brand_vivo),
+        "iqoo" to listOf(R.drawable.ic_brand_vivo, R.drawable.ic_brand_vivo),
+        "apple" to listOf(R.drawable.ic_brand_apple, R.drawable.ic_brand_apple_light),
+        "sony" to listOf(R.drawable.ic_brand_sony, R.drawable.ic_brand_sony_light),
+        "canon" to listOf(R.drawable.ic_brand_canon, R.drawable.ic_brand_canon),
+        "dji" to listOf(R.drawable.ic_brand_dji, R.drawable.ic_brand_dji),
+        "fujifilm" to listOf(R.drawable.ic_brand_fujifilm, R.drawable.ic_brand_fujifilm_light),
+        "hasselblad" to listOf(R.drawable.ic_brand_hasselblad, R.drawable.ic_brand_hasselblad_light),
+        "leica" to listOf(R.drawable.ic_brand_leica, R.drawable.ic_brand_leica),
+        "nikon" to listOf(R.drawable.ic_brand_nikon, R.drawable.ic_brand_nikon),
+        "panasonic" to listOf(R.drawable.ic_brand_panasonic, R.drawable.ic_brand_panasonic),
+        "olympus" to listOf(R.drawable.ic_brand_olympus, R.drawable.ic_brand_olympus),
+        "pentax" to listOf(R.drawable.ic_brand_pentax, R.drawable.ic_brand_pentax),
+        "ricoh" to listOf(R.drawable.ic_brand_ricoh, R.drawable.ic_brand_ricoh),
+    )
+
+    private fun getBrandLogoDrawable(brand: String?, light: Boolean = false): Int {
+        if (brand == null) return R.mipmap.ic_launcher_round
         
         // 尝试获取品牌特定的 Logo
         val brandLower = brand.lowercase()
-        val resourceName = when {
-            brandLower.contains("samsung") -> "ic_brand_samsung"
-            brandLower.contains("xiaomi") || brandLower.contains("redmi") || brandLower.contains("poco") -> "ic_brand_xiaomi"
-            brandLower.contains("huawei") -> "ic_brand_huawei"
-            brandLower.contains("honor") -> "ic_brand_honor"
-            brandLower.contains("oppo") || brandLower.contains("realme") || brandLower.contains("oneplus") -> "ic_brand_oppo"
-            brandLower.contains("vivo") || brandLower.contains("iqoo") -> "ic_brand_vivo"
-            brandLower.contains("apple") -> "ic_brand_apple"
-            brandLower.contains("sony") -> "ic_brand_sony"
-            brandLower.contains("canon") -> "ic_brand_canon"
-            brandLower.contains("dji") -> "ic_brand_dji"
-            brandLower.contains("fujifilm") -> "ic_brand_fujifilm"
-            brandLower.contains("hasselblad") -> "ic_brand_hasselblad"
-            brandLower.contains("leica") -> "ic_brand_leica"
-            brandLower.contains("nikon") -> "ic_brand_nikon"
-            brandLower.contains("panasonic") -> "ic_brand_panasonic"
-            brandLower.contains("olympus") -> "ic_brand_olympus"
-            brandLower.contains("pentax") -> "ic_brand_pentax"
-            brandLower.contains("ricoh") -> "ic_brand_ricoh"
-            else -> null
+        val drawableRes = logoMap.firstNotNullOfOrNull { (key, value) ->
+            if (brandLower.contains(key)) value.getOrNull(if (light) 1 else 0) else null
         }
-        
-        if (resourceName != null) {
-            // 尝试获取特定品牌资源
-            val resId = context.resources.getIdentifier(
-                resourceName, "drawable", context.packageName
-            )
-            if (resId != 0) return resId
-        }
-        
+
         // 使用通用品牌图标作为后备
-        return R.drawable.ic_brand_generic
+        return drawableRes ?: R.mipmap.ic_launcher_round
     }
     
     /**

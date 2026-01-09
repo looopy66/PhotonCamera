@@ -7,7 +7,7 @@
     "version": 1,
     "layout": {
         "position": "BORDER",
-        "height": 64,
+        "height": 10,
         "borderWidth": 16,
         "backgroundColor": "#2C2416",
         "padding": 16

@@ -104,7 +104,7 @@ sealed class FrameElement {
         val logoType: LogoType,
         val alignment: ElementAlignment = ElementAlignment.CENTER,
         val sizeDp: Int = 24,
-        val tint: Int? = null,
+        val light: Boolean = false,
         val marginDp: Int = 8,
         val line: Int = 0
     ) : FrameElement()

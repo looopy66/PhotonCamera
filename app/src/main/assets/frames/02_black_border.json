@@ -17,7 +17,8 @@
             "type": "logo",
             "logoType": "BRAND",
             "alignment": "CENTER",
-            "size": 48,
+            "light": true,
+            "size": 40,
             "line": 0
         },
         {
