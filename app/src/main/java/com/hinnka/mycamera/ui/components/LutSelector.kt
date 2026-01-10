@@ -1,8 +1,14 @@
 package com.hinnka.mycamera.ui.components
 
 import android.graphics.Bitmap
-import androidx.compose.foundation.*
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -10,6 +16,8 @@ import androidx.compose.material.icons.filled.FilterNone
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -17,14 +25,15 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.res.stringResource
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.lut.LutInfo
+import kotlinx.coroutines.launch
 
 /**
  * LUT 选择器组件
@@ -39,15 +48,31 @@ fun LutSelector(
     onLutSelected: (String?) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Row(
+    val scrollState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
+    
+    // 在组件首次加载时滚动到当前选中的 LUT
+    LaunchedEffect(currentLutId) {
+        currentLutId?.let { lutId ->
+            val selectedIndex = availableLuts.indexOfFirst { it.id == lutId }
+            if (selectedIndex >= 2) {
+                coroutineScope.launch {
+                    // 使用 animateScrollTo 进行平滑滚动，将选中项滚动到可视区域中心
+                    scrollState.animateScrollToItem(selectedIndex - 2)
+                }
+            }
+        }
+    }
+    
+    LazyRow(
         modifier = modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
             .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        state = scrollState
     ) {
         // LUT 列表
-        availableLuts.forEach { lut ->
+        items(availableLuts) { lut ->
             LutItem(
                 name = lut.getName(),
                 previewBitmap = lutPreviewBitmaps[lut.id],

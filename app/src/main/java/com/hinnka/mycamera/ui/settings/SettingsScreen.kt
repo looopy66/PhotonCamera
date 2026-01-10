@@ -2,6 +2,9 @@ package com.hinnka.mycamera.ui.settings
 
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -10,6 +13,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FilterNone
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -341,6 +345,18 @@ fun FrameWatermarkSetting(
     onFrameSelected: (String?) -> Unit,
     modifier: Modifier = Modifier
 ) {
+
+    val frameScrollState = rememberLazyListState()
+
+    LaunchedEffect(currentFrameId) {
+        currentFrameId?.let { lutId ->
+            val selectedIndex = availableFrames.indexOfFirst { it.id == lutId }
+            if (selectedIndex >= 1) {
+                frameScrollState.animateScrollToItem(selectedIndex - 1)
+            }
+        }
+    }
+
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
             text = stringResource(R.string.settings_frame_style),
@@ -351,23 +367,25 @@ fun FrameWatermarkSetting(
         )
 
         // 边框选择器
-        Row(
+        LazyRow(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
                 .padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            state = frameScrollState
         ) {
             // "无边框" 选项
-            FrameItem(
-                name = stringResource(R.string.none),
-                isSelected = currentFrameId == null,
-                onClick = { onFrameSelected(null) },
-                isNone = true
-            )
+            item {
+                FrameItem(
+                    name = stringResource(R.string.none),
+                    isSelected = currentFrameId == null,
+                    onClick = { onFrameSelected(null) },
+                    isNone = true
+                )
+            }
 
             // 边框列表
-            availableFrames.forEach { frame ->
+            items(availableFrames) { frame ->
                 FrameItem(
                     name = frame.name,
                     isSelected = currentFrameId == frame.id,

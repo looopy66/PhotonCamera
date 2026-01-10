@@ -1,7 +1,9 @@
 package com.hinnka.mycamera.ui.gallery
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.graphics.Bitmap
-import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -11,13 +13,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Rotate90DegreesCw
-import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -36,15 +37,11 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.ui.components.CustomSlider
+import com.hinnka.mycamera.ui.components.PaymentDialog
 import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import com.hinnka.mycamera.ui.components.PaymentDialog
-import android.app.Activity
-import android.content.Context
-import android.content.ContextWrapper
-import androidx.compose.ui.text.font.FontWeight
 
 /**
  * 照片编辑界面
@@ -69,6 +66,8 @@ fun PhotoEditScreen(
     var isSaving by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     var isLoadingPreview by remember { mutableStateOf(false) }
+    val lutScrollState = rememberLazyListState()
+    val frameScrollState = rememberLazyListState()
     
     BackHandler {
         viewModel.exitEditMode()
@@ -81,10 +80,10 @@ fun PhotoEditScreen(
     
     // 边框编辑状态
     val editFrameId = viewModel.editFrameId
-    val editShowAppBranding = viewModel.editShowAppBranding
+    val availableFrames = viewModel.availableFrames
     
     // 当编辑参数变化时更新预览
-    LaunchedEffect(currentPhoto, editLutId, editLutConfig, editLutIntensity, rotation, brightness, editFrameId, editShowAppBranding) {
+    LaunchedEffect(currentPhoto, editLutId, editLutConfig, editLutIntensity, rotation, brightness, editFrameId) {
         if (currentPhoto == null) return@LaunchedEffect
         
         isLoadingPreview = true
@@ -95,6 +94,24 @@ fun PhotoEditScreen(
             viewModel.loadLutPreviews(currentPhoto)
         }
         isLoadingPreview = false
+    }
+
+    LaunchedEffect(editLutId) {
+        editLutId?.let { lutId ->
+            val selectedIndex = availableLuts.indexOfFirst { it.id == lutId }
+            if (selectedIndex >= 2) {
+                lutScrollState.animateScrollToItem(selectedIndex - 2)
+            }
+        }
+    }
+
+    LaunchedEffect(editFrameId) {
+        editFrameId?.let { lutId ->
+            val selectedIndex = availableFrames.indexOfFirst { it.id == lutId }
+            if (selectedIndex >= 1) {
+                frameScrollState.animateScrollToItem(selectedIndex - 1)
+            }
+        }
     }
     
     if (currentPhoto == null) {
@@ -256,7 +273,8 @@ fun PhotoEditScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                     
                     LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        state = lutScrollState
                     ) {
                         // LUT 选项
                         itemsIndexed(availableLuts) { index, lut ->
@@ -309,11 +327,11 @@ fun PhotoEditScreen(
                     )
                     
                     Spacer(modifier = Modifier.height(8.dp))
-                    
-                    val availableFrames = viewModel.availableFrames
+
                     
                     LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        state = frameScrollState
                     ) {
                         // 无边框选项
                         item {
