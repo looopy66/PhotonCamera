@@ -79,7 +79,7 @@ fun PhotoDetailScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                modifier = Modifier.padding(top = 32.dp),
+                modifier = Modifier,
                 title = {
                     Text(
                         text = "${pagerState.currentPage + 1} / ${photos.size}",

@@ -57,7 +57,6 @@ fun SettingsScreen(
         modifier = modifier
             .fillMaxSize()
             .background(backgroundColor)
-            .padding(top = 32.dp)
     ) {
         // 顶部标题栏
         TopAppBar(

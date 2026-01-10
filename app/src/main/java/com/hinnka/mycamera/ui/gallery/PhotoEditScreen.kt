@@ -124,7 +124,7 @@ fun PhotoEditScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                modifier = Modifier.padding(top = 32.dp),
+                modifier = Modifier,
                 title = {
                     Text(
                         text = stringResource(R.string.edit),
