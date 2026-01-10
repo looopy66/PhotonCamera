@@ -10,10 +10,13 @@ import com.hinnka.mycamera.camera.CaptureInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.util.*
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 /**
  * 照片管理器
@@ -67,14 +70,12 @@ object PhotoManager {
      * @param context Context
      * @param bitmap 原始 Bitmap 图片
      * @param metadata 编辑元数据（LUT、边框等）
-     * @param previewBitmap 预览图（用于生成缩略图）
      * @param captureInfo 拍摄信息（用于写入 EXIF）
      */
     suspend fun savePhoto(
         context: Context,
         bitmap: Bitmap,
         metadata: PhotoMetadata,
-        previewBitmap: Bitmap? = null,
         captureInfo: CaptureInfo? = null,
     ): String? {
         return withContext(Dispatchers.IO) {
@@ -102,7 +103,16 @@ object PhotoManager {
                         FileOutputStream(photoFile).use { out ->
                             bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
                         }
-                        // EXIF 必须在原图保存后写入
+                    }
+
+                    // 任务 2: 保存元数据 JSON
+                    launch {
+                        metadataFile.writeText(metadataJson)
+                    }
+
+                    // 任务 3: EXIF 必须在原图保存后写入
+                    launch {
+                        saveOriginalJob.await()
                         captureInfo?.copy(
                             imageWidth = bitmap.width,
                             imageHeight = bitmap.height,
@@ -111,37 +121,21 @@ object PhotoManager {
                         }
                     }
 
-                    // 任务 2: 保存元数据 JSON
-                    val saveMetadataJob = async {
-                        metadataFile.writeText(metadataJson)
+                    // 任务 4: 生成并保存预览图
+                    launch {
+                        saveOriginalJob.await()
+                        savePreviewFileIfNeed(photoFile, previewFile)
                     }
 
-                    // 任务 3: 生成并保存缩略图
-                    val saveThumbnailJob = async {
-                        if (previewBitmap != null) {
-                            // 从预览图生成缩略图，更高效
-                            saveThumbnail(previewBitmap, thumbnailFile)
-                        } else {
-                            // 没有预览图时，需要等原图保存完成后再生成
-                            saveOriginalJob.await()
-                            generateThumbnail(photoFile, thumbnailFile)
-                        }
-                    }
-
-                    // 任务 4: 保存 LUT 预览图
-                    val savePreviewJob = async {
-                        if (previewBitmap != null) {
-                            FileOutputStream(previewFile).use { out ->
-                                previewBitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
-                            }
-                        }
+                    // 任务 5: 生成并保存缩略图
+                    val thumbnailJob = async {
+                        saveOriginalJob.await()
+                        generateThumbnail(photoFile, thumbnailFile)
                     }
 
                     // 等待所有任务完成
                     saveOriginalJob.await()
-                    saveMetadataJob.await()
-                    saveThumbnailJob.await()
-                    savePreviewJob.await()
+                    thumbnailJob.await()
                 }
 
                 Log.d(TAG, "Photo saved: $photoId")
@@ -153,14 +147,22 @@ object PhotoManager {
         }
     }
 
-    private fun saveThumbnail(source: Bitmap, targetFile: File) {
+    private fun savePreviewFileIfNeed(sourceFile: File, targetFile: File) {
         try {
-            val targetSize = 512
-            val thumbnail = ThumbnailUtils.extractThumbnail(source, targetSize, targetSize)
-            FileOutputStream(targetFile).use { out ->
-                thumbnail.compress(Bitmap.CompressFormat.JPEG, 80, out)
+            val option = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(sourceFile.absolutePath, option)
+            val maxSide = max(option.outWidth, option.outHeight)
+            if (maxSide > 3840) {
+                val inSampleSize = (maxSide / 2560f).roundToInt().coerceAtLeast(1)
+                option.inSampleSize = inSampleSize
+                option.inJustDecodeBounds = false
+                val bitmap = BitmapFactory.decodeFile(sourceFile.absolutePath, option)
+                if (bitmap != null) {
+                    FileOutputStream(targetFile).use { out ->
+                        bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                    }
+                }
             }
-            thumbnail.recycle()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save thumbnail from source", e)
         }
@@ -170,7 +172,6 @@ object PhotoManager {
      * 生成缩略图
      */
     private fun generateThumbnail(sourceFile: File, targetFile: File) {
-
         try {
             val options = BitmapFactory.Options().apply {
                 inJustDecodeBounds = true
@@ -183,6 +184,7 @@ object PhotoManager {
             options.inJustDecodeBounds = false
 
             val bitmap = BitmapFactory.decodeFile(sourceFile.absolutePath, options)
+
             if (bitmap != null) {
                 val thumbnail = ThumbnailUtils.extractThumbnail(bitmap, targetSize, targetSize)
                 FileOutputStream(targetFile).use { out ->
@@ -286,6 +288,7 @@ object PhotoManager {
                 val photoFile = File(photoDir, PHOTO_FILE)
                 val metadataFile = File(photoDir, METADATA_FILE)
                 val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
+                val previewFile = File(photoDir, PREVIEW_FILE)
 
                 // 1. 复制文件
                 context.contentResolver.openInputStream(uri)?.use { input ->
@@ -299,6 +302,7 @@ object PhotoManager {
                 metadataFile.writeText(metadata.toJson())
 
                 // 3. 生成缩略图
+                savePreviewFileIfNeed(photoFile, previewFile)
                 generateThumbnail(photoFile, thumbnailFile)
 
                 Log.d(TAG, "Photo imported: $photoId")

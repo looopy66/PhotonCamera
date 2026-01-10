@@ -131,7 +131,7 @@ fun GalleryScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Black
+                    containerColor = Color(0xFF434A5D)
                 )
             )
         },
@@ -201,7 +201,7 @@ fun GalleryScreen(
                 }
             }
         },
-        containerColor = Color.Black,
+        containerColor = Color(0xFF434A5D),
         modifier = modifier
     ) { paddingValues ->
         Box(

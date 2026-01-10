@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.hinnka.mycamera.gallery.PhotoData
+import com.hinnka.mycamera.lut.PhotoTransformation
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 
 /**
@@ -46,17 +47,11 @@ fun GalleryThumbnail(
         contentAlignment = Alignment.Center
     ) {
         if (latestPhoto != null) {
-            // 显示最近的照片缩略图，优先使用带 LUT/边框 的预览图
-            val imageSource = if (latestPhoto.metadata?.lutId != null || latestPhoto.metadata?.frameId != null) {
-                latestPhoto.previewUri
-            } else {
-                latestPhoto.thumbnailUri
-            }
-            
             AsyncImage(
                 model = ImageRequest.Builder(context)
-                    .data(imageSource)
+                    .data(latestPhoto.thumbnailUri)
                     .crossfade(true)
+                    .transformations(viewModel.getPhotoTransformation(latestPhoto))
                     .build(),
                 contentDescription = "Gallery",
                 contentScale = ContentScale.Crop,

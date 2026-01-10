@@ -70,12 +70,13 @@ class GalleryRepository(private val context: Context) {
         photoIds.take(limit).forEach { id ->
             val photoFile = PhotoManager.getPhotoFile(context, id)
             if (photoFile.exists()) {
+                val previewFile = PhotoManager.getPreviewFile(context, id)
                 photos.add(
                     PhotoData(
                         id = id,
                         uri = Uri.fromFile(photoFile),
                         thumbnailUri = Uri.fromFile(PhotoManager.getThumbnailFile(context, id)),
-                        previewUri = Uri.fromFile(PhotoManager.getPreviewFile(context, id)),
+                        previewUri = Uri.fromFile(if (previewFile.exists()) previewFile else photoFile),
                         displayName = photoFile.name,
                         dateAdded = photoFile.lastModified() / 1000,
                         dateTaken = photoFile.lastModified(),
@@ -88,5 +89,3 @@ class GalleryRepository(private val context: Context) {
         return photos
     }
 }
-
-

@@ -182,7 +182,8 @@ fun NavigationHost(
                 galleryViewModel = galleryViewModel,
                 onGalleryClick = {
                     navController.navigate(Routes.GALLERY)
-                    if (galleryViewModel.latestPhoto.value != null) {
+                    val latestPhoto = galleryViewModel.latestPhoto.value
+                    if (latestPhoto != null && System.currentTimeMillis() - latestPhoto.dateAdded < 3 * 60 * 1000) {
                         navController.navigate(Routes.photoDetail(0))
                     }
                 },

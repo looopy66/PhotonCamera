@@ -217,7 +217,7 @@ fun PhotoEditScreen(
                     // 加载中或尚无预览时显示原图
                     AsyncImage(
                         model = ImageRequest.Builder(context)
-                            .data(currentPhoto.uri)
+                            .data(currentPhoto.previewUri)
                             .crossfade(true)
                             .build(),
                         contentDescription = stringResource(R.string.original),

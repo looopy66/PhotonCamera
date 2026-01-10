@@ -462,7 +462,7 @@ private fun ZoomableImage(
         ) {
             AsyncImage(
                 model = ImageRequest.Builder(context)
-                    .data(photo.uri)
+                    .data(photo.previewUri)
                     .crossfade(true)
                     .transformations(viewModel.getPhotoTransformation(photo))
                     .build(),

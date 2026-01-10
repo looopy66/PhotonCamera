@@ -616,7 +616,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         return withContext(Dispatchers.IO) {
             try {
                 val context = getApplication<Application>()
-                val inputStream = context.contentResolver.openInputStream(photo.uri)
+                val inputStream = context.contentResolver.openInputStream(photo.previewUri)
                 val bitmap = BitmapFactory.decodeStream(inputStream)
                 inputStream?.close()
                 
@@ -631,7 +631,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     showAppBranding = editShowAppBranding
                 )
                 
-                photoProcessor.process(context, bitmap, metadata, photo.uri)
+                photoProcessor.process(context, bitmap, metadata, photo.previewUri)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to create preview", e)
                 null
@@ -654,7 +654,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             try {
                 val context = getApplication<Application>()
-                val metadata = PhotoMetadata(
+                val metadata = (currentPhotoMetadata ?: PhotoMetadata()).copy(
                     lutId = editLutId,
                     lutIntensity = editLutIntensity,
                     brightness = editBrightness,
