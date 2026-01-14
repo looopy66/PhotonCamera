@@ -428,12 +428,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         currentLutId = lutId
         if (lutId == null) {
             currentLutConfig = null
+            // LUT 已禁用，通知相机控制器
+            cameraController.setLutEnabled(false)
         } else {
             viewModelScope.launch {
                 currentLutConfig = withContext(Dispatchers.IO) {
                     contentRepository.lutManager.loadLut(lutId)
                 }
             }
+            // LUT 已启用，通知相机控制器
+            cameraController.setLutEnabled(true)
         }
 
         // 保存到用户偏好设置
@@ -447,6 +451,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun setLutIntensity(intensity: Float) {
         cameraController.setLutIntensity(intensity)
+        cameraController.setLutEnabled(intensity > 0f)
         // 保存到用户偏好设置
         viewModelScope.launch {
             userPreferencesRepository.saveLutIntensity(intensity)
@@ -781,7 +786,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
                             uri?.let {
                                 context.contentResolver.openOutputStream(it)?.use { outputStream ->
-                                    processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                                    // 使用 98 质量以获得更高的图像清晰度
+                                    processedBitmap.compress(Bitmap.CompressFormat.JPEG, 98, outputStream)
                                 }
                             }
 

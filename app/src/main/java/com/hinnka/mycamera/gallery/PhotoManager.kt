@@ -102,7 +102,8 @@ object PhotoManager {
                     // 任务 1: 保存原图
                     val saveOriginalJob = async {
                         FileOutputStream(photoFile).use { out ->
-                            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                            // 使用 98 质量以获得更高的图像清晰度
+                            bitmap.compress(Bitmap.CompressFormat.JPEG, 98, out)
                         }
                     }
 

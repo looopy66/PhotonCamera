@@ -633,38 +633,46 @@ class Camera2Controller(private val context: Context) {
     }
 
     /**
-     * 设置 Flat Profile（平坦色调曲线）
+     * 设置色调映射模式
      *
-     * LIMITED 硬件级别不支持手动 Tonemap 控制
-     * 只在 FULL 或 LEVEL_3 设备上启用，否则会导致相机服务崩溃
+     * 根据 LUT 启用状态决定是否使用 sRGB 平坦曲线：
+     * - LUT 启用时：使用 sRGB 平坦曲线（避免厂商色调+LUT的双重处理）
+     * - LUT 未启用时：使用厂商优化曲线（更好的对比度和清晰度）
+     *
+     * @param builder 需要配置的 Builder
+     * @param isCapture 是否为拍摄请求
      */
-    private fun setupFlatProfileRequest(builder: CaptureRequest.Builder) {
-        // 检查硬件级别：只有 FULL 或 LEVEL_3 支持手动 Tonemap
+    private fun setupFlatProfileRequest(builder: CaptureRequest.Builder, isCapture: Boolean) {
+        val currentState = _state.value
+
+        // 只有在启用 LUT 时才使用平坦曲线
+        if (!currentState.lutEnabled) {
+            // LUT 未启用：使用厂商优化的色调曲线，获得更好的清晰度
+            // 不设置任何 Tonemap 参数，让系统使用默认值
+            return
+        }
+
+        // LUT 已启用：检查硬件级别，只有 FULL 或 LEVEL_3 支持手动 Tonemap
         val isFullOrAbove = cachedHardwareLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL ||
                            cachedHardwareLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3
 
         if (!isFullOrAbove) {
-            // LIMITED 或 LEGACY 设备：跳过 Tonemap 设置
-            PLog.d(TAG, "跳过 Tonemap 设置 (硬件级别不支持: $cachedHardwareLevel)")
+            // LIMITED 或 LEGACY 设备：不支持手动 Tonemap
+            PLog.d(TAG, "LUT 已启用，但硬件级别不支持 Tonemap 控制 (硬件级别: $cachedHardwareLevel)")
             return
         }
 
         try {
-            // 只在支持的设备上设置 Tonemap
+            // 只在支持的设备上设置 sRGB 平坦曲线
             builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_PRESET_CURVE)
             builder.set(CaptureRequest.TONEMAP_PRESET_CURVE, CaptureRequest.TONEMAP_PRESET_CURVE_SRGB)
-            PLog.d(TAG, "已启用 Flat Profile (TONEMAP_PRESET_CURVE_SRGB)")
+
+            if (isCapture) {
+                PLog.d(TAG, "LUT 已启用，使用 sRGB 平坦曲线")
+            }
         } catch (e: Exception) {
-            PLog.e(TAG, "Failed to set tonemap (ignoring)", e)
+            PLog.e(TAG, "Failed to set tonemap", e)
         }
-
-        // 1. 禁用所有场景特效
-//        builder.set(CaptureRequest.CONTROL_SCENE_MODE, CaptureRequest.CONTROL_SCENE_MODE_DISABLED)
-//        builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
-//        builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
-
-        // 4. 关闭锐化
-//        builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
     }
     
     // ==================== 统一参数配置 ====================
@@ -693,7 +701,12 @@ class Camera2Controller(private val context: Context) {
         applyZoomSettings(builder, currentState)
 
         // 5. 色调映射（Flat Profile）
-        setupFlatProfileRequest(builder)
+        // 注意：是否启用平坦曲线需要根据 LUT 使用情况决定
+        // 这个决策应该由外部传入，暂时保留接口
+        setupFlatProfileRequest(builder, isCapture)
+
+        // 6. 图像质量设置（锐化、降噪）
+        applyImageQualitySettings(builder, isCapture)
     }
     
     /**
@@ -754,14 +767,15 @@ class Camera2Controller(private val context: Context) {
      */
     private fun applyWhiteBalanceSettings(builder: CaptureRequest.Builder, state: CameraState) {
         builder.set(CaptureRequest.CONTROL_AWB_MODE, state.awbMode)
-        
+
         if (state.awbMode == CameraMetadata.CONTROL_AWB_MODE_OFF && supportsManualWhiteBalance()) {
             // 手动白平衡，应用当前色温
             builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
             val gains = kelvinToRggbGains(state.awbTemperature)
             builder.set(CaptureRequest.COLOR_CORRECTION_GAINS, gains)
         } else {
-            builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
+            // 自动白平衡：使用高质量色彩校正模式以获得更好的色彩准确性
+            builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY)
         }
     }
     
@@ -831,12 +845,12 @@ class Camera2Controller(private val context: Context) {
         try {
             val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
             val activeRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
-            
+
             val centerX = activeRect.width() / 2
             val centerY = activeRect.height() / 2
             val deltaX = ((activeRect.width() / 2) / state.zoomRatio).toInt()
             val deltaY = ((activeRect.height() / 2) / state.zoomRatio).toInt()
-            
+
             val cropRect = android.graphics.Rect(
                 centerX - deltaX,
                 centerY - deltaY,
@@ -848,7 +862,41 @@ class Camera2Controller(private val context: Context) {
             PLog.e(TAG, "Failed to apply zoom settings", e)
         }
     }
-    
+
+    /**
+     * 应用图像质量设置（锐化、降噪）
+     *
+     * 这些设置直接影响照片清晰度和细节保留
+     *
+     * @param builder 需要配置的 Builder
+     * @param isCapture 是否为拍摄请求（拍摄时使用高质量模式）
+     */
+    private fun applyImageQualitySettings(builder: CaptureRequest.Builder, isCapture: Boolean) {
+        try {
+            // 锐化模式：拍摄时使用高质量，预览时使用快速模式
+            val edgeMode = if (isCapture) {
+                CaptureRequest.EDGE_MODE_HIGH_QUALITY
+            } else {
+                CaptureRequest.EDGE_MODE_FAST
+            }
+            builder.set(CaptureRequest.EDGE_MODE, edgeMode)
+
+            // 降噪模式：拍摄时使用高质量，预览时使用快速模式
+            val noiseReductionMode = if (isCapture) {
+                CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
+            } else {
+                CaptureRequest.NOISE_REDUCTION_MODE_FAST
+            }
+            builder.set(CaptureRequest.NOISE_REDUCTION_MODE, noiseReductionMode)
+
+            if (isCapture) {
+                PLog.d(TAG, "图像质量设置: 锐化=HIGH_QUALITY, 降噪=HIGH_QUALITY")
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to apply image quality settings", e)
+        }
+    }
+
 
     
     /**
@@ -1093,18 +1141,19 @@ class Camera2Controller(private val context: Context) {
      */
     fun setAwbMode(mode: Int) {
         _state.value = _state.value.copy(awbMode = mode)
-        
+
         previewRequestBuilder?.apply {
             set(CaptureRequest.CONTROL_AWB_MODE, mode)
             if (mode == CameraMetadata.CONTROL_AWB_MODE_OFF && supportsManualWhiteBalance()) {
                 // 手动白平衡，应用当前色温
                 set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
-                
+
                 val gains = kelvinToRggbGains(_state.value.awbTemperature)
                 set(CaptureRequest.COLOR_CORRECTION_GAINS, gains)
                 PLog.d(TAG, "Manual AWB enabled with temperature: ${_state.value.awbTemperature}K")
             } else {
-                set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
+                // 自动白平衡：使用高质量色彩校正模式
+                set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY)
             }
             updatePreview()
         }
@@ -1140,15 +1189,16 @@ class Camera2Controller(private val context: Context) {
         } else {
             // 设备不支持手动白平衡 - 使用预设 AWB 模式近似
             val presetMode = kelvinToPresetAwbMode(clampedKelvin)
-            
+
             _state.value = _state.value.copy(
                 awbTemperature = clampedKelvin,
                 awbMode = presetMode
             )
-            
+
             previewRequestBuilder?.apply {
                 set(CaptureRequest.CONTROL_AWB_MODE, presetMode)
-                set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
+                // 自动白平衡：使用高质量色彩校正模式
+                set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY)
                 PLog.d(TAG, "AWB temperature set to: ${clampedKelvin}K (preset mode: ${getAwbModeName(presetMode)})")
                 updatePreview()
             }
@@ -1426,7 +1476,23 @@ class Camera2Controller(private val context: Context) {
     fun setLutIntensity(intensity: Float) {
         _state.value = _state.value.copy(lutIntensity = intensity)
     }
-    
+
+    /**
+     * 设置 LUT 启用状态
+     *
+     * 当 LUT 启用状态改变时，需要更新相机参数（特别是色调映射设置）
+     */
+    fun setLutEnabled(enabled: Boolean) {
+        _state.value = _state.value.copy(lutEnabled = enabled)
+
+        // LUT 启用状态改变时，需要重新应用相机设置
+        // 因为色调映射设置依赖于 LUT 是否启用
+        previewRequestBuilder?.apply {
+            applyBaseCameraSettings(this, isCapture = false)
+            updatePreview()
+        }
+    }
+
     // ==================== 延时拍摄和网格线 ====================
     
     /**

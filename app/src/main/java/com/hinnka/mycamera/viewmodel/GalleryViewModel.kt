@@ -780,7 +780,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
             val sharedFile = File(sharedDir, "share_${photo.id}.jpg")
             FileOutputStream(sharedFile).use { out ->
-                processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                // 使用 98 质量以获得更高的图像清晰度
+                processedBitmap.compress(Bitmap.CompressFormat.JPEG, 98, out)
             }
 
             processedBitmap.recycle()
@@ -835,7 +836,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 
                 uri?.let {
                     context.contentResolver.openOutputStream(it)?.use { outputStream ->
-                        processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                        // 使用 98 质量以获得更高的图像清晰度
+                        processedBitmap.compress(Bitmap.CompressFormat.JPEG, 98, outputStream)
                     }
                 }
                 
