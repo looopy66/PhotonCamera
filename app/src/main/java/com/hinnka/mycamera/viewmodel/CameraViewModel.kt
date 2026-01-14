@@ -495,8 +495,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         }
 
                         if (lutConfig != null) {
+                            // 直接使用原始 bitmap，不创建副本以避免内存溢出
                             val previewBitmap = lutImageProcessor.applyLut(
-                                bitmap = bitmap.copy(Bitmap.Config.ARGB_8888, false),
+                                bitmap = bitmap,
                                 lutConfig = lutConfig,
                                 intensity = 1.0f
                             )
@@ -740,52 +741,57 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 aperture = captureInfo.formatAperture(),
             )
 
-            coroutineScope {
-                // 保存原始照片到数据库
-                launch {
-                    val photoId = PhotoManager.savePhoto(context, bitmap, metadata, captureInfo)
-
-                    if (photoId != null) {
-                        PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
-                        _imageSavedEvent.emit(Unit)
-                    } else {
-                        PLog.e(TAG, "Failed to save image via PhotoManager")
-                    }
-                }
-
-                // 如果启用自动保存,导出处理后的图片到系统相册
-                if (shouldAutoSave) {
+            try {
+                coroutineScope {
+                    // 保存原始照片到数据库
                     launch {
-                        val processedBitmap = withContext(Dispatchers.Default) {
-                            photoProcessor.process(context, bitmap, metadata)
+                        val photoId = PhotoManager.savePhoto(context, bitmap, metadata, captureInfo)
+
+                        if (photoId != null) {
+                            PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
+                            _imageSavedEvent.emit(Unit)
+                        } else {
+                            PLog.e(TAG, "Failed to save image via PhotoManager")
                         }
+                    }
 
-                        val filename = "PhotonCamera_${
-                            java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
-                        }.jpg"
-                        val contentValues = android.content.ContentValues().apply {
-                            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, filename)
-                            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-                            put(
-                                android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
-                                android.os.Environment.DIRECTORY_DCIM + "/PhotonCamera"
-                            )
-                        }
-
-                        val uri = context.contentResolver.insert(
-                            android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                            contentValues
-                        )
-
-                        uri?.let {
-                            context.contentResolver.openOutputStream(it)?.use { outputStream ->
-                                processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                    // 如果启用自动保存,导出处理后的图片到系统相册
+                    if (shouldAutoSave) {
+                        launch {
+                            val processedBitmap = withContext(Dispatchers.Default) {
+                                photoProcessor.process(context, bitmap, metadata)
                             }
-                        }
 
-                        processedBitmap.recycle()
+                            val filename = "PhotonCamera_${
+                                java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
+                            }.jpg"
+                            val contentValues = android.content.ContentValues().apply {
+                                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+                                put(
+                                    android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
+                                    android.os.Environment.DIRECTORY_DCIM + "/PhotonCamera"
+                                )
+                            }
+
+                            val uri = context.contentResolver.insert(
+                                android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                                contentValues
+                            )
+
+                            uri?.let {
+                                context.contentResolver.openOutputStream(it)?.use { outputStream ->
+                                    processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                                }
+                            }
+
+                            processedBitmap.recycle()
+                        }
                     }
                 }
+            } finally {
+                // 确保 bitmap 在所有操作完成后被回收
+                bitmap.recycle()
             }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save image", e)

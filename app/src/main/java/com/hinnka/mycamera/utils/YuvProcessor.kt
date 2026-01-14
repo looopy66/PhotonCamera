@@ -66,12 +66,11 @@ object YuvProcessor {
         // 结果前两个元素是宽高
         val outputWidth = result[0]
         val outputHeight = result[1]
-        val pixels = result.copyOfRange(2, result.size)
-        
+
 //        PLog.d(TAG, "Creating bitmap: ${outputWidth}x${outputHeight}")
-        
-        // 创建 Bitmap
-        return Bitmap.createBitmap(pixels, outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
+
+        // 创建 Bitmap，直接使用原数组避免额外内存分配
+        return Bitmap.createBitmap(result, 2, outputWidth, outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
     }
     
     /**

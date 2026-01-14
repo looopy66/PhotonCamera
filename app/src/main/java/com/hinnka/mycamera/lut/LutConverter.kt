@@ -53,68 +53,84 @@ object LutConverter {
 
     /**
      * 解析 .cube 文件
+     * 优化版本：单遍流式处理避免内存溢出
      */
     private fun parseCubeFile(inputStream: InputStream): CubeData {
-        val lines = try {
-            inputStream.bufferedReader(Charsets.UTF_8).readLines()
-        } catch (e: Exception) {
-            // 尝试 latin-1 编码
-            inputStream.bufferedReader(Charsets.ISO_8859_1).readLines()
-        }
-
         var size = 0
         var domainMin = floatArrayOf(0f, 0f, 0f)
         var domainMax = floatArrayOf(1f, 1f, 1f)
-        val data = mutableListOf<Byte>()
+        var data: ByteArray? = null
+        var dataIndex = 0
 
-        for (line in lines) {
-            val trimmed = line.trim()
+        // 临时存储 RGB 数据（只在找到 size 之前使用）
+        val tempDataList = mutableListOf<FloatArray>()
 
-            // 跳过空行和注释
-            if (trimmed.isEmpty() || trimmed.startsWith('#')) {
-                continue
-            }
+        inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+            reader.forEachLine { line ->
+                val trimmed = line.trim()
 
-            when {
-                trimmed.startsWith("LUT_3D_SIZE") -> {
-                    size = trimmed.split("\\s+".toRegex())[1].toInt()
+                // 跳过空行和注释
+                if (trimmed.isEmpty() || trimmed.startsWith('#')) {
+                    return@forEachLine
                 }
-                trimmed.startsWith("DOMAIN_MIN") -> {
-                    val values = trimmed.split("\\s+".toRegex()).drop(1)
-                    domainMin = floatArrayOf(
-                        values[0].toFloat(),
-                        values[1].toFloat(),
-                        values[2].toFloat()
-                    )
-                }
-                trimmed.startsWith("DOMAIN_MAX") -> {
-                    val values = trimmed.split("\\s+".toRegex()).drop(1)
-                    domainMax = floatArrayOf(
-                        values[0].toFloat(),
-                        values[1].toFloat(),
-                        values[2].toFloat()
-                    )
-                }
-                else -> {
-                    // 尝试解析 RGB 数据
-                    val parts = trimmed.split("\\s+".toRegex())
-                    if (parts.size == 3) {
-                        try {
-                            val rgb = floatArrayOf(
-                                parts[0].toFloat(),
-                                parts[1].toFloat(),
-                                parts[2].toFloat()
-                            )
 
-                            // 归一化到 [0, 1] 并转换为 uint8
+                when {
+                    trimmed.startsWith("LUT_3D_SIZE") -> {
+                        size = trimmed.split("\\s+".toRegex())[1].toInt()
+                        // 找到 size 后，立即分配数组并写入已缓存的数据
+                        data = ByteArray(size * size * size * 3)
+
+                        // 将临时数据写入数组
+                        for (rgb in tempDataList) {
                             for (i in 0..2) {
                                 var value = (rgb[i] - domainMin[i]) / (domainMax[i] - domainMin[i])
                                 value = max(0f, min(1f, value))
-                                // 转换为 0-255
-                                data.add((value * 255f + 0.5f).toInt().toByte())
+                                data!![dataIndex++] = (value * 255f + 0.5f).toInt().toByte()
                             }
-                        } catch (e: NumberFormatException) {
-                            // 忽略无法解析的行
+                        }
+                        tempDataList.clear()  // 释放临时列表内存
+                    }
+                    trimmed.startsWith("DOMAIN_MIN") -> {
+                        val values = trimmed.split("\\s+".toRegex()).drop(1)
+                        domainMin = floatArrayOf(
+                            values[0].toFloat(),
+                            values[1].toFloat(),
+                            values[2].toFloat()
+                        )
+                    }
+                    trimmed.startsWith("DOMAIN_MAX") -> {
+                        val values = trimmed.split("\\s+".toRegex()).drop(1)
+                        domainMax = floatArrayOf(
+                            values[0].toFloat(),
+                            values[1].toFloat(),
+                            values[2].toFloat()
+                        )
+                    }
+                    !trimmed.startsWith("TITLE") -> {
+                        // 尝试解析 RGB 数据
+                        val parts = trimmed.split("\\s+".toRegex())
+                        if (parts.size == 3) {
+                            try {
+                                val rgb = floatArrayOf(
+                                    parts[0].toFloat(),
+                                    parts[1].toFloat(),
+                                    parts[2].toFloat()
+                                )
+
+                                if (data != null && dataIndex < data!!.size) {
+                                    // 已经分配了数组，直接写入
+                                    for (i in 0..2) {
+                                        var value = (rgb[i] - domainMin[i]) / (domainMax[i] - domainMin[i])
+                                        value = max(0f, min(1f, value))
+                                        data!![dataIndex++] = (value * 255f + 0.5f).toInt().toByte()
+                                    }
+                                } else {
+                                    // 还未分配数组，暂存数据
+                                    tempDataList.add(rgb)
+                                }
+                            } catch (e: NumberFormatException) {
+                                // 忽略无法解析的行
+                            }
                         }
                     }
                 }
@@ -125,21 +141,7 @@ object LutConverter {
             throw IllegalArgumentException("Could not find LUT_3D_SIZE in .cube file")
         }
 
-        val expectedCount = size * size * size * 3
-        if (data.size != expectedCount) {
-            // 补齐或截断数据
-            if (data.size < expectedCount) {
-                repeat(expectedCount - data.size) {
-                    data.add(0)
-                }
-            } else {
-                while (data.size > expectedCount) {
-                    data.removeAt(data.lastIndex)
-                }
-            }
-        }
-
-        return CubeData(size, data.toByteArray())
+        return CubeData(size, data!!)
     }
 
     /**
