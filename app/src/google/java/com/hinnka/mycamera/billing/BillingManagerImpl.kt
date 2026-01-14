@@ -29,9 +29,9 @@ class BillingManagerImpl(private val context: Context) : BillingManager {
                 handlePurchase(purchase)
             }
         } else if (billingResult.responseCode == BillingClient.BillingResponseCode.USER_CANCELED) {
-            Log.d(TAG, "User canceled the purchase")
+            PLog.d(TAG, "User canceled the purchase")
         } else {
-            Log.e(TAG, "Purchase error: ${billingResult.debugMessage}")
+            PLog.e(TAG, "Purchase error: ${billingResult.debugMessage}")
         }
     }
 
@@ -48,13 +48,13 @@ class BillingManagerImpl(private val context: Context) : BillingManager {
         billingClient.startConnection(object : BillingClientStateListener {
             override fun onBillingSetupFinished(billingResult: BillingResult) {
                 if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
-                    Log.d(TAG, "Billing setup finished")
+                    PLog.d(TAG, "Billing setup finished")
                     queryPurchases()
                 }
             }
 
             override fun onBillingServiceDisconnected() {
-                Log.d(TAG, "Billing service disconnected, retrying...")
+                PLog.d(TAG, "Billing service disconnected, retrying...")
                 // Retry logic if needed
             }
         })
@@ -69,7 +69,7 @@ class BillingManagerImpl(private val context: Context) : BillingManager {
             if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
                 val purchased = purchases.any { it.purchaseState == Purchase.PurchaseState.PURCHASED }
                 _isPurchased.value = purchased
-                Log.d(TAG, "Purchases queried: $purchased")
+                PLog.d(TAG, "Purchases queried: $purchased")
                 
                 // If purchased but not acknowledged, acknowledge it
                 purchases.forEach { purchase ->
@@ -87,7 +87,7 @@ class BillingManagerImpl(private val context: Context) : BillingManager {
             .build()
         billingClient.acknowledgePurchase(params) { billingResult ->
             if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
-                Log.d(TAG, "Purchase acknowledged")
+                PLog.d(TAG, "Purchase acknowledged")
                 _isPurchased.value = true
             }
         }
@@ -118,7 +118,7 @@ class BillingManagerImpl(private val context: Context) : BillingManager {
                     .build()
                 billingClient.launchBillingFlow(activity, flowParams)
             } else {
-                Log.e(TAG, "Failed to query product details: ${billingResult.debugMessage}")
+                PLog.e(TAG, "Failed to query product details: ${billingResult.debugMessage}")
             }
         }
     }

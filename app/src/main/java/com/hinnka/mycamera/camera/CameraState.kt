@@ -56,7 +56,8 @@ data class CameraInfo(
     val focalLength: Float = 0f,  // 物理焦距 (mm)
     val focalLength35mmEquivalent: Float = 0f,  // 35mm等效焦距
     val zoomSteps: List<Float> = listOf(1f),  // 可用的变焦档位 (如 [0.5, 1.0, 2.0])
-    val intrinsicZoomRatio: Float = 1f  // 固有变焦比例 (CameraX 1.3.0+)
+    val intrinsicZoomRatio: Float = 1f,  // 固有变焦比例 (CameraX 1.3.0+)
+    val hardwareLevel: Int = -1  // 硬件支持级别
 ) {
     /**
      * 获取镜头类型显示名称
@@ -80,6 +81,20 @@ data class CameraInfo(
      * 是否支持长焦（maxZoom > 2）
      */
     fun hasTelephoto(): Boolean = maxZoom > 2f
+
+    /**
+     * 获取硬件支持级别的可读名称
+     */
+    fun getHardwareLevelName(): String {
+        return when (hardwareLevel) {
+            0 -> "LIMITED"
+            1 -> "FULL"
+            2 -> "LEGACY"
+            3 -> "LEVEL_3"
+            4 -> "EXTERNAL"
+            else -> "UNKNOWN"
+        }
+    }
 }
 
 /**

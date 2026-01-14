@@ -45,9 +45,9 @@ class ShutterSoundPlayer(private val context: Context) {
             soundPool?.setOnLoadCompleteListener { _, _, status ->
                 if (status == 0) {
                     isLoaded = true
-                    Log.d(TAG, "Shutter sound loaded successfully")
+                    PLog.d(TAG, "Shutter sound loaded successfully")
                 } else {
-                    Log.e(TAG, "Failed to load shutter sound, status: $status")
+                    PLog.e(TAG, "Failed to load shutter sound, status: $status")
                 }
             }
             
@@ -55,9 +55,9 @@ class ShutterSoundPlayer(private val context: Context) {
             soundId = soundPool?.load(afd, 1) ?: -1
             afd.close()
             
-            Log.d(TAG, "Shutter sound player initialized with SoundPool")
+            PLog.d(TAG, "Shutter sound player initialized with SoundPool")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize shutter sound player", e)
+            PLog.e(TAG, "Failed to initialize shutter sound player", e)
             isLoaded = false
         }
     }
@@ -67,7 +67,7 @@ class ShutterSoundPlayer(private val context: Context) {
      */
     fun play() {
         if (soundPool == null || soundId == -1 || !isLoaded) {
-            Log.w(TAG, "SoundPool not ready: soundPool=$soundPool, soundId=$soundId, isLoaded=$isLoaded")
+            PLog.w(TAG, "SoundPool not ready: soundPool=$soundPool, soundId=$soundId, isLoaded=$isLoaded")
             // 如果是因为未初始化或加载失败，尝试重新初始化
             if (soundPool == null) {
                 initializePlayer()
@@ -79,7 +79,7 @@ class ShutterSoundPlayer(private val context: Context) {
             // 播放音效：左声道音量, 右声道音量, 优先级, 循环次数(0不循环), 播放速率(1.0正常)
             soundPool?.play(soundId, 1.0f, 1.0f, 1, 0, 1.0f)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to play shutter sound", e)
+            PLog.e(TAG, "Failed to play shutter sound", e)
         }
     }
     
@@ -92,9 +92,9 @@ class ShutterSoundPlayer(private val context: Context) {
             soundPool = null
             soundId = -1
             isLoaded = false
-            Log.d(TAG, "Shutter sound player released")
+            PLog.d(TAG, "Shutter sound player released")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to release shutter sound player", e)
+            PLog.e(TAG, "Failed to release shutter sound player", e)
         }
     }
 }

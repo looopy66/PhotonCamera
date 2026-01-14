@@ -2,6 +2,7 @@ package com.hinnka.mycamera.lut
 
 import android.content.Context
 import android.util.Log
+import com.hinnka.mycamera.utils.PLog
 import org.json.JSONObject
 import java.io.InputStream
 import java.nio.ByteBuffer
@@ -124,10 +125,10 @@ object LutParser {
                 )
             }
             
-            Log.d(TAG, "Loaded ${lutList.size} LUTs from config.json")
+            PLog.d(TAG, "Loaded ${lutList.size} LUTs from config.json")
             lutList
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to load LUT config", e)
+            PLog.e(TAG, "Failed to load LUT config", e)
             emptyList()
         }
     }

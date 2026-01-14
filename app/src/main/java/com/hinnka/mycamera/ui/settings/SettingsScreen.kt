@@ -11,11 +11,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FilterNone
+import androidx.compose.material.icons.filled.Article
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -30,6 +34,7 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.ui.camera.autoRotate
+import com.hinnka.mycamera.ui.components.LogViewerDialog
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 
 /**
@@ -48,9 +53,12 @@ fun SettingsScreen(
     val volumeKeyCapture by viewModel.volumeKeyCapture.collectAsState(initial = false)
     val autoSaveAfterCapture by viewModel.autoSaveAfterCapture.collectAsState(initial = true)
     val isPurchased by viewModel.isPurchased.collectAsState()
-    
+
     val context = androidx.compose.ui.platform.LocalContext.current
-    
+
+    // 日志查看器弹窗状态
+    var showLogViewerDialog by remember { mutableStateOf(false) }
+
     val backgroundColor = Color(0xFF434A5D)
 
     Column(
@@ -195,8 +203,54 @@ fun SettingsScreen(
                 )
             }
 
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // 开发者选项
+            SettingsSection(title = "开发者选项") {
+                // 日志收集按钮
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showLogViewerDialog = true }
+                        .padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "日志收集",
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Normal
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "查看和导出应用日志，用于问题诊断",
+                            color = Color.White.copy(alpha = 0.6f),
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(16.dp))
+
+                    Icon(
+                        imageVector = Icons.Default.Article,
+                        contentDescription = "日志",
+                        tint = Color.White.copy(alpha = 0.6f)
+                    )
+                }
+            }
+
             Spacer(modifier = Modifier.height(32.dp))
         }
+    }
+
+    // 显示日志查看器弹窗
+    if (showLogViewerDialog) {
+        LogViewerDialog(
+            onDismiss = { showLogViewerDialog = false }
+        )
     }
 }
 

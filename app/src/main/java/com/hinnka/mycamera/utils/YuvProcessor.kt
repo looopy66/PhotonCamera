@@ -18,9 +18,9 @@ object YuvProcessor {
     init {
         try {
             System.loadLibrary("my-native-lib")
-            Log.i(TAG, "Native library loaded successfully")
+            PLog.i(TAG, "Native library loaded successfully")
         } catch (e: UnsatisfiedLinkError) {
-            Log.e(TAG, "Failed to load native library", e)
+            PLog.e(TAG, "Failed to load native library", e)
         }
     }
     
@@ -48,7 +48,7 @@ object YuvProcessor {
         // 获取目标宽高比（长边/短边）
         val targetRatio = aspectRatio.getValue(true)
         
-//        Log.d(TAG, "Processing image: ${width}x${height}, rotation=$rotation, ratio=$targetRatio")
+//        PLog.d(TAG, "Processing image: ${width}x${height}, rotation=$rotation, ratio=$targetRatio")
         
         // 调用 native 方法处理
         val result = processYuv(
@@ -59,7 +59,7 @@ object YuvProcessor {
         )
         
         if (result == null || result.size < 3) {
-            Log.e(TAG, "Native processing failed, using fallback")
+            PLog.e(TAG, "Native processing failed, using fallback")
             return fallbackProcess(image, aspectRatio)
         }
         
@@ -68,7 +68,7 @@ object YuvProcessor {
         val outputHeight = result[1]
         val pixels = result.copyOfRange(2, result.size)
         
-//        Log.d(TAG, "Creating bitmap: ${outputWidth}x${outputHeight}")
+//        PLog.d(TAG, "Creating bitmap: ${outputWidth}x${outputHeight}")
         
         // 创建 Bitmap
         return Bitmap.createBitmap(pixels, outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
@@ -78,7 +78,7 @@ object YuvProcessor {
      * 后备处理方法（如果 native 处理失败）
      */
     private fun fallbackProcess(image: Image, aspectRatio: AspectRatio): Bitmap {
-        Log.w(TAG, "Using fallback YUV processing")
+        PLog.w(TAG, "Using fallback YUV processing")
         
         val planes = image.planes
         val width = image.width

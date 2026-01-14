@@ -19,6 +19,7 @@ import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.gallery.*
 import com.hinnka.mycamera.lut.*
+import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -135,14 +136,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             contentRepository.availableLuts.collect { luts ->
                 availableLuts = luts
-                Log.d(TAG, "GalleryViewModel: availableLuts updated to ${luts.size} items")
+                PLog.d(TAG, "GalleryViewModel: availableLuts updated to ${luts.size} items")
             }
         }
 
         viewModelScope.launch {
             contentRepository.availableFrames.collect { frames ->
                 availableFrames = frames
-                Log.d(TAG, "GalleryViewModel: availableFrames updated to ${frames.size} items")
+                PLog.d(TAG, "GalleryViewModel: availableFrames updated to ${frames.size} items")
             }
         }
     }
@@ -206,7 +207,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     _photos.value = finalPhotos
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to load photos", e)
+                PLog.e(TAG, "Failed to load photos", e)
                 _isLoading.value = false
             }
         }
@@ -236,7 +237,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     updatedPhoto = updatedPhoto.copy(metadata = newMetadata)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to load dimensions for ${photo.id}", e)
+                PLog.e(TAG, "Failed to load dimensions for ${photo.id}", e)
             }
         } else if (metadata != null) {
             // Already has width/height from metadata
@@ -280,7 +281,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                             PhotoManager.saveMetadata(context, it.id, newMetadata)
                         }
                     } catch (e: Exception) {
-                        Log.e(TAG, "Failed to load dimensions for latest photo", e)
+                        PLog.e(TAG, "Failed to load dimensions for latest photo", e)
                     }
                 }
                 _latestPhoto.value = updatedPhoto
@@ -651,7 +652,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 
                 photoProcessor.process(context, bitmap, metadata, photo.previewUri)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to create preview", e)
+                PLog.e(TAG, "Failed to create preview", e)
                 null
             }
         }
@@ -704,7 +705,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
                 onComplete(success)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to save metadata", e)
+                PLog.e(TAG, "Failed to save metadata", e)
                 onComplete(false)
             }
         }
@@ -787,7 +788,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
             sharedFile
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to prepare shared photo", e)
+            PLog.e(TAG, "Failed to prepare shared photo", e)
             null
         }
     }
@@ -842,7 +843,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 onComplete(uri != null)
                 
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to export photo", e)
+                PLog.e(TAG, "Failed to export photo", e)
                 onComplete(false)
             }
         }
@@ -898,7 +899,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 // StateFlow 会自动更新 availableLuts 和 availableFrames
                 contentRepository.refreshCustomContent()
             }
-            Log.d(TAG, "Custom content refreshed via ContentRepository")
+            PLog.d(TAG, "Custom content refreshed via ContentRepository")
         }
     }
 }

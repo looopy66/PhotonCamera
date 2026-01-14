@@ -9,6 +9,7 @@ import android.util.Log
 import android.view.Surface
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutRenderer
+import com.hinnka.mycamera.utils.PLog
 
 /**
  * 相机预览 GLSurfaceView
@@ -60,7 +61,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         // 保持 EGL 上下文
         preserveEGLContextOnPause = true
         
-        Log.d(TAG, "CameraGLSurfaceView initialized")
+        PLog.d(TAG, "CameraGLSurfaceView initialized")
     }
 
     /**
@@ -143,17 +144,17 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     
     override fun onPause() {
         super.onPause()
-        Log.d(TAG, "onPause")
+        PLog.d(TAG, "onPause")
     }
     
     override fun onResume() {
         super.onResume()
-        Log.d(TAG, "onResume")
+        PLog.d(TAG, "onResume")
     }
     
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
-        Log.d(TAG, "onDetachedFromWindow")
+        PLog.d(TAG, "onDetachedFromWindow")
         
         // 通知 Surface 销毁
         onSurfaceDestroyed?.invoke()

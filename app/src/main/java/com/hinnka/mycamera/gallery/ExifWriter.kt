@@ -3,6 +3,7 @@ package com.hinnka.mycamera.gallery
 import android.util.Log
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.CaptureInfo
+import com.hinnka.mycamera.utils.PLog
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -121,13 +122,13 @@ object ExifWriter {
             // 保存
             exif.saveAttributes()
             
-            Log.d(TAG, "EXIF written to ${file.name}: ISO=${captureInfo.iso}, " +
+            PLog.d(TAG, "EXIF written to ${file.name}: ISO=${captureInfo.iso}, " +
                     "Exposure=${captureInfo.formatExposureTime()}, " +
                     "Aperture=${captureInfo.formatAperture()}, " +
                     "Focal=${captureInfo.formatFocalLength()}")
             
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to write EXIF to ${file.name}", e)
+            PLog.e(TAG, "Failed to write EXIF to ${file.name}", e)
         }
     }
     

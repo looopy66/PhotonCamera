@@ -5,6 +5,7 @@ import android.hardware.camera2.CameraCharacteristics
 import android.os.Build
 import android.util.Log
 import android.util.Size
+import com.hinnka.mycamera.utils.PLog
 
 /**
  * 高分辨率拍照能力检测工具
@@ -157,7 +158,7 @@ object HighResolutionHelper {
                     addIfValid(size, format, minPixels, configs, seen)
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Error getting output sizes for format $format: ${e.message}")
+                PLog.w(TAG, "Error getting output sizes for format $format: ${e.message}")
             }
         }
     }
@@ -177,7 +178,7 @@ object HighResolutionHelper {
             try {
                 val value = getVendorKeyValue(characteristics, keyName) ?: continue
                 parseVendorStreamConfigurations(value, minPixels, configs, seen)
-                Log.d(TAG, "Found vendor key: $keyName with ${value.size} values")
+                PLog.d(TAG, "Found vendor key: $keyName with ${value.size} values")
             } catch (e: Exception) {
                 // 私有 Key 不存在或无法访问，静默忽略
             }
@@ -363,18 +364,18 @@ object HighResolutionHelper {
     fun logResolutionCapabilities(characteristics: CameraCharacteristics) {
         val options = getMegapixelOptions(characteristics)
         
-        Log.i(TAG, "========== High Resolution Capabilities ==========")
-        Log.i(TAG, "Max Megapixels: ${options.maxMegapixels}MP")
-        Log.i(TAG, "Max Resolution: ${options.maxResolution}")
-        Log.i(TAG, "12MP: ${options.mp12}")
-        Log.i(TAG, "24MP: ${options.mp24}")
-        Log.i(TAG, "48MP: ${options.mp48}")
-        Log.i(TAG, "108MP: ${options.mp108}")
-        Log.i(TAG, "200MP: ${options.mp200}")
-        Log.i(TAG, "All resolutions (${options.allResolutions.size}):")
+        PLog.i(TAG, "========== High Resolution Capabilities ==========")
+        PLog.i(TAG, "Max Megapixels: ${options.maxMegapixels}MP")
+        PLog.i(TAG, "Max Resolution: ${options.maxResolution}")
+        PLog.i(TAG, "12MP: ${options.mp12}")
+        PLog.i(TAG, "24MP: ${options.mp24}")
+        PLog.i(TAG, "48MP: ${options.mp48}")
+        PLog.i(TAG, "108MP: ${options.mp108}")
+        PLog.i(TAG, "200MP: ${options.mp200}")
+        PLog.i(TAG, "All resolutions (${options.allResolutions.size}):")
         options.allResolutions.forEach { config ->
-            Log.i(TAG, "  - $config")
+            PLog.i(TAG, "  - $config")
         }
-        Log.i(TAG, "===================================================")
+        PLog.i(TAG, "===================================================")
     }
 }

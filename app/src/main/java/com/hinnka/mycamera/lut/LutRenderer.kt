@@ -7,6 +7,7 @@ import android.opengl.GLES30
 import android.opengl.GLSurfaceView
 import android.opengl.Matrix
 import android.util.Log
+import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.ShortBuffer
@@ -102,7 +103,7 @@ class LutRenderer : GLSurfaceView.Renderer {
      * Surface 创建时调用
      */
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-        Log.d(TAG, "onSurfaceCreated")
+        PLog.d(TAG, "onSurfaceCreated")
         
         // 设置清屏颜色
         GLES30.glClearColor(0f, 0f, 0f, 1f)
@@ -142,7 +143,7 @@ class LutRenderer : GLSurfaceView.Renderer {
      * Surface 尺寸变化时调用
      */
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
-        Log.d(TAG, "onSurfaceChanged: ${width}x${height}")
+        PLog.d(TAG, "onSurfaceChanged: ${width}x${height}")
         
         viewportWidth = width
         viewportHeight = height
@@ -257,7 +258,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         val fragmentShader = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.FRAGMENT_SHADER_LUT)
         
         if (vertexShader == 0 || fragmentShader == 0) {
-            Log.e(TAG, "Failed to compile shaders")
+            PLog.e(TAG, "Failed to compile shaders")
             return
         }
         
@@ -268,7 +269,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         GLES30.glDeleteShader(fragmentShader)
         
         if (programId == 0) {
-            Log.e(TAG, "Failed to link program")
+            PLog.e(TAG, "Failed to link program")
             return
         }
         
@@ -285,7 +286,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         aPositionLocation = GLES30.glGetAttribLocation(programId, "aPosition")
         aTexCoordLocation = GLES30.glGetAttribLocation(programId, "aTexCoord")
         
-//        Log.d(TAG, "Shader program created: $programId")
+//        PLog.d(TAG, "Shader program created: $programId")
     }
     
     /**
@@ -357,7 +358,7 @@ class LutRenderer : GLSurfaceView.Renderer {
             lutTextureId = GlUtils.create3DTexture(lutConfig)
             lutSize = lutConfig.size.toFloat()
             lutEnabled = true
-//            Log.d(TAG, "LUT set: ${lutConfig.title}, size: ${lutConfig.size}")
+//            PLog.d(TAG, "LUT set: ${lutConfig.title}, size: ${lutConfig.size}")
         } else {
             lutEnabled = false
         }
@@ -410,7 +411,7 @@ class LutRenderer : GLSurfaceView.Renderer {
             Matrix.scaleM(mvpMatrix, 0, scaleX, scaleY, 1f)
         }
         
-        Log.d(TAG, "MVP matrix updated: viewport=${viewportWidth}x${viewportHeight}, preview=${previewWidth}x${previewHeight}")
+        PLog.d(TAG, "MVP matrix updated: viewport=${viewportWidth}x${viewportHeight}, preview=${previewWidth}x${previewHeight}")
     }
     
     /**
@@ -464,7 +465,7 @@ class LutRenderer : GLSurfaceView.Renderer {
             onPreviewFrameCaptured?.invoke(scaledBitmap)
             
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to capture preview frame", e)
+            PLog.e(TAG, "Failed to capture preview frame", e)
         }
     }
     

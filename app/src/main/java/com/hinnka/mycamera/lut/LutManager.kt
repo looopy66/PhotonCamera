@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import android.util.LruCache
 import com.hinnka.mycamera.data.CustomImportManager
+import com.hinnka.mycamera.utils.PLog
 
 /**
  * LUT 管理器
@@ -41,7 +42,7 @@ class LutManager(private val context: Context) {
         // 将自定义 LUT 放在最前面
         availableLuts = customLuts + builtInLuts
 
-        Log.d(TAG, "Found ${availableLuts.size} LUT files (${customLuts.size} custom, ${builtInLuts.size} built-in)")
+        PLog.d(TAG, "Found ${availableLuts.size} LUT files (${customLuts.size} custom, ${builtInLuts.size} built-in)")
     }
 
     /**
@@ -65,13 +66,13 @@ class LutManager(private val context: Context) {
     fun loadLut(id: String): LutConfig? {
         // 先从缓存查找
         lutCache.get(id)?.let {
-            Log.d(TAG, "LUT loaded from cache: $id")
+            PLog.d(TAG, "LUT loaded from cache: $id")
             return it
         }
 
         // 查找 LUT 信息
         val lutInfo = getLutInfo(id) ?: run {
-            Log.e(TAG, "LUT not found: $id")
+            PLog.e(TAG, "LUT not found: $id")
             return null
         }
 
@@ -90,14 +91,14 @@ class LutManager(private val context: Context) {
             if (lutConfig.isValid()) {
                 // 添加到缓存
                 lutCache.put(id, lutConfig)
-                Log.d(TAG, "LUT loaded: $id, size: ${lutConfig.size}")
+                PLog.d(TAG, "LUT loaded: $id, size: ${lutConfig.size}")
                 lutConfig
             } else {
-                Log.e(TAG, "Invalid LUT data: $id")
+                PLog.e(TAG, "Invalid LUT data: $id")
                 null
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to load LUT: $id", e)
+            PLog.e(TAG, "Failed to load LUT: $id", e)
             null
         }
     }
@@ -135,7 +136,7 @@ class LutManager(private val context: Context) {
      */
     fun clearCache() {
         lutCache.evictAll()
-        Log.d(TAG, "LUT cache cleared")
+        PLog.d(TAG, "LUT cache cleared")
     }
     
     /**

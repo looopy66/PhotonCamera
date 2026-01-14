@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Build
 import android.util.Log
 import androidx.exifinterface.media.ExifInterface
+import com.hinnka.mycamera.utils.PLog
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.*
@@ -100,7 +101,7 @@ data class PhotoMetadata(
                     isImported = obj.optBoolean("isImported", false)
                 )
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to parse JSON", e)
+                PLog.e(TAG, "Failed to parse JSON", e)
                 null
             }
         }
@@ -181,7 +182,7 @@ data class PhotoMetadata(
                     )
                 } ?: createDefault(0, 0)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to load EXIF from $uri", e)
+                PLog.e(TAG, "Failed to load EXIF from $uri", e)
                 createDefault(0, 0)
             }
         }

@@ -14,9 +14,9 @@ import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
-import android.util.Size
 import android.view.Surface
 import androidx.exifinterface.media.ExifInterface
+import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -65,7 +65,12 @@ class Camera2Controller(private val context: Context) {
     
     private var cameraThread: HandlerThread? = null
     private var cameraHandler: Handler? = null
-    
+
+    private var cachedCharacteristics: CameraCharacteristics? = null
+    private var cachedSensorOrientation: Int = 0
+    private var cachedLensFacing: Int = CameraCharacteristics.LENS_FACING_BACK
+    private var cachedHardwareLevel: Int = CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED
+
     private val _state = MutableStateFlow(CameraState())
     val state: StateFlow<CameraState> = _state.asStateFlow()
     
@@ -120,6 +125,7 @@ class Camera2Controller(private val context: Context) {
      * 初始化相机
      */
     fun initialize() {
+        PLog.i(TAG, "初始化相机控制器")
         startBackgroundThread()
         discoverCameras()
     }
@@ -136,7 +142,7 @@ class Camera2Controller(private val context: Context) {
             cameraThread = null
             cameraHandler = null
         } catch (e: InterruptedException) {
-            Log.e(TAG, "Error stopping background thread", e)
+            PLog.e(TAG, "Error stopping background thread", e)
         }
     }
     
@@ -145,17 +151,21 @@ class Camera2Controller(private val context: Context) {
      */
     private fun discoverCameras() {
         val cameras = cameraDiscovery.discoverAllCameras()
-        
-        Log.d(TAG, "Discovered ${cameras.size} cameras:")
+
+        PLog.d(TAG, "Discovered ${cameras.size} cameras:")
+        PLog.d(TAG, "发现 ${cameras.size} 个摄像头")
         cameras.forEach { cam ->
-            Log.d(TAG, "  - ${cam.cameraId}: ${cam.lensType}, intrinsicZoom=${cam.intrinsicZoomRatio}")
+            PLog.d(TAG, "  - ${cam.cameraId}: ${cam.lensType}, intrinsicZoom=${cam.intrinsicZoomRatio}")
+            PLog.d(TAG, "摄像头: ${cam.cameraId}, 类型: ${cam.lensType}, 变焦: ${cam.intrinsicZoomRatio}")
         }
-        
+
         // 默认选择主摄
         val defaultCamera = cameras.firstOrNull { it.lensType == LensType.BACK_MAIN }
             ?: cameras.firstOrNull { it.lensFacing == CameraCharacteristics.LENS_FACING_BACK }
             ?: cameras.firstOrNull()
-        
+
+        PLog.i(TAG, "选择默认摄像头: ${defaultCamera?.cameraId}, 类型: ${defaultCamera?.lensType}")
+
         _state.value = _state.value.copy(
             availableCameras = cameras,
             currentCameraId = defaultCamera?.cameraId ?: "",
@@ -167,30 +177,63 @@ class Camera2Controller(private val context: Context) {
     
     /**
      * 打开相机并开始预览
-     * 
+     *
      * @param surfaceTexture SurfaceTexture 用于预览
      */
     @SuppressLint("MissingPermission")
     fun openCamera(surfaceTexture: SurfaceTexture) {
+        // 先关闭旧的相机和资源，防止资源泄漏
+        closeCamera()
+
         val cameraId = _state.value.currentCameraId
         val aspectRatio = _state.value.aspectRatio
         if (cameraId.isEmpty()) {
-            Log.e(TAG, "No camera ID set")
+            PLog.e(TAG, "No camera ID set")
             return
         }
 
+        PLog.i(TAG, "打开相机: $cameraId, 画面比例: ${aspectRatio.getDisplayName()}")
+
         val previewSize = CameraUtils.getFixedPreviewSize(context, cameraId, aspectRatio)
         surfaceTexture.setDefaultBufferSize(previewSize.width, previewSize.height)
-        
+
         try {
+            try {
+                cachedCharacteristics = cameraManager.getCameraCharacteristics(cameraId)
+
+                // 缓存固定属性（传感器方向、镜头朝向、硬件级别）
+                // 这些值在相机生命周期内不会改变，避免在每帧预览中重复获取
+                cachedSensorOrientation = cachedCharacteristics?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+                cachedLensFacing = cachedCharacteristics?.get(CameraCharacteristics.LENS_FACING)
+                    ?: CameraCharacteristics.LENS_FACING_BACK
+                cachedHardwareLevel = cachedCharacteristics?.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
+                    ?: CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED
+
+                val hardwareLevelName = when (cachedHardwareLevel) {
+                    CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY -> "LEGACY"
+                    CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED -> "LIMITED"
+                    CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL -> "FULL"
+                    CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3 -> "LEVEL_3"
+                    else -> "UNKNOWN($cachedHardwareLevel)"
+                }
+
+                PLog.i(TAG, "Camera characteristics cached - ID: $cameraId, Hardware Level: $hardwareLevelName")
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to cache camera characteristics", e)
+                cachedCharacteristics = null
+                cachedSensorOrientation = 0
+                cachedLensFacing = CameraCharacteristics.LENS_FACING_BACK
+            }
+
             // 配置 SurfaceTexture
             previewSurface = Surface(surfaceTexture)
 
 //            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
 //            HighResolutionHelper.logResolutionCapabilities(characteristics)
-            
+
             // 创建 ImageReader 用于拍照 (使用 YUV 格式)
             val captureSize = CameraUtils.getBestCaptureSize(context, cameraId, aspectRatio)
+            PLog.d(TAG, "拍照尺寸: ${captureSize.width}x${captureSize.height}, 预览尺寸: ${previewSize.width}x${previewSize.height}")
             imageReader = ImageReader.newInstance(
                 captureSize.width,
                 captureSize.height,
@@ -337,7 +380,7 @@ class Camera2Controller(private val context: Context) {
                             }
                         }
 
-//                        Log.d(TAG, "avgLum: ${weightedSumLuminance / totalWeight}")
+//                        PLog.d(TAG, "avgLum: ${weightedSumLuminance / totalWeight}")
                         
                         // Calculate Software Auto Metering
                         calculateAutoMetering(totalWeight, weightedSumLuminance)
@@ -364,31 +407,31 @@ class Camera2Controller(private val context: Context) {
                             return@setOnImageAvailableListener
                         }
                     } catch (e: Exception) {
-                        Log.e(TAG, "Failed to calculate histogram", e)
+                        PLog.e(TAG, "Failed to calculate histogram", e)
                     } finally {
                         image.close()
                     }
                 }, cameraHandler)
             }
             
-            Log.d(TAG, "Opening camera: $cameraId")
+            PLog.d(TAG, "Opening camera: $cameraId")
             
             cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
-                    Log.d(TAG, "Camera opened: ${camera.id}")
+                    PLog.d(TAG, "Camera opened: ${camera.id}")
                     cameraDevice = camera
                     createPreviewSession()
                 }
                 
                 override fun onDisconnected(camera: CameraDevice) {
-                    Log.w(TAG, "Camera disconnected: ${camera.id}")
+                    PLog.w(TAG, "Camera disconnected: ${camera.id}")
                     camera.close()
                     cameraDevice = null
                     _state.value = _state.value.copy(isPreviewActive = false)
                 }
                 
                 override fun onError(camera: CameraDevice, error: Int) {
-                    Log.e(TAG, "Camera error: ${camera.id}, error=$error")
+                    PLog.e(TAG, "Camera error: ${camera.id}, error=$error")
                     camera.close()
                     cameraDevice = null
                     _state.value = _state.value.copy(isPreviewActive = false)
@@ -396,9 +439,9 @@ class Camera2Controller(private val context: Context) {
             }, cameraHandler)
             
         } catch (e: CameraAccessException) {
-            Log.e(TAG, "Failed to open camera", e)
+            PLog.e(TAG, "Failed to open camera", e)
         } catch (e: SecurityException) {
-            Log.e(TAG, "Camera permission denied", e)
+            PLog.e(TAG, "Camera permission denied", e)
         }
     }
 
@@ -488,7 +531,7 @@ class Camera2Controller(private val context: Context) {
                 val builder = previewRequestBuilder
 
                 if (device == null || session == null || builder == null) {
-                    Log.v(TAG, "calculateAutoMetering: camera not ready, skipping update")
+                    PLog.v(TAG, "calculateAutoMetering: camera not ready, skipping update")
                     return
                 }
 
@@ -501,11 +544,11 @@ class Camera2Controller(private val context: Context) {
                     )
                     meteringSkipFrames = 5
                 } catch (e: CameraAccessException) {
-                    Log.e(TAG, "Failed to update exposure: ${e.message}")
+                    PLog.e(TAG, "Failed to update exposure: ${e.message}")
                 } catch (e: IllegalStateException) {
-                    Log.w(TAG, "Failed to update exposure - camera closed: ${e.message}")
+                    PLog.w(TAG, "Failed to update exposure - camera closed: ${e.message}")
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to update exposure: ${e.message}")
+                    PLog.e(TAG, "Failed to update exposure: ${e.message}")
                 }
             }
         }
@@ -549,14 +592,14 @@ class Camera2Controller(private val context: Context) {
                     }
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
-                        Log.e(TAG, "Session configuration failed")
+                        PLog.e(TAG, "Session configuration failed")
                     }
                 }
             )
             device.createCaptureSession(sessionConfig)
 
         } catch (e: CameraAccessException) {
-            Log.e(TAG, "Failed to create preview session", e)
+            PLog.e(TAG, "Failed to create preview session", e)
         }
     }
     
@@ -571,41 +614,47 @@ class Camera2Controller(private val context: Context) {
             }
 
             _state.value = _state.value.copy(isPreviewActive = true)
-            Log.d(TAG, "Preview started")
+            PLog.d(TAG, "Preview started")
 
         } catch (e: CameraAccessException) {
-            Log.e(TAG, "Failed to start preview", e)
+            PLog.e(TAG, "Failed to start preview", e)
         } catch (e: IllegalStateException) {
-            Log.e(TAG, "Failed to start preview - illegal state", e)
+            PLog.e(TAG, "Failed to start preview - illegal state", e)
         } catch (e: IllegalArgumentException) {
-            Log.e(TAG, "Failed to start preview - unconfigured surface", e)
+            PLog.e(TAG, "Failed to start preview - unconfigured surface", e)
         }
     }
 
+    /**
+     * 设置 Flat Profile（平坦色调曲线）
+     *
+     * LIMITED 硬件级别不支持手动 Tonemap 控制
+     * 只在 FULL 或 LEVEL_3 设备上启用，否则会导致相机服务崩溃
+     */
     private fun setupFlatProfileRequest(builder: CaptureRequest.Builder) {
+        // 检查硬件级别：只有 FULL 或 LEVEL_3 支持手动 Tonemap
+        val isFullOrAbove = cachedHardwareLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL ||
+                           cachedHardwareLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3
+
+        if (!isFullOrAbove) {
+            // LIMITED 或 LEGACY 设备：跳过 Tonemap 设置
+            PLog.d(TAG, "跳过 Tonemap 设置 (硬件级别不支持: $cachedHardwareLevel)")
+            return
+        }
+
+        try {
+            // 只在支持的设备上设置 Tonemap
+            builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_PRESET_CURVE)
+            builder.set(CaptureRequest.TONEMAP_PRESET_CURVE, CaptureRequest.TONEMAP_PRESET_CURVE_SRGB)
+            PLog.d(TAG, "已启用 Flat Profile (TONEMAP_PRESET_CURVE_SRGB)")
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to set tonemap (ignoring)", e)
+        }
+
         // 1. 禁用所有场景特效
 //        builder.set(CaptureRequest.CONTROL_SCENE_MODE, CaptureRequest.CONTROL_SCENE_MODE_DISABLED)
 //        builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
 //        builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
-
-        // 2. 强制使用矩阵色彩校正（去除厂商滤镜倾向）
-//        builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
-
-        // 3. 覆盖 Tone Mapping（关键：去除 S 曲线）
-        builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_PRESET_CURVE)
-        builder.set(CaptureRequest.TONEMAP_PRESET_CURVE, CaptureRequest.TONEMAP_PRESET_CURVE_SRGB)
-//
-//        // 生成标准 Gamma 2.2 曲线 (比纯线性更接近人眼感知的“标准灰片”)
-//        // 如果直接用 Linear，画面会极其暗，LUT 很难拉回来
-//        val curvePoints = FloatArray(64 * 2) // 64个控制点
-//        for (i in 0 until 64) {
-//            val input = i / 63.0f
-//            val output = input.toDouble().pow(1.0 / 2.2).toFloat() // Gamma 2.2
-//            curvePoints[i * 2] = input
-//            curvePoints[i * 2 + 1] = output
-//        }
-//        val gammaCurve = TonemapCurve(curvePoints, curvePoints, curvePoints)
-//        builder.set(CaptureRequest.TONEMAP_CURVE, gammaCurve)
 
         // 4. 关闭锐化
 //        builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
@@ -680,14 +729,14 @@ class Camera2Controller(private val context: Context) {
             // 拍摄时设置低帧率范围以支持长曝光
             if (isCapture) {
                 try {
-                    val characteristics = cameraManager.getCameraCharacteristics(state.currentCameraId)
+                    val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(state.currentCameraId)
                     val availableFpsRanges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
                     val lowestFpsRange = availableFpsRanges?.minByOrNull { it.upper }
                     lowestFpsRange?.let {
                         builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it)
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to set FPS range", e)
+                    PLog.e(TAG, "Failed to set FPS range", e)
                 }
             }
         }
@@ -771,9 +820,9 @@ class Camera2Controller(private val context: Context) {
     private fun applyZoomSettings(builder: CaptureRequest.Builder, state: CameraState) {
         val cameraId = state.currentCameraId
         if (cameraId.isEmpty() || state.zoomRatio <= 1f) return
-        
+
         try {
-            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
             val activeRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
             
             val centerX = activeRect.width() / 2
@@ -789,7 +838,7 @@ class Camera2Controller(private val context: Context) {
             )
             builder.set(CaptureRequest.SCALER_CROP_REGION, cropRect)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to apply zoom settings", e)
+            PLog.e(TAG, "Failed to apply zoom settings", e)
         }
     }
     
@@ -799,33 +848,14 @@ class Camera2Controller(private val context: Context) {
      * 获取传感器方向（供外部 YUV 处理使用）
      */
     fun getSensorOrientation(): Int {
-        val cameraId = _state.value.currentCameraId
-        if (cameraId.isEmpty()) return 0
-        
-        return try {
-            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
-            characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to get sensor orientation", e)
-            0
-        }
+        return cachedSensorOrientation
     }
     
     /**
      * 获取镜头朝向
      */
     fun getLensFacing(): Int {
-        val cameraId = _state.value.currentCameraId
-        if (cameraId.isEmpty()) return CameraCharacteristics.LENS_FACING_BACK
-        
-        return try {
-            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
-            characteristics.get(CameraCharacteristics.LENS_FACING) 
-                ?: CameraCharacteristics.LENS_FACING_BACK
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to get lens facing", e)
-            CameraCharacteristics.LENS_FACING_BACK
-        }
+        return cachedLensFacing
     }
     
     // ==================== 镜头切换 ====================
@@ -860,14 +890,14 @@ class Camera2Controller(private val context: Context) {
     fun switchToLens(lensType: LensType) {
         val cameras = _state.value.availableCameras
         val currentLensType = _state.value.currentLensType
-        
+
         if (currentLensType == lensType) return
-        
+
         val targetCamera = cameras.find { it.lensType == lensType }
-        
+
         targetCamera?.let { cam ->
-            Log.d(TAG, "Switching to lens: $lensType, cameraId: ${cam.cameraId}")
-            
+            PLog.d(TAG, "Switching to lens: $lensType, cameraId: ${cam.cameraId}")
+
             // 关闭当前相机
             closeCamera()
             
@@ -879,7 +909,7 @@ class Camera2Controller(private val context: Context) {
             )
             
             // 注意：需要外部重新调用 openCamera
-        } ?: Log.w(TAG, "Camera with lens type $lensType not found")
+        } ?: PLog.w(TAG, "Camera with lens type $lensType not found")
     }
     
     /**
@@ -890,7 +920,7 @@ class Camera2Controller(private val context: Context) {
         val targetCamera = cameras.find { it.cameraId == cameraId }
         
         targetCamera?.let { cam ->
-            Log.d(TAG, "Switching to camera ID: $cameraId")
+            PLog.d(TAG, "Switching to camera ID: $cameraId")
             
             // 关闭当前相机
             closeCamera()
@@ -901,7 +931,7 @@ class Camera2Controller(private val context: Context) {
                 currentLensType = cam.lensType,
                 zoomRatio = 1f
             )
-        } ?: Log.w(TAG, "Camera with ID $cameraId not found")
+        } ?: PLog.w(TAG, "Camera with ID $cameraId not found")
     }
     
     // ==================== 曝光控制 ====================
@@ -1019,18 +1049,18 @@ class Camera2Controller(private val context: Context) {
     private fun supportsManualWhiteBalance(): Boolean {
         val cameraId = _state.value.currentCameraId
         if (cameraId.isEmpty()) return false
-        
+
         return try {
-            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
             val hardwareLevel = characteristics.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
             
             val isSupported = hardwareLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL ||
                     hardwareLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3
             
-            Log.d(TAG, "Hardware level: $hardwareLevel, Manual WB supported: $isSupported")
+            PLog.d(TAG, "Hardware level: $hardwareLevel, Manual WB supported: $isSupported")
             isSupported
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to check hardware level", e)
+            PLog.e(TAG, "Failed to check hardware level", e)
             false
         }
     }
@@ -1041,9 +1071,9 @@ class Camera2Controller(private val context: Context) {
     private fun getSupportedAwbModes(): IntArray {
         val cameraId = _state.value.currentCameraId
         if (cameraId.isEmpty()) return intArrayOf(CameraMetadata.CONTROL_AWB_MODE_AUTO)
-        
+
         return try {
-            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
             characteristics.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)
                 ?: intArrayOf(CameraMetadata.CONTROL_AWB_MODE_AUTO)
         } catch (e: Exception) {
@@ -1065,7 +1095,7 @@ class Camera2Controller(private val context: Context) {
                 
                 val gains = kelvinToRggbGains(_state.value.awbTemperature)
                 set(CaptureRequest.COLOR_CORRECTION_GAINS, gains)
-                Log.d(TAG, "Manual AWB enabled with temperature: ${_state.value.awbTemperature}K")
+                PLog.d(TAG, "Manual AWB enabled with temperature: ${_state.value.awbTemperature}K")
             } else {
                 set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
             }
@@ -1097,7 +1127,7 @@ class Camera2Controller(private val context: Context) {
                 
                 val gains = kelvinToRggbGains(clampedKelvin)
                 set(CaptureRequest.COLOR_CORRECTION_GAINS, gains)
-                Log.d(TAG, "AWB temperature set to: ${clampedKelvin}K (manual), gains: R=${gains.red}, G=${gains.greenEven}, B=${gains.blue}")
+                PLog.d(TAG, "AWB temperature set to: ${clampedKelvin}K (manual), gains: R=${gains.red}, G=${gains.greenEven}, B=${gains.blue}")
                 updatePreview()
             }
         } else {
@@ -1112,7 +1142,7 @@ class Camera2Controller(private val context: Context) {
             previewRequestBuilder?.apply {
                 set(CaptureRequest.CONTROL_AWB_MODE, presetMode)
                 set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
-                Log.d(TAG, "AWB temperature set to: ${clampedKelvin}K (preset mode: ${getAwbModeName(presetMode)})")
+                PLog.d(TAG, "AWB temperature set to: ${clampedKelvin}K (preset mode: ${getAwbModeName(presetMode)})")
                 updatePreview()
             }
         }
@@ -1221,7 +1251,7 @@ class Camera2Controller(private val context: Context) {
             blue = blue.coerceIn(0f, 255f)
         }
         
-        Log.d(TAG, "kelvinToRggbGains: ${kelvin}K -> RGB($red, $green, $blue)")
+        PLog.d(TAG, "kelvinToRggbGains: ${kelvin}K -> RGB($red, $green, $blue)")
         
         // Camera2 特定的增益计算：
         // 红色和蓝色通道乘以2，绿色通道保持归一化
@@ -1245,17 +1275,17 @@ class Camera2Controller(private val context: Context) {
         val builder = previewRequestBuilder
 
         if (device == null || session == null || builder == null) {
-            Log.v(TAG, "updatePreview: camera not ready (device=$device, session=$session, builder=$builder)")
+            PLog.v(TAG, "updatePreview: camera not ready (device=$device, session=$session, builder=$builder)")
             return
         }
 
         try {
             session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
         } catch (e: CameraAccessException) {
-            Log.e(TAG, "Failed to update preview", e)
+            PLog.e(TAG, "Failed to update preview", e)
         } catch (e: IllegalStateException) {
             // 相机已关闭或处于错误状态
-            Log.w(TAG, "Failed to update preview - camera closed or in error state", e)
+            PLog.w(TAG, "Failed to update preview - camera closed or in error state", e)
         }
     }
     
@@ -1268,9 +1298,9 @@ class Camera2Controller(private val context: Context) {
     fun setZoomRatio(ratio: Float) {
         val cameraId = _state.value.currentCameraId
         if (cameraId.isEmpty()) return
-        
+
         try {
-            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
             val maxZoom = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
             val clampedRatio = ratio.coerceIn(1f, maxZoom)
             
@@ -1295,10 +1325,10 @@ class Camera2Controller(private val context: Context) {
                 updatePreview()
             }
             
-            Log.d(TAG, "setZoomRatio: $ratio -> $clampedRatio")
+            PLog.d(TAG, "setZoomRatio: $ratio -> $clampedRatio")
             
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to set zoom", e)
+            PLog.e(TAG, "Failed to set zoom", e)
         }
     }
     
@@ -1316,9 +1346,9 @@ class Camera2Controller(private val context: Context) {
             isFocusing = true,
             focusSuccess = null
         )
-        
+
         try {
-            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
             val activeRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
             
             // 计算对焦区域
@@ -1367,7 +1397,7 @@ class Camera2Controller(private val context: Context) {
             }, 2500)
             
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to focus", e)
+            PLog.e(TAG, "Failed to focus", e)
             _state.value = _state.value.copy(isFocusing = false, focusSuccess = false)
         }
     }
@@ -1422,6 +1452,8 @@ class Camera2Controller(private val context: Context) {
         val device = cameraDevice ?: return
         val reader = imageReader ?: return
 
+        PLog.i(TAG, "开始拍照 - 闪光模式: ${_state.value.flashMode}, ISO模式: ${if (_state.value.isIsoAuto) "自动" else "手动(${_state.value.iso})"}")
+
         // 播放快门音效
         onPlayShutterSound?.invoke()
 
@@ -1437,14 +1469,17 @@ class Camera2Controller(private val context: Context) {
 
             if (needsPrecapture) {
                 // 自动曝光 + 单次闪光：需要先触发预闪流程
+                PLog.d(TAG, "使用预闪流程")
                 triggerPrecaptureAndCapture(device, reader)
             } else {
                 // 其他情况（手动曝光、手电筒模式、不使用闪光灯）：直接拍照
+                PLog.d(TAG, "直接拍照")
                 performCapture(device, reader)
             }
 
         } catch (e: CameraAccessException) {
-            Log.e(TAG, "Failed to capture", e)
+            PLog.e(TAG, "Failed to capture", e)
+            PLog.e(TAG, "拍照失败", e)
             _state.value = _state.value.copy(isCapturing = false)
         }
     }
@@ -1465,7 +1500,7 @@ class Camera2Controller(private val context: Context) {
                         result: TotalCaptureResult
                     ) {
                         val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
-                        Log.d(TAG, "Precapture AE state: $aeState")
+                        PLog.d(TAG, "Precapture AE state: $aeState")
 
                         // 等待 AE 收敛完成
                         // AE_STATE_CONVERGED (2) 或 AE_STATE_FLASH_REQUIRED (4) 表示可以拍照了
@@ -1490,14 +1525,14 @@ class Camera2Controller(private val context: Context) {
                         request: CaptureRequest,
                         failure: CaptureFailure
                     ) {
-                        Log.e(TAG, "Precapture failed: ${failure.reason}")
+                        PLog.e(TAG, "Precapture failed: ${failure.reason}")
                         // 即使预闪失败，也尝试拍照
                         performCapture(device, reader)
                     }
                 }, cameraHandler)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to trigger precapture", e)
+            PLog.e(TAG, "Failed to trigger precapture", e)
             // 出错时直接拍照
             performCapture(device, reader)
         }
@@ -1528,7 +1563,7 @@ class Camera2Controller(private val context: Context) {
                     }
                 }
 
-                Log.d(TAG, "Capture with ISO: ${_state.value.iso}, shutterSpeed: ${_state.value.shutterSpeed}, isAutoExposure: ${_state.value.isAutoExposure}")
+                PLog.d(TAG, "Capture with ISO: ${_state.value.iso}, shutterSpeed: ${_state.value.shutterSpeed}, isAutoExposure: ${_state.value.isAutoExposure}")
             }
 
             captureSession?.capture(captureBuilder.build(), object : CameraCaptureSession.CaptureCallback() {
@@ -1539,7 +1574,7 @@ class Camera2Controller(private val context: Context) {
                 ) {
                     // 保存拍摄结果用于提取 EXIF
                     lastCaptureResult = result
-                    Log.d(TAG, "Capture completed")
+                    PLog.d(TAG, "Capture completed")
 
                     // 关键修复：拍照完成后重置预览流的预闪触发器
                     // 这样可以避免预闪状态影响后续的预览（例如手电筒模式变暗）
@@ -1551,7 +1586,7 @@ class Camera2Controller(private val context: Context) {
                     request: CaptureRequest,
                     failure: CaptureFailure
                 ) {
-                    Log.e(TAG, "Capture failed: ${failure.reason}")
+                    PLog.e(TAG, "Capture failed: ${failure.reason}")
                     _state.value = _state.value.copy(isCapturing = false)
 
                     // 即使拍照失败，也要重置预览
@@ -1560,7 +1595,7 @@ class Camera2Controller(private val context: Context) {
             }, cameraHandler)
 
         } catch (e: CameraAccessException) {
-            Log.e(TAG, "Failed to perform capture", e)
+            PLog.e(TAG, "Failed to perform capture", e)
             _state.value = _state.value.copy(isCapturing = false)
         }
     }
@@ -1577,7 +1612,7 @@ class Camera2Controller(private val context: Context) {
         val builder = previewRequestBuilder
 
         if (device == null || session == null || builder == null) {
-            Log.v(TAG, "resetPreviewAfterCapture: camera not ready, skipping")
+            PLog.v(TAG, "resetPreviewAfterCapture: camera not ready, skipping")
             return
         }
 
@@ -1592,13 +1627,13 @@ class Camera2Controller(private val context: Context) {
             // 发送重置后的预览请求
             session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
 
-            Log.d(TAG, "Preview reset after capture")
+            PLog.d(TAG, "Preview reset after capture")
         } catch (e: CameraAccessException) {
-            Log.e(TAG, "Failed to reset preview after capture", e)
+            PLog.e(TAG, "Failed to reset preview after capture", e)
         } catch (e: IllegalStateException) {
-            Log.w(TAG, "Failed to reset preview - camera closed", e)
+            PLog.w(TAG, "Failed to reset preview - camera closed", e)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to reset preview after capture", e)
+            PLog.e(TAG, "Failed to reset preview after capture", e)
         }
     }
     
@@ -1619,10 +1654,10 @@ class Camera2Controller(private val context: Context) {
         var aperture: Float? = null
         var focalLength: Float? = null
         var focalLength35mm: Int? = null
-        
+
         try {
-            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
-            
+            val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
+
             // 光圈值（取第一个可用光圈）
             val apertures = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)
             aperture = apertures?.firstOrNull()
@@ -1636,7 +1671,7 @@ class Camera2Controller(private val context: Context) {
             }
 
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to get camera characteristics for EXIF", e)
+            PLog.e(TAG, "Failed to get camera characteristics for EXIF", e)
         }
         
         // 从 TotalCaptureResult 获取曝光信息
@@ -1648,11 +1683,11 @@ class Camera2Controller(private val context: Context) {
         // 如果有实时的光圈/焦距，使用实时值
         result?.get(CaptureResult.LENS_APERTURE)?.let { aperture = it }
         result?.get(CaptureResult.LENS_FOCAL_LENGTH)?.let {
-            Log.d(TAG, "buildCaptureInfo: $zoomRatio")
+            PLog.d(TAG, "buildCaptureInfo: $zoomRatio")
             focalLength = it * zoomRatio
             // 重新计算35mm等效焦距
             try {
-                val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+                val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
                 focalLength35mm = calculate35mmEquivalent(characteristics, it)?.times(zoomRatio)?.roundToInt()
             } catch (e: Exception) {
                 // 忽略
@@ -1705,9 +1740,9 @@ class Camera2Controller(private val context: Context) {
     fun capturePreviewFrame() {
         shouldCapturePreviewFrame = true
     }
-    
+
     // ==================== 生命周期 ====================
-    
+
     /**
      * 关闭相机
      */
@@ -1715,24 +1750,30 @@ class Camera2Controller(private val context: Context) {
         try {
             captureSession?.close()
             captureSession = null
-            
+
             cameraDevice?.close()
             cameraDevice = null
-            
+
             imageReader?.close()
             imageReader = null
-            
+
             previewImageReader?.close()
             previewImageReader = null
-            
+
             previewSurface = null
             previewRequestBuilder = null
-            
+
+            //清理所有缓存的相机特性和属性
+            cachedCharacteristics = null
+            cachedSensorOrientation = 0
+            cachedLensFacing = CameraCharacteristics.LENS_FACING_BACK
+            cachedHardwareLevel = CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED
+
             _state.value = _state.value.copy(isPreviewActive = false)
-            
-            Log.d(TAG, "Camera closed")
+
+            PLog.d(TAG, "Camera closed")
         } catch (e: Exception) {
-            Log.e(TAG, "Error closing camera", e)
+            PLog.e(TAG, "Error closing camera", e)
         }
     }
     

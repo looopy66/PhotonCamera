@@ -10,6 +10,7 @@ import com.hinnka.mycamera.gallery.PhotoMetadata
 import java.text.SimpleDateFormat
 import java.util.*
 import androidx.core.graphics.createBitmap
+import com.hinnka.mycamera.utils.PLog
 
 
 /**
@@ -47,7 +48,7 @@ class FrameRenderer(private val context: Context) {
         showAppBranding: Boolean = true,
     ): Bitmap {
 
-        Log.d(TAG, "render: $metadata")
+        PLog.d(TAG, "render: $metadata")
 
         val layout = template.layout
         
@@ -528,7 +529,7 @@ class FrameRenderer(private val context: Context) {
                 size to size
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to draw logo", e)
+            PLog.e(TAG, "Failed to draw logo", e)
             return 0 to 0
         }
     }
@@ -572,7 +573,7 @@ class FrameRenderer(private val context: Context) {
             
             return bmpW + margin * 2
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to draw logo", e)
+            PLog.e(TAG, "Failed to draw logo", e)
             return 0f
         }
     }

@@ -7,6 +7,7 @@ import android.media.ThumbnailUtils
 import android.net.Uri
 import android.util.Log
 import com.hinnka.mycamera.camera.CaptureInfo
+import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -141,10 +142,10 @@ object PhotoManager {
                     thumbnailJob.await()
                 }
 
-                Log.d(TAG, "Photo saved: $photoId")
+                PLog.d(TAG, "Photo saved: $photoId")
                 photoId
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to save photo", e)
+                PLog.e(TAG, "Failed to save photo", e)
                 null
             }
         }
@@ -167,7 +168,7 @@ object PhotoManager {
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to save thumbnail from source", e)
+            PLog.e(TAG, "Failed to save thumbnail from source", e)
         }
     }
 
@@ -197,7 +198,7 @@ object PhotoManager {
                 thumbnail.recycle()
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to generate thumbnail", e)
+            PLog.e(TAG, "Failed to generate thumbnail", e)
         }
     }
 
@@ -239,7 +240,7 @@ object PhotoManager {
                 }
                 true
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to delete photo: $photoId", e)
+                PLog.e(TAG, "Failed to delete photo: $photoId", e)
                 false
             }
         }
@@ -258,7 +259,7 @@ object PhotoManager {
                     null
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to load metadata for photo: $photoId", e)
+                PLog.e(TAG, "Failed to load metadata for photo: $photoId", e)
                 null
             }
         }
@@ -274,7 +275,7 @@ object PhotoManager {
                 file.writeText(metadata.toJson())
                 true
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to save metadata for photo: $photoId", e)
+                PLog.e(TAG, "Failed to save metadata for photo: $photoId", e)
                 false
             }
         }
@@ -308,10 +309,10 @@ object PhotoManager {
                 savePreviewFileIfNeed(photoFile, previewFile)
                 generateThumbnail(photoFile, thumbnailFile)
 
-                Log.d(TAG, "Photo imported: $photoId")
+                PLog.d(TAG, "Photo imported: $photoId")
                 photoId
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to import photo", e)
+                PLog.e(TAG, "Failed to import photo", e)
                 null
             }
         }

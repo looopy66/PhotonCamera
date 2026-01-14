@@ -27,6 +27,7 @@ import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.utils.OrientationObserver
+import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.ShutterSoundPlayer
 import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.*
@@ -151,14 +152,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             contentRepository.availableLuts.collect { luts ->
                 availableLutList = luts
-                Log.d(TAG, "CameraViewModel: availableLutList updated to ${luts.size} items")
+                PLog.d(TAG, "CameraViewModel: availableLutList updated to ${luts.size} items")
             }
         }
 
         viewModelScope.launch {
             contentRepository.availableFrames.collect { frames ->
                 availableFrameList = frames
-                Log.d(TAG, "CameraViewModel: availableFrameList updated to ${frames.size} items")
+                PLog.d(TAG, "CameraViewModel: availableFrameList updated to ${frames.size} items")
             }
         }
 
@@ -414,7 +415,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 // StateFlow 会自动更新 availableLutList 和 availableFrameList
                 contentRepository.refreshCustomContent()
             }
-            Log.d(TAG, "Custom content refreshed via ContentRepository")
+            PLog.d(TAG, "Custom content refreshed via ContentRepository")
         }
     }
 
@@ -471,7 +472,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun captureAndGenerateLutPreviews() {
         if (isGeneratingPreviews) {
-            Log.d(TAG, "Already generating previews, skipping")
+            PLog.d(TAG, "Already generating previews, skipping")
             return
         }
 
@@ -508,10 +509,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         lutPreviewBitmaps.values.forEach { it.recycle() }
                         lutPreviewBitmaps = newPreviews
                         isGeneratingPreviews = false
-                        Log.d(TAG, "Generated ${newPreviews.size} LUT previews from YUV")
+                        PLog.d(TAG, "Generated ${newPreviews.size} LUT previews from YUV")
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to generate LUT previews", e)
+                    PLog.e(TAG, "Failed to generate LUT previews", e)
                     isGeneratingPreviews = false
                 }
             }
@@ -565,7 +566,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val imageBytes = out.toByteArray()
             android.graphics.BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to convert YUV to Bitmap", e)
+            PLog.e(TAG, "Failed to convert YUV to Bitmap", e)
             null
         }
     }
@@ -745,10 +746,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     val photoId = PhotoManager.savePhoto(context, bitmap, metadata, captureInfo)
 
                     if (photoId != null) {
-                        Log.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
+                        PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
                         _imageSavedEvent.emit(Unit)
                     } else {
-                        Log.e(TAG, "Failed to save image via PhotoManager")
+                        PLog.e(TAG, "Failed to save image via PhotoManager")
                     }
                 }
 
@@ -787,7 +788,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to save image", e)
+            PLog.e(TAG, "Failed to save image", e)
             // 确保即使出错也关闭 Image
             try {
                 image.close()

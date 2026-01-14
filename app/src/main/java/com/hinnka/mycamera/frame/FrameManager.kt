@@ -3,6 +3,7 @@ package com.hinnka.mycamera.frame
 import android.content.Context
 import android.util.Log
 import android.util.LruCache
+import com.hinnka.mycamera.utils.PLog
 
 /**
  * 边框管理器
@@ -27,7 +28,7 @@ class FrameManager(private val context: Context) {
      */
     fun initialize() {
         availableFrames = FrameTemplateParser.listAvailableFrames(context)
-        Log.d(TAG, "Found ${availableFrames.size} frame templates")
+        PLog.d(TAG, "Found ${availableFrames.size} frame templates")
     }
     
     /**
@@ -51,13 +52,13 @@ class FrameManager(private val context: Context) {
     fun loadTemplate(id: String): FrameTemplate? {
         // 先从缓存查找
         templateCache.get(id)?.let {
-            Log.d(TAG, "Frame template loaded from cache: $id")
+            PLog.d(TAG, "Frame template loaded from cache: $id")
             return it
         }
         
         // 查找边框信息
         val frameInfo = getFrameInfo(id) ?: run {
-            Log.e(TAG, "Frame not found: $id")
+            PLog.e(TAG, "Frame not found: $id")
             return null
         }
         
@@ -67,11 +68,11 @@ class FrameManager(private val context: Context) {
             
             if (template != null) {
                 templateCache.put(id, template)
-                Log.d(TAG, "Frame template loaded: $id")
+                PLog.d(TAG, "Frame template loaded: $id")
             }
             template
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to load frame template: $id", e)
+            PLog.e(TAG, "Failed to load frame template: $id", e)
             null
         }
     }
@@ -101,7 +102,7 @@ class FrameManager(private val context: Context) {
      */
     fun clearCache() {
         templateCache.evictAll()
-        Log.d(TAG, "Frame template cache cleared")
+        PLog.d(TAG, "Frame template cache cleared")
     }
     
     /**

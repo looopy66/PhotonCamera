@@ -7,6 +7,7 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.util.Log
 import android.util.Size
+import com.hinnka.mycamera.utils.PLog
 import kotlin.math.abs
 
 /**
@@ -50,7 +51,7 @@ object CameraUtils {
             // 如果没有比例完全匹配的，则选择高度 >= 1080 中最小的一个（之前的逻辑）
             return previewSizes.filter { it.height >= 1080 }.minByOrNull { it.width } ?: Size(1440, 1080)
         } catch (e: Exception) {
-            Log.d("CameraUtils", "getFixedPreviewSize: ${e.message}")
+            PLog.d("CameraUtils", "getFixedPreviewSize: ${e.message}")
             return Size(1440, 1080)
         }
     }
@@ -79,7 +80,7 @@ object CameraUtils {
             // 选择最大的尺寸
             sizes.maxByOrNull { it.width * it.height } ?: Size(1920, 1080)
         } catch (e: Exception) {
-//            Log.e(TAG, "Failed to get capture size", e)
+//            PLog.e(TAG, "Failed to get capture size", e)
             Size(1920, 1080)
         }
     }

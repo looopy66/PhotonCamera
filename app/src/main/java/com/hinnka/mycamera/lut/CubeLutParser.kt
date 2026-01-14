@@ -2,6 +2,7 @@ package com.hinnka.mycamera.lut
 
 import android.content.Context
 import android.util.Log
+import com.hinnka.mycamera.utils.PLog
 import java.io.BufferedReader
 import java.io.InputStream
 import java.io.InputStreamReader
@@ -90,7 +91,7 @@ object CubeLutParser {
         
         val expectedDataSize = size * size * size * 3
         if (dataList.size != expectedDataSize) {
-            Log.w(TAG, "Data size mismatch: expected $expectedDataSize, got ${dataList.size}")
+            PLog.w(TAG, "Data size mismatch: expected $expectedDataSize, got ${dataList.size}")
         }
         
         return LutConfig(
@@ -137,7 +138,7 @@ object CubeLutParser {
                     )
                 }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to list LUT files", e)
+            PLog.e(TAG, "Failed to list LUT files", e)
             emptyList()
         }
     }

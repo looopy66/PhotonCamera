@@ -8,6 +8,7 @@ import android.opengl.EGLDisplay
 import android.opengl.EGLSurface
 import android.opengl.GLES30
 import android.util.Log
+import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
@@ -63,14 +64,14 @@ class LutImageProcessor {
             // 获取 EGL Display
             eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
             if (eglDisplay == EGL14.EGL_NO_DISPLAY) {
-                Log.e(TAG, "Unable to get EGL display")
+                PLog.e(TAG, "Unable to get EGL display")
                 return false
             }
             
             // 初始化 EGL
             val version = IntArray(2)
             if (!EGL14.eglInitialize(eglDisplay, version, 0, version, 1)) {
-                Log.e(TAG, "Unable to initialize EGL")
+                PLog.e(TAG, "Unable to initialize EGL")
                 return false
             }
             
@@ -88,7 +89,7 @@ class LutImageProcessor {
             val configs = arrayOfNulls<EGLConfig>(1)
             val numConfigs = IntArray(1)
             if (!EGL14.eglChooseConfig(eglDisplay, configAttribs, 0, configs, 0, 1, numConfigs, 0)) {
-                Log.e(TAG, "Unable to choose EGL config")
+                PLog.e(TAG, "Unable to choose EGL config")
                 return false
             }
             
@@ -101,7 +102,7 @@ class LutImageProcessor {
             )
             eglContext = EGL14.eglCreateContext(eglDisplay, config, EGL14.EGL_NO_CONTEXT, contextAttribs, 0)
             if (eglContext == EGL14.EGL_NO_CONTEXT) {
-                Log.e(TAG, "Unable to create EGL context")
+                PLog.e(TAG, "Unable to create EGL context")
                 return false
             }
             
@@ -113,13 +114,13 @@ class LutImageProcessor {
             )
             eglSurface = EGL14.eglCreatePbufferSurface(eglDisplay, config, surfaceAttribs, 0)
             if (eglSurface == EGL14.EGL_NO_SURFACE) {
-                Log.e(TAG, "Unable to create EGL surface")
+                PLog.e(TAG, "Unable to create EGL surface")
                 return false
             }
             
             // 激活上下文
             if (!EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
-                Log.e(TAG, "Unable to make EGL current")
+                PLog.e(TAG, "Unable to make EGL current")
                 return false
             }
             
@@ -128,11 +129,11 @@ class LutImageProcessor {
             initBuffers()
             
             isInitialized = true
-            Log.d(TAG, "LutImageProcessor initialized")
+            PLog.d(TAG, "LutImageProcessor initialized")
             return true
             
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize", e)
+            PLog.e(TAG, "Failed to initialize", e)
             return false
         }
     }
@@ -265,7 +266,7 @@ class LutImageProcessor {
         
         val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
         if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
-            Log.e(TAG, "Framebuffer not complete: $status")
+            PLog.e(TAG, "Framebuffer not complete: $status")
         }
         
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
@@ -343,7 +344,7 @@ class LutImageProcessor {
         GLES30.glGetShaderiv(shader, GLES30.GL_COMPILE_STATUS, compiled, 0)
         if (compiled[0] == 0) {
             val error = GLES30.glGetShaderInfoLog(shader)
-            Log.e(TAG, "Shader compilation failed: $error")
+            PLog.e(TAG, "Shader compilation failed: $error")
             GLES30.glDeleteShader(shader)
             return 0
         }
@@ -412,7 +413,7 @@ class LutImageProcessor {
         EGL14.eglTerminate(eglDisplay)
         
         isInitialized = false
-        Log.d(TAG, "LutImageProcessor released")
+        PLog.d(TAG, "LutImageProcessor released")
     }
     
     companion object {

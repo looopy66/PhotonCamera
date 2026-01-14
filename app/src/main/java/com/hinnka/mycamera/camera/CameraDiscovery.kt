@@ -8,6 +8,7 @@ import android.hardware.camera2.CameraMetadata
 import android.os.Build
 import android.util.Log
 import android.util.Range
+import com.hinnka.mycamera.utils.PLog
 
 /**
  * 相机发现器
@@ -53,7 +54,7 @@ class CameraDiscovery(private val context: Context) {
         
         // 获取完整的 Camera ID 列表（包括探测的隐藏摄像头）
         val allCameraIds = getAllCameraIds()
-        Log.d(TAG, "Camera2 discovered IDs: $allCameraIds")
+        PLog.d(TAG, "Camera2 discovered IDs: $allCameraIds")
         
         // 构建摄像头信息
         val backCameras = mutableListOf<CameraInfoWithZoom>()
@@ -83,10 +84,10 @@ class CameraDiscovery(private val context: Context) {
                     }
                 }
                 
-                Log.d(TAG, "Camera2: $cameraId: facing=$lensFacing, intrinsicZoom=$intrinsicZoomRatio")
+                PLog.d(TAG, "Camera2: $cameraId: facing=$lensFacing, intrinsicZoom=$intrinsicZoomRatio")
                 
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to get camera $cameraId info", e)
+                PLog.w(TAG, "Failed to get camera $cameraId info", e)
             }
         }
         
@@ -97,9 +98,9 @@ class CameraDiscovery(private val context: Context) {
         // 添加前置摄像头
         frontCamera?.let { cameras.add(it) }
         
-        Log.d(TAG, "Camera2 final list:")
+        PLog.d(TAG, "Camera2 final list:")
         cameras.forEach { cam ->
-            Log.d(TAG, "  - ${cam.cameraId}: ${cam.lensType}, intrinsicZoom=${cam.intrinsicZoomRatio}")
+            PLog.d(TAG, "  - ${cam.cameraId}: ${cam.lensType}, intrinsicZoom=${cam.intrinsicZoomRatio}")
         }
         
         return cameras
@@ -115,14 +116,14 @@ class CameraDiscovery(private val context: Context) {
         val systemCameraIds = try {
             cameraManager.cameraIdList.toList()
         } catch (e: CameraAccessException) {
-            Log.e(TAG, "Failed to get camera ID list (CameraAccessException)", e)
+            PLog.e(TAG, "Failed to get camera ID list (CameraAccessException)", e)
             emptyList()
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to get camera ID list (${e.javaClass.simpleName}): ${e.message}", e)
+            PLog.e(TAG, "Failed to get camera ID list (${e.javaClass.simpleName}): ${e.message}", e)
             emptyList()
         }
         
-        Log.d(TAG, "System camera IDs: $systemCameraIds")
+        PLog.d(TAG, "System camera IDs: $systemCameraIds")
         
         // 如果系统已经返回了足够多的摄像头，或者需要跳过探测，直接返回
         if (systemCameraIds.size > 2 || shouldSkipProbing()) {
@@ -134,7 +135,7 @@ class CameraDiscovery(private val context: Context) {
         val probedIds = probeCameraIds(systemCameraIds)
         val allIds = (systemCameraIds + probedIds).distinct()
         
-        Log.d(TAG, "After probing: $allIds (probed: $probedIds)")
+        PLog.d(TAG, "After probing: $allIds (probed: $probedIds)")
         
         cachedCameraIds = allIds
         return allIds
@@ -149,7 +150,7 @@ class CameraDiscovery(private val context: Context) {
         
         // Huawei / Honor 跳过
         if (SKIP_PROBE_MANUFACTURERS.any { manufacturer.contains(it) }) {
-            Log.d(TAG, "Skipping probe for manufacturer: $manufacturer")
+            PLog.d(TAG, "Skipping probe for manufacturer: $manufacturer")
             return true
         }
         
@@ -157,13 +158,13 @@ class CameraDiscovery(private val context: Context) {
         if (manufacturer.contains("vivo")) {
             // Android 10 及以下跳过
             if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
-                Log.d(TAG, "Skipping probe for Vivo on Android ${Build.VERSION.SDK_INT}")
+                PLog.d(TAG, "Skipping probe for Vivo on Android ${Build.VERSION.SDK_INT}")
                 return true
             }
             
             // 特定机型跳过
             if (VIVO_SKIP_MODELS.contains(Build.MODEL)) {
-                Log.d(TAG, "Skipping probe for Vivo model: ${Build.MODEL}")
+                PLog.d(TAG, "Skipping probe for Vivo model: ${Build.MODEL}")
                 return true
             }
         }
@@ -196,15 +197,15 @@ class CameraDiscovery(private val context: Context) {
                     
                     // 只有 intrinsicZoomRatio != 1.0 的才是广角/长焦
                     if (intrinsicZoomRatio != 1f) {
-                        Log.d(TAG, "Probed camera $cameraId: intrinsicZoom=$intrinsicZoomRatio")
+                        PLog.d(TAG, "Probed camera $cameraId: intrinsicZoom=$intrinsicZoomRatio")
                         foundIds.add(cameraId)
                     } else {
-                        Log.d(TAG, "Probed camera $cameraId: skipped (intrinsicZoom=1.0)")
+                        PLog.d(TAG, "Probed camera $cameraId: skipped (intrinsicZoom=1.0)")
                     }
                 }
             } catch (e: Exception) {
                 // 该 ID 不存在或无法访问，忽略
-                Log.v(TAG, "Probe camera $cameraId failed: ${e.message}")
+                PLog.v(TAG, "Probe camera $cameraId failed: ${e.message}")
             }
         }
         
@@ -236,7 +237,7 @@ class CameraDiscovery(private val context: Context) {
             return current35mm / default35mm
             
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to calculate intrinsicZoomRatio for camera $cameraId", e)
+            PLog.w(TAG, "Failed to calculate intrinsicZoomRatio for camera $cameraId", e)
             return 1f
         }
     }
@@ -255,7 +256,7 @@ class CameraDiscovery(private val context: Context) {
                 return get35mmEquivalentFocalLength(characteristics)
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to get default focal length", e)
+            PLog.w(TAG, "Failed to get default focal length", e)
         }
         
         return 0f
@@ -302,7 +303,7 @@ class CameraDiscovery(private val context: Context) {
         // 专用微距镜头的典型特征：
         // (1) 最小对焦距离很大
         if (minFocusDistance >= 30f) {
-            Log.d(TAG, "isMacroLens: minFocusDistance=$minFocusDistance, focusCalibration=$focusCalibration")
+            PLog.d(TAG, "isMacroLens: minFocusDistance=$minFocusDistance, focusCalibration=$focusCalibration")
             return true
         }
         return false
@@ -363,32 +364,35 @@ class CameraDiscovery(private val context: Context) {
         // 焦距信息
         val focalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
         val focalLength = focalLengths?.firstOrNull() ?: 0f
-        
+
         // 计算 35mm 等效焦距
         val focalLength35mm = get35mmEquivalentFocalLength(characteristics)
-        
+
         // ISO 范围
         val isoRange = characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
-        
+
         // 曝光时间范围
         val exposureTimeRange = characteristics.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
-        
+
         // 曝光补偿范围
         val exposureCompensationRange = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
             ?: Range(0, 0)
-        
+
         // 曝光补偿步长
         val exposureCompensationStep = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0f
-        
+
         // 最大数字变焦
         val maxZoom = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
-        
+
         // 传感器方向
         val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
-        
+
         // 活动区域大小
         val activeArraySize = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
-        
+
+        // 硬件支持级别
+        val hardwareLevel = characteristics.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL) ?: -1
+
         return CameraInfo(
             cameraId = cameraId,
             lensFacing = lensFacing,
@@ -405,7 +409,8 @@ class CameraDiscovery(private val context: Context) {
             focalLength = focalLength,
             focalLength35mmEquivalent = focalLength35mm,
             zoomSteps = listOf(1f),
-            intrinsicZoomRatio = intrinsicZoomRatio
+            intrinsicZoomRatio = intrinsicZoomRatio,
+            hardwareLevel = hardwareLevel
         )
     }
     

@@ -3,6 +3,7 @@ package com.hinnka.mycamera.frame
 import android.content.Context
 import android.graphics.Color
 import android.util.Log
+import com.hinnka.mycamera.utils.PLog
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -40,7 +41,7 @@ object FrameTemplateParser {
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to list frame templates", e)
+            PLog.e(TAG, "Failed to list frame templates", e)
         }
         
         return frames
@@ -88,7 +89,7 @@ object FrameTemplateParser {
             val json = readAssetFile(context, path)
             parseTemplate(json)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to parse frame template: $frameId", e)
+            PLog.e(TAG, "Failed to parse frame template: $frameId", e)
             null
         }
     }

@@ -5,6 +5,7 @@ import android.net.Uri
 import android.util.Log
 import com.hinnka.mycamera.lut.LutConverter
 import com.hinnka.mycamera.lut.LutInfo
+import com.hinnka.mycamera.utils.PLog
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -70,10 +71,10 @@ class CustomImportManager(private val context: Context) {
             // 保存到配置文件
             saveLutToConfig(lutId, name, plutFileName)
 
-            Log.d(TAG, "LUT imported successfully: $lutId ($name)")
+            PLog.d(TAG, "LUT imported successfully: $lutId ($name)")
             lutId
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to import LUT", e)
+            PLog.e(TAG, "Failed to import LUT", e)
             null
         }
     }
@@ -110,10 +111,10 @@ class CustomImportManager(private val context: Context) {
             // 保存到配置文件
             saveFrameToConfig(frameId, nameMap, "$frameId.json")
 
-            Log.d(TAG, "Frame imported successfully: $frameId")
+            PLog.d(TAG, "Frame imported successfully: $frameId")
             frameId
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to import frame", e)
+            PLog.e(TAG, "Failed to import frame", e)
             null
         }
     }
@@ -163,7 +164,7 @@ class CustomImportManager(private val context: Context) {
 
             lutList
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to load custom LUTs", e)
+            PLog.e(TAG, "Failed to load custom LUTs", e)
             emptyList()
         }
     }
@@ -204,7 +205,7 @@ class CustomImportManager(private val context: Context) {
 
             frameList
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to load custom frames", e)
+            PLog.e(TAG, "Failed to load custom frames", e)
             emptyList()
         }
     }
@@ -241,7 +242,7 @@ class CustomImportManager(private val context: Context) {
 
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to delete custom LUT", e)
+            PLog.e(TAG, "Failed to delete custom LUT", e)
             false
         }
     }
@@ -277,7 +278,7 @@ class CustomImportManager(private val context: Context) {
 
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to delete custom frame", e)
+            PLog.e(TAG, "Failed to delete custom frame", e)
             false
         }
     }

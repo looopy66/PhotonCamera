@@ -3,6 +3,7 @@ package com.hinnka.mycamera.lut
 import android.opengl.GLES11Ext
 import android.opengl.GLES30
 import android.util.Log
+import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -24,7 +25,7 @@ object GlUtils {
     fun compileShader(type: Int, source: String): Int {
         val shader = GLES30.glCreateShader(type)
         if (shader == 0) {
-            Log.e(TAG, "Failed to create shader")
+            PLog.e(TAG, "Failed to create shader")
             return 0
         }
         
@@ -36,7 +37,7 @@ object GlUtils {
         
         if (compileStatus[0] == 0) {
             val errorLog = GLES30.glGetShaderInfoLog(shader)
-            Log.e(TAG, "Shader compilation failed: $errorLog")
+            PLog.e(TAG, "Shader compilation failed: $errorLog")
             GLES30.glDeleteShader(shader)
             return 0
         }
@@ -54,7 +55,7 @@ object GlUtils {
     fun linkProgram(vertexShader: Int, fragmentShader: Int): Int {
         val program = GLES30.glCreateProgram()
         if (program == 0) {
-            Log.e(TAG, "Failed to create program")
+            PLog.e(TAG, "Failed to create program")
             return 0
         }
         
@@ -67,7 +68,7 @@ object GlUtils {
         
         if (linkStatus[0] == 0) {
             val errorLog = GLES30.glGetProgramInfoLog(program)
-            Log.e(TAG, "Program linking failed: $errorLog")
+            PLog.e(TAG, "Program linking failed: $errorLog")
             GLES30.glDeleteProgram(program)
             return 0
         }
@@ -87,7 +88,7 @@ object GlUtils {
         val textureId = textureIds[0]
         
         if (textureId == 0) {
-            Log.e(TAG, "Failed to generate 3D texture")
+            PLog.e(TAG, "Failed to generate 3D texture")
             return 0
         }
         
@@ -125,7 +126,7 @@ object GlUtils {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, 0)
         
         checkGlError("create3DTexture")
-//        Log.d(TAG, "Created 3D LUT texture: size=${lutConfig.size}, id=$textureId")
+//        PLog.d(TAG, "Created 3D LUT texture: size=${lutConfig.size}, id=$textureId")
         
         return textureId
     }
@@ -141,7 +142,7 @@ object GlUtils {
         val textureId = textureIds[0]
         
         if (textureId == 0) {
-            Log.e(TAG, "Failed to generate OES texture")
+            PLog.e(TAG, "Failed to generate OES texture")
             return 0
         }
         
@@ -221,7 +222,7 @@ object GlUtils {
     fun checkGlError(tag: String) {
         var error: Int
         while (GLES30.glGetError().also { error = it } != GLES30.GL_NO_ERROR) {
-            Log.e(TAG, "$tag: glError $error")
+            PLog.e(TAG, "$tag: glError $error")
         }
     }
 }
