@@ -127,7 +127,8 @@ class Camera2Controller(private val context: Context) {
     fun initialize() {
         PLog.i(TAG, "初始化相机控制器")
         startBackgroundThread()
-        discoverCameras()
+        // 不再在初始化时立即发现相机，延迟到第一次打开相机时
+        // discoverCameras()
     }
     
     private fun startBackgroundThread() {
@@ -184,6 +185,12 @@ class Camera2Controller(private val context: Context) {
     fun openCamera(surfaceTexture: SurfaceTexture) {
         // 先关闭旧的相机和资源，防止资源泄漏
         closeCamera()
+
+        // 确保在权限已授予后才发现相机（延迟初始化）
+        if (_state.value.availableCameras.isEmpty()) {
+            PLog.i(TAG, "首次打开相机，开始发现可用摄像头")
+            discoverCameras()
+        }
 
         val cameraId = _state.value.currentCameraId
         val aspectRatio = _state.value.aspectRatio
