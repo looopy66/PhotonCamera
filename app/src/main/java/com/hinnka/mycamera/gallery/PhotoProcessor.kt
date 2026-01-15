@@ -39,24 +39,16 @@ class PhotoProcessor(
         var result = input
         
         // 1. 应用 LUT
-        if (metadata.lutId != null && metadata.lutIntensity > 0f) {
+        if (metadata.lutId != null) {
             val lutConfig = lutManager.loadLut(metadata.lutId)
-            if (lutConfig != null) {
-                val lutResult = lutImageProcessor.applyLut(result, lutConfig, metadata.lutIntensity)
+            val colorRecipeParams = lutManager.loadColorRecipeParams(metadata.lutId)
+            if (lutConfig != null && colorRecipeParams.lutIntensity > 0f) {
+                val lutResult = lutImageProcessor.applyLut(result, lutConfig, colorRecipeParams)
                 result = lutResult
             }
         }
         
-        // 2. 应用旋转和亮度
-        if (metadata.rotation != 0f || metadata.brightness != 1f) {
-            val editedResult = applyEdits(result, metadata.rotation, metadata.brightness)
-            if (editedResult != result && result != input) {
-                result.recycle()
-            }
-            result = editedResult
-        }
-        
-        // 3. 应用边框水印
+        // 2. 应用边框水印
         if (metadata.frameId != null) {
             val template = frameManager.loadTemplate(metadata.frameId)
             if (template != null) {
@@ -98,7 +90,6 @@ class PhotoProcessor(
                     result,
                     template,
                     finalMetadata,
-                    metadata.showAppBranding
                 )
                 if (framedResult != result && result != input) {
                     result.recycle()

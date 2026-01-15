@@ -7,7 +7,7 @@ import android.opengl.EGLContext
 import android.opengl.EGLDisplay
 import android.opengl.EGLSurface
 import android.opengl.GLES30
-import android.util.Log
+import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
@@ -45,7 +45,7 @@ class LutImageProcessor {
     private var indexBuffer: ShortBuffer? = null
     
     private var isInitialized = false
-    
+
     // Uniform 位置
     private var uImageTextureLoc = 0
     private var uLutTextureLoc = 0
@@ -53,6 +53,18 @@ class LutImageProcessor {
     private var uLutIntensityLoc = 0
     private var uLutEnabledLoc = 0
     private var uMVPMatrixLoc = 0
+
+    // 色彩配方 Uniform 位置
+    private var uColorRecipeEnabledLoc = 0
+    private var uExposureLoc = 0
+    private var uContrastLoc = 0
+    private var uSaturationLoc = 0
+    private var uTemperatureLoc = 0
+    private var uTintLoc = 0
+    private var uFadeLoc = 0
+    private var uVibranceLoc = 0
+    private var uHighlightsLoc = 0
+    private var uShadowsLoc = 0
     
     /**
      * 初始化 EGL 环境
@@ -144,13 +156,26 @@ class LutImageProcessor {
     suspend fun applyLut(
         bitmap: Bitmap,
         lutConfig: LutConfig?,
-        intensity: Float
+        colorRecipeParams: ColorRecipeParams?,
     ): Bitmap = withContext(glDispatcher) {
         if (!isInitialized) {
             if (!initialize()) {
                 return@withContext bitmap
             }
         }
+
+        // 提取色彩配方参数
+        val colorRecipeEnabled = colorRecipeParams != null && !colorRecipeParams.isDefault()
+        val exposure = colorRecipeParams?.exposure ?: 0f
+        val contrast = colorRecipeParams?.contrast ?: 1f
+        val saturation = colorRecipeParams?.saturation ?: 1f
+        val temperature = colorRecipeParams?.temperature ?: 0f
+        val tint = colorRecipeParams?.tint ?: 0f
+        val fade = colorRecipeParams?.fade ?: 0f
+        val vibrance = colorRecipeParams?.vibrance ?: 1f
+        val highlights = colorRecipeParams?.highlights ?: 0f
+        val shadows = colorRecipeParams?.shadows ?: 0f
+        val intensity = colorRecipeParams?.lutIntensity ?: 1f
         
         // 确保上下文激活
         EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
@@ -190,7 +215,21 @@ class LutImageProcessor {
         GLES30.glUniform1f(uLutSizeLoc, lutConfig?.size?.toFloat() ?: 0f)
         GLES30.glUniform1f(uLutIntensityLoc, if (lutConfig != null) intensity else 0f)
         GLES30.glUniform1i(uLutEnabledLoc, if (lutConfig != null) 1 else 0)
-        
+
+        // 设置色彩配方参数
+        GLES30.glUniform1i(uColorRecipeEnabledLoc, if (colorRecipeEnabled) 1 else 0)
+        if (colorRecipeEnabled) {
+            GLES30.glUniform1f(uExposureLoc, exposure)
+            GLES30.glUniform1f(uContrastLoc, contrast)
+            GLES30.glUniform1f(uSaturationLoc, saturation)
+            GLES30.glUniform1f(uTemperatureLoc, temperature)
+            GLES30.glUniform1f(uTintLoc, tint)
+            GLES30.glUniform1f(uFadeLoc, fade)
+            GLES30.glUniform1f(uVibranceLoc, vibrance)
+            GLES30.glUniform1f(uHighlightsLoc, highlights)
+            GLES30.glUniform1f(uShadowsLoc, shadows)
+        }
+
         // 设置 MVP 矩阵（单位矩阵）
         val mvpMatrix = FloatArray(16)
         android.opengl.Matrix.setIdentityM(mvpMatrix, 0)
@@ -319,13 +358,13 @@ class LutImageProcessor {
     
     private fun initShaderProgram() {
         val vertexShader = compileShader(GLES30.GL_VERTEX_SHADER, IMAGE_VERTEX_SHADER)
-        val fragmentShader = compileShader(GLES30.GL_FRAGMENT_SHADER, IMAGE_FRAGMENT_SHADER_LUT)
-        
+        val fragmentShader = compileShader(GLES30.GL_FRAGMENT_SHADER, IMAGE_FRAGMENT_SHADER_COLOR_RECIPE)
+
         shaderProgram = GLES30.glCreateProgram()
         GLES30.glAttachShader(shaderProgram, vertexShader)
         GLES30.glAttachShader(shaderProgram, fragmentShader)
         GLES30.glLinkProgram(shaderProgram)
-        
+
         // 获取 uniform 位置
         uImageTextureLoc = GLES30.glGetUniformLocation(shaderProgram, "uImageTexture")
         uLutTextureLoc = GLES30.glGetUniformLocation(shaderProgram, "uLutTexture")
@@ -333,6 +372,18 @@ class LutImageProcessor {
         uLutIntensityLoc = GLES30.glGetUniformLocation(shaderProgram, "uLutIntensity")
         uLutEnabledLoc = GLES30.glGetUniformLocation(shaderProgram, "uLutEnabled")
         uMVPMatrixLoc = GLES30.glGetUniformLocation(shaderProgram, "uMVPMatrix")
+
+        // 获取色彩配方 uniform 位置
+        uColorRecipeEnabledLoc = GLES30.glGetUniformLocation(shaderProgram, "uColorRecipeEnabled")
+        uExposureLoc = GLES30.glGetUniformLocation(shaderProgram, "uExposure")
+        uContrastLoc = GLES30.glGetUniformLocation(shaderProgram, "uContrast")
+        uSaturationLoc = GLES30.glGetUniformLocation(shaderProgram, "uSaturation")
+        uTemperatureLoc = GLES30.glGetUniformLocation(shaderProgram, "uTemperature")
+        uTintLoc = GLES30.glGetUniformLocation(shaderProgram, "uTint")
+        uFadeLoc = GLES30.glGetUniformLocation(shaderProgram, "uFade")
+        uVibranceLoc = GLES30.glGetUniformLocation(shaderProgram, "uVibrance")
+        uHighlightsLoc = GLES30.glGetUniformLocation(shaderProgram, "uHighlights")
+        uShadowsLoc = GLES30.glGetUniformLocation(shaderProgram, "uShadows")
     }
     
     private fun compileShader(type: Int, source: String): Int {
@@ -436,37 +487,103 @@ class LutImageProcessor {
             }
         """.trimIndent()
         
-        // 2D 图片版本的片元着色器（带 LUT）
-        private val IMAGE_FRAGMENT_SHADER_LUT = """
+        // 2D 图片版本的片元着色器（带色彩配方和 LUT）
+        private val IMAGE_FRAGMENT_SHADER_COLOR_RECIPE = """
             #version 300 es
-            
-            precision mediump float;
-            
+
+            precision highp float;
+
             in vec2 vTexCoord;
             out vec4 fragColor;
-            
+
             uniform sampler2D uImageTexture;
             uniform mediump sampler3D uLutTexture;
             uniform float uLutSize;
             uniform float uLutIntensity;
             uniform bool uLutEnabled;
-            
+
+            // 色彩配方控制
+            uniform bool uColorRecipeEnabled;
+
+            // 色彩配方参数
+            uniform float uExposure;      // -2.0 ~ +2.0 (EV)
+            uniform float uContrast;      // 0.5 ~ 1.5
+            uniform float uSaturation;    // 0.0 ~ 2.0
+            uniform float uTemperature;   // -1.0 ~ +1.0 (暖/冷色调)
+            uniform float uTint;          // -1.0 ~ +1.0 (绿/品红偏移)
+            uniform float uFade;          // 0.0 ~ 1.0 (褪色效果)
+            uniform float uVibrance;      // 0.0 ~ 2.0 (蓝色增强)
+            uniform float uHighlights;    // -1.0 ~ +1.0 (高光调整)
+            uniform float uShadows;       // -1.0 ~ +1.0 (阴影调整)
+
             void main() {
-                vec4 originalColor = texture(uImageTexture, vTexCoord);
-                
-                if (!uLutEnabled || uLutIntensity <= 0.0) {
-                    fragColor = originalColor;
+                // 从图片纹理采样原始颜色
+                vec4 color = texture(uImageTexture, vTexCoord);
+
+                // Early exit 优化：无任何调整时直接输出
+                if (!uColorRecipeEnabled && !uLutEnabled) {
+                    fragColor = color;
                     return;
                 }
-                
-                // 3D LUT 查找
-                float scale = (uLutSize - 1.0) / uLutSize;
-                float offset = 1.0 / (2.0 * uLutSize);
-                vec3 lutCoord = originalColor.rgb * scale + offset;
-                vec4 lutColor = texture(uLutTexture, lutCoord);
-                
-                vec3 finalColor = mix(originalColor.rgb, lutColor.rgb, uLutIntensity);
-                fragColor = vec4(finalColor, originalColor.a);
+
+                // === 色彩配方处理（按专业后期流程顺序） ===
+                if (uColorRecipeEnabled) {
+                    // 1. 曝光调整（线性空间，最先执行避免 clipping）
+                    color.rgb *= pow(2.0, uExposure);
+
+                    // 2. 高光/阴影调整（分区调整，基于亮度 mask）
+                    float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+                    float highlightMask = smoothstep(0.5, 1.0, luma);
+                    float shadowMask = smoothstep(0.5, 0.0, luma);
+                    color.rgb *= 1.0 + uHighlights * highlightMask;
+                    color.rgb *= 1.0 + uShadows * shadowMask;
+
+                    // 3. 对比度（围绕中灰点调整）
+                    color.rgb = (color.rgb - 0.5) * uContrast + 0.5;
+
+                    // 4. 白平衡调整（色温 + 色调）
+                    color.r += uTemperature * 0.1;
+                    color.b -= uTemperature * 0.1;
+                    color.g += uTint * 0.05;
+
+                    // 5. 饱和度（基于 Luma 的快速算法）
+                    float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+                    color.rgb = mix(vec3(gray), color.rgb, uSaturation);
+
+                    // 6. 蓝色增强（Vibrance）
+                    float blueness = color.b - max(color.r, color.g);
+                    if (blueness > 0.0) {
+                        color.b += blueness * (uVibrance - 1.0) * 0.5;
+                    }
+
+                    // 7. 褪色效果
+                    if (uFade > 0.0) {
+                        float fadeAmount = uFade * 0.3;
+                        color.rgb = mix(color.rgb, vec3(0.5), fadeAmount);
+                        color.rgb += fadeAmount * 0.1;
+                    }
+
+                    // Clamp 到合法范围
+                    color.rgb = clamp(color.rgb, 0.0, 1.0);
+                }
+
+                // === LUT 处理（在色彩配方之后） ===
+                if (uLutEnabled && uLutIntensity > 0.0) {
+                    // 3D LUT 查找
+                    float scale = (uLutSize - 1.0) / uLutSize;
+                    float offset = 1.0 / (2.0 * uLutSize);
+
+                    // 将 RGB 值映射到 LUT 纹理坐标
+                    vec3 lutCoord = color.rgb * scale + offset;
+
+                    // 从 3D LUT 纹理采样
+                    vec4 lutColor = texture(uLutTexture, lutCoord);
+
+                    // 根据强度混合色彩配方处理后的颜色和 LUT 颜色
+                    color.rgb = mix(color.rgb, lutColor.rgb, uLutIntensity);
+                }
+
+                fragColor = color;
             }
         """.trimIndent()
     }

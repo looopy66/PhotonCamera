@@ -71,6 +71,8 @@ fun CameraScreen(
     val state by viewModel.state.collectAsState()
     val latestPhoto by galleryViewModel.latestPhoto.collectAsState()
     val showLevelIndicator by viewModel.showLevelIndicator.collectAsState(initial = false)
+    val currentLutId by viewModel.currentLutId.collectAsState()
+    val currentRecipeParams by viewModel.currentRecipeParams.collectAsState()
 
     val backgroundColor = Color(0xFF434A5D)
 
@@ -162,7 +164,7 @@ fun CameraScreen(
                     aspectRatio = state.aspectRatio,
                     previewSize = previewSize,
                     currentLut = viewModel.currentLutConfig,
-                    lutIntensity = state.lutIntensity,
+                    colorRecipeParams = currentRecipeParams,
                     focusPoint = state.focusPoint,
                     isFocusing = state.isFocusing,
                     focusSuccess = state.focusSuccess,
@@ -309,11 +311,9 @@ fun CameraScreen(
                 if (activePanel == ActivePanel.FILTERS) {
                     LutControlPanel(
                         availableLuts = viewModel.availableLutList,
-                        currentLutId = viewModel.currentLutId,
-                        lutIntensity = state.lutIntensity,
+                        currentLutId = currentLutId,
                         lutPreviewBitmaps = viewModel.lutPreviewBitmaps,
                         onLutSelected = { viewModel.setLut(it) },
-                        onIntensityChange = { viewModel.setLutIntensity(it) },
                         modifier = Modifier.fillMaxWidth()
                             .padding(horizontal = 8.dp)
                     )

@@ -20,13 +20,21 @@ import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.gallery.*
 import com.hinnka.mycamera.lut.*
+import com.hinnka.mycamera.model.ColorRecipe
+import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.model.RecipeParam
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -96,17 +104,23 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     var isEditing by mutableStateOf(false)
         private set
 
-    // 编辑参数
-    var editRotation by mutableFloatStateOf(0f)
-        private set
-    var editBrightness by mutableFloatStateOf(1f)
+    // LUT 编辑状态
+    var editLutId = MutableStateFlow<String?>(null)
         private set
 
-    // LUT 编辑状态
-    var editLutId: String? by mutableStateOf(null)
-        private set
-    var editLutIntensity by mutableFloatStateOf(1f)
-        private set
+    @OptIn(ExperimentalCoroutinesApi::class)
+    var editLutRecipeParams = editLutId.flatMapLatest { id ->
+        if (id == null) {
+            flowOf(ColorRecipeParams.DEFAULT)
+        } else {
+            contentRepository.lutManager.getColorRecipeParams(id)
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = ColorRecipeParams.DEFAULT
+    )
+
     var editLutConfig: LutConfig? by mutableStateOf(null)
         private set
 
@@ -120,8 +134,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     // 边框编辑状态
     var editFrameId: String? by mutableStateOf(null)
-        private set
-    var editShowAppBranding by mutableStateOf(true)
         private set
 
     // 可用的边框列表
@@ -151,7 +163,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         loadPhotos()
-        contentRepository.initialize()
 
         // 订阅 ContentRepository 的 StateFlow，实现自动更新
         viewModelScope.launch {
@@ -327,15 +338,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
             // 更新编辑状态
             currentPhotoMetadata?.let { metadata ->
-                editLutId = metadata.lutId
-                editLutIntensity = metadata.lutIntensity
-                editBrightness = metadata.brightness
-                editRotation = metadata.rotation
+                editLutId.value = metadata.lutId
                 editFrameId = metadata.frameId
-                editShowAppBranding = metadata.showAppBranding
 
                 // 加载 LUT 配置
-                editLutId?.let { id ->
+                editLutId.value?.let { id ->
                     editLutConfig = withContext(Dispatchers.IO) {
                         contentRepository.lutManager.loadLut(id)
                     }
@@ -344,7 +351,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    suspend fun loadLutPreviews(photo: PhotoData): List<Bitmap?> {
+    suspend fun loadLutPreviews(photo: PhotoData): Map<String, Bitmap> {
         val context = getApplication<Application>()
         val inputStream = context.contentResolver.openInputStream(photo.uri)
         val options = BitmapFactory.Options().apply {
@@ -353,21 +360,30 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val bitmap = BitmapFactory.decodeStream(inputStream, null, options)
         inputStream?.close()
 
-        if (bitmap == null) return emptyList()
+        if (bitmap == null) return emptyMap()
 
-        return availableLuts.map { lutInfo ->
+        val previews = mutableMapOf<String, Bitmap>()
+
+        availableLuts.forEach { lutInfo ->
             val lutConfig = withContext(Dispatchers.IO) {
                 contentRepository.lutManager.loadLut(lutInfo.id)
             }
 
             if (lutConfig != null) {
+                val colorRecipeParams = withContext(Dispatchers.IO) {
+                    contentRepository.lutManager.loadColorRecipeParams(lutInfo.id)
+                }
                 lutImageProcessor.applyLut(
                     bitmap = bitmap.copy(Bitmap.Config.ARGB_8888, false),
                     lutConfig = lutConfig,
-                    intensity = 1.0f
-                )
-            } else null
+                    colorRecipeParams = colorRecipeParams
+                ).let { preview ->
+                    previews[lutInfo.id] = preview
+                }
+            }
         }
+
+        return previews
     }
 
     /**
@@ -757,26 +773,18 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         isEditing = true
         // 从当前元数据恢复编辑状态
         currentPhotoMetadata?.let { metadata ->
-            editLutId = metadata.lutId
-            editLutIntensity = metadata.lutIntensity
-            editBrightness = metadata.brightness
-            editRotation = metadata.rotation
+            editLutId.value = metadata.lutId
             editFrameId = metadata.frameId
-            editShowAppBranding = metadata.showAppBranding
             editCustomProperties.clear()
             editCustomProperties.putAll(metadata.customProperties)
         } ?: run {
-            editLutId = null
-            editLutIntensity = 1f
-            editBrightness = 1f
-            editRotation = 0f
+            editLutId.value = null
             editFrameId = null
-            editShowAppBranding = true
             editCustomProperties.clear()
         }
 
         // 加载当前编辑的 LUT 配置
-        editLutId?.let { id ->
+        editLutId.value?.let { id ->
             viewModelScope.launch {
                 editLutConfig = withContext(Dispatchers.IO) {
                     contentRepository.lutManager.loadLut(id)
@@ -790,35 +798,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     fun exitEditMode() {
         isEditing = false
-        editRotation = 0f
-        editBrightness = 1f
-        editLutId = null
-        editLutIntensity = 1f
+        editLutId.value = null
         editLutConfig = null
         editFrameId = null
-        editShowAppBranding = true
         editCustomProperties.clear()
-    }
-
-    /**
-     * 旋转90度
-     */
-    fun rotate90() {
-        editRotation = (editRotation + 90f) % 360f
-    }
-
-    /**
-     * 设置亮度
-     */
-    fun setBrightness(value: Float) {
-        editBrightness = value.coerceIn(0.5f, 2f)
     }
 
     /**
      * 设置 LUT
      */
     fun setEditLut(lutId: String?) {
-        editLutId = lutId
+        editLutId.value = lutId
         if (lutId == null) {
             editLutConfig = null
             return
@@ -832,24 +822,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * 设置 LUT 强度
-     */
-    fun updateEditLutIntensity(intensity: Float) {
-        editLutIntensity = intensity.coerceIn(0f, 1f)
-    }
-
-    /**
      * 设置边框
      */
     fun setEditFrame(frameId: String?) {
         editFrameId = frameId
-    }
-
-    /**
-     * 设置是否显示 App 品牌
-     */
-    fun setShowAppBranding(show: Boolean) {
-        editShowAppBranding = show
     }
 
     /**
@@ -886,12 +862,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 if (bitmap == null) return@withContext null
 
                 val metadata = (photo.metadata ?: PhotoMetadata()).copy(
-                    lutId = editLutId,
-                    lutIntensity = editLutIntensity,
-                    brightness = editBrightness,
-                    rotation = editRotation,
+                    lutId = editLutId.value,
                     frameId = editFrameId,
-                    showAppBranding = editShowAppBranding,
                     customProperties = editCustomProperties.toMap()
                 )
 
@@ -908,7 +880,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     fun saveEditMetadata(photo: PhotoData, onComplete: (Boolean) -> Unit = {}) {
         // 检查 VIP 权限
-        val currentLut = availableLuts.find { it.id == editLutId }
+        val currentLut = availableLuts.find { it.id == editLutId.value }
         if (currentLut?.isVip == true && !isPurchased.value) {
             showPaymentDialog = true
             onComplete(false)
@@ -919,12 +891,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             try {
                 val context = getApplication<Application>()
                 val metadata = (currentPhotoMetadata ?: PhotoMetadata()).copy(
-                    lutId = editLutId,
-                    lutIntensity = editLutIntensity,
-                    brightness = editBrightness,
-                    rotation = editRotation,
+                    lutId = editLutId.value,
                     frameId = editFrameId,
-                    showAppBranding = editShowAppBranding,
                     customProperties = editCustomProperties.toMap()
                 )
                 val success = PhotoManager.saveMetadata(context, photo.id, metadata)
@@ -962,19 +930,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     fun saveEdit(photo: PhotoData, onComplete: (Boolean) -> Unit = {}) {
         // 检查 VIP 权限
-        val currentLut = availableLuts.find { it.id == editLutId }
+        val currentLut = availableLuts.find { it.id == editLutId.value }
         if (currentLut?.isVip == true && !isPurchased.value) {
             showPaymentDialog = true
             return
         }
 
         val metadata = (photo.metadata ?: PhotoMetadata()).copy(
-            lutId = editLutId,
-            lutIntensity = editLutIntensity,
-            brightness = editBrightness,
-            rotation = editRotation,
+            lutId = editLutId.value,
             frameId = editFrameId,
-            showAppBranding = editShowAppBranding,
             customProperties = editCustomProperties.toMap()
         )
         exportPhotoInternal(

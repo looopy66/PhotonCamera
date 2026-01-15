@@ -37,6 +37,7 @@ import kotlin.math.abs
 fun CustomSlider(
     value: Float,
     onValueChange: (Float) -> Unit,
+    onDoubleTap: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
@@ -47,17 +48,19 @@ fun CustomSlider(
     thumbColor: Color = Color.White
 ) {
     var isDragging by remember { mutableStateOf(false) }
-    
+    val currentOnValueChange by rememberUpdatedState(onValueChange)
+    val currentOnDoubleTap by rememberUpdatedState(onDoubleTap)
+
     val density = LocalDensity.current
     val thumbRadiusPx = with(density) { thumbRadius.toPx() }
     val trackHeightPx = with(density) { trackHeight.toPx() }
-    
+
     // 确保值在范围内
     val coercedValue = value.coerceIn(valueRange.start, valueRange.endInclusive)
-    
+
     // 计算归一化的值（0-1）
     val normalizedValue = (coercedValue - valueRange.start) / (valueRange.endInclusive - valueRange.start)
-    
+
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -66,50 +69,44 @@ fun CustomSlider(
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
-                .pointerInput(enabled) {
+                .pointerInput(enabled, valueRange, thumbRadiusPx) {
                     if (!enabled) return@pointerInput
-                    
                     detectDragGestures(
-                        onDragStart = {
-                            isDragging = true
-                        },
-                        onDragEnd = {
-                            isDragging = false
-                        },
-                        onDragCancel = {
-                            isDragging = false
-                        }
+                        onDragStart = { isDragging = true },
+                        onDragEnd = { isDragging = false },
+                        onDragCancel = { isDragging = false }
                     ) { change, _ ->
                         change.consume()
-                        
                         val trackWidth = size.width - thumbRadiusPx * 2
                         val trackStart = thumbRadiusPx
                         val x = change.position.x.coerceIn(trackStart, trackStart + trackWidth)
-                        
                         val fraction = (x - trackStart) / trackWidth
                         val newValue = valueRange.start + fraction * (valueRange.endInclusive - valueRange.start)
-                        onValueChange(newValue.coerceIn(valueRange.start, valueRange.endInclusive))
+                        currentOnValueChange(newValue.coerceIn(valueRange.start, valueRange.endInclusive))
                     }
                 }
-                .pointerInput(enabled) {
+                .pointerInput(enabled, valueRange, thumbRadiusPx) {
                     if (!enabled) return@pointerInput
-                    
-                    detectTapGestures { offset ->
-                        val trackWidth = size.width - thumbRadiusPx * 2
-                        val trackStart = thumbRadiusPx
-                        val x = offset.x.coerceIn(trackStart, trackStart + trackWidth)
-                        
-                        val fraction = (x - trackStart) / trackWidth
-                        val newValue = valueRange.start + fraction * (valueRange.endInclusive - valueRange.start)
-                        onValueChange(newValue.coerceIn(valueRange.start, valueRange.endInclusive))
-                    }
+                    detectTapGestures(
+                        onDoubleTap = {
+                            currentOnDoubleTap?.invoke()
+                        },
+                        onTap = { offset ->
+                            val trackWidth = size.width - thumbRadiusPx * 2
+                            val trackStart = thumbRadiusPx
+                            val x = offset.x.coerceIn(trackStart, trackStart + trackWidth)
+                            val fraction = (x - trackStart) / trackWidth
+                            val newValue = valueRange.start + fraction * (valueRange.endInclusive - valueRange.start)
+                            currentOnValueChange(newValue.coerceIn(valueRange.start, valueRange.endInclusive))
+                        }
+                    )
                 }
         ) {
             val trackWidth = size.width - thumbRadiusPx * 2
             val trackStart = thumbRadiusPx
             val trackEnd = trackStart + trackWidth
             val centerY = size.height / 2
-            
+
             // 绘制未激活轨道
             drawTrack(
                 start = Offset(trackStart, centerY),
@@ -117,7 +114,7 @@ fun CustomSlider(
                 color = if (enabled) inactiveTrackColor else inactiveTrackColor.copy(alpha = 0.3f),
                 strokeWidth = trackHeightPx
             )
-            
+
             // 绘制激活轨道
             val activeEnd = trackStart + trackWidth * normalizedValue
             drawTrack(
@@ -126,7 +123,7 @@ fun CustomSlider(
                 color = if (enabled) activeTrackColor else activeTrackColor.copy(alpha = 0.5f),
                 strokeWidth = trackHeightPx
             )
-            
+
             // 绘制 Thumb
             val thumbX = trackStart + trackWidth * normalizedValue
             drawThumb(
@@ -176,14 +173,14 @@ private fun DrawScope.drawThumb(
             center = center
         )
     }
-    
+
     // 主圆圈
     drawCircle(
         color = color,
         radius = radius,
         center = center
     )
-    
+
     // 内圈高光（增加立体感）
     drawCircle(
         color = Color.White.copy(alpha = if (enabled) 0.3f else 0.15f),
@@ -201,6 +198,7 @@ private fun DrawScope.drawThumb(
 fun CustomSliderThinThumb(
     value: Float,
     onValueChange: (Float) -> Unit,
+    onDoubleTap: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
@@ -212,18 +210,20 @@ fun CustomSliderThinThumb(
     thumbColor: Color = Color.White
 ) {
     var isDragging by remember { mutableStateOf(false) }
-    
+    val currentOnValueChange by rememberUpdatedState(onValueChange)
+    val currentOnDoubleTap by rememberUpdatedState(onDoubleTap)
+
     val density = LocalDensity.current
     val thumbWidthPx = with(density) { thumbWidth.toPx() }
     val thumbHeightPx = with(density) { thumbHeight.toPx() }
     val trackHeightPx = with(density) { trackHeight.toPx() }
-    
+
     // 确保值在范围内
     val coercedValue = value.coerceIn(valueRange.start, valueRange.endInclusive)
-    
+
     // 计算归一化的值（0-1）
     val normalizedValue = (coercedValue - valueRange.start) / (valueRange.endInclusive - valueRange.start)
-    
+
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -232,50 +232,44 @@ fun CustomSliderThinThumb(
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
-                .pointerInput(enabled) {
+                .pointerInput(enabled, valueRange, thumbWidthPx) {
                     if (!enabled) return@pointerInput
-                    
                     detectDragGestures(
-                        onDragStart = {
-                            isDragging = true
-                        },
-                        onDragEnd = {
-                            isDragging = false
-                        },
-                        onDragCancel = {
-                            isDragging = false
-                        }
+                        onDragStart = { isDragging = true },
+                        onDragEnd = { isDragging = false },
+                        onDragCancel = { isDragging = false }
                     ) { change, _ ->
                         change.consume()
-                        
                         val trackWidth = size.width - thumbWidthPx
                         val trackStart = thumbWidthPx / 2
                         val x = change.position.x.coerceIn(trackStart, trackStart + trackWidth)
-                        
                         val fraction = (x - trackStart) / trackWidth
                         val newValue = valueRange.start + fraction * (valueRange.endInclusive - valueRange.start)
-                        onValueChange(newValue.coerceIn(valueRange.start, valueRange.endInclusive))
+                        currentOnValueChange(newValue.coerceIn(valueRange.start, valueRange.endInclusive))
                     }
                 }
-                .pointerInput(enabled) {
+                .pointerInput(enabled, valueRange, thumbWidthPx) {
                     if (!enabled) return@pointerInput
-                    
-                    detectTapGestures { offset ->
-                        val trackWidth = size.width - thumbWidthPx
-                        val trackStart = thumbWidthPx / 2
-                        val x = offset.x.coerceIn(trackStart, trackStart + trackWidth)
-                        
-                        val fraction = (x - trackStart) / trackWidth
-                        val newValue = valueRange.start + fraction * (valueRange.endInclusive - valueRange.start)
-                        onValueChange(newValue.coerceIn(valueRange.start, valueRange.endInclusive))
-                    }
+                    detectTapGestures(
+                        onDoubleTap = {
+                            currentOnDoubleTap?.invoke()
+                        },
+                        onTap = { offset ->
+                            val trackWidth = size.width - thumbWidthPx
+                            val trackStart = thumbWidthPx / 2
+                            val x = offset.x.coerceIn(trackStart, trackStart + trackWidth)
+                            val fraction = (x - trackStart) / trackWidth
+                            val newValue = valueRange.start + fraction * (valueRange.endInclusive - valueRange.start)
+                            currentOnValueChange(newValue.coerceIn(valueRange.start, valueRange.endInclusive))
+                        }
+                    )
                 }
         ) {
             val trackWidth = size.width - thumbWidthPx
             val trackStart = thumbWidthPx / 2
             val trackEnd = trackStart + trackWidth
             val centerY = size.height / 2
-            
+
             // 绘制未激活轨道
             drawLine(
                 color = if (enabled) inactiveTrackColor else inactiveTrackColor.copy(alpha = 0.3f),
@@ -284,7 +278,7 @@ fun CustomSliderThinThumb(
                 strokeWidth = trackHeightPx,
                 cap = StrokeCap.Round
             )
-            
+
             // 绘制激活轨道
             val activeEnd = trackStart + trackWidth * normalizedValue
             drawLine(
@@ -294,12 +288,12 @@ fun CustomSliderThinThumb(
                 strokeWidth = trackHeightPx,
                 cap = StrokeCap.Round
             )
-            
+
             // 绘制细长型 Thumb
             val thumbX = trackStart + trackWidth * normalizedValue
             val thumbTop = centerY - thumbHeightPx / 2
             val thumbBottom = centerY + thumbHeightPx / 2
-            
+
             // 拖拽时的光晕效果
             if (isDragging && enabled) {
                 drawRoundRect(
@@ -309,7 +303,7 @@ fun CustomSliderThinThumb(
                     cornerRadius = androidx.compose.ui.geometry.CornerRadius(thumbWidthPx * 1.5f, thumbWidthPx * 1.5f)
                 )
             }
-            
+
             // 主 Thumb 矩形
             drawRoundRect(
                 color = if (enabled) thumbColor else thumbColor.copy(alpha = 0.5f),

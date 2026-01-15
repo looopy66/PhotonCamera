@@ -7,6 +7,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -69,7 +70,7 @@ fun ZoomControlBar(
     ) {
         // Display Mode Toggle (Left)
         IconButton(
-            onClick = { 
+            onClick = {
                 displayMode = if (displayMode == ZoomDisplayMode.ZOOM_RATIO) {
                     ZoomDisplayMode.FOCAL_LENGTH
                 } else {
@@ -89,8 +90,8 @@ fun ZoomControlBar(
                 tint = Color.White
             )
         }
-        
-        // Filter Button (Right)
+
+        // 右侧滤镜按钮
         IconButton(
             onClick = onFilterClick,
             modifier = Modifier

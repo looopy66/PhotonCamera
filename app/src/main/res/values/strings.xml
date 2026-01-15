@@ -144,6 +144,9 @@
     <string name="name">Name</string>
     <string name="confirm">Confirm</string>
 
+    <!-- Color Recipe -->
+    <string name="color_recipe">Color Recipe</string>
+
     <!-- Developer Options -->
     <string name="settings_section_developer">Developer Options</string>
     <string name="settings_log_viewer">Log Viewer</string>

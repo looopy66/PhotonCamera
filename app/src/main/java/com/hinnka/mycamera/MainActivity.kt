@@ -36,12 +36,14 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.hinnka.mycamera.ui.camera.CameraScreen
+import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.gallery.GalleryScreen
 import com.hinnka.mycamera.ui.gallery.PhotoDetailScreen
 import com.hinnka.mycamera.ui.gallery.PhotoEditScreen
@@ -172,84 +174,86 @@ fun NavigationHost(
         BuglyHelper.setUserScene(context, destination.route.hashCode())
     }
 
-    NavHost(
-        navController = navController,
-        startDestination = Routes.CAMERA,
-        enterTransition = {
-            slideInHorizontally(initialOffsetX = { it }) + fadeIn()
-        },
-        exitTransition = {
-            slideOutHorizontally(targetOffsetX = { -it }) + fadeOut()
-        },
-        popEnterTransition = {
-            slideInHorizontally(initialOffsetX = { -it }) + fadeIn()
-        },
-        popExitTransition = {
-            slideOutHorizontally(targetOffsetX = { it }) + fadeOut()
-        }
-    ) {
-        composable(Routes.CAMERA) {
-            CameraScreen(
-                viewModel = cameraViewModel,
-                galleryViewModel = galleryViewModel,
-                onGalleryClick = {
-                    navController.navigate(Routes.GALLERY)
-                    val latestPhoto = galleryViewModel.latestPhoto.value
-                    if (latestPhoto != null && System.currentTimeMillis() - latestPhoto.dateAdded < 3 * 60 * 1000) {
-                        navController.navigate(Routes.photoDetail(0))
+    Box(modifier = Modifier.fillMaxSize()) {
+        NavHost(
+            navController = navController,
+            startDestination = Routes.CAMERA,
+            enterTransition = {
+                slideInHorizontally(initialOffsetX = { it }) + fadeIn()
+            },
+            exitTransition = {
+                slideOutHorizontally(targetOffsetX = { -it }) + fadeOut()
+            },
+            popEnterTransition = {
+                slideInHorizontally(initialOffsetX = { -it }) + fadeIn()
+            },
+            popExitTransition = {
+                slideOutHorizontally(targetOffsetX = { it }) + fadeOut()
+            }
+        ) {
+            composable(Routes.CAMERA) {
+                CameraScreen(
+                    viewModel = cameraViewModel,
+                    galleryViewModel = galleryViewModel,
+                    onGalleryClick = {
+                        navController.navigate(Routes.GALLERY)
+                        val latestPhoto = galleryViewModel.latestPhoto.value
+                        if (latestPhoto != null && System.currentTimeMillis() - latestPhoto.dateAdded < 3 * 60 * 1000) {
+                            navController.navigate(Routes.photoDetail(0))
+                        }
+                    },
+                    onSettingsClick = {
+                        navController.navigate(Routes.SETTINGS)
                     }
-                },
-                onSettingsClick = {
-                    navController.navigate(Routes.SETTINGS)
-                }
-            )
-        }
+                )
+            }
 
-        composable(Routes.GALLERY) {
-            GalleryScreen(
-                viewModel = galleryViewModel,
-                onBack = {
-                    navController.popBackStack()
-                },
-                onPhotoClick = { index ->
-                    navController.navigate(Routes.photoDetail(index))
-                }
-            )
-        }
+            composable(Routes.GALLERY) {
+                GalleryScreen(
+                    viewModel = galleryViewModel,
+                    onBack = {
+                        navController.popBackStack()
+                    },
+                    onPhotoClick = { index ->
+                        navController.navigate(Routes.photoDetail(index))
+                    }
+                )
+            }
 
-        composable(
-            route = Routes.PHOTO_DETAIL,
-            arguments = listOf(navArgument("index") { type = NavType.IntType })
-        ) { backStackEntry ->
-            val index = backStackEntry.arguments?.getInt("index") ?: 0
-            PhotoDetailScreen(
-                viewModel = galleryViewModel,
-                initialIndex = index,
-                onBack = {
-                    navController.popBackStack()
-                },
-                onEdit = {
-                    navController.navigate(Routes.PHOTO_EDIT)
-                }
-            )
-        }
+            composable(
+                route = Routes.PHOTO_DETAIL,
+                arguments = listOf(navArgument("index") { type = NavType.IntType })
+            ) { backStackEntry ->
+                val index = backStackEntry.arguments?.getInt("index") ?: 0
+                PhotoDetailScreen(
+                    viewModel = galleryViewModel,
+                    initialIndex = index,
+                    onBack = {
+                        navController.popBackStack()
+                    },
+                    onEdit = {
+                        navController.navigate(Routes.PHOTO_EDIT)
+                    }
+                )
+            }
 
-        composable(Routes.PHOTO_EDIT) {
-            PhotoEditScreen(
-                viewModel = galleryViewModel,
-                onBack = {
-                    navController.popBackStack()
-                }
-            )
-        }
-        
-        composable(Routes.SETTINGS) {
-            SettingsScreen(
-                viewModel = cameraViewModel,
-                onBack = {
-                    navController.popBackStack()
-                }
-            )
+            composable(Routes.PHOTO_EDIT) {
+                PhotoEditScreen(
+                    viewModel = galleryViewModel,
+                    onBack = {
+                        navController.popBackStack()
+                    }
+                )
+            }
+
+            composable(Routes.SETTINGS) {
+                SettingsScreen(
+                    viewModel = cameraViewModel,
+                    onBack = {
+                        navController.popBackStack()
+                    }
+                )
+            }
         }
     }
 }

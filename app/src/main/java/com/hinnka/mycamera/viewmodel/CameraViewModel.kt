@@ -6,6 +6,7 @@ import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.media.Image
 import android.util.Log
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -26,6 +27,7 @@ import com.hinnka.mycamera.gallery.PhotoProcessor
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutInfo
+import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.ShutterSoundPlayer
@@ -82,8 +84,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     var currentLutConfig: LutConfig? by mutableStateOf(null)
         private set
 
-    var currentLutId: String? by mutableStateOf(null)
+    var currentLutId = MutableStateFlow("standard")
         private set
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    var currentRecipeParams = currentLutId.flatMapLatest { id ->
+        contentRepository.lutManager.getColorRecipeParams(id)
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = ColorRecipeParams.DEFAULT
+    )
 
     var availableLutList: List<LutInfo> by mutableStateOf(emptyList())
         private set
@@ -115,6 +126,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     // 付费弹窗状态
     var showPaymentDialog by mutableStateOf(false)
+
+    // LUT编辑底部弹窗状态
+    var showLutEditSheet by mutableStateOf(false)
+        private set
+
+    var editingLutInfo: LutInfo? by mutableStateOf(null)
+        private set
 
     // 新增设置项 StateFlow
     val showLevelIndicator: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.showLevelIndicator }
@@ -161,9 +179,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // 初始化内容仓库
-        contentRepository.initialize()
-
         // 订阅 ContentRepository 的 StateFlow，实现自动更新
         viewModelScope.launch {
             contentRepository.availableLuts.collect { luts ->
@@ -199,7 +214,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     val defaultLut = availableLutList.firstOrNull { it.isDefault }
                     defaultLut?.let { setLut(it.id) }
                 }
-                setLutIntensity(prefs.lutIntensity)
 
                 // 应用保存的边框配置
                 if (prefs.frameId != null) {
@@ -253,7 +267,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val timerSeconds = state.value.timerSeconds
 
         // 检查 VIP 权限
-        val currentLut = getLutInfo(currentLutId ?: "")
+        val currentLut = getLutInfo(currentLutId.value)
         if (currentLut?.isVip == true && !isPurchased.value) {
             showPaymentDialog = true
             return
@@ -264,7 +278,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             viewModelScope.launch {
                 for (i in timerSeconds downTo 1) {
                     cameraController.setCountdownValue(i)
-                    kotlinx.coroutines.delay(1000)
+                    delay(1000)
                 }
                 // 倒计时结束，拍照
                 cameraController.setCountdownValue(0)
@@ -441,7 +455,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 设置当前 LUT
      */
     fun setLut(lutId: String?) {
-        currentLutId = lutId
+        currentLutId.value = lutId ?: currentLutId.value
         if (lutId == null) {
             currentLutConfig = null
             // LUT 已禁用，通知相机控制器
@@ -451,6 +465,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 currentLutConfig = withContext(Dispatchers.IO) {
                     contentRepository.lutManager.loadLut(lutId)
                 }
+                currentRecipeParams = contentRepository.lutManager.getColorRecipeParams(lutId).stateIn(
+                    viewModelScope,
+                    started = SharingStarted.Lazily,
+                    initialValue = ColorRecipeParams.DEFAULT,
+                )
             }
             // LUT 已启用，通知相机控制器
             cameraController.setLutEnabled(true)
@@ -458,19 +477,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         // 保存到用户偏好设置
         viewModelScope.launch {
-            userPreferencesRepository.saveLutConfig(lutId, state.value.lutIntensity)
-        }
-    }
-
-    /**
-     * 设置 LUT 强度
-     */
-    fun setLutIntensity(intensity: Float) {
-        cameraController.setLutIntensity(intensity)
-        cameraController.setLutEnabled(intensity > 0f)
-        // 保存到用户偏好设置
-        viewModelScope.launch {
-            userPreferencesRepository.saveLutIntensity(intensity)
+            userPreferencesRepository.saveLutConfig(lutId)
         }
     }
 
@@ -516,11 +523,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         }
 
                         if (lutConfig != null) {
+                            val colorRecipeParams = contentRepository.lutManager.loadColorRecipeParams(lutInfo.id)
                             // 直接使用原始 bitmap，不创建副本以避免内存溢出
                             val previewBitmap = lutImageProcessor.applyLut(
                                 bitmap = bitmap,
                                 lutConfig = lutConfig,
-                                intensity = 1.0f
+                                colorRecipeParams = colorRecipeParams
                             )
                             newPreviews[lutInfo.id] = previewBitmap
                         }
@@ -721,8 +729,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val context = getApplication<Application>()
 
         // 保存当前 LUT 信息用于元数据
-        val lutIdToSave = currentLutId
-        val lutIntensityToSave = state.value.lutIntensity
+        val lutIdToSave = currentLutId.value
 
         val aspectRatio = state.value.aspectRatio
 
@@ -757,9 +764,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val metadata = PhotoMetadata(
                 // 编辑配置
                 lutId = lutIdToSave,
-                lutIntensity = lutIntensityToSave,
                 frameId = frameIdToSave,
-                showAppBranding = showAppBrandingToSave,
                 // 拍摄信息 (来自 captureInfo)
                 deviceModel = captureInfo.model,
                 brand = captureInfo.make.replaceFirstChar { it.uppercase() },

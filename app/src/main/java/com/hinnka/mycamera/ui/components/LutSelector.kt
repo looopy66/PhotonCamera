@@ -2,6 +2,7 @@ package com.hinnka.mycamera.ui.components
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -11,13 +12,17 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FilterNone
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.lut.LutInfo
+import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import kotlinx.coroutines.launch
 
 /**
@@ -50,6 +56,7 @@ fun LutSelector(
 ) {
     val scrollState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
+    var showLutEditDialog by remember { mutableStateOf(false) }
     
     // 在组件首次加载时滚动到当前选中的 LUT
     LaunchedEffect(currentLutId) {
@@ -62,6 +69,16 @@ fun LutSelector(
                 }
             }
         }
+    }
+
+    // 全局 LUT 编辑底部弹窗
+    if (showLutEditDialog && currentLutId != null) {
+        LutEditBottomSheet(
+            lutId = currentLutId,
+            onDismiss = {
+                showLutEditDialog = false
+            }
+        )
     }
     
     LazyRow(
@@ -79,7 +96,13 @@ fun LutSelector(
                 isSelected = currentLutId == lut.id,
                 isVip = lut.isVip,
                 isCustom = !lut.isBuiltIn,  // 添加自定义标识
-                onClick = { onLutSelected(lut.id) }
+                onClick = {
+                    if (currentLutId == lut.id) {
+                        showLutEditDialog = true
+                    } else {
+                        onLutSelected(lut.id)
+                    }
+                }
             )
         }
     }
@@ -88,6 +111,7 @@ fun LutSelector(
 /**
  * 单个 LUT 选项
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun LutItem(
     name: String,
@@ -121,7 +145,7 @@ private fun LutItem(
                 color = borderColor,
                 shape = RoundedCornerShape(8.dp)
             )
-            .clickable(onClick = onClick)
+            .clickable { onClick() }
             .padding(8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
@@ -178,10 +202,10 @@ private fun LutItem(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Check,
-                        contentDescription = stringResource(R.string.selected),
-                        tint = Color.White,
-                        modifier = Modifier.size(24.dp)
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = stringResource(R.string.edit),
+                        tint = Color(0xFFD7E1F1),
+                        modifier = Modifier.size(16.dp)
                     )
                 }
             }
@@ -244,59 +268,6 @@ private fun LutItem(
     }
 }
 
-/**
- * LUT 强度滑块组件
- */
-@Composable
-fun LutIntensitySlider(
-    intensity: Float,
-    onIntensityChange: (Float) -> Unit,
-    enabled: Boolean = true,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            /*.background(
-                Color.Black.copy(alpha = 0.6f),
-                RoundedCornerShape(8.dp)
-            )*/
-            .padding(horizontal = 8.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            /*Text(
-                text = stringResource(R.string.filter_intensity),
-                color = if (enabled) Color.White else Color.Gray,
-                fontSize = 12.sp
-            )*/
-
-            Text(
-                text = "${(intensity * 100).toInt()}%",
-                color = if (enabled) Color.White else Color.Gray,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
-
-        CustomSliderThinThumb(
-            value = intensity,
-            onValueChange = onIntensityChange,
-            enabled = enabled,
-            valueRange = 0f..1f,
-            thumbWidth = 3.dp,
-            thumbHeight = 22.dp,
-            trackHeight = 4.dp,
-            activeTrackColor = Color.White,
-            inactiveTrackColor = Color.Gray.copy(alpha = 0.5f),
-            thumbColor = Color.White,
-            modifier = Modifier.fillMaxWidth()
-        )
-    }
-}
 
 /**
  * LUT 控制面板
@@ -307,10 +278,8 @@ fun LutIntensitySlider(
 fun LutControlPanel(
     availableLuts: List<LutInfo>,
     currentLutId: String?,
-    lutIntensity: Float,
     lutPreviewBitmaps: Map<String, Bitmap> = emptyMap(),
     onLutSelected: (String?) -> Unit,
-    onIntensityChange: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -319,13 +288,6 @@ fun LutControlPanel(
             .padding(4.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        // 强度滑块（LUT 始终可用）
-        LutIntensitySlider(
-            intensity = lutIntensity,
-            onIntensityChange = onIntensityChange,
-            enabled = true
-        )
-
         // LUT 选择器
         LutSelector(
             availableLuts = availableLuts,

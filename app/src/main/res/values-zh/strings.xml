@@ -143,6 +143,9 @@
     <string name="name">名称</string>
     <string name="confirm">确认</string>
 
+    <!-- Color Recipe -->
+    <string name="color_recipe">色彩配方</string>
+
     <!-- Developer Options -->
     <string name="settings_section_developer">开发者选项</string>
     <string name="settings_log_viewer">日志收集</string>

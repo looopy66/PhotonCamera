@@ -86,16 +86,6 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     }
     
     /**
-     * 设置 LUT 强度
-     * 
-     * @param intensity 强度值 (0.0 - 1.0)
-     */
-    fun setLutIntensity(intensity: Float) {
-        renderer.lutIntensity = intensity.coerceIn(0f, 1f)
-        requestRender()
-    }
-    
-    /**
      * 设置 LUT 是否启用
      */
     fun setLutEnabled(enabled: Boolean) {
@@ -112,7 +102,43 @@ class CameraGLSurfaceView @JvmOverloads constructor(
      * 获取 LUT 是否启用
      */
     fun isLutEnabled(): Boolean = renderer.lutEnabled
-    
+
+    /**
+     * 设置色彩配方是否启用
+     */
+    fun setColorRecipeEnabled(enabled: Boolean) {
+        renderer.colorRecipeEnabled = enabled
+        requestRender()
+    }
+
+    /**
+     * 设置色彩配方参数
+     */
+    fun setColorRecipeParams(
+        exposure: Float,
+        contrast: Float,
+        saturation: Float,
+        temperature: Float,
+        tint: Float,
+        fade: Float,
+        vibrance: Float,
+        highlights: Float,
+        shadows: Float,
+        lutIntensity: Float,
+    ) {
+        renderer.exposure = exposure
+        renderer.contrast = contrast
+        renderer.saturation = saturation
+        renderer.temperature = temperature
+        renderer.tint = tint
+        renderer.fade = fade
+        renderer.vibrance = vibrance
+        renderer.highlights = highlights
+        renderer.shadows = shadows
+        renderer.lutIntensity = lutIntensity
+        requestRender()
+    }
+
     /**
      * 请求渲染帧
      */

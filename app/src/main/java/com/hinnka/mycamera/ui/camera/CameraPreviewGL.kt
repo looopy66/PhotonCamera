@@ -2,7 +2,6 @@ package com.hinnka.mycamera.ui.camera
 
 import android.graphics.SurfaceTexture
 import android.util.Size
-import android.view.Surface
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -17,19 +16,20 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.viewinterop.AndroidView
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.lut.LutConfig
+import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.ui.components.FocusIndicator
 
 /**
  * 相机预览组件 - OpenGL ES 版本（Camera2 适配）
- * 
- * 使用 GLSurfaceView 渲染相机预览，支持实时 3D LUT 滤镜
+ *
+ * 使用 GLSurfaceView 渲染相机预览，支持实时 3D LUT 滤镜和色彩配方
  */
 @Composable
 fun CameraPreviewGL(
     aspectRatio: AspectRatio,
     previewSize: Size,
     currentLut: LutConfig?,
-    lutIntensity: Float,
+    colorRecipeParams: ColorRecipeParams,
     focusPoint: Pair<Float, Float>?,
     isFocusing: Boolean,
     focusSuccess: Boolean?,
@@ -124,15 +124,29 @@ fun CameraPreviewGL(
                             onSurfaceTextureReady(surfaceTexture)
                         }
                     }
-                    
+
+                    val colorRecipeEnabled = !colorRecipeParams.isDefault()
                     // 更新 LUT 设置
                     if (currentLut != null) {
                         glSurfaceView.setLut(currentLut)
                         glSurfaceView.setLutEnabled(true)
+                        glSurfaceView.setColorRecipeEnabled(colorRecipeEnabled)
+                        glSurfaceView.setColorRecipeParams(
+                            exposure = colorRecipeParams.exposure,
+                            contrast = colorRecipeParams.contrast,
+                            saturation = colorRecipeParams.saturation,
+                            temperature = colorRecipeParams.temperature,
+                            tint = colorRecipeParams.tint,
+                            fade = colorRecipeParams.fade,
+                            vibrance = colorRecipeParams.vibrance,
+                            highlights = colorRecipeParams.highlights,
+                            shadows = colorRecipeParams.shadows,
+                            lutIntensity = colorRecipeParams.lutIntensity,
+                        )
                     } else {
                         glSurfaceView.setLutEnabled(false)
+                        glSurfaceView.setColorRecipeEnabled(false)
                     }
-                    glSurfaceView.setLutIntensity(lutIntensity)
                 },
                 modifier = Modifier.fillMaxSize()
             )

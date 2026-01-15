@@ -1553,13 +1553,6 @@ class Camera2Controller(private val context: Context) {
     }
 
     /**
-     * 设置 LUT 强度
-     */
-    fun setLutIntensity(intensity: Float) {
-        _state.value = _state.value.copy(lutIntensity = intensity)
-    }
-
-    /**
      * 设置 LUT 启用状态
      *
      * 当 LUT 启用状态改变时，需要更新相机参数（特别是色调映射设置）

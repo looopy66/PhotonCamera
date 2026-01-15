@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.lut
 
+import com.hinnka.mycamera.model.ColorRecipeParams
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -95,22 +96,6 @@ data class LutConfig(
 }
 
 /**
- * LUT 强度预设
- */
-enum class LutIntensity(val value: Float, val displayRes: Int) {
-    NONE(0f, com.hinnka.mycamera.R.string.lut_intensity_none),
-    LOW(0.33f, com.hinnka.mycamera.R.string.lut_intensity_low),
-    MEDIUM(0.66f, com.hinnka.mycamera.R.string.lut_intensity_medium),
-    FULL(1.0f, com.hinnka.mycamera.R.string.lut_intensity_high);
-    
-    companion object {
-        fun fromValue(value: Float): LutIntensity {
-            return entries.minByOrNull { kotlin.math.abs(it.value - value) } ?: FULL
-        }
-    }
-}
-
-/**
  * LUT 信息（用于列表展示）
  */
 data class LutInfo(
@@ -119,7 +104,7 @@ data class LutInfo(
     val fileName: String,
     val isBuiltIn: Boolean = true,
     val isDefault: Boolean = false, // 是否为默认 LUT
-    val isVip: Boolean = false // 是否为 VIP LUT
+    val isVip: Boolean = false, // 是否为 VIP LUT
 ) {
     /**
      * 获取显示名称（优先当前系统语言）

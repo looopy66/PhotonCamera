@@ -13,7 +13,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -38,7 +37,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.frame.TextType
-import com.hinnka.mycamera.ui.components.CustomSlider
+import com.hinnka.mycamera.ui.components.LutSelector
 import com.hinnka.mycamera.ui.components.PaymentDialog
 import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
@@ -60,10 +59,8 @@ fun PhotoEditScreen(
 ) {
     val context = LocalContext.current
     val currentPhoto = viewModel.getCurrentPhoto()
-    val rotation = viewModel.editRotation
-    val brightness = viewModel.editBrightness
-    val editLutId = viewModel.editLutId
-    val editLutIntensity = viewModel.editLutIntensity
+    val editLutId by viewModel.editLutId.collectAsState()
+    val editLutRecipeParams by viewModel.editLutRecipeParams.collectAsState()
     val editLutConfig = viewModel.editLutConfig
     val availableLuts = viewModel.availableLuts
     val showPaymentDialog = viewModel.showPaymentDialog
@@ -81,7 +78,7 @@ fun PhotoEditScreen(
 
     // 预览 Bitmap 状态
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var lutPreviews by remember { mutableStateOf<List<Bitmap?>>(emptyList()) }
+    var lutPreviews by remember { mutableStateOf<Map<String, Bitmap>>(emptyMap()) }
 
     // 边框编辑状态
     val editFrameId = viewModel.editFrameId
@@ -92,10 +89,8 @@ fun PhotoEditScreen(
     LaunchedEffect(
         currentPhoto,
         editLutId,
+        editLutRecipeParams,
         editLutConfig,
-        editLutIntensity,
-        rotation,
-        brightness,
         editFrameId,
         customPropertiesList
     ) {
@@ -248,25 +243,6 @@ fun PhotoEditScreen(
                         modifier = Modifier.size(48.dp)
                     )
                 }
-
-                // LUT 指示器
-                if (editLutId != null) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .background(
-                                AccentOrange.copy(alpha = 0.8f),
-                                RoundedCornerShape(4.dp)
-                            )
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            text = "LUT ${(editLutIntensity * 100).toInt()}%",
-                            color = Color.White,
-                            fontSize = 12.sp
-                        )
-                    }
-                }
             }
 
             // 编辑控制区域
@@ -287,51 +263,12 @@ fun PhotoEditScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        state = lutScrollState
-                    ) {
-                        // LUT 选项
-                        itemsIndexed(availableLuts) { index, lut ->
-                            LutOption(
-                                name = lut.getName(),
-                                previewBitmap = lutPreviews.getOrNull(index),
-                                isSelected = editLutId == lut.id,
-                                isVip = lut.isVip,
-                                isCustom = !lut.isBuiltIn,  // 添加自定义标识
-                                onClick = { viewModel.setEditLut(lut.id) }
-                            )
-                        }
-                    }
-
-                    // LUT 强度滑块（LUT 始终可用）
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = stringResource(R.string.intensity),
-                            color = Color.White,
-                            fontSize = 14.sp,
-                            modifier = Modifier.width(60.dp)
-                        )
-
-                        CustomSlider(
-                            value = editLutIntensity,
-                            onValueChange = { viewModel.updateEditLutIntensity(it) },
-                            valueRange = 0f..1f,
-                            modifier = Modifier.weight(1f)
-                        )
-
-                        Text(
-                            text = "${(editLutIntensity * 100).toInt()}%",
-                            color = Color.White.copy(alpha = 0.7f),
-                            fontSize = 12.sp,
-                            modifier = Modifier.width(40.dp)
-                        )
-                    }
+                    LutSelector(
+                        availableLuts = viewModel.availableLuts,
+                        currentLutId = editLutId,
+                        lutPreviewBitmaps = lutPreviews,
+                        onLutSelected = { viewModel.setEditLut(it) }
+                    )
 
                     Spacer(modifier = Modifier.height(16.dp))
 
@@ -351,7 +288,7 @@ fun PhotoEditScreen(
                     ) {
                         // 无边框选项
                         item {
-                            LutOption(
+                            FrameOption(
                                 name = stringResource(R.string.none),
                                 isSelected = editFrameId == null,
                                 isCustom = false,  // 无边框不是自定义
@@ -361,7 +298,7 @@ fun PhotoEditScreen(
 
                         // 边框选项
                         items(availableFrames) { frame ->
-                            LutOption(
+                            FrameOption(
                                 name = frame.name,
                                 isSelected = editFrameId == frame.id,
                                 isCustom = !frame.isBuiltIn,  // 添加自定义标识
@@ -458,7 +395,7 @@ private fun Context.findActivity(): Activity? {
  * LUT 选项
  */
 @Composable
-private fun LutOption(
+private fun FrameOption(
     name: String,
     previewBitmap: Bitmap? = null,
     isSelected: Boolean,

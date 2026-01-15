@@ -54,6 +54,18 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var uLutSizeLocation: Int = 0
     private var uLutIntensityLocation: Int = 0
     private var uLutEnabledLocation: Int = 0
+
+    // 色彩配方 Uniform 位置
+    private var uColorRecipeEnabledLocation: Int = 0
+    private var uExposureLocation: Int = 0
+    private var uContrastLocation: Int = 0
+    private var uSaturationLocation: Int = 0
+    private var uTemperatureLocation: Int = 0
+    private var uTintLocation: Int = 0
+    private var uFadeLocation: Int = 0
+    private var uVibranceLocation: Int = 0
+    private var uHighlightsLocation: Int = 0
+    private var uShadowsLocation: Int = 0
     
     // Attribute 位置
     private var aPositionLocation: Int = 0
@@ -81,7 +93,29 @@ class LutRenderer : GLSurfaceView.Renderer {
     // LUT 是否启用
     @Volatile
     var lutEnabled: Boolean = false
-    
+
+    // 色彩配方参数
+    @Volatile
+    var colorRecipeEnabled: Boolean = false
+    @Volatile
+    var exposure: Float = 0f // -2.0 ~ +2.0
+    @Volatile
+    var contrast: Float = 1f // 0.5 ~ 1.5
+    @Volatile
+    var saturation: Float = 1f // 0.0 ~ 2.0
+    @Volatile
+    var temperature: Float = 0f // -1.0 ~ +1.0
+    @Volatile
+    var tint: Float = 0f // -1.0 ~ +1.0
+    @Volatile
+    var fade: Float = 0f // 0.0 ~ 1.0
+    @Volatile
+    var vibrance: Float = 1f // 0.0 ~ 2.0
+    @Volatile
+    var highlights: Float = 0f // -1.0 ~ +1.0
+    @Volatile
+    var shadows: Float = 0f // -1.0 ~ +1.0
+
     // 渲染尺寸
     private var viewportWidth: Int = 0
     private var viewportHeight: Int = 0
@@ -201,7 +235,21 @@ class LutRenderer : GLSurfaceView.Renderer {
         GLES30.glUniform1f(uLutSizeLocation, lutSize)
         GLES30.glUniform1f(uLutIntensityLocation, lutIntensity)
         GLES30.glUniform1i(uLutEnabledLocation, if (lutEnabled && lutTextureId != 0) 1 else 0)
-        
+
+        // 设置色彩配方 Uniforms
+        GLES30.glUniform1i(uColorRecipeEnabledLocation, if (colorRecipeEnabled) 1 else 0)
+        if (colorRecipeEnabled) {
+            GLES30.glUniform1f(uExposureLocation, exposure)
+            GLES30.glUniform1f(uContrastLocation, contrast)
+            GLES30.glUniform1f(uSaturationLocation, saturation)
+            GLES30.glUniform1f(uTemperatureLocation, temperature)
+            GLES30.glUniform1f(uTintLocation, tint)
+            GLES30.glUniform1f(uFadeLocation, fade)
+            GLES30.glUniform1f(uVibranceLocation, vibrance)
+            GLES30.glUniform1f(uHighlightsLocation, highlights)
+            GLES30.glUniform1f(uShadowsLocation, shadows)
+        }
+
         // 绑定顶点缓冲
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)
         GLES30.glEnableVertexAttribArray(aPositionLocation)
@@ -255,24 +303,24 @@ class LutRenderer : GLSurfaceView.Renderer {
      */
     private fun initShaderProgram() {
         val vertexShader = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, Shaders.VERTEX_SHADER)
-        val fragmentShader = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.FRAGMENT_SHADER_LUT)
-        
+        val fragmentShader = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.FRAGMENT_SHADER_COLOR_RECIPE)
+
         if (vertexShader == 0 || fragmentShader == 0) {
             PLog.e(TAG, "Failed to compile shaders")
             return
         }
-        
+
         programId = GlUtils.linkProgram(vertexShader, fragmentShader)
-        
+
         // 着色器已链接到程序，可以删除
         GLES30.glDeleteShader(vertexShader)
         GLES30.glDeleteShader(fragmentShader)
-        
+
         if (programId == 0) {
             PLog.e(TAG, "Failed to link program")
             return
         }
-        
+
         // 获取 Uniform 位置
         uMVPMatrixLocation = GLES30.glGetUniformLocation(programId, "uMVPMatrix")
         uSTMatrixLocation = GLES30.glGetUniformLocation(programId, "uSTMatrix")
@@ -281,11 +329,23 @@ class LutRenderer : GLSurfaceView.Renderer {
         uLutSizeLocation = GLES30.glGetUniformLocation(programId, "uLutSize")
         uLutIntensityLocation = GLES30.glGetUniformLocation(programId, "uLutIntensity")
         uLutEnabledLocation = GLES30.glGetUniformLocation(programId, "uLutEnabled")
-        
+
+        // 获取色彩配方 Uniform 位置
+        uColorRecipeEnabledLocation = GLES30.glGetUniformLocation(programId, "uColorRecipeEnabled")
+        uExposureLocation = GLES30.glGetUniformLocation(programId, "uExposure")
+        uContrastLocation = GLES30.glGetUniformLocation(programId, "uContrast")
+        uSaturationLocation = GLES30.glGetUniformLocation(programId, "uSaturation")
+        uTemperatureLocation = GLES30.glGetUniformLocation(programId, "uTemperature")
+        uTintLocation = GLES30.glGetUniformLocation(programId, "uTint")
+        uFadeLocation = GLES30.glGetUniformLocation(programId, "uFade")
+        uVibranceLocation = GLES30.glGetUniformLocation(programId, "uVibrance")
+        uHighlightsLocation = GLES30.glGetUniformLocation(programId, "uHighlights")
+        uShadowsLocation = GLES30.glGetUniformLocation(programId, "uShadows")
+
         // 获取 Attribute 位置
         aPositionLocation = GLES30.glGetAttribLocation(programId, "aPosition")
         aTexCoordLocation = GLES30.glGetAttribLocation(programId, "aTexCoord")
-        
+
 //        PLog.d(TAG, "Shader program created: $programId")
     }
     
