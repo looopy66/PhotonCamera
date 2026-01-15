@@ -40,6 +40,8 @@ data class PhotoMetadata(
     val focalLength35mm: String? = null,
     val aperture: String? = null,
     val isImported: Boolean = false,
+    // 边框水印自定义
+    val customProperties: Map<String, String> = emptyMap(),
     // 导出到系统相册的 URI 列表
     val exportedUris: List<String> = emptyList()
 ) {
@@ -71,14 +73,18 @@ data class PhotoMetadata(
             put("focalLength35mm", focalLength35mm ?: JSONObject.NULL)
             put("aperture", aperture ?: JSONObject.NULL)
             put("isImported", isImported)
+            // 边框水印自定义
+            val customPropsObj = JSONObject()
+            customProperties.forEach { (k, v) -> customPropsObj.put(k, v) }
+            put("customProperties", customPropsObj)
             // 导出的 URI 列表
             put("exportedUris", org.json.JSONArray(exportedUris))
         }.toString(2)
     }
-    
+
     companion object {
         private const val TAG = "PhotoMetadata"
-        
+
         fun fromJson(json: String): PhotoMetadata? {
             return try {
                 val obj = JSONObject(json)
@@ -113,6 +119,12 @@ data class PhotoMetadata(
                     focalLength35mm = if (obj.isNull("focalLength35mm")) null else obj.optString("focalLength35mm"),
                     aperture = if (obj.isNull("aperture")) null else obj.optString("aperture"),
                     isImported = obj.optBoolean("isImported", false),
+                    customProperties = mutableMapOf<String, String>().apply {
+                        val customPropsObj = obj.optJSONObject("customProperties")
+                        customPropsObj?.keys()?.forEach { key ->
+                            put(key, customPropsObj.getString(key))
+                        }
+                    },
                     exportedUris = exportedUris
                 )
             } catch (e: Exception) {
@@ -120,7 +132,7 @@ data class PhotoMetadata(
                 null
             }
         }
-        
+
         /**
          * 从系统信息创建默认元数据
          */
@@ -141,14 +153,16 @@ data class PhotoMetadata(
             return try {
                 context.contentResolver.openInputStream(uri)?.use { inputStream ->
                     val exif = ExifInterface(inputStream)
-                    
+
                     val model = exif.getAttribute(ExifInterface.TAG_MODEL)
                     val make = exif.getAttribute(ExifInterface.TAG_MAKE)
-                    val dateStr = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL) ?: exif.getAttribute(ExifInterface.TAG_DATETIME)
-                    
+                    val dateStr = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL) ?: exif.getAttribute(
+                        ExifInterface.TAG_DATETIME
+                    )
+
                     val iso = exif.getAttributeInt(ExifInterface.TAG_ISO_SPEED_RATINGS, 0).takeIf { it > 0 }
                         ?: exif.getAttributeInt(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY, 0).takeIf { it > 0 }
-                    
+
                     val shutterSpeed = exif.getAttribute(ExifInterface.TAG_EXPOSURE_TIME)?.let {
                         try {
                             val time = it.toDouble()
@@ -161,8 +175,9 @@ data class PhotoMetadata(
                             it
                         }
                     }
-                    
-                    val aperture = exif.getAttributeDouble(ExifInterface.TAG_F_NUMBER, 0.0).takeIf { it > 0 }?.let { "f/${String.format("%.1f", it)}" }
+
+                    val aperture = exif.getAttributeDouble(ExifInterface.TAG_F_NUMBER, 0.0).takeIf { it > 0 }
+                        ?.let { "f/${String.format("%.1f", it)}" }
                     val focalLength = exif.getAttributeDouble(ExifInterface.TAG_FOCAL_LENGTH, 0.0).let {
                         "${it.toInt()}mm"
                     }

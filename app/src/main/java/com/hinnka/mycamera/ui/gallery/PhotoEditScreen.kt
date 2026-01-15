@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -36,12 +37,16 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.hinnka.mycamera.R
+import com.hinnka.mycamera.frame.TextType
 import com.hinnka.mycamera.ui.components.CustomSlider
 import com.hinnka.mycamera.ui.components.PaymentDialog
 import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * 照片编辑界面
@@ -62,30 +67,40 @@ fun PhotoEditScreen(
     val editLutConfig = viewModel.editLutConfig
     val availableLuts = viewModel.availableLuts
     val showPaymentDialog = viewModel.showPaymentDialog
-    
+
     var isSaving by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     var isLoadingPreview by remember { mutableStateOf(false) }
     val lutScrollState = rememberLazyListState()
     val frameScrollState = rememberLazyListState()
-    
+
     BackHandler {
         viewModel.exitEditMode()
         onBack()
     }
-    
+
     // 预览 Bitmap 状态
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var lutPreviews by remember { mutableStateOf<List<Bitmap?>>(emptyList()) }
-    
+
     // 边框编辑状态
     val editFrameId = viewModel.editFrameId
     val availableFrames = viewModel.availableFrames
-    
+
     // 当编辑参数变化时更新预览
-    LaunchedEffect(currentPhoto, editLutId, editLutConfig, editLutIntensity, rotation, brightness, editFrameId) {
+    val customPropertiesList = viewModel.editCustomProperties.entries.toList()
+    LaunchedEffect(
+        currentPhoto,
+        editLutId,
+        editLutConfig,
+        editLutIntensity,
+        rotation,
+        brightness,
+        editFrameId,
+        customPropertiesList
+    ) {
         if (currentPhoto == null) return@LaunchedEffect
-        
+
         isLoadingPreview = true
         previewBitmap = withContext(Dispatchers.IO) {
             viewModel.getPreviewBitmap(currentPhoto)
@@ -113,14 +128,14 @@ fun PhotoEditScreen(
             }
         }
     }
-    
+
     if (currentPhoto == null) {
         LaunchedEffect(Unit) {
             onBack()
         }
         return
     }
-    
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -171,7 +186,7 @@ fun PhotoEditScreen(
                             )
                         }
                     }
-                    
+
                     // 导出（烘焙）按钮
                     /*IconButton(
                         onClick = { showExportDialog = true },
@@ -225,7 +240,7 @@ fun PhotoEditScreen(
                         modifier = Modifier.fillMaxSize()
                     )
                 }
-                
+
                 // 加载指示器
                 if (isLoadingPreview) {
                     CircularProgressIndicator(
@@ -233,7 +248,7 @@ fun PhotoEditScreen(
                         modifier = Modifier.size(48.dp)
                     )
                 }
-                
+
                 // LUT 指示器
                 if (editLutId != null) {
                     Box(
@@ -253,7 +268,7 @@ fun PhotoEditScreen(
                     }
                 }
             }
-            
+
             // 编辑控制区域
             Surface(
                 color = Color(0xFF1A1A1A),
@@ -269,9 +284,9 @@ fun PhotoEditScreen(
                         color = Color.White,
                         fontSize = 16.sp
                     )
-                    
+
                     Spacer(modifier = Modifier.height(8.dp))
-                    
+
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         state = lutScrollState
@@ -288,10 +303,10 @@ fun PhotoEditScreen(
                             )
                         }
                     }
-                    
+
                     // LUT 强度滑块（LUT 始终可用）
                     Spacer(modifier = Modifier.height(12.dp))
-                    
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
@@ -309,7 +324,7 @@ fun PhotoEditScreen(
                             valueRange = 0f..1f,
                             modifier = Modifier.weight(1f)
                         )
-                        
+
                         Text(
                             text = "${(editLutIntensity * 100).toInt()}%",
                             color = Color.White.copy(alpha = 0.7f),
@@ -317,19 +332,19 @@ fun PhotoEditScreen(
                             modifier = Modifier.width(40.dp)
                         )
                     }
-                    
+
                     Spacer(modifier = Modifier.height(16.dp))
-                    
+
                     // 边框水印选择器
                     Text(
                         text = stringResource(R.string.frame),
                         color = Color.White,
                         fontSize = 16.sp
                     )
-                    
+
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    
+
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         state = frameScrollState
@@ -354,11 +369,33 @@ fun PhotoEditScreen(
                             )
                         }
                     }
+
+                    if (editFrameId != null) {
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Button(
+                            onClick = { viewModel.showWatermarkSheet = true },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color.White.copy(alpha = 0.1f)
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(text = "调整水印", color = Color.White)
+                        }
+                    }
                 }
             }
         }
     }
-    
+
+    if (viewModel.showWatermarkSheet) {
+        WatermarkEditSheet(
+            viewModel = viewModel,
+            onDismiss = { viewModel.showWatermarkSheet = false }
+        )
+    }
+
     // 导出确认对话框
     if (showExportDialog) {
         AlertDialog(
@@ -505,9 +542,9 @@ private fun LutOption(
                 }
             }
         }
-        
+
         Spacer(modifier = Modifier.height(4.dp))
-        
+
         Text(
             text = name,
             color = if (isSelected) AccentOrange else Color.White.copy(alpha = 0.7f),
@@ -516,5 +553,139 @@ private fun LutOption(
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun WatermarkEditSheet(
+    viewModel: GalleryViewModel,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState()
+    val customProperties = viewModel.editCustomProperties
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = Color(0xFF1A1A1A),
+        contentColor = Color.White
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+                .padding(bottom = 32.dp)
+        ) {
+            Text(
+                text = "水印调整",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+
+            // Logo 选择
+            Text(
+                text = "LOGO",
+                fontSize = 14.sp,
+                color = Color.White.copy(alpha = 0.6f),
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            val logos = listOf(
+                "none" to "无",
+                "apple" to "Apple",
+                "leica" to "Leica",
+                "hasselblad" to "Hasselblad",
+                "sony" to "Sony",
+                "canon" to "Canon",
+                "nikon" to "Nikon",
+                "fujifilm" to "Fujifilm",
+                "xiaomi" to "Xiaomi",
+                "huawei" to "Huawei",
+                "oppo" to "OPPO",
+                "vivo" to "Vivo"
+            )
+
+            val currentPhoto = viewModel.getCurrentPhoto()
+            val currentBrand = currentPhoto?.metadata?.brand?.lowercase() ?: ""
+            val effectiveActiveId =
+                customProperties["LOGO"] ?: logos.find { it.first != "none" && currentBrand.contains(it.first) }?.first
+                ?: "none"
+
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(bottom = 16.dp)
+            ) {
+                items(logos) { (id, name) ->
+                    val isSelected = effectiveActiveId == id
+                    Surface(
+                        onClick = { viewModel.updateEditCustomProperty("LOGO", id) },
+                        color = if (isSelected) AccentOrange.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.1f),
+                        shape = RoundedCornerShape(8.dp),
+                        border = if (isSelected) BorderStroke(1.dp, AccentOrange) else null
+                    ) {
+                        Text(
+                            text = name,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            fontSize = 13.sp,
+                            color = if (isSelected) AccentOrange else Color.White
+                        )
+                    }
+                }
+            }
+
+            // 文字编辑
+            Text(
+                text = "文字内容",
+                fontSize = 14.sp,
+                color = Color.White.copy(alpha = 0.6f),
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            val textTypes = listOf(
+                TextType.DEVICE_MODEL to "设备型号",
+                TextType.BRAND to "品牌名称",
+                TextType.DATE to "日期 (DATE)",
+                TextType.TIME to "时间 (TIME)",
+                TextType.DATETIME to "日期时间 (DATETIME)"
+            )
+
+            textTypes.forEach { (type, label) ->
+                val currentPhoto = viewModel.getCurrentPhoto()
+                val originalValue = when (type) {
+                    TextType.DEVICE_MODEL -> currentPhoto?.metadata?.deviceModel
+                    TextType.BRAND -> currentPhoto?.metadata?.brand
+                    TextType.DATE -> currentPhoto?.metadata?.dateTaken?.let {
+                        SimpleDateFormat("yyyy.MM.dd", Locale.getDefault()).format(Date(it))
+                    }
+
+                    TextType.TIME -> currentPhoto?.metadata?.dateTaken?.let {
+                        SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(it))
+                    }
+
+                    TextType.DATETIME -> currentPhoto?.metadata?.dateTaken?.let {
+                        SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.getDefault()).format(Date(it))
+                    }
+
+                    else -> null
+                } ?: ""
+
+                OutlinedTextField(
+                    value = customProperties[type.name] ?: originalValue,
+                    onValueChange = { viewModel.updateEditCustomProperty(type.name, it) },
+                    label = { Text(label) },
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AccentOrange,
+                        unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
+                        focusedLabelColor = AccentOrange,
+                        unfocusedLabelColor = Color.White.copy(alpha = 0.5f),
+                        cursorColor = AccentOrange
+                    ),
+                    singleLine = true
+                )
+            }
+        }
     }
 }

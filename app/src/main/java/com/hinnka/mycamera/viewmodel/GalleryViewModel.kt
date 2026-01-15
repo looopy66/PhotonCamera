@@ -65,14 +65,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     // 付费弹窗状态
     var showPaymentDialog by mutableStateOf(false)
-    
+
+    // 水印编辑弹窗状态
+    var showWatermarkSheet by mutableStateOf(false)
+
     // 照片列表
     private val _photos = MutableStateFlow<List<PhotoData>>(emptyList())
     val photos: StateFlow<List<PhotoData>> = _photos.asStateFlow()
-    
+
     // 加载状态
     private val _isLoading = MutableStateFlow(false)
-    val isLoading:StateFlow<Boolean> = _isLoading.asStateFlow()
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
     // 分享状态
     private val _isSharing = MutableStateFlow(false)
@@ -81,24 +84,24 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     // 多选模式
     var isSelectionMode by mutableStateOf(false)
         private set
-    
+
     // 选中的照片
     val selectedPhotos = mutableStateListOf<PhotoData>()
-    
+
     // 当前查看的照片索引
     var currentPhotoIndex by mutableStateOf(0)
         private set
-    
+
     // 编辑状态
     var isEditing by mutableStateOf(false)
         private set
-    
+
     // 编辑参数
     var editRotation by mutableFloatStateOf(0f)
         private set
     var editBrightness by mutableFloatStateOf(1f)
         private set
-    
+
     // LUT 编辑状态
     var editLutId: String? by mutableStateOf(null)
         private set
@@ -106,23 +109,27 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         private set
     var editLutConfig: LutConfig? by mutableStateOf(null)
         private set
-    
+
     // 当前照片的元数据
     var currentPhotoMetadata: PhotoMetadata? by mutableStateOf(null)
         private set
-    
+
     // 可用的 LUT 列表
     var availableLuts: List<LutInfo> by mutableStateOf(emptyList())
         private set
-    
+
     // 边框编辑状态
     var editFrameId: String? by mutableStateOf(null)
         private set
     var editShowAppBranding by mutableStateOf(true)
         private set
-    
+
     // 可用的边框列表
     var availableFrames: List<FrameInfo> by mutableStateOf(emptyList())
+        private set
+
+    // 水印自定义属性
+    var editCustomProperties = mutableStateMapOf<String, String>()
         private set
 
     // 最新照片（用于相机界面显示入口）
@@ -141,7 +148,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private var pendingDeletePhotos: List<PhotoData> = emptyList()
     var batchDeletePendingIntent: android.app.PendingIntent? by mutableStateOf(null)
         private set
-    
+
     init {
         loadPhotos()
         contentRepository.initialize()
@@ -161,7 +168,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
         }
     }
-    
+
     /**
      * 加载照片列表
      */
@@ -173,7 +180,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             try {
                 // 1. Get basic list from repository (fast: file list only)
                 val newList = repository.getPhotosSync()
-                
+
                 // 2. Reuse existing objects to preserve metadata and avoid UI replacement
                 val currentPhotos = _photos.value.associateBy { it.id }
                 val mergedList = newList.map { photo ->
@@ -181,7 +188,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
 
                 val context = getApplication<Application>()
-                
+
                 // 3. Eagerly load metadata for the first ~30 items (visible area)
                 val topItemsToLoad = mergedList.take(30).filter { it.metadata == null }
                 val topItemsLoaded = if (topItemsToLoad.isNotEmpty()) {
@@ -193,17 +200,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         }.awaitAll()
                     }
                 } else emptyList()
-                
+
                 val topMap = topItemsLoaded.associateBy { it.id }
                 val updatedWithTop = mergedList.map { photo ->
                     topMap[photo.id] ?: photo
                 }
-                
+
                 // Update UI for the first time
                 _photos.value = updatedWithTop
                 _latestPhoto.value = updatedWithTop.firstOrNull()
                 _isLoading.value = false
-                
+
                 // 4. Load the rest of the metadata in background
                 val remainingToLoad = updatedWithTop.filter { it.metadata == null }
                 if (remainingToLoad.isNotEmpty()) {
@@ -212,7 +219,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                             async { loadSpecificPhotoMetadata(context, photo) }
                         }.awaitAll()
                     }
-                    
+
                     // Final update: merge background results back into the list
                     val finalMap = fullyUpdatedList.associateBy { it.id }
                     val finalPhotos = updatedWithTop.map { photo ->
@@ -234,7 +241,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         } else {
             photo
         }
-        
+
         // If dimensions are missing, load from file header
         if (updatedPhoto.width == 0 || updatedPhoto.height == 0) {
             try {
@@ -243,7 +250,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                     BitmapFactory.decodeFile(photoFile.absolutePath, options)
                     updatedPhoto = updatedPhoto.copy(width = options.outWidth, height = options.outHeight)
-                    
+
                     // Cache dimensions back to metadata
                     val currentMeta = metadata ?: PhotoMetadata()
                     val newMetadata = currentMeta.copy(width = options.outWidth, height = options.outHeight)
@@ -257,12 +264,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             // Already has width/height from metadata
             updatedPhoto = updatedPhoto.copy(width = metadata.width, height = metadata.height)
         }
-        
+
         // Update the metadata field of the photo object directly? No, copy it.
         // The callers (async) will collect these.
         return updatedPhoto
     }
-    
+
     /**
      * 刷新最新照片
      */
@@ -281,7 +288,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 } else {
                     it
                 }
-                
+
                 // If dimensions are missing, load from file (same as loadPhotos)
                 if (updatedPhoto.width == 0 || updatedPhoto.height == 0) {
                     try {
@@ -289,7 +296,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                         BitmapFactory.decodeFile(photoFile.absolutePath, options)
                         updatedPhoto = updatedPhoto.copy(width = options.outWidth, height = options.outHeight)
-                        
+
                         metadata?.let { m ->
                             val newMetadata = m.copy(width = options.outWidth, height = options.outHeight)
                             PhotoManager.saveMetadata(context, it.id, newMetadata)
@@ -308,7 +315,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
         }
     }
-    
+
     /**
      * 加载当前照片的元数据
      */
@@ -317,7 +324,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             val context = getApplication<Application>()
             currentPhotoMetadata = PhotoManager.loadMetadata(context, photo.id)
-            
+
             // 更新编辑状态
             currentPhotoMetadata?.let { metadata ->
                 editLutId = metadata.lutId
@@ -326,7 +333,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editRotation = metadata.rotation
                 editFrameId = metadata.frameId
                 editShowAppBranding = metadata.showAppBranding
-                
+
                 // 加载 LUT 配置
                 editLutId?.let { id ->
                     editLutConfig = withContext(Dispatchers.IO) {
@@ -362,7 +369,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             } else null
         }
     }
-    
+
     /**
      * 进入多选模式
      */
@@ -370,7 +377,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         isSelectionMode = true
         selectedPhotos.clear()
     }
-    
+
     /**
      * 退出多选模式
      */
@@ -378,7 +385,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         isSelectionMode = false
         selectedPhotos.clear()
     }
-    
+
     /**
      * 切换照片选中状态
      */
@@ -388,13 +395,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         } else {
             selectedPhotos.add(photo)
         }
-        
+
         // 如果没有选中的照片，退出多选模式
         if (selectedPhotos.isEmpty()) {
             exitSelectionMode()
         }
     }
-    
+
     /**
      * 全选/取消全选
      */
@@ -406,7 +413,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             selectedPhotos.addAll(_photos.value)
         }
     }
-    
+
     /**
      * 设置当前查看的照片
      */
@@ -414,7 +421,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         currentPhotoIndex = index.coerceIn(0, (_photos.value.size - 1).coerceAtLeast(0))
         loadCurrentPhotoMetadata()
     }
-    
+
     /**
      * 获取当前照片
      */
@@ -674,7 +681,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             PLog.d(TAG, "Batch deleted $deletedCount photos after confirmation")
         }
     }
-    
+
     /**
      * 分享照片
      */
@@ -706,7 +713,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
         }
     }
-    
+
     /**
      * 批量分享选中的照片
      */
@@ -742,7 +749,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
         }
     }
-    
+
     /**
      * 进入编辑模式
      */
@@ -756,6 +763,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editRotation = metadata.rotation
             editFrameId = metadata.frameId
             editShowAppBranding = metadata.showAppBranding
+            editCustomProperties.clear()
+            editCustomProperties.putAll(metadata.customProperties)
         } ?: run {
             editLutId = null
             editLutIntensity = 1f
@@ -763,8 +772,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editRotation = 0f
             editFrameId = null
             editShowAppBranding = true
+            editCustomProperties.clear()
         }
-        
+
         // 加载当前编辑的 LUT 配置
         editLutId?.let { id ->
             viewModelScope.launch {
@@ -774,7 +784,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
         }
     }
-    
+
     /**
      * 退出编辑模式
      */
@@ -787,22 +797,23 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editLutConfig = null
         editFrameId = null
         editShowAppBranding = true
+        editCustomProperties.clear()
     }
-    
+
     /**
      * 旋转90度
      */
     fun rotate90() {
         editRotation = (editRotation + 90f) % 360f
     }
-    
+
     /**
      * 设置亮度
      */
     fun setBrightness(value: Float) {
         editBrightness = value.coerceIn(0.5f, 2f)
     }
-    
+
     /**
      * 设置 LUT
      */
@@ -812,35 +823,42 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editLutConfig = null
             return
         }
-        
+
         viewModelScope.launch {
             editLutConfig = withContext(Dispatchers.IO) {
                 contentRepository.lutManager.loadLut(lutId)
             }
         }
     }
-    
+
     /**
      * 设置 LUT 强度
      */
     fun updateEditLutIntensity(intensity: Float) {
         editLutIntensity = intensity.coerceIn(0f, 1f)
     }
-    
+
     /**
      * 设置边框
      */
     fun setEditFrame(frameId: String?) {
         editFrameId = frameId
     }
-    
+
     /**
      * 设置是否显示 App 品牌
      */
     fun setShowAppBranding(show: Boolean) {
         editShowAppBranding = show
     }
-    
+
+    /**
+     * 更新水印自定义属性
+     */
+    fun updateEditCustomProperty(key: String, value: String) {
+        editCustomProperties[key] = value
+    }
+
     /**
      * 获取指定照片的完整转换器（LUT + 边框）
      */
@@ -853,6 +871,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             photoProcessor = photoProcessor
         )
     }
+
     /**
      * 获取应用 LUT 和边框后的预览 Bitmap
      */
@@ -863,18 +882,19 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val inputStream = context.contentResolver.openInputStream(photo.previewUri)
                 val bitmap = BitmapFactory.decodeStream(inputStream)
                 inputStream?.close()
-                
+
                 if (bitmap == null) return@withContext null
-                
+
                 val metadata = (photo.metadata ?: PhotoMetadata()).copy(
                     lutId = editLutId,
                     lutIntensity = editLutIntensity,
                     brightness = editBrightness,
                     rotation = editRotation,
                     frameId = editFrameId,
-                    showAppBranding = editShowAppBranding
+                    showAppBranding = editShowAppBranding,
+                    customProperties = editCustomProperties.toMap()
                 )
-                
+
                 photoProcessor.process(context, bitmap, metadata, photo.previewUri)
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to create preview", e)
@@ -882,7 +902,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
         }
     }
-    
+
     /**
      * 保存编辑（只更新元数据，不修改原图）
      */
@@ -904,13 +924,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     brightness = editBrightness,
                     rotation = editRotation,
                     frameId = editFrameId,
-                    showAppBranding = editShowAppBranding
+                    showAppBranding = editShowAppBranding,
+                    customProperties = editCustomProperties.toMap()
                 )
                 val success = PhotoManager.saveMetadata(context, photo.id, metadata)
-                
+
                 if (success) {
                     currentPhotoMetadata = metadata
-                    
+
                     // 更新 photos 列表中对应照片的 metadata，触发 UI 刷新
                     val updatedPhotos = _photos.value.map { p ->
                         if (p.id == photo.id) {
@@ -920,12 +941,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         }
                     }
                     _photos.value = updatedPhotos
-                    
+
                     // 同步更新 latestPhoto
                     if (_latestPhoto.value?.id == photo.id) {
                         _latestPhoto.value = _latestPhoto.value?.copy(metadata = metadata)
                     }
-                    
+
                     exitEditMode()
                 }
                 onComplete(success)
@@ -935,7 +956,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
         }
     }
-    
+
     /**
      * 保存编辑（导出烘焙后的图片）
      */
@@ -953,7 +974,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             brightness = editBrightness,
             rotation = editRotation,
             frameId = editFrameId,
-            showAppBranding = editShowAppBranding
+            showAppBranding = editShowAppBranding,
+            customProperties = editCustomProperties.toMap()
         )
         exportPhotoInternal(
             photo = photo,
@@ -1047,7 +1069,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val processedBitmap = photoProcessor.process(context, bitmap, metadata, photo.uri)
 
                 // 保存到指定目录
-                val filename = "PhotonCamera_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}$filenameSuffix.jpg"
+                val filename =
+                    "PhotonCamera_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}$filenameSuffix.jpg"
                 val contentValues = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
                     put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
@@ -1130,7 +1153,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
         }
     }
-    
+
     override fun onCleared() {
         super.onCleared()
         lutImageProcessor.release()
