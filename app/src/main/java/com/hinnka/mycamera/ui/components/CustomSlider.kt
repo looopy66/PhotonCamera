@@ -227,7 +227,7 @@ fun CustomSliderThinThumb(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(thumbHeight + 8.dp)
+            .height(thumbHeight + 4.dp)
     ) {
         Canvas(
             modifier = Modifier

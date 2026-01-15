@@ -257,27 +257,27 @@ fun LutIntensitySlider(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(
+            /*.background(
                 Color.Black.copy(alpha = 0.6f),
                 RoundedCornerShape(8.dp)
-            )
-            .padding(horizontal = 8.dp, vertical = 8.dp)
+            )*/
+            .padding(horizontal = 8.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
+            /*Text(
                 text = stringResource(R.string.filter_intensity),
                 color = if (enabled) Color.White else Color.Gray,
                 fontSize = 12.sp
-            )
+            )*/
 
             Text(
                 text = "${(intensity * 100).toInt()}%",
                 color = if (enabled) Color.White else Color.Gray,
-                fontSize = 12.sp,
+                fontSize = 10.sp,
                 fontWeight = FontWeight.Bold
             )
         }
@@ -316,8 +316,8 @@ fun LutControlPanel(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+            .padding(4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         // 强度滑块（LUT 始终可用）
         LutIntensitySlider(

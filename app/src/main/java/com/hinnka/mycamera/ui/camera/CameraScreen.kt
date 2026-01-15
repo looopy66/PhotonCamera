@@ -7,6 +7,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -25,14 +26,15 @@ import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathOperation
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.hinnka.mycamera.R
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.CameraUtils
 import com.hinnka.mycamera.ui.components.GalleryThumbnail
@@ -53,7 +55,8 @@ import kotlin.math.sin
 enum class ActivePanel {
     NONE,
     SETTINGS,
-    FILTERS
+    FILTERS,
+    PARAMETERS
 }
 
 @Composable
@@ -70,21 +73,21 @@ fun CameraScreen(
     val showLevelIndicator by viewModel.showLevelIndicator.collectAsState(initial = false)
 
     val backgroundColor = Color(0xFF434A5D)
-    
+
     // 标记相机是否已打开
     var cameraOpened by remember { mutableStateOf(false) }
-    
+
     // UI State
     var activePanel by remember { mutableStateOf(ActivePanel.NONE) }
     var selectedParameter by remember { mutableStateOf<CameraParameter?>(null) }
-    
+
     // 当打开滤镜面板时，生成预览图
     LaunchedEffect(activePanel) {
         if (activePanel == ActivePanel.FILTERS) {
             viewModel.captureAndGenerateLutPreviews()
         }
     }
-    
+
     // 从后台返回时检查并恢复相机，刷新最新照片
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         if (cameraOpened) {
@@ -92,7 +95,7 @@ fun CameraScreen(
         }
         galleryViewModel.refreshLatestPhoto()
     }
-    
+
     // 监听照片保存完成事件，立即刷新缩略图
     LaunchedEffect(Unit) {
         viewModel.imageSavedEvent.collect {
@@ -123,72 +126,186 @@ fun CameraScreen(
             }
         )
     }
-    
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(backgroundColor)
-    ) {
-        // 顶部控制条
-        CameraTopBar(
-            flashMode = state.flashMode,
-            onFlashToggle = {
-                viewModel.toggleFlash()
-            },
-            timerSeconds = state.timerSeconds,
-            onTimerToggle = { viewModel.toggleTimer() },
-            showHistogram = viewModel.showHistogram,
-            onHistogramToggle = {
-                viewModel.saveShowHistogram(!viewModel.showHistogram)
-            },
-            showGrid = state.showGrid,
-            onGridToggle = { viewModel.toggleGrid() },
-            onSettingsClick = onSettingsClick
-        )
 
-        Box(
+    Box(modifier = modifier.fillMaxSize()) {
+        Column(
             modifier = Modifier
-                .padding(8.dp)
-                .fillMaxWidth()
-                .aspectRatio(3 / 4f)
-                .background(Color.Black),
+                .fillMaxSize()
+                .background(backgroundColor)
         ) {
-            // 相机预览
-            CameraPreviewGL(
-                aspectRatio = state.aspectRatio,
-                previewSize = previewSize,
-                currentLut = viewModel.currentLutConfig,
-                lutIntensity = state.lutIntensity,
-                focusPoint = state.focusPoint,
-                isFocusing = state.isFocusing,
-                focusSuccess = state.focusSuccess,
-                onSurfaceTextureReady = { surfaceTexture ->
-                    viewModel.openCamera(surfaceTexture)
-                    cameraOpened = true
+            // 顶部控制条
+            CameraTopBar(
+                flashMode = state.flashMode,
+                onFlashToggle = {
+                    viewModel.toggleFlash()
                 },
-                onSurfaceDestroyed = { 
-                    viewModel.closeCamera()
-                    cameraOpened = false
+                timerSeconds = state.timerSeconds,
+                onTimerToggle = { viewModel.toggleTimer() },
+                showHistogram = viewModel.showHistogram,
+                onHistogramToggle = {
+                    viewModel.saveShowHistogram(!viewModel.showHistogram)
                 },
-                onTap = { x, y, w, h ->
-                    viewModel.focusOnPoint(x, y, w, h)
-                },
-                modifier = Modifier.fillMaxSize()
+                showGrid = state.showGrid,
+                onGridToggle = { viewModel.toggleGrid() },
+                onSettingsClick = onSettingsClick
             )
-            
-            Box(modifier = Modifier.fillMaxWidth().aspectRatio(3 / 4f).align(Alignment.Center)) {
-                // 实时直方图 (Overlaid on preview if enabled)
-                if (state.histogram != null && viewModel.showHistogram) {
-                    HistogramView(
-                        histogram = state.histogram,
-                        modifier = Modifier
-                            .padding(16.dp)
-                            .size(80.dp, 40.dp)
-                            .align(Alignment.TopStart)
-                            .autoRotate(dx = -20.dp, dy = 20.dp)
-                    )
+
+            Box(
+                modifier = Modifier
+                    .padding(8.dp)
+                    .fillMaxWidth()
+                    .aspectRatio(3 / 4f)
+                    .background(Color.Black),
+            ) {
+                // 相机预览
+                CameraPreviewGL(
+                    aspectRatio = state.aspectRatio,
+                    previewSize = previewSize,
+                    currentLut = viewModel.currentLutConfig,
+                    lutIntensity = state.lutIntensity,
+                    focusPoint = state.focusPoint,
+                    isFocusing = state.isFocusing,
+                    focusSuccess = state.focusSuccess,
+                    onSurfaceTextureReady = { surfaceTexture ->
+                        viewModel.openCamera(surfaceTexture)
+                        cameraOpened = true
+                    },
+                    onSurfaceDestroyed = {
+                        viewModel.closeCamera()
+                        cameraOpened = false
+                    },
+                    onTap = { x, y, w, h ->
+                        // 如果 LUT 面板打开，点击预览区域关闭面板
+                        if (activePanel != ActivePanel.NONE) {
+                            activePanel = ActivePanel.NONE
+                        } else {
+                            // 否则执行对焦
+                            viewModel.focusOnPoint(x, y, w, h)
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                Box(modifier = Modifier.fillMaxWidth().aspectRatio(3 / 4f).align(Alignment.Center)) {
+                    // 实时直方图 (Overlaid on preview if enabled)
+                    if (state.histogram != null && viewModel.showHistogram) {
+                        HistogramView(
+                            histogram = state.histogram,
+                            modifier = Modifier
+                                .padding(16.dp)
+                                .size(80.dp, 40.dp)
+                                .align(Alignment.TopStart)
+                                .autoRotate(dx = -20.dp, dy = 20.dp)
+                        )
+                    }
+
+                    if (activePanel == ActivePanel.NONE) {
+                        // Zoom Control Bar (Overlay at bottom of preview)
+                        ZoomControlBar(
+                            zoomRatio = viewModel.zoomRatioByMain,
+                            availableCameras = state.availableCameras,
+                            currentCameraId = state.getCurrentCameraInfo()?.cameraId ?: "0",
+                            onZoomChange = { viewModel.setZoomRatio(it) },
+                            onLensSwitch = { lenId -> viewModel.switchToLens(lenId) },
+                            onFilterClick = {
+                                // Toggle Filter Panel
+                                activePanel =
+                                    if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
+                            },
+                            modifier = Modifier.align(Alignment.BottomCenter)
+                        )
+                    }
+
+                    // 网格线覆盖
+                    if (state.showGrid) {
+                        GridOverlay(
+                            aspectRatio = state.aspectRatio,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    // 水平仪覆盖
+                    if (showLevelIndicator) {
+                        LevelIndicatorOverlay(
+                            aspectRatio = state.aspectRatio,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    // 倒计时覆盖
+                    if (state.countdownValue > 0) {
+                        CountdownOverlay(
+                            countdownValue = state.countdownValue,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
                 }
 
+                CornerOverlay(
+                    modifier = Modifier.fillMaxSize(),
+                    radius = 16.dp,
+                    color = backgroundColor
+                )
+            }
+
+            Column(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                CameraParameterBar(
+                    state = state,
+                    selectedParameter = selectedParameter,
+                    onParameterClick = { param ->
+                        // Toggle selection: if clicking the same parameter, deselect it; otherwise select new one
+                        if (selectedParameter == param) {
+                            selectedParameter = null
+                            activePanel = ActivePanel.NONE
+                        } else {
+                            selectedParameter = param
+                            activePanel = ActivePanel.PARAMETERS
+                        }
+                    }
+                )
+
+                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    // 底部控制层
+                    Controls(
+                        state = state,
+                        viewModel = viewModel,
+                        galleryViewModel = galleryViewModel,
+                        latestPhoto = latestPhoto,
+                        onGalleryClick = {
+                            galleryViewModel.loadPhotos()
+                            onGalleryClick()
+                        }
+                    )
+                }
+            }
+
+        }
+
+        // 全屏遮罩层，用于点击关闭 LutControlPanel
+        // 放在最外层 Box，确保覆盖整个屏幕
+        if (activePanel != ActivePanel.NONE) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures {
+                            // 点击遮罩关闭 LUT 面板
+                            activePanel = ActivePanel.NONE
+                            selectedParameter = null
+                        }
+                    }
+            )
+        }
+
+        // LutControlPanel 显示在遮罩层之上，确保能接收点击事件
+        if (activePanel != ActivePanel.NONE) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 72.dp)
+                    .aspectRatio(3 / 4f),
+                contentAlignment = Alignment.BottomCenter
+            ) {
                 if (activePanel == ActivePanel.FILTERS) {
                     LutControlPanel(
                         availableLuts = viewModel.availableLutList,
@@ -197,144 +314,78 @@ fun CameraScreen(
                         lutPreviewBitmaps = viewModel.lutPreviewBitmaps,
                         onLutSelected = { viewModel.setLut(it) },
                         onIntensityChange = { viewModel.setLutIntensity(it) },
-                        modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter).padding(bottom = 48.dp)
+                        modifier = Modifier.fillMaxWidth()
+                            .padding(horizontal = 8.dp)
                     )
                 }
-
-                // Zoom Control Bar (Overlay at bottom of preview)
-                ZoomControlBar(
-                    zoomRatio = viewModel.zoomRatioByMain,
-                    availableCameras = state.availableCameras,
-                    currentCameraId = state.getCurrentCameraInfo()?.cameraId ?: "0",
-                    onZoomChange = { viewModel.setZoomRatio(it) },
-                    onLensSwitch = { lenId -> viewModel.switchToLens(lenId) },
-                    onFilterClick = {
-                        // Toggle Filter Panel
-                        activePanel = if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
-                    },
-                    modifier = Modifier.align(Alignment.BottomCenter)
-                )
-                
-                // 网格线覆盖
-                if (state.showGrid) {
-                    GridOverlay(
-                        aspectRatio = state.aspectRatio,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-                
-                // 水平仪覆盖
-                if (showLevelIndicator) {
-                    LevelIndicatorOverlay(
-                        aspectRatio = state.aspectRatio,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-                
-                // 倒计时覆盖
-                if (state.countdownValue > 0) {
-                    CountdownOverlay(
-                        countdownValue = state.countdownValue,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-            }
-
-            Box(modifier = Modifier.align(Alignment.BottomCenter)) {
-
-                // Parameter Ruler (shown above CameraParameterBar when a parameter is selected)
-                selectedParameter?.let { param ->
-                    ParameterRuler(
-                        parameter = param,
-                        currentValue = when (param) {
-                            CameraParameter.EXPOSURE_COMPENSATION -> state.exposureCompensation * state.getExposureCompensationStep()
-                            CameraParameter.SHUTTER_SPEED -> state.shutterSpeed.toFloat()
-                            CameraParameter.ISO -> state.iso.toFloat()
-                            CameraParameter.APERTURE -> state.aperture
-                            CameraParameter.WHITE_BALANCE -> state.awbTemperature.toFloat()
-                        },
-                        minValue = when (param) {
-                            CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().lower * state.getExposureCompensationStep()
-                            CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().lower.toFloat()
-                            CameraParameter.ISO -> state.getIsoRange().lower.toFloat()
-                            CameraParameter.APERTURE -> state.aperture // Fixed
-                            CameraParameter.WHITE_BALANCE -> 2000f
-                        },
-                        maxValue = when (param) {
-                            CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().upper * state.getExposureCompensationStep()
-                            CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().upper.toFloat()
-                            CameraParameter.ISO -> state.getIsoRange().upper.toFloat()
-                            CameraParameter.APERTURE -> state.aperture // Fixed
-                            CameraParameter.WHITE_BALANCE -> 10000f
-                        },
-                        isAdjustable = when (param) {
-                            CameraParameter.EXPOSURE_COMPENSATION -> state.isAutoExposure
-                            CameraParameter.SHUTTER_SPEED -> !state.isShutterSpeedAuto
-                            CameraParameter.ISO -> !state.isIsoAuto
-                            CameraParameter.APERTURE -> false
-                            CameraParameter.WHITE_BALANCE -> state.awbMode != android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
-                        },
-                        showAutoButton = when (param) {
-                            CameraParameter.SHUTTER_SPEED, CameraParameter.ISO, CameraParameter.WHITE_BALANCE -> true
-                            else -> false
-                        },
-                        onValueChange = { value ->
-                            when (param) {
-                                CameraParameter.EXPOSURE_COMPENSATION -> viewModel.setExposureCompensation((value / state.getExposureCompensationStep()).roundToInt())
-                                CameraParameter.SHUTTER_SPEED -> viewModel.setShutterSpeed(value.toLong())
-                                CameraParameter.ISO -> viewModel.setIso(value.toInt())
-                                CameraParameter.APERTURE -> {} // Not adjustable
-                                CameraParameter.WHITE_BALANCE -> viewModel.setAwbTemperature(value.toInt())
-                            }
-                        },
-                        onAutoModeToggle = {
-                            when (param) {
-                                CameraParameter.SHUTTER_SPEED -> viewModel.setShutterSpeedAuto(!state.isShutterSpeedAuto)
-                                CameraParameter.ISO -> viewModel.setIsoAuto(!state.isIsoAuto)
-                                CameraParameter.WHITE_BALANCE -> {
-                                    if (state.awbMode == android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO) {
-                                        viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_OFF)
-                                    } else {
-                                        viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO)
-                                    }
+                if (activePanel == ActivePanel.PARAMETERS) {
+                    // Parameter Ruler (shown above CameraParameterBar when a parameter is selected)
+                    selectedParameter?.let { param ->
+                        ParameterRuler(
+                            parameter = param,
+                            currentValue = when (param) {
+                                CameraParameter.EXPOSURE_COMPENSATION -> state.exposureCompensation * state.getExposureCompensationStep()
+                                CameraParameter.SHUTTER_SPEED -> state.shutterSpeed.toFloat()
+                                CameraParameter.ISO -> state.iso.toFloat()
+                                CameraParameter.APERTURE -> state.aperture
+                                CameraParameter.WHITE_BALANCE -> state.awbTemperature.toFloat()
+                            },
+                            minValue = when (param) {
+                                CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().lower * state.getExposureCompensationStep()
+                                CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().lower.toFloat()
+                                CameraParameter.ISO -> state.getIsoRange().lower.toFloat()
+                                CameraParameter.APERTURE -> state.aperture // Fixed
+                                CameraParameter.WHITE_BALANCE -> 2000f
+                            },
+                            maxValue = when (param) {
+                                CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().upper * state.getExposureCompensationStep()
+                                CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().upper.toFloat()
+                                CameraParameter.ISO -> state.getIsoRange().upper.toFloat()
+                                CameraParameter.APERTURE -> state.aperture // Fixed
+                                CameraParameter.WHITE_BALANCE -> 10000f
+                            },
+                            isAdjustable = when (param) {
+                                CameraParameter.EXPOSURE_COMPENSATION -> state.isAutoExposure
+                                CameraParameter.SHUTTER_SPEED -> !state.isShutterSpeedAuto
+                                CameraParameter.ISO -> !state.isIsoAuto
+                                CameraParameter.APERTURE -> false
+                                CameraParameter.WHITE_BALANCE -> state.awbMode != android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
+                            },
+                            showAutoButton = when (param) {
+                                CameraParameter.SHUTTER_SPEED, CameraParameter.ISO, CameraParameter.WHITE_BALANCE -> true
+                                else -> false
+                            },
+                            onValueChange = { value ->
+                                when (param) {
+                                    CameraParameter.EXPOSURE_COMPENSATION -> viewModel.setExposureCompensation((value / state.getExposureCompensationStep()).roundToInt())
+                                    CameraParameter.SHUTTER_SPEED -> viewModel.setShutterSpeed(value.toLong())
+                                    CameraParameter.ISO -> viewModel.setIso(value.toInt())
+                                    CameraParameter.APERTURE -> {} // Not adjustable
+                                    CameraParameter.WHITE_BALANCE -> viewModel.setAwbTemperature(value.toInt())
                                 }
-                                else -> {}
+                            },
+                            onAutoModeToggle = {
+                                when (param) {
+                                    CameraParameter.SHUTTER_SPEED -> viewModel.setShutterSpeedAuto(!state.isShutterSpeedAuto)
+                                    CameraParameter.ISO -> viewModel.setIsoAuto(!state.isIsoAuto)
+                                    CameraParameter.WHITE_BALANCE -> {
+                                        if (state.awbMode == android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO) {
+                                            viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_OFF)
+                                        } else {
+                                            viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO)
+                                        }
+                                    }
+
+                                    else -> {}
+                                }
+                            },
+                            onDismiss = {
+                                selectedParameter = null
+                                activePanel = ActivePanel.NONE
                             }
-                        },
-                        onDismiss = { selectedParameter = null }
-                    )
-                }
-            }
-
-            CornerOverlay(
-                modifier = Modifier.fillMaxSize(),
-                radius = 16.dp,
-                color = backgroundColor
-            )
-        }
-
-        Column(modifier = Modifier.fillMaxWidth().weight(1f)) {
-            CameraParameterBar(
-                state = state,
-                selectedParameter = selectedParameter,
-                onParameterClick = { param ->
-                    // Toggle selection: if clicking the same parameter, deselect it; otherwise select new one
-                    selectedParameter = if (selectedParameter == param) null else param
-                }
-            )
-
-            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                // 底部控制层
-                Controls(
-                    state = state,
-                    viewModel = viewModel,
-                    galleryViewModel = galleryViewModel,
-                    latestPhoto = latestPhoto,
-                    onGalleryClick = {
-                        galleryViewModel.loadPhotos()
-                        onGalleryClick()
+                        )
                     }
-                )
+                }
             }
         }
     }
@@ -408,7 +459,7 @@ fun CaptureButton(
         animationSpec = spring(dampingRatio = 0.5f),
         label = "captureScale"
     )
-    
+
     Box(
         modifier = modifier
             .size(80.dp)
@@ -422,7 +473,7 @@ fun CaptureButton(
                 .fillMaxSize()
                 .border(2.dp, Color.White, CircleShape)
         )
-        
+
         // Inner Yellow Ring
         Box(
             modifier = Modifier
@@ -430,7 +481,7 @@ fun CaptureButton(
                 .fillMaxSize()
                 .border(4.dp, Color(0xFFFFD700), CircleShape)
         )
-        
+
         // Center Solid Button (When not capturing)
         if (!isCapturing) {
             Box(
