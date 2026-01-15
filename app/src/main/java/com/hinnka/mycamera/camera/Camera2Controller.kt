@@ -719,6 +719,15 @@ class Camera2Controller(private val context: Context) {
             return
         }
 
+        val availableTonemapModes = cachedCharacteristics?.get(
+            CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES
+        )
+        if (availableTonemapModes?.contains(CaptureRequest.TONEMAP_MODE_PRESET_CURVE) != true) {
+            // 不支持，跳过设置
+            PLog.d(TAG, "LUT 已启用，但硬件不支持 TONEMAP_MODE_PRESET_CURVE")
+            return
+        }
+
         try {
             // 只在支持的设备上设置 sRGB 平坦曲线
             builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_PRESET_CURVE)
