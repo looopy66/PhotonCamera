@@ -7,6 +7,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
@@ -123,10 +124,23 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     // 可用的边框列表
     var availableFrames: List<FrameInfo> by mutableStateOf(emptyList())
         private set
-    
+
     // 最新照片（用于相机界面显示入口）
     private val _latestPhoto = MutableStateFlow<PhotoData?>(null)
     val latestPhoto: StateFlow<PhotoData?> = _latestPhoto.asStateFlow()
+
+    // 待删除的照片（用于 Activity Result 回调）
+    var pendingDeletePhoto: PhotoData? by mutableStateOf(null)
+        private set
+
+    // 删除请求的 PendingIntent（用于启动系统删除对话框）
+    var deletePendingIntent: android.app.PendingIntent? by mutableStateOf(null)
+        private set
+
+    // 批量删除相关状态
+    private var pendingDeletePhotos: List<PhotoData> = emptyList()
+    var batchDeletePendingIntent: android.app.PendingIntent? by mutableStateOf(null)
+        private set
     
     init {
         loadPhotos()
@@ -407,46 +421,200 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun getCurrentPhoto(): PhotoData? {
         return _photos.value.getOrNull(currentPhotoIndex)
     }
-    
+
     /**
-     * 删除单张照片
+     * 获取删除系统相册照片的请求 PendingIntent（用于 Android 11+）
+     *
+     * @return PendingIntent 如果有导出的照片需要删除，返回 PendingIntent；否则返回 null
      */
-    fun deletePhoto(photo: PhotoData, onComplete: (Boolean) -> Unit = {}) {
+    private fun getDeleteRequest(photo: PhotoData): android.app.PendingIntent? {
+        val context = getApplication<Application>()
+        return PhotoManager.createDeleteRequest(context, photo.id)
+    }
+
+    /**
+     * 请求删除照片
+     *
+     * 这个方法会：
+     * 1. 在 Android 11+ 上检查是否有导出的照片需要删除
+     * 2. 如果有，设置 deletePendingIntent 和 pendingDeletePhoto，UI 层需要监听这些状态并启动删除确认对话框
+     * 3. 如果没有导出的照片，或者在 Android 10 及以下，直接删除照片
+     */
+    fun requestDeletePhoto(photo: PhotoData) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Android 11+: 检查是否有导出的照片
+            val pendingIntent = getDeleteRequest(photo)
+
+            if (pendingIntent != null) {
+                // 有导出的照片，需要用户确认
+                pendingDeletePhoto = photo
+                deletePendingIntent = pendingIntent
+                PLog.d(TAG, "Set delete pending intent for photo ${photo.id}")
+            } else {
+                // 没有导出的照片，直接删除应用内照片
+                deletePhotoDirectly(photo)
+            }
+        } else {
+            // Android 10 及以下: 直接删除所有照片
+            deletePhotoDirectly(photo)
+        }
+    }
+
+    /**
+     * 清除删除请求状态
+     */
+    fun clearDeleteRequest() {
+        pendingDeletePhoto = null
+        deletePendingIntent = null
+    }
+
+    /**
+     * 清除批量删除请求状态
+     */
+    fun clearBatchDeleteRequest() {
+        pendingDeletePhotos = emptyList()
+        batchDeletePendingIntent = null
+    }
+
+    /**
+     * 直接删除照片（不检查系统相册）
+     */
+    private fun deletePhotoDirectly(photo: PhotoData) {
         viewModelScope.launch {
             val success = repository.deletePhoto(photo)
             if (success) {
-                // PhotoManager.deletePhoto 已由 repository.deletePhoto 调用
                 loadPhotos()
+                PLog.d(TAG, "Photo deleted: ${photo.id}")
+            } else {
+                PLog.e(TAG, "Failed to delete photo: ${photo.id}")
             }
+        }
+    }
+
+    /**
+     * 仅删除应用内部的照片（在用户确认删除系统相册照片后调用）
+     */
+    fun deletePhotoAfterConfirmation(onComplete: (Boolean) -> Unit = {}) {
+        val photo = pendingDeletePhoto ?: return
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            val success = PhotoManager.deletePhotoOnly(context, photo.id)
+            if (success) {
+                loadPhotos()
+
+                // 如果删除的是当前照片，调整索引
+                if (photo == getCurrentPhoto() && currentPhotoIndex >= _photos.value.size) {
+                    currentPhotoIndex = (_photos.value.size - 1).coerceAtLeast(0)
+                }
+
+                PLog.d(TAG, "Photo deleted after confirmation: ${photo.id}")
+            }
+            clearDeleteRequest()
             onComplete(success)
         }
     }
-    
+
     /**
      * 删除当前照片
      */
-    fun deleteCurrentPhoto(onComplete: (Boolean) -> Unit = {}) {
+    fun deleteCurrentPhoto() {
         getCurrentPhoto()?.let { photo ->
-            deletePhoto(photo) { success ->
-                if (success && currentPhotoIndex >= _photos.value.size) {
-                    currentPhotoIndex = (_photos.value.size - 1).coerceAtLeast(0)
-                }
-                onComplete(success)
-            }
+            requestDeletePhoto(photo)
         }
     }
-    
+
     /**
      * 批量删除选中的照片
+     *
+     * Android 11+: 会使用 MediaStore.createDeleteRequest 弹出系统确认对话框
+     * Android 10-: 直接删除所有照片
      */
-    fun deleteSelectedPhotos(onComplete: (Int) -> Unit = {}) {
+    fun deleteSelectedPhotos() {
+        val toDelete = selectedPhotos.toList()
+        if (toDelete.isEmpty()) return
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Android 11+: 收集所有导出的 URIs
+            viewModelScope.launch {
+                val context = getApplication<Application>()
+                val allExportedUris = mutableListOf<Uri>()
+
+                withContext(Dispatchers.IO) {
+                    toDelete.forEach { photo ->
+                        val metadata = PhotoManager.loadMetadata(context, photo.id)
+                        metadata?.exportedUris?.forEach { uriString ->
+                            try {
+                                allExportedUris.add(Uri.parse(uriString))
+                            } catch (e: Exception) {
+                                PLog.e(TAG, "Invalid URI: $uriString", e)
+                            }
+                        }
+                    }
+                }
+
+                if (allExportedUris.isNotEmpty()) {
+                    // 有导出的照片，需要用户确认
+                    try {
+                        val pendingIntent = MediaStore.createDeleteRequest(
+                            context.contentResolver,
+                            allExportedUris
+                        )
+                        pendingDeletePhotos = toDelete
+                        batchDeletePendingIntent = pendingIntent
+                        PLog.d(TAG, "Set batch delete pending intent for ${toDelete.size} photos")
+                    } catch (e: Exception) {
+                        PLog.e(TAG, "Failed to create batch delete request", e)
+                        // 创建请求失败，直接删除应用内照片
+                        deleteBatchPhotosDirectly(toDelete)
+                    }
+                } else {
+                    // 没有导出的照片，直接删除应用内照片
+                    deleteBatchPhotosDirectly(toDelete)
+                }
+            }
+        } else {
+            // Android 10 及以下: 直接删除
+            deleteBatchPhotosDirectly(toDelete)
+        }
+    }
+
+    /**
+     * 直接批量删除照片（不检查系统相册）
+     */
+    private fun deleteBatchPhotosDirectly(photos: List<PhotoData>) {
         viewModelScope.launch {
-            val toDelete = selectedPhotos.toList()
-            val deletedCount = repository.deletePhotos(toDelete)
-            
+            val deletedCount = repository.deletePhotos(photos)
             exitSelectionMode()
             loadPhotos()
+            PLog.d(TAG, "Batch deleted $deletedCount photos")
+        }
+    }
+
+    /**
+     * 批量删除确认后的回调（在用户确认删除系统相册照片后调用）
+     */
+    fun deleteBatchPhotosAfterConfirmation(onComplete: (Int) -> Unit = {}) {
+        val photos = pendingDeletePhotos
+        if (photos.isEmpty()) return
+
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            var deletedCount = 0
+
+            withContext(Dispatchers.IO) {
+                photos.forEach { photo ->
+                    val success = PhotoManager.deletePhotoOnly(context, photo.id)
+                    if (success) {
+                        deletedCount++
+                    }
+                }
+            }
+
+            exitSelectionMode()
+            loadPhotos()
+            clearBatchDeleteRequest()
             onComplete(deletedCount)
+            PLog.d(TAG, "Batch deleted $deletedCount photos after confirmation")
         }
     }
     
@@ -807,20 +975,20 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             try {
                 val context = getApplication<Application>()
-                
+
                 // 读取照片
                 val inputStream = context.contentResolver.openInputStream(photo.uri)
                 val bitmap = BitmapFactory.decodeStream(inputStream)
                 inputStream?.close()
-                
+
                 if (bitmap == null) {
                     onComplete(false)
                     return@launch
                 }
-                
+
                 // 处理照片
                 val processedBitmap = photoProcessor.process(context, bitmap, metadata, photo.uri)
-                
+
                 // 保存到指定目录
                 val filename = "PhotonCamera_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}$filenameSuffix.jpg"
                 val contentValues = ContentValues().apply {
@@ -828,22 +996,30 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
                     put(MediaStore.MediaColumns.RELATIVE_PATH, directory)
                 }
-                
+
                 val uri = context.contentResolver.insert(
                     MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                     contentValues
                 )
-                
+
                 uri?.let {
                     context.contentResolver.openOutputStream(it)?.use { outputStream ->
                         // 使用 98 质量以获得更高的图像清晰度
                         processedBitmap.compress(Bitmap.CompressFormat.JPEG, 98, outputStream)
                     }
+
+                    // 保存导出的 URI 到元数据
+                    val currentMetadata = PhotoManager.loadMetadata(context, photo.id) ?: metadata
+                    val updatedMetadata = currentMetadata.copy(
+                        exportedUris = currentMetadata.exportedUris + it.toString()
+                    )
+                    PhotoManager.saveMetadata(context, photo.id, updatedMetadata)
+                    PLog.d(TAG, "Exported URI saved: $it for photo ${photo.id}")
                 }
-                
+
                 processedBitmap.recycle()
                 onComplete(uri != null)
-                
+
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to export photo", e)
                 onComplete(false)

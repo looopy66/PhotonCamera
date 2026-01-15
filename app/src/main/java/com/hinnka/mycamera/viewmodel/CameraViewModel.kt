@@ -795,6 +795,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                                     // 使用 98 质量以获得更高的图像清晰度
                                     processedBitmap.compress(Bitmap.CompressFormat.JPEG, 98, outputStream)
                                 }
+
+                                // 保存导出的 URI 到元数据
+                                val photoId = PhotoManager.getPhotoIds(context).firstOrNull()
+                                if (photoId != null) {
+                                    val currentMetadata = PhotoManager.loadMetadata(context, photoId) ?: metadata
+                                    val updatedMetadata = currentMetadata.copy(
+                                        exportedUris = currentMetadata.exportedUris + it.toString()
+                                    )
+                                    PhotoManager.saveMetadata(context, photoId, updatedMetadata)
+                                    PLog.d(TAG, "Exported URI saved: $it")
+                                }
                             }
 
                             processedBitmap.recycle()

@@ -1,6 +1,8 @@
 package com.hinnka.mycamera.ui.gallery
 
+import android.app.Activity
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -64,13 +66,40 @@ fun GalleryScreen(
     val isSharing by viewModel.isSharing.collectAsState()
     val isSelectionMode = viewModel.isSelectionMode
     val selectedPhotos = viewModel.selectedPhotos
-    
+
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri ->
         uri?.let { viewModel.importPhoto(it) }
     }
-    
+
+    // Activity Result Launcher for batch delete confirmation
+    val batchDeleteLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            // User confirmed deletion, delete internal photos
+            viewModel.deleteBatchPhotosAfterConfirmation()
+        } else {
+            // User cancelled deletion
+            viewModel.clearBatchDeleteRequest()
+        }
+    }
+
+    // Monitor batchDeletePendingIntent and launch system delete dialog
+    LaunchedEffect(viewModel.batchDeletePendingIntent) {
+        viewModel.batchDeletePendingIntent?.let { pendingIntent ->
+            try {
+                batchDeleteLauncher.launch(
+                    IntentSenderRequest.Builder(pendingIntent.intentSender).build()
+                )
+            } catch (e: Exception) {
+                // Failed to launch, clear the request
+                viewModel.clearBatchDeleteRequest()
+            }
+        }
+    }
+
     var showDeleteDialog by remember { mutableStateOf(false) }
     
     // 延迟加载照片列表，避免与跳转动画冲突导致卡顿

@@ -1,17 +1,20 @@
 package com.hinnka.mycamera.gallery
 
+import android.app.PendingIntent
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.ThumbnailUtils
 import android.net.Uri
-import android.util.Log
+import android.os.Build
+import android.provider.MediaStore
 import com.hinnka.mycamera.camera.CaptureInfo
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
@@ -230,21 +233,79 @@ object PhotoManager {
     }
 
     /**
+     * 创建删除系统相册照片的请求（弹出确认对话框）
+     *
+     * 仅适用于 Android 11+ (API 30+)
+     * 返回 PendingIntent，需要在 Activity 中通过 startIntentSenderForResult 启动
+     */
+    fun createDeleteRequest(context: Context, photoId: String): PendingIntent? {
+        return try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                PLog.w(TAG, "createDeleteRequest requires Android 11+")
+                return null
+            }
+
+            // 加载元数据，获取导出的 URI 列表（使用 runBlocking 同步调用）
+            val metadata = runBlocking {
+                loadMetadata(context, photoId)
+            }
+            val exportedUris = metadata?.exportedUris ?: emptyList()
+
+            if (exportedUris.isEmpty()) {
+                PLog.d(TAG, "No exported URIs to delete for photo: $photoId")
+                return null
+            }
+
+            // 将字符串 URI 转换为 Uri 对象列表
+            val uriList = exportedUris.mapNotNull { uriString ->
+                try {
+                    Uri.parse(uriString)
+                } catch (e: Exception) {
+                    PLog.e(TAG, "Invalid URI: $uriString", e)
+                    null
+                }
+            }
+
+            if (uriList.isEmpty()) {
+                return null
+            }
+
+            // 创建删除请求（会弹出系统确认对话框）
+            MediaStore.createDeleteRequest(context.contentResolver, uriList)
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to create delete request for photo: $photoId", e)
+            null
+        }
+    }
+
+    /**
      * 删除照片及其所有相关文件
      */
-    suspend fun deletePhoto(context: Context, photoId: String): Boolean {
+    suspend fun deletePhoto(
+        context: Context,
+        photoId: String
+    ): Boolean {
         return withContext(Dispatchers.IO) {
             try {
                 val photoDir = getPhotoDir(context, photoId)
                 if (photoDir.exists()) {
                     photoDir.deleteRecursively()
                 }
+
+                PLog.d(TAG, "Photo deleted: $photoId")
                 true
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to delete photo: $photoId", e)
                 false
             }
         }
+    }
+
+    /**
+     * 仅删除应用内部的照片，不删除系统相册中的导出照片
+     */
+    suspend fun deletePhotoOnly(context: Context, photoId: String): Boolean {
+        return deletePhoto(context, photoId)
     }
 
     /**

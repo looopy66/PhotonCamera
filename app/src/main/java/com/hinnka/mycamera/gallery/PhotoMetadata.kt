@@ -17,7 +17,7 @@ import kotlin.text.toInt
  * 保存 LUT、边框水印、编辑信息和拍摄参数，用于非破坏性编辑和边框水印渲染
  */
 data class PhotoMetadata(
-    val version: Int = 3,
+    val version: Int = 4,
     // 编辑配置
     val lutId: String? = null,
     val lutIntensity: Float = 1f,
@@ -39,7 +39,9 @@ data class PhotoMetadata(
     val focalLength: String? = null,
     val focalLength35mm: String? = null,
     val aperture: String? = null,
-    val isImported: Boolean = false
+    val isImported: Boolean = false,
+    // 导出到系统相册的 URI 列表
+    val exportedUris: List<String> = emptyList()
 ) {
     /**
      * 分辨率字符串 (用于边框水印显示)
@@ -69,6 +71,8 @@ data class PhotoMetadata(
             put("focalLength35mm", focalLength35mm ?: JSONObject.NULL)
             put("aperture", aperture ?: JSONObject.NULL)
             put("isImported", isImported)
+            // 导出的 URI 列表
+            put("exportedUris", org.json.JSONArray(exportedUris))
         }.toString(2)
     }
     
@@ -78,6 +82,16 @@ data class PhotoMetadata(
         fun fromJson(json: String): PhotoMetadata? {
             return try {
                 val obj = JSONObject(json)
+
+                // 解析 exportedUris 列表
+                val exportedUris = mutableListOf<String>()
+                val urisArray = obj.optJSONArray("exportedUris")
+                if (urisArray != null) {
+                    for (i in 0 until urisArray.length()) {
+                        exportedUris.add(urisArray.getString(i))
+                    }
+                }
+
                 PhotoMetadata(
                     version = obj.optInt("version", 1),
                     lutId = if (obj.isNull("lutId")) null else obj.optString("lutId"),
@@ -98,7 +112,8 @@ data class PhotoMetadata(
                     focalLength = if (obj.isNull("focalLength")) null else obj.optString("focalLength"),
                     focalLength35mm = if (obj.isNull("focalLength35mm")) null else obj.optString("focalLength35mm"),
                     aperture = if (obj.isNull("aperture")) null else obj.optString("aperture"),
-                    isImported = obj.optBoolean("isImported", false)
+                    isImported = obj.optBoolean("isImported", false),
+                    exportedUris = exportedUris
                 )
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to parse JSON", e)

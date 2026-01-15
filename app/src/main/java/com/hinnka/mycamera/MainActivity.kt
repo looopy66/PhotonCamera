@@ -80,6 +80,18 @@ class MainActivity : ComponentActivity() {
         hasCameraPermission = isGranted
     }
 
+    private val deletePhotoLauncher = registerForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            // 用户确认删除，删除应用内部的照片
+            galleryViewModel.deletePhotoAfterConfirmation()
+        } else {
+            // 用户取消删除
+            galleryViewModel.clearDeleteRequest()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 

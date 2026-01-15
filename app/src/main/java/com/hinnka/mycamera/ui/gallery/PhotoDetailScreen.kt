@@ -1,5 +1,9 @@
 package com.hinnka.mycamera.ui.gallery
 
+import android.app.Activity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.*
@@ -56,13 +60,44 @@ fun PhotoDetailScreen(
 ) {
     val photos by viewModel.photos.collectAsState()
     val context = LocalContext.current
-    
+
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showInfoDialog by remember { mutableStateOf(false) }
     var isZoomed by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
     val isSharing by viewModel.isSharing.collectAsState()
+
+    // Activity Result Launcher for delete confirmation
+    val deletePhotoLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            // User confirmed deletion, delete internal photo
+            viewModel.deletePhotoAfterConfirmation { success ->
+                if (success && photos.isEmpty()) {
+                    onBack()
+                }
+            }
+        } else {
+            // User cancelled deletion
+            viewModel.clearDeleteRequest()
+        }
+    }
+
+    // Monitor deletePendingIntent and launch system delete dialog
+    LaunchedEffect(viewModel.deletePendingIntent) {
+        viewModel.deletePendingIntent?.let { pendingIntent ->
+            try {
+                deletePhotoLauncher.launch(
+                    IntentSenderRequest.Builder(pendingIntent.intentSender).build()
+                )
+            } catch (e: Exception) {
+                // Failed to launch, clear the request
+                viewModel.clearDeleteRequest()
+            }
+        }
+    }
 
     val pagerState = rememberPagerState(
         initialPage = initialIndex,
@@ -242,11 +277,7 @@ fun PhotoDetailScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        viewModel.deleteCurrentPhoto { success ->
-                            if (success && photos.isEmpty()) {
-                                onBack()
-                            }
-                        }
+                        viewModel.deleteCurrentPhoto()
                         showDeleteDialog = false
                     }
                 ) {
