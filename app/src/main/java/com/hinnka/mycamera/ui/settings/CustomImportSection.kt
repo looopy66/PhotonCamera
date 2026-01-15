@@ -39,6 +39,7 @@ fun CustomImportSection(
     var customLuts by remember { mutableStateOf(customImportManager.getCustomLuts()) }
     var customFrames by remember { mutableStateOf(customImportManager.getCustomFrames()) }
     var isImporting by remember { mutableStateOf(false) }  // 添加导入中状态
+    var importProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }  // 当前进度和总数
     val scope = rememberCoroutineScope()
 
     // 刷新自定义内容列表
@@ -48,22 +49,41 @@ fun CustomImportSection(
         onImportSuccess()
     }
 
-    // LUT 文件选择器
+    // LUT 文件选择器（支持批量导入）
     val lutLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris: List<Uri> ->
         scope.launch {
-            uri?.let {
-                isImporting = true  // 开始导入
-                val result = withContext(Dispatchers.IO) {
-                    customImportManager.importLut(it)
+            if (uris.isNotEmpty()) {
+                isImporting = true
+                importProgress = Pair(0, uris.size)
+
+                var successCount = 0
+                var failCount = 0
+
+                uris.forEachIndexed { index, uri ->
+                    importProgress = Pair(index + 1, uris.size)
+                    val result = withContext(Dispatchers.IO) {
+                        customImportManager.importLut(uri)
+                    }
+                    if (result != null) {
+                        successCount++
+                    } else {
+                        failCount++
+                    }
                 }
-                isImporting = false  // 导入完成
-                importResult = if (result != null) {
+
+                isImporting = false
+                importProgress = null
+
+                importResult = when {
+                    failCount == 0 -> "成功导入 $successCount 个 LUT"
+                    successCount == 0 -> "导入失败，共 $failCount 个文件"
+                    else -> "成功导入 $successCount 个，失败 $failCount 个"
+                }
+
+                if (successCount > 0) {
                     refreshCustomContent()
-                    "LUT 导入成功"
-                } else {
-                    "LUT 导入失败"
                 }
             }
         }
@@ -135,7 +155,9 @@ fun CustomImportSection(
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
-                    text = stringResource(R.string.importing),
+                    text = importProgress?.let { (current, total) ->
+                        "${stringResource(R.string.importing)} ($current/$total)"
+                    } ?: stringResource(R.string.importing),
                     color = Color.White.copy(alpha = 0.8f),
                     fontSize = 13.sp
                 )
