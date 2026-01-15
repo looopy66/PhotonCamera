@@ -4,10 +4,12 @@ import android.app.PendingIntent
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.media.ThumbnailUtils
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.CaptureInfo
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.Dispatchers
@@ -356,28 +358,131 @@ object PhotoManager {
                 val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
                 val previewFile = File(photoDir, PREVIEW_FILE)
 
-                // 1. 复制文件
+                // 1. 复制文件到临时位置
+                val tempFile = File(photoDir, "temp.jpg")
                 context.contentResolver.openInputStream(uri)?.use { input ->
-                    FileOutputStream(photoFile).use { output ->
+                    FileOutputStream(tempFile).use { output ->
                         input.copyTo(output)
                     }
                 }
 
-                // 2. 读取元数据 (此时 isImported 会被设置为 true)
+                // 2. 读取并处理 EXIF 方向信息
+                val exif = ExifInterface(tempFile)
+                val orientation = exif.getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL
+                )
+
+                // 3. 根据 EXIF 方向旋转图片
+                if (orientation != ExifInterface.ORIENTATION_NORMAL &&
+                    orientation != ExifInterface.ORIENTATION_UNDEFINED) {
+                    // 需要旋转图片
+                    val bitmap = BitmapFactory.decodeFile(tempFile.absolutePath)
+                    if (bitmap != null) {
+                        val rotatedBitmap = rotateImageIfRequired(bitmap, orientation)
+                        // 保存已旋转的图片，并设置 EXIF 方向为 NORMAL
+                        FileOutputStream(photoFile).use { out ->
+                            rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 98, out)
+                        }
+
+                        // 设置正确的 EXIF 方向
+                        val newExif = ExifInterface(photoFile)
+                        newExif.setAttribute(ExifInterface.TAG_ORIENTATION,
+                            ExifInterface.ORIENTATION_NORMAL.toString())
+                        newExif.saveAttributes()
+
+                        if (rotatedBitmap != bitmap) {
+                            rotatedBitmap.recycle()
+                        }
+                        bitmap.recycle()
+                    } else {
+                        // 解码失败，直接复制原文件
+                        tempFile.copyTo(photoFile, overwrite = true)
+                    }
+                } else {
+                    // 不需要旋转，直接使用临时文件
+                    tempFile.renameTo(photoFile)
+                }
+
+                // 删除临时文件（如果还存在）
+                if (tempFile.exists()) {
+                    tempFile.delete()
+                }
+
+                // 4. 读取元数据 (此时 isImported 会被设置为 true)
                 val metadata = PhotoMetadata.fromUri(context, uri)
                 metadataFile.writeText(metadata.toJson())
 
-                // 3. 生成缩略图
+                // 5. 生成缩略图
                 savePreviewFileIfNeed(photoFile, previewFile)
                 generateThumbnail(photoFile, thumbnailFile)
 
-                PLog.d(TAG, "Photo imported: $photoId")
+                PLog.d(TAG, "Photo imported: $photoId (orientation: $orientation)")
                 photoId
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to import photo", e)
                 null
             }
         }
+    }
+
+    /**
+     * 根据 EXIF 方向信息旋转图片
+     */
+    private fun rotateImageIfRequired(img: Bitmap, orientation: Int): Bitmap {
+        return when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> {
+                rotateImage(img, 90f)
+            }
+            ExifInterface.ORIENTATION_ROTATE_180 -> {
+                rotateImage(img, 180f)
+            }
+            ExifInterface.ORIENTATION_ROTATE_270 -> {
+                rotateImage(img, 270f)
+            }
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> {
+                flipImage(img, horizontal = true, vertical = false)
+            }
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> {
+                flipImage(img, horizontal = false, vertical = true)
+            }
+            ExifInterface.ORIENTATION_TRANSPOSE -> {
+                // 先水平翻转，再旋转 270 度
+                val flipped = flipImage(img, horizontal = true, vertical = false)
+                val rotated = rotateImage(flipped, 270f)
+                if (flipped != img) flipped.recycle()
+                rotated
+            }
+            ExifInterface.ORIENTATION_TRANSVERSE -> {
+                // 先垂直翻转，再旋转 270 度
+                val flipped = flipImage(img, horizontal = false, vertical = true)
+                val rotated = rotateImage(flipped, 270f)
+                if (flipped != img) flipped.recycle()
+                rotated
+            }
+            else -> img
+        }
+    }
+
+    /**
+     * 旋转图片
+     */
+    private fun rotateImage(img: Bitmap, degree: Float): Bitmap {
+        val matrix = Matrix()
+        matrix.postRotate(degree)
+        return Bitmap.createBitmap(img, 0, 0, img.width, img.height, matrix, true)
+    }
+
+    /**
+     * 翻转图片
+     */
+    private fun flipImage(img: Bitmap, horizontal: Boolean, vertical: Boolean): Bitmap {
+        val matrix = Matrix()
+        matrix.postScale(
+            if (horizontal) -1f else 1f,
+            if (vertical) -1f else 1f
+        )
+        return Bitmap.createBitmap(img, 0, 0, img.width, img.height, matrix, true)
     }
 }
 
