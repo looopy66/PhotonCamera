@@ -128,6 +128,9 @@
     <string name="delete_confirm_title">删除确认</string>
     <string name="delete_custom_content_confirm">删除 "%s" 吗？</string>
     <string name="importing">导入中...</string>
+    <string name="edit_name">编辑名称</string>
+    <string name="name">名称</string>
+    <string name="confirm">确认</string>
 
     <!-- Developer Options -->
     <string name="settings_section_developer">开发者选项</string>

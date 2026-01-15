@@ -129,6 +129,9 @@
     <string name="delete_confirm_title">Delete Confirmation</string>
     <string name="delete_custom_content_confirm">Delete "%s"?</string>
     <string name="importing">Importing...</string>
+    <string name="edit_name">Edit Name</string>
+    <string name="name">Name</string>
+    <string name="confirm">Confirm</string>
 
     <!-- Developer Options -->
     <string name="settings_section_developer">Developer Options</string>

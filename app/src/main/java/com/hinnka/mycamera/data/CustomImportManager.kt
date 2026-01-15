@@ -211,6 +211,46 @@ class CustomImportManager(private val context: Context) {
     }
 
     /**
+     * 更新自定义 LUT 名称
+     */
+    fun updateLutName(lutId: String, newName: String): Boolean {
+        return try {
+            val configFile = File(context.filesDir, CUSTOM_LUT_CONFIG)
+            if (!configFile.exists()) {
+                return false
+            }
+
+            val configJson = configFile.readText()
+            val jsonArray = JSONArray(configJson)
+            val newArray = JSONArray()
+
+            var updated = false
+            for (i in 0 until jsonArray.length()) {
+                val lutObj = jsonArray.getJSONObject(i)
+                if (lutObj.getString("id") == lutId) {
+                    // 更新名称
+                    lutObj.put("name", JSONObject().apply {
+                        put("en", newName)
+                        put("zh", newName)
+                    })
+                    updated = true
+                }
+                newArray.put(lutObj)
+            }
+
+            if (updated) {
+                configFile.writeText(newArray.toString())
+                PLog.d(TAG, "LUT name updated: $lutId -> $newName")
+            }
+
+            updated
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to update LUT name", e)
+            false
+        }
+    }
+
+    /**
      * 删除自定义 LUT
      */
     fun deleteCustomLut(lutId: String): Boolean {

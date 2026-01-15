@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -204,6 +205,20 @@ fun CustomImportSection(
                 CustomContentItem(
                     name = lut.getName(),
                     type = stringResource(R.string.lut_type),
+                    showEditButton = true,  // LUT 支持编辑
+                    onEdit = { newName ->
+                        scope.launch {
+                            val success = withContext(Dispatchers.IO) {
+                                customImportManager.updateLutName(lut.id, newName)
+                            }
+                            if (success) {
+                                importResult = "已更新: $newName"
+                                refreshCustomContent()
+                            } else {
+                                importResult = "更新失败"
+                            }
+                        }
+                    },
                     onDelete = {
                         scope.launch {
                             withContext(Dispatchers.IO) {
@@ -246,9 +261,13 @@ private fun CustomContentItem(
     name: String,
     type: String,
     onDelete: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showEditButton: Boolean = false,
+    onEdit: ((String) -> Unit)? = null
 ) {
     var showDeleteDialog by remember { mutableStateOf(false) }
+    var showEditDialog by remember { mutableStateOf(false) }
+    var editedName by remember { mutableStateOf(name) }
 
     Row(
         modifier = modifier
@@ -276,16 +295,78 @@ private fun CustomContentItem(
             )
         }
 
-        IconButton(
-            onClick = { showDeleteDialog = true },
-            modifier = Modifier.size(36.dp)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Icon(
-                imageVector = Icons.Default.Delete,
-                contentDescription = stringResource(R.string.delete),
-                tint = Color(0xFFFF5252)
-            )
+            // 编辑按钮（仅当 showEditButton 为 true 时显示）
+            if (showEditButton && onEdit != null) {
+                IconButton(
+                    onClick = {
+                        editedName = name
+                        showEditDialog = true
+                    },
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = stringResource(R.string.edit),
+                        tint = Color(0xFF4CAF50)
+                    )
+                }
+            }
+
+            // 删除按钮
+            IconButton(
+                onClick = { showDeleteDialog = true },
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = stringResource(R.string.delete),
+                    tint = Color(0xFFFF5252)
+                )
+            }
         }
+    }
+
+    // 编辑对话框
+    if (showEditDialog) {
+        AlertDialog(
+            onDismissRequest = { showEditDialog = false },
+            title = {
+                Text(text = stringResource(R.string.edit_name))
+            },
+            text = {
+                OutlinedTextField(
+                    value = editedName,
+                    onValueChange = { editedName = it },
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.name)) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (editedName.isNotBlank() && editedName != name) {
+                            onEdit?.invoke(editedName)
+                        }
+                        showEditDialog = false
+                    },
+                    enabled = editedName.isNotBlank()
+                ) {
+                    Text(
+                        text = stringResource(R.string.confirm),
+                        color = Color(0xFF4CAF50)
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEditDialog = false }) {
+                    Text(text = stringResource(R.string.cancel))
+                }
+            }
+        )
     }
 
     // 删除确认对话框

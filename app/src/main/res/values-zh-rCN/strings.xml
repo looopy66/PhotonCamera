@@ -59,6 +59,9 @@
     <string name="none">无</string>
     <string name="show_app_branding">显示 App 品牌</string>
     <string name="export_with_frame_confirm">导出带边框水印的照片?</string>
+    <string name="edit_name">编辑名称</string>
+    <string name="name">名称</string>
+    <string name="confirm">确认</string>
 
     <!-- Developer Options -->
     <string name="settings_section_developer">开发者选项</string>
