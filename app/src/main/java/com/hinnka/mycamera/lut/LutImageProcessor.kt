@@ -763,11 +763,20 @@ class LutImageProcessor {
                     color.rgb *= pow(2.0, uExposure);
 
                     // 2. 高光/阴影调整（分区调整，基于亮度 mask）
+                    // 使用标准的 NTSC 权重
                     float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
                     float highlightMask = smoothstep(0.5, 1.0, luma);
                     float shadowMask = smoothstep(0.5, 0.0, luma);
-                    color.rgb *= 1.0 + uHighlights * highlightMask;
-                    color.rgb *= 1.0 + uShadows * shadowMask;
+                    float highlightFactor = 1.0 + uHighlights * 0.5;
+                    color.rgb = mix(color.rgb, color.rgb * highlightFactor, highlightMask);
+
+                    vec3 shadowTarget;
+                    if (uShadows > 0.0) {
+                        shadowTarget = mix(color.rgb, vec3(1.0) * luma, uShadows * 0.2) + (color.rgb * uShadows * 0.5);
+                    } else {
+                        shadowTarget = color.rgb * (1.0 + uShadows * 0.5);
+                    }
+                    color.rgb = mix(color.rgb, shadowTarget, shadowMask);
 
                     // 3. 对比度（围绕中灰点调整）
                     color.rgb = (color.rgb - 0.5) * uContrast + 0.5;
