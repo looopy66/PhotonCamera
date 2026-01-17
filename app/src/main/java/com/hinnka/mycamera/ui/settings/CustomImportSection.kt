@@ -111,6 +111,27 @@ fun CustomImportSection(
         }
     }
 
+    // 图片边框文件选择器
+    val imageFrameLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        scope.launch {
+            uri?.let {
+                isImporting = true  // 开始导入
+                val result = withContext(Dispatchers.IO) {
+                    customImportManager.importImageFrame(it)
+                }
+                isImporting = false  // 导入完成
+                importResult = if (result != null) {
+                    refreshCustomContent()
+                    "图片边框导入成功"
+                } else {
+                    "图片边框导入失败"
+                }
+            }
+        }
+    }
+
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
             text = stringResource(R.string.settings_custom_import),
@@ -135,8 +156,8 @@ fun CustomImportSection(
             // 导入边框样式按钮
             ImportButton(
                 text = stringResource(R.string.import_frame),
-                onClick = { frameLauncher.launch("application/json") },
-                enabled = !isImporting,  // 导入时禁用
+                onClick = { imageFrameLauncher.launch("image/*") },
+                enabled = !isImporting,
                 modifier = Modifier.weight(1f)
             )
         }

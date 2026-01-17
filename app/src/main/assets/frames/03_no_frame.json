@@ -5,6 +5,7 @@
         "zh": "无框水印"
     },
     "version": 1,
+    "editable": true,
     "layout": {
         "position": "OVERLAY",
         "height": 150,

@@ -120,6 +120,61 @@ class CustomImportManager(private val context: Context) {
     }
 
     /**
+     * 导入图片边框样式
+     *
+     * @param uri 选择的图片文件 URI (PNG/WebP with transparency)
+     * @param displayName 用户自定义的显示名称（可选）
+     * @return 导入成功的边框 ID，失败返回 null
+     */
+    fun importImageFrame(uri: Uri, displayName: String? = null): String? {
+        return try {
+            val fileName = getFileName(uri) ?: "frame_${System.currentTimeMillis()}.png"
+            val frameId = "custom_${UUID.randomUUID()}"
+            val imageFileName = "${frameId}_image.png"
+            val imageFile = File(customFrameDir, imageFileName)
+            val frameConfigFile = File(customFrameDir, "$frameId.json")
+
+            // 复制图片文件
+            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                FileOutputStream(imageFile).use { outputStream ->
+                    inputStream.copyTo(outputStream)
+                }
+            } ?: return null
+
+            // 生成显示名称
+            val name = displayName ?: fileName.substringBeforeLast('.')
+
+            // 创建边框配置 JSON
+            val frameConfig = JSONObject().apply {
+                put("id", frameId)
+                put("name", JSONObject().apply {
+                    put("en", name)
+                    put("zh", name)
+                })
+                put("version", 1)
+                put("layout", JSONObject().apply {
+                    put("position", "IMAGE")
+                    put("imagePath", imageFile.absolutePath)
+                })
+                put("elements", JSONArray())
+            }
+
+            // 保存配置文件
+            frameConfigFile.writeText(frameConfig.toString())
+
+            // 保存到配置索引
+            val nameMap = mapOf("en" to name, "zh" to name)
+            saveFrameToConfig(frameId, nameMap, "$frameId.json")
+
+            PLog.d(TAG, "Image frame imported successfully: $frameId ($name)")
+            frameId
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to import image frame", e)
+            null
+        }
+    }
+
+    /**
      * 获取所有自定义 LUT
      */
     fun getCustomLuts(): List<LutInfo> {
@@ -193,9 +248,12 @@ class CustomImportManager(private val context: Context) {
                     nameMap[lang] = nameObj.getString(lang)
                 }
 
+                val path = File(context.filesDir, CUSTOM_FRAME_DIR).resolve("$id.json").absolutePath
+
                 frameList.add(
                     com.hinnka.mycamera.frame.FrameInfo(
                         id = id,
+                        path = path,
                         nameMap = nameMap,
                         previewResId = 0,
                         isBuiltIn = false

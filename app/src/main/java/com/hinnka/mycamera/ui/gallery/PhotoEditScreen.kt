@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.graphics.Bitmap
+import android.text.Editable
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
@@ -30,6 +31,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.foundation.gestures.*
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.layout.ContentScale
@@ -296,23 +298,15 @@ fun PhotoEditScreen(
                                 name = frame.name,
                                 isSelected = editFrameId == frame.id,
                                 isCustom = !frame.isBuiltIn,  // 添加自定义标识
-                                onClick = { viewModel.setEditFrame(frame.id) }
+                                isEditable = frame.isEditable,
+                                onClick = {
+                                    if (editFrameId == frame.id) {
+                                        viewModel.showWatermarkSheet = true
+                                    } else {
+                                        viewModel.setEditFrame(frame.id)
+                                    }
+                                }
                             )
-                        }
-                    }
-
-                    if (editFrameId != null) {
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        Button(
-                            onClick = { viewModel.showWatermarkSheet = true },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color.White.copy(alpha = 0.1f)
-                            ),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(text = stringResource(R.string.adjust_watermark), color = Color.White)
                         }
                     }
                 }
@@ -395,6 +389,7 @@ private fun FrameOption(
     isSelected: Boolean,
     isVip: Boolean = false,
     isCustom: Boolean = false,  // 添加自定义标识参数
+    isEditable: Boolean = false,
     onClick: () -> Unit
 ) {
     Column(
@@ -430,6 +425,22 @@ private fun FrameOption(
                     color = if (isSelected) AccentOrange else Color.White.copy(alpha = 0.7f),
                     fontSize = 16.sp
                 )
+            }
+
+            if (isSelected && isEditable) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.4f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = stringResource(R.string.edit),
+                        tint = Color(0xFFD7E1F1),
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
 
             if (isVip) {

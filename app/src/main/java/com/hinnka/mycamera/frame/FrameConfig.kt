@@ -22,9 +22,11 @@ data class FrameConfig(
  */
 data class FrameInfo(
     val id: String,
+    val path: String,
     val nameMap: Map<String, String>,
     val previewResId: Int = 0,
-    val isBuiltIn: Boolean = true
+    val isBuiltIn: Boolean = true,
+    val isEditable: Boolean = false,
 ) {
     /**
      * 获取当前语言名称
@@ -64,7 +66,9 @@ data class FrameLayout(
     val heightDp: Int = 80,
     val backgroundColor: Int = Color.WHITE,
     val paddingDp: Int = 16,
-    val borderWidthDp: Int = 0  // 四周边框宽度（仅 BORDER 模式使用）
+    val borderWidthDp: Int = 0,  // 四周边框宽度（仅 BORDER 模式使用）
+    val imageResName: String? = null,  // 边框图片资源名称（仅 IMAGE 模式使用，内置资源）
+    val imagePath: String? = null  // 边框图片文件路径（仅 IMAGE 模式使用，外部导入）
 )
 
 /**
@@ -75,7 +79,8 @@ enum class FramePosition {
     BOTTOM,
     BOTH,
     OVERLAY,  // 叠加在图片上，不增加额外边框区域
-    BORDER    // 四周边框 + 底部信息区
+    BORDER,   // 四周边框 + 底部信息区
+    IMAGE     // 使用图片作为边框，照片填充透明区域
 }
 
 /**

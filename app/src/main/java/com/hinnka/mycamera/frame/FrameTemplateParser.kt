@@ -2,7 +2,6 @@ package com.hinnka.mycamera.frame
 
 import android.content.Context
 import android.graphics.Color
-import android.util.Log
 import com.hinnka.mycamera.utils.PLog
 import org.json.JSONArray
 import org.json.JSONObject
@@ -30,14 +29,7 @@ object FrameTemplateParser {
             
             for (fileName in files) {
                 if (fileName.endsWith(".json")) {
-                    val id = fileName.removeSuffix(".json")
-                    frames.add(
-                        FrameInfo(
-                            id = id,
-                            nameMap = parseFrameNameMap(context, "$TEMPLATES_FOLDER/$fileName"),
-                            isBuiltIn = true
-                        )
-                    )
+                    parseFrameInfo(context, "$TEMPLATES_FOLDER/$fileName")?.let { frames.add(it) }
                 }
             }
         } catch (e: Exception) {
@@ -50,12 +42,22 @@ object FrameTemplateParser {
     /**
      * 解析边框模板名称映射
      */
-    private fun parseFrameNameMap(context: Context, path: String): Map<String, String> {
+    private fun parseFrameInfo(context: Context, path: String): FrameInfo? {
         return try {
             val json = readAssetFile(context, path)
-            parseNameMap(JSONObject(json).opt("name"))
+            val jsonObject = JSONObject(json)
+            val id = jsonObject.optString("id")
+            val name = parseNameMap(jsonObject.opt("name"))
+            val editable = jsonObject.optBoolean("editable")
+            FrameInfo(
+                id = id,
+                path = path,
+                nameMap = name,
+                isBuiltIn = true,
+                isEditable = editable
+            )
         } catch (e: Exception) {
-            emptyMap()
+            null
         }
     }
 
@@ -83,13 +85,30 @@ object FrameTemplateParser {
     /**
      * 从 assets 加载并解析边框模板
      */
-    fun parseFromAssets(context: Context, frameId: String): FrameTemplate? {
-        val path = "$TEMPLATES_FOLDER/$frameId.json"
+    fun parseFromAssets(context: Context, path: String): FrameTemplate? {
         return try {
             val json = readAssetFile(context, path)
             parseTemplate(json)
         } catch (e: Exception) {
-            PLog.e(TAG, "Failed to parse frame template: $frameId", e)
+            PLog.e(TAG, "Failed to parse frame template: $path", e)
+            null
+        }
+    }
+
+    /**
+     * 从文件路径加载并解析边框模板
+     */
+    fun parseFromFile(filePath: String): FrameTemplate? {
+        return try {
+            val file = java.io.File(filePath)
+            if (!file.exists()) {
+                PLog.e(TAG, "Frame template file not found: $filePath")
+                return null
+            }
+            val json = file.readText()
+            parseTemplate(json)
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to parse frame template from file: $filePath", e)
             null
         }
     }
@@ -129,7 +148,9 @@ object FrameTemplateParser {
             heightDp = obj.optInt("height", 80),
             backgroundColor = parseColor(obj.optString("backgroundColor", "#FFFFFF")),
             paddingDp = obj.optInt("padding", 16),
-            borderWidthDp = obj.optInt("borderWidth", 0)
+            borderWidthDp = obj.optInt("borderWidth", 0),
+            imageResName = obj.optString("imageResName").takeIf { it.isNotEmpty() },
+            imagePath = obj.optString("imagePath").takeIf { it.isNotEmpty() }
         )
     }
     

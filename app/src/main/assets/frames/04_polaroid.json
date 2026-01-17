@@ -5,6 +5,7 @@
         "zh": "拍立得"
     },
     "version": 1,
+    "editable": true,
     "layout": {
         "position": "BORDER",
         "height": 120,

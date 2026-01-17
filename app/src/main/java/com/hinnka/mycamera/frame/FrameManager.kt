@@ -3,7 +3,9 @@ package com.hinnka.mycamera.frame
 import android.content.Context
 import android.util.Log
 import android.util.LruCache
+import com.hinnka.mycamera.data.CustomImportManager
 import com.hinnka.mycamera.utils.PLog
+import java.io.File
 
 /**
  * 边框管理器
@@ -15,20 +17,29 @@ class FrameManager(private val context: Context) {
     companion object {
         private const val TAG = "FrameManager"
         private const val CACHE_SIZE = 5
+        private const val CUSTOM_FRAME_DIR = "custom_frames"
     }
+
+    private val customImportManager = CustomImportManager(context)
     
     // 模板缓存
     private val templateCache = LruCache<String, FrameTemplate>(CACHE_SIZE)
     
     // 可用边框列表
     private var availableFrames: List<FrameInfo> = emptyList()
+
+    // 自定义边框目录
+    private val customFrameDir: File
+        get() = File(context.filesDir, CUSTOM_FRAME_DIR)
     
     /**
      * 初始化，扫描可用的边框模板
      */
     fun initialize() {
-        availableFrames = FrameTemplateParser.listAvailableFrames(context)
-        PLog.d(TAG, "Found ${availableFrames.size} frame templates")
+        val builtInFrames = FrameTemplateParser.listAvailableFrames(context)
+        val customFrames = customImportManager.getCustomFrames()
+        availableFrames = builtInFrames + customFrames
+        PLog.d(TAG, "Found ${availableFrames.size} frame templates (${builtInFrames.size} built-in, ${customFrames.size} custom)")
     }
     
     /**
@@ -62,13 +73,19 @@ class FrameManager(private val context: Context) {
             return null
         }
         
-        // 从文件加载
+        // 根据是否为内置边框决定加载方式
         return try {
-            val template = FrameTemplateParser.parseFromAssets(context, frameInfo.id)
+            val template = if (frameInfo.isBuiltIn) {
+                FrameTemplateParser.parseFromAssets(context, frameInfo.path)
+            } else {
+                // 自定义边框从文件加载
+                val filePath = frameInfo.path
+                FrameTemplateParser.parseFromFile(filePath)
+            }
             
             if (template != null) {
                 templateCache.put(id, template)
-                PLog.d(TAG, "Frame template loaded: $id")
+                PLog.d(TAG, "Frame template loaded: $id (builtIn=${frameInfo.isBuiltIn})")
             }
             template
         } catch (e: Exception) {

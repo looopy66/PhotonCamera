@@ -5,6 +5,7 @@
     "zh": "经典白框"
   },
   "version": 1,
+  "editable": true,
   "layout": {
     "position": "BOTTOM",
     "height": 80,

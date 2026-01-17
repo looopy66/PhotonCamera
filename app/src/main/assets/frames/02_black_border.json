@@ -5,6 +5,7 @@
         "zh": "品质黑框"
     },
     "version": 1,
+    "editable": true,
     "layout": {
         "position": "BORDER",
         "height": 200,

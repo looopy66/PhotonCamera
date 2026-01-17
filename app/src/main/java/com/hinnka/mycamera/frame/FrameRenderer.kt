@@ -86,6 +86,11 @@ class FrameRenderer(private val context: Context) {
                 outputWidth = originalBitmap.width + borderWidth * 2
                 outputHeight = originalBitmap.height + borderWidth * 2 + frameHeight
             }
+
+            FramePosition.IMAGE -> {
+                // IMAGE 模式使用单独的渲染方法
+                return renderImageFrame(originalBitmap, template.layout)
+            }
         }
 
         // 创建输出 Bitmap
@@ -743,6 +748,181 @@ class FrameRenderer(private val context: Context) {
             )
             return length + margin * 2
         }
+    }
+
+    /**
+     * 渲染图片边框
+     * 
+     * 将照片填充到边框图片的透明区域中
+     * 
+     * @param originalBitmap 原始照片
+     * @param layout 边框布局配置
+     * @return 合成后的图片
+     */
+    private fun renderImageFrame(originalBitmap: Bitmap, layout: FrameLayout): Bitmap {
+        // 加载边框图片（使用 BitmapFactory 直接解码，避免 Drawable 缓存问题）
+        var frameBitmap = try {
+            val options = BitmapFactory.Options().apply {
+                inMutable = true
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+            
+            // 优先使用文件路径（外部导入），其次使用资源名称（内置资源）
+            when {
+                layout.imagePath != null -> {
+                    BitmapFactory.decodeFile(layout.imagePath, options)
+                        ?: run {
+                            PLog.e(TAG, "Frame image file not found: ${layout.imagePath}")
+                            return originalBitmap
+                        }
+                }
+                layout.imageResName != null -> {
+                    val resId = context.resources.getIdentifier(layout.imageResName, "drawable", context.packageName)
+                    if (resId == 0) {
+                        PLog.e(TAG, "Frame image resource not found: ${layout.imageResName}")
+                        return originalBitmap
+                    }
+                    BitmapFactory.decodeResource(context.resources, resId, options)
+                        ?: run {
+                            PLog.e(TAG, "Failed to decode frame image resource: ${layout.imageResName}")
+                            return originalBitmap
+                        }
+                }
+                else -> {
+                    PLog.e(TAG, "No image source specified for IMAGE frame")
+                    return originalBitmap
+                }
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to load frame image", e)
+            return originalBitmap
+        }
+
+        // 检查方向是否匹配，如果不匹配则旋转边框
+        val isPhotoPortrait = originalBitmap.height > originalBitmap.width
+        val isFramePortrait = frameBitmap.height > frameBitmap.width
+
+        if (isPhotoPortrait != isFramePortrait) {
+            val matrix = Matrix()
+            // 如果原本是不匹配的，旋转90度
+            matrix.postRotate(90f)
+            try {
+                val originalFrame = frameBitmap
+                val rotatedFrame = Bitmap.createBitmap(
+                    originalFrame, 0, 0, 
+                    originalFrame.width, originalFrame.height, 
+                    matrix, true
+                )
+                frameBitmap = rotatedFrame
+                // 只有当 createBitmap 返回了新的 Bitmap 对象时才回收原始对象
+                if (rotatedFrame !== originalFrame) {
+                    originalFrame.recycle()
+                }
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to rotate frame bitmap", e)
+            }
+        }
+        
+        // 检测透明区域的边界
+        val transparentBounds = detectTransparentBounds(frameBitmap)
+        if (transparentBounds.width() <= 0 || transparentBounds.height() <= 0) {
+            PLog.e(TAG, "No transparent area detected in frame image")
+            frameBitmap.recycle()
+            return originalBitmap
+        }
+        
+        PLog.d(TAG, "Transparent bounds: $transparentBounds, frame size: ${frameBitmap.width}x${frameBitmap.height}")
+        
+        // 计算缩放比例，使透明区域能够容纳照片（以照片尺寸为准）
+        val photoWidth = originalBitmap.width
+        val photoHeight = originalBitmap.height
+        val transparentWidth = transparentBounds.width()
+        val transparentHeight = transparentBounds.height()
+        
+        // 计算边框需要缩放的比例，使透明区域与照片大小匹配
+        val scaleX = photoWidth.toFloat() / transparentWidth
+        val scaleY = photoHeight.toFloat() / transparentHeight
+        // 使用较大的缩放比例，确保照片完全填充透明区域（center crop 效果）
+        val frameScale = maxOf(scaleX, scaleY)
+        
+        // 缩放后的边框尺寸
+        val scaledFrameWidth = (frameBitmap.width * frameScale).toInt()
+        val scaledFrameHeight = (frameBitmap.height * frameScale).toInt()
+        
+        // 缩放后的透明区域边界
+        val scaledTransparentLeft = (transparentBounds.left * frameScale).toInt()
+        val scaledTransparentTop = (transparentBounds.top * frameScale).toInt()
+        val scaledTransparentWidth = (transparentWidth * frameScale).toInt()
+        val scaledTransparentHeight = (transparentHeight * frameScale).toInt()
+        
+        // 计算照片在缩放后透明区域中的居中位置
+        val photoOffsetX = (scaledTransparentWidth - photoWidth) / 2
+        val photoOffsetY = (scaledTransparentHeight - photoHeight) / 2
+        
+        // 缩放边框图片
+        val scaledFrame = Bitmap.createScaledBitmap(frameBitmap, scaledFrameWidth, scaledFrameHeight, true)
+        frameBitmap.recycle()
+        
+        // 创建输出 Bitmap（与缩放后的边框大小相同）
+        val output = createBitmap(scaledFrameWidth, scaledFrameHeight)
+        val canvas = Canvas(output)
+        
+        // 先绘制照片到缩放后的透明区域位置（居中）
+        val photoDrawX = scaledTransparentLeft + photoOffsetX
+        val photoDrawY = scaledTransparentTop + photoOffsetY
+        canvas.drawBitmap(originalBitmap, photoDrawX.toFloat(), photoDrawY.toFloat(), null)
+        
+        // 再绘制缩放后的边框图片（透明区域会显示下面的照片）
+        canvas.drawBitmap(scaledFrame, 0f, 0f, null)
+        scaledFrame.recycle()
+        
+        return output
+    }
+    
+    /**
+     * 检测图片中透明区域的边界
+     * 
+     * 扫描图片找出主要透明区域的矩形边界
+     * 
+     * @param bitmap 要检测的图片
+     * @return 透明区域的矩形边界
+     */
+    private fun detectTransparentBounds(bitmap: Bitmap): Rect {
+        val width = bitmap.width
+        val height = bitmap.height
+        
+        // 透明度阈值（低于此值认为是透明的）
+        val alphaThreshold = 10
+        
+        var minX = width
+        var minY = height
+        var maxX = 0
+        var maxY = 0
+        
+        // 扫描所有像素找出透明区域边界
+        val pixels = IntArray(width * height)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+        
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val pixel = pixels[y * width + x]
+                val alpha = (pixel shr 24) and 0xFF
+                
+                if (alpha < alphaThreshold) {
+                    if (x < minX) minX = x
+                    if (x > maxX) maxX = x
+                    if (y < minY) minY = y
+                    if (y > maxY) maxY = y
+                }
+            }
+        }
+        
+        // 如果没有找到透明区域，返回空矩形
+        if (minX > maxX || minY > maxY) {
+            return Rect(0, 0, 0, 0)
+        }
+        
+        return Rect(minX, minY, maxX + 1, maxY + 1)
     }
 
     /**

@@ -142,7 +142,8 @@
     <string name="settings_custom_import">导入自定义内容</string>
     <string name="import_lut">导入 LUT</string>
     <string name="import_frame">导入边框</string>
-    <string name="settings_import_description">导入自定义 LUT 滤镜文件 (.cube) 或边框模板文件 (.json)</string>
+    <string name="import_image_frame">导入图片边框</string>
+    <string name="settings_import_description">导入自定义 LUT 滤镜文件 (.cube) 或边框模板图片 (.png/.webp)</string>
     <string name="custom_content_management">已导入内容</string>
     <string name="lut_type">LUT 滤镜</string>
     <string name="frame_type">边框模板</string>

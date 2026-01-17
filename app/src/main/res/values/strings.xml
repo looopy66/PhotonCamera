@@ -143,7 +143,8 @@
     <string name="settings_custom_import">Import Custom Content</string>
     <string name="import_lut">Import LUT</string>
     <string name="import_frame">Import Frame</string>
-    <string name="settings_import_description">Import custom LUT filters (.cube) or frame templates (.json)</string>
+    <string name="import_image_frame">Import Image Frame</string>
+    <string name="settings_import_description">Import custom LUT filters (.cube) or frame templates (.png/.webp)</string>
     <string name="custom_content_management">Imported Content</string>
     <string name="lut_type">LUT Filter</string>
     <string name="frame_type">Frame Template</string>
