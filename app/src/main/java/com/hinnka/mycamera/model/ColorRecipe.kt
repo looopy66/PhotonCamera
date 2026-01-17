@@ -1,5 +1,7 @@
 package com.hinnka.mycamera.model
 
+import com.hinnka.mycamera.R
+
 /**
  * 色彩配方参数数据类
  *
@@ -86,24 +88,24 @@ data class ColorRecipe(
  * 用于标识不同的可调整参数
  */
 enum class RecipeParam(
-    val displayName: String,             // 显示名称
+    val displayNameRes: Int,             // 显示名称资源ID
     val minValue: Float,                 // 最小值
     val maxValue: Float,                 // 最大值
     val defaultValue: Float              // 默认值
 ) {
-    EXPOSURE("曝光", -2.0f, 2.0f, 0f),
-    CONTRAST("对比度", 0.5f, 1.5f, 1f),
-    SATURATION("饱和度", 0.0f, 2.0f, 1f),
-    TEMPERATURE("色温", -1.0f, 1.0f, 0f),
-    TINT("色调", -1.0f, 1.0f, 0f),
-    FADE("褪色", 0.0f, 1.0f, 0f),
-    VIBRANCE("蓝色增强", 0.0f, 2.0f, 1f),
-    HIGHLIGHTS("高光", -1.0f, 1.0f, 0f),
-    SHADOWS("阴影", -1.0f, 1.0f, 0f),
-    FILM_GRAIN("颗粒", 0.0f, 1.0f, 0f),
-    VIGNETTE("晕影", -1.0f, 1.0f, 0f),
-    BLEACH_BYPASS("留银冲洗", 0.0f, 1.0f, 0f),
-    LUT_INTENSITY("滤镜强度", 0.0f, 1.0f, 1f);
+    EXPOSURE(R.string.recipe_param_exposure, -2.0f, 2.0f, 0f),
+    CONTRAST(R.string.recipe_param_contrast, 0.5f, 1.5f, 1f),
+    SATURATION(R.string.recipe_param_saturation, 0.0f, 2.0f, 1f),
+    TEMPERATURE(R.string.recipe_param_temperature, -1.0f, 1.0f, 0f),
+    TINT(R.string.recipe_param_tint, -1.0f, 1.0f, 0f),
+    FADE(R.string.recipe_param_fade, 0.0f, 1.0f, 0f),
+    VIBRANCE(R.string.recipe_param_vibrance, 0.0f, 2.0f, 1f),
+    HIGHLIGHTS(R.string.recipe_param_highlights, -1.0f, 1.0f, 0f),
+    SHADOWS(R.string.recipe_param_shadows, -1.0f, 1.0f, 0f),
+    FILM_GRAIN(R.string.recipe_param_film_grain, 0.0f, 1.0f, 0f),
+    VIGNETTE(R.string.recipe_param_vignette, -1.0f, 1.0f, 0f),
+    BLEACH_BYPASS(R.string.recipe_param_bleach_bypass, 0.0f, 1.0f, 0f),
+    LUT_INTENSITY(R.string.recipe_param_lut_intensity, 0.0f, 1.0f, 1f);
 
     /**
      * 将参数值限制在合法范围内

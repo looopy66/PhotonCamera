@@ -146,6 +146,27 @@
     <!-- Color Recipe -->
     <string name="color_recipe">色彩配方</string>
 
+    <!-- Color Recipe Parameters -->
+    <string name="recipe_param_exposure">曝光</string>
+    <string name="recipe_param_contrast">对比度</string>
+    <string name="recipe_param_saturation">饱和度</string>
+    <string name="recipe_param_temperature">色温</string>
+    <string name="recipe_param_tint">色调</string>
+    <string name="recipe_param_fade">褪色</string>
+    <string name="recipe_param_vibrance">蓝色增强</string>
+    <string name="recipe_param_highlights">高光</string>
+    <string name="recipe_param_shadows">阴影</string>
+    <string name="recipe_param_film_grain">颗粒</string>
+    <string name="recipe_param_vignette">晕影</string>
+    <string name="recipe_param_bleach_bypass">留银冲洗</string>
+    <string name="recipe_param_lut_intensity">滤镜强度</string>
+
+    <!-- Color Recipe Tabs -->
+    <string name="recipe_tab_basic">基础</string>
+    <string name="recipe_tab_temp">色温</string>
+    <string name="recipe_tab_light">光影</string>
+    <string name="recipe_tab_texture">质感</string>
+
     <!-- Developer Options -->
     <string name="settings_section_developer">开发者选项</string>
     <string name="settings_log_viewer">日志收集</string>

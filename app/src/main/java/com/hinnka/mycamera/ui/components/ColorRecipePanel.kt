@@ -19,6 +19,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.res.stringResource
+import com.hinnka.mycamera.R
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.RecipeParam
 
@@ -35,7 +37,12 @@ fun ColorRecipePanel(
 ) {
     var selectedTabIndex by remember { mutableIntStateOf(0) }
 
-    val tabs = listOf("基础", "色温", "光影", "质感")
+    val tabs = listOf(
+        R.string.recipe_tab_basic,
+        R.string.recipe_tab_temp,
+        R.string.recipe_tab_light,
+        R.string.recipe_tab_texture
+    )
     val parameterGroups = listOf(
         listOf(
             RecipeParam.EXPOSURE,
@@ -91,7 +98,7 @@ fun ColorRecipePanel(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = title,
+                            text = stringResource(title),
                             fontSize = 12.sp,
                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                             color = if (isSelected) Color.White else Color.White.copy(alpha = 0.6f)
@@ -152,7 +159,7 @@ fun ColorRecipeSlider(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = param.displayName,
+                text = stringResource(param.displayNameRes),
                 color = Color.White,
                 fontSize = 11.sp,
                 modifier = Modifier.width(64.dp)

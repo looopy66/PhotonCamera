@@ -613,11 +613,11 @@ class LutImageProcessor {
                         
                         // 根据 uVignette 符号决定是暗角还是亮角
                         if (uVignette < 0.0) {
-                            // 暗角：边缘变暗（更强的效果：从0.1到1.0）
-                            color.rgb *= mix(0.1, 1.0, vignetteMask) * abs(uVignette) + (1.0 + uVignette);
+                            // 暗角：边缘变暗（更强的效果：从0.01到1.0）
+                            color.rgb *= mix(0.01, 1.0, vignetteMask) * abs(uVignette) + (1.0 + uVignette);
                         } else {
                             // 亮角：边缘变亮（增强效果）
-                            color.rgb = mix(color.rgb, vec3(1.0), (1.0 - vignetteMask) * uVignette * 0.7);
+                            color.rgb = mix(color.rgb, vec3(1.0), (1.0 - vignetteMask) * uVignette);
                         }
                     }
 

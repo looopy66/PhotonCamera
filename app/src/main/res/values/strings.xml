@@ -147,6 +147,27 @@
     <!-- Color Recipe -->
     <string name="color_recipe">Color Recipe</string>
 
+    <!-- Color Recipe Parameters -->
+    <string name="recipe_param_exposure">Exposure</string>
+    <string name="recipe_param_contrast">Contrast</string>
+    <string name="recipe_param_saturation">Saturation</string>
+    <string name="recipe_param_temperature">Temp</string>
+    <string name="recipe_param_tint">Tint</string>
+    <string name="recipe_param_fade">Fade</string>
+    <string name="recipe_param_vibrance">Vibrance</string>
+    <string name="recipe_param_highlights">Highlights</string>
+    <string name="recipe_param_shadows">Shadows</string>
+    <string name="recipe_param_film_grain">Grain</string>
+    <string name="recipe_param_vignette">Vignette</string>
+    <string name="recipe_param_bleach_bypass">Bleach Bypass</string>
+    <string name="recipe_param_lut_intensity">Filter</string>
+
+    <!-- Color Recipe Tabs -->
+    <string name="recipe_tab_basic">Basic</string>
+    <string name="recipe_tab_temp">Color Temp</string>
+    <string name="recipe_tab_light">Light</string>
+    <string name="recipe_tab_texture">Texture</string>
+
     <!-- Developer Options -->
     <string name="settings_section_developer">Developer Options</string>
     <string name="settings_log_viewer">Log Viewer</string>
