@@ -37,7 +37,7 @@ class PhotoProcessor(
         input: Bitmap,
         metadata: PhotoMetadata,
         uri: Uri? = null,
-        useSoftwareProcessing: Boolean = true,
+        useSoftwareProcessing: Boolean = false,
         sharpening: Float = 0.3f,
         noiseReduction: Float = 0.25f,
         chromaNoiseReduction: Float = 0.25f

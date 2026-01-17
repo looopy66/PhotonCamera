@@ -30,7 +30,7 @@ data class UserPreferences(
     val vibrationEnabled: Boolean = true,  // 拍摄震动
     val volumeKeyCapture: Boolean = false,  // 音量键拍摄
     val autoSaveAfterCapture: Boolean = true,  // 自动保存
-    val useSoftwareProcessing: Boolean = true,  // 使用软件降噪/锐化（而非系统算法）
+    val useSoftwareProcessing: Boolean = false,  // 使用软件降噪/锐化（而非系统算法）
     // 软件处理参数（仅在 useSoftwareProcessing=true 时生效）
     val sharpening: Float = 0.3f,              // 0.0 ~ 1.0 锐化强度
     val noiseReduction: Float = 0.25f,         // 0.0 ~ 1.0 降噪强度
@@ -78,7 +78,7 @@ class UserPreferencesRepository(private val context: Context) {
                 vibrationEnabled = preferences[VIBRATION_ENABLED] ?: true,
                 volumeKeyCapture = preferences[VOLUME_KEY_CAPTURE] ?: false,
                 autoSaveAfterCapture = preferences[AUTO_SAVE_AFTER_CAPTURE] ?: true,
-                useSoftwareProcessing = preferences[USE_SOFTWARE_PROCESSING] ?: true,
+                useSoftwareProcessing = preferences[USE_SOFTWARE_PROCESSING] ?: false,
                 // 软件处理参数
                 sharpening = preferences[SHARPENING] ?: 0.3f,
                 noiseReduction = preferences[NOISE_REDUCTION] ?: 0.25f,

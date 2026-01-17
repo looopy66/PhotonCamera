@@ -176,7 +176,7 @@ class LutImageProcessor {
         bitmap: Bitmap,
         lutConfig: LutConfig?,
         colorRecipeParams: ColorRecipeParams?,
-        useSoftwareProcessing: Boolean = true,
+        useSoftwareProcessing: Boolean = false,
         sharpeningValue: Float = 0.3f,
         noiseReductionValue: Float = 0.25f,
         chromaNoiseReductionValue: Float = 0.25f,

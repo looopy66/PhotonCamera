@@ -62,7 +62,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     // 软件处理模式设置
     val useSoftwareProcessing: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useSoftwareProcessing }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     // 软件处理参数
     val sharpening: StateFlow<Float> = userPreferencesRepository.userPreferences

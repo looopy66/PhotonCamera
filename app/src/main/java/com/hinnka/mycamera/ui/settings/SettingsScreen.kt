@@ -54,7 +54,7 @@ fun SettingsScreen(
     val vibrationEnabled by viewModel.vibrationEnabled.collectAsState(initial = true)
     val volumeKeyCapture by viewModel.volumeKeyCapture.collectAsState(initial = false)
     val autoSaveAfterCapture by viewModel.autoSaveAfterCapture.collectAsState(initial = true)
-    val useSoftwareProcessing by viewModel.useSoftwareProcessing.collectAsState(initial = true)
+    val useSoftwareProcessing by viewModel.useSoftwareProcessing.collectAsState(initial = false)
     // 软件处理参数
     val sharpening by viewModel.sharpening.collectAsState(initial = 0.3f)
     val noiseReduction by viewModel.noiseReduction.collectAsState(initial = 0.25f)

@@ -131,7 +131,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val autoSaveAfterCapture: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.autoSaveAfterCapture }
     val useSoftwareProcessing: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useSoftwareProcessing }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
     // 软件处理参数 Flow
     val sharpening: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.sharpening }
