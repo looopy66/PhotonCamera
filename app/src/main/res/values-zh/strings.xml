@@ -41,6 +41,8 @@
     <string name="share">分享</string>
     <string name="delete">删除</string>
     <string name="export">导出</string>
+    <string name="export_success">照片导出成功</string>
+    <string name="export_failed">照片导出失败</string>
     <string name="edit">编辑</string>
     <string name="select_all">全选</string>
     <string name="cancel">取消</string>

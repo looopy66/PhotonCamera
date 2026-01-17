@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.ui.gallery
 
 import android.app.Activity
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -243,9 +244,12 @@ fun PhotoDetailScreen(
                 .padding(paddingValues)
         ) {
             if (photos.isEmpty()) {
-                // 没有照片时返回
-                LaunchedEffect(Unit) {
-                    onBack()
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        text = stringResource(R.string.no_photos),
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 16.sp
+                    )
                 }
             } else {
                 HorizontalPager(
@@ -341,7 +345,9 @@ fun PhotoDetailScreen(
                             viewModel.exportPhoto(it) { success ->
                                 isSaving = false
                                 if (success) {
-                                    onBack()
+                                    Toast.makeText(context, R.string.export_success, Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, R.string.export_failed, Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }

@@ -41,6 +41,8 @@
     <string name="share">Share</string>
     <string name="delete">Delete</string>
     <string name="export">Export</string>
+    <string name="export_success">Photo exported successfully</string>
+    <string name="export_failed">Failed to export photo</string>
     <string name="edit">Edit</string>
     <string name="select_all">Select All</string>
     <string name="cancel">Cancel</string>
