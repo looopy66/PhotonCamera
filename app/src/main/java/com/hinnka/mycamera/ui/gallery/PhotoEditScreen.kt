@@ -90,18 +90,17 @@ fun PhotoEditScreen(
     var lutPreviews by remember { mutableStateOf<Map<String, Bitmap>>(emptyMap()) }
 
     // 边框编辑状态
-    val editFrameId = viewModel.editFrameId
+    val editFrameId by viewModel.editFrameId.collectAsState()
     val availableFrames = viewModel.availableFrames
+    val editFrameCustomProperties by viewModel.editFrameCustomProperties.collectAsState()
 
-    // 当编辑参数变化时更新预览
-    val customPropertiesList = viewModel.editCustomProperties.entries.toList()
     LaunchedEffect(
         currentPhoto,
         editLutId,
         editLutRecipeParams,
         editLutConfig,
         editFrameId,
-        customPropertiesList
+        editFrameCustomProperties
     ) {
         if (currentPhoto == null) return@LaunchedEffect
 
@@ -317,7 +316,9 @@ fun PhotoEditScreen(
     if (viewModel.showWatermarkSheet) {
         WatermarkEditSheet(
             viewModel = viewModel,
-            onDismiss = { viewModel.showWatermarkSheet = false }
+            onDismiss = {
+                viewModel.showWatermarkSheet = false
+            }
         )
     }
 
@@ -505,10 +506,17 @@ private fun WatermarkEditSheet(
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState()
-    val customProperties = viewModel.editCustomProperties
+    val customProperties = remember(viewModel.editFrameId) {
+        mutableStateMapOf<String, String>().apply {
+            putAll(viewModel.editFrameCustomProperties.value)
+        }
+    }
 
     ModalBottomSheet(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            viewModel.saveEditCustomProperties(customProperties)
+            onDismiss()
+        },
         sheetState = sheetState,
         containerColor = Color(0xFF1A1A1A),
         contentColor = Color.White
@@ -562,7 +570,7 @@ private fun WatermarkEditSheet(
                 items(logos) { (id, name) ->
                     val isSelected = effectiveActiveId == id
                     Surface(
-                        onClick = { viewModel.updateEditCustomProperty("LOGO", id) },
+                        onClick = { customProperties["LOGO"] = id },
                         color = if (isSelected) AccentOrange.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.1f),
                         shape = RoundedCornerShape(8.dp),
                         border = if (isSelected) BorderStroke(1.dp, AccentOrange) else null
@@ -615,7 +623,7 @@ private fun WatermarkEditSheet(
 
                 OutlinedTextField(
                     value = customProperties[type.name] ?: originalValue,
-                    onValueChange = { viewModel.updateEditCustomProperty(type.name, it) },
+                    onValueChange = { customProperties[type.name] = it },
                     label = { Text(label) },
                     modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                     colors = OutlinedTextFieldDefaults.colors(

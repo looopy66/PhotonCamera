@@ -3,21 +3,37 @@ package com.hinnka.mycamera.frame
 import android.content.Context
 import android.util.Log
 import android.util.LruCache
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
 import com.hinnka.mycamera.data.CustomImportManager
 import com.hinnka.mycamera.utils.PLog
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.map
+import org.json.JSONObject
 import java.io.File
+
+/**
+ * DataStore 扩展属性
+ */
+private val Context.framePropertiesDataStore: DataStore<Preferences> by preferencesDataStore(name = "frame_properties_preferences")
 
 /**
  * 边框管理器
  * 
- * 负责边框模板的加载、缓存和管理
+ * 负责边框模板的加载、缓存和管理，以及自定义属性的持久化
  */
 class FrameManager(private val context: Context) {
     
     companion object {
         private const val TAG = "FrameManager"
         private const val CACHE_SIZE = 5
-        private const val CUSTOM_FRAME_DIR = "custom_frames"
+
+        // 自定义属性 DataStore Key 生成函数（每个 Frame ID 独立）
+        private fun customPropertiesKey(frameId: String) = stringPreferencesKey("${frameId}_customProperties")
     }
 
     private val customImportManager = CustomImportManager(context)
@@ -27,10 +43,6 @@ class FrameManager(private val context: Context) {
     
     // 可用边框列表
     private var availableFrames: List<FrameInfo> = emptyList()
-
-    // 自定义边框目录
-    private val customFrameDir: File
-        get() = File(context.filesDir, CUSTOM_FRAME_DIR)
     
     /**
      * 初始化，扫描可用的边框模板
@@ -127,5 +139,93 @@ class FrameManager(private val context: Context) {
      */
     fun getCacheInfo(): String {
         return "Frame Cache: ${templateCache.size()}/$CACHE_SIZE, hits=${templateCache.hitCount()}, misses=${templateCache.missCount()}"
+    }
+
+    // ========== 自定义属性持久化方法 ==========
+
+    /**
+     * 获取指定边框的自定义属性 Flow
+     */
+    fun getCustomProperties(frameId: String): Flow<Map<String, String>> {
+        return context.framePropertiesDataStore.data.map { preferences ->
+            val jsonString = preferences[customPropertiesKey(frameId)]
+            if (jsonString != null) {
+                try {
+                    jsonToMap(jsonString)
+                } catch (e: Exception) {
+                    PLog.e(TAG, "Failed to parse custom properties JSON for frame [$frameId]", e)
+                    emptyMap()
+                }
+            } else {
+                emptyMap()
+            }
+        }
+    }
+
+    /**
+     * 保存指定边框的自定义属性
+     *
+     * @param frameId 边框 ID
+     * @param properties 自定义属性 Map
+     */
+    suspend fun saveCustomProperties(frameId: String, properties: Map<String, String>) {
+        context.framePropertiesDataStore.edit { preferences ->
+            val jsonString = mapToJson(properties)
+            preferences[customPropertiesKey(frameId)] = jsonString
+        }
+        PLog.d(TAG, "Custom properties saved for frame [$frameId]: $properties")
+    }
+
+    /**
+     * 加载指定边框的自定义属性（同步方法）
+     *
+     * @param frameId 边框 ID
+     * @return 自定义属性 Map，如果未设置则返回空 Map
+     */
+    suspend fun loadCustomProperties(frameId: String): Map<String, String> {
+        return context.framePropertiesDataStore.data.map { preferences ->
+            val jsonString = preferences[customPropertiesKey(frameId)]
+            if (jsonString != null) {
+                try {
+                    jsonToMap(jsonString)
+                } catch (e: Exception) {
+                    PLog.e(TAG, "Failed to parse custom properties JSON for frame [$frameId]", e)
+                    emptyMap()
+                }
+            } else {
+                emptyMap()
+            }
+        }.firstOrNull() ?: emptyMap()
+    }
+
+    /**
+     * 删除指定边框的自定义属性
+     *
+     * @param frameId 边框 ID
+     */
+    suspend fun deleteCustomProperties(frameId: String) {
+        context.framePropertiesDataStore.edit { preferences ->
+            preferences.remove(customPropertiesKey(frameId))
+        }
+        PLog.d(TAG, "Custom properties deleted for frame [$frameId]")
+    }
+
+    // ========== JSON 辅助方法 ==========
+
+    private fun mapToJson(map: Map<String, String>): String {
+        val jsonObject = JSONObject()
+        map.forEach { (key, value) ->
+            jsonObject.put(key, value)
+        }
+        return jsonObject.toString()
+    }
+
+    private fun jsonToMap(jsonString: String): Map<String, String> {
+        val result = mutableMapOf<String, String>()
+        val jsonObject = JSONObject(jsonString)
+        jsonObject.keys().forEach { key ->
+            result[key] = jsonObject.getString(key)
+        }
+        return result
     }
 }

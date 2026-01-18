@@ -143,16 +143,26 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         private set
 
     // 边框编辑状态
-    var editFrameId: String? by mutableStateOf(null)
+    var editFrameId = MutableStateFlow<String?>(null)
         private set
 
     // 可用的边框列表
     var availableFrames: List<FrameInfo> by mutableStateOf(emptyList())
         private set
 
-    // 水印自定义属性
-    var editCustomProperties = mutableStateMapOf<String, String>()
-        private set
+    // 水印自定义属性（从 FrameManager 持久化加载）
+    @OptIn(ExperimentalCoroutinesApi::class)
+    var editFrameCustomProperties = editFrameId.flatMapLatest { id ->
+        if (id == null) {
+            flowOf(emptyMap())
+        } else {
+            contentRepository.frameManager.getCustomProperties(id)
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyMap()
+    )
 
     // 最新照片（用于相机界面显示入口）
     private val _latestPhoto = MutableStateFlow<PhotoData?>(null)
@@ -349,7 +359,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             // 更新编辑状态
             currentPhotoMetadata?.let { metadata ->
                 editLutId.value = metadata.lutId
-                editFrameId = metadata.frameId
+                editFrameId.value = metadata.frameId
 
                 // 加载 LUT 配置
                 editLutId.value?.let { id ->
@@ -785,13 +795,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         // 从当前元数据恢复编辑状态
         currentPhotoMetadata?.let { metadata ->
             editLutId.value = metadata.lutId
-            editFrameId = metadata.frameId
-            editCustomProperties.clear()
-            editCustomProperties.putAll(metadata.customProperties)
+            editFrameId.value = metadata.frameId
         } ?: run {
             editLutId.value = null
-            editFrameId = null
-            editCustomProperties.clear()
+            editFrameId.value = null
         }
 
         // 加载当前编辑的 LUT 配置
@@ -811,8 +818,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         isEditing = false
         editLutId.value = null
         editLutConfig = null
-        editFrameId = null
-        editCustomProperties.clear()
+        editFrameId.value = null
     }
 
     /**
@@ -836,14 +842,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 设置边框
      */
     fun setEditFrame(frameId: String?) {
-        editFrameId = frameId
+        editFrameId.value = frameId
     }
 
     /**
-     * 更新水印自定义属性
+     * 保存当前边框的自定义属性到持久化存储
      */
-    fun updateEditCustomProperty(key: String, value: String) {
-        editCustomProperties[key] = value
+    fun saveEditCustomProperties(properties: Map<String, String>) {
+        viewModelScope.launch {
+            editFrameId.value?.let { contentRepository.frameManager.saveCustomProperties(it, properties) }
+        }
     }
 
     /**
@@ -878,9 +886,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
                 val metadata = (photo.metadata ?: PhotoMetadata()).copy(
                     lutId = editLutId.value,
-                    frameId = editFrameId,
+                    frameId = editFrameId.value,
                     colorRecipeParams = editLutRecipeParams.value,
-                    customProperties = editCustomProperties.toMap()
+                    customProperties = editFrameCustomProperties.value
                 )
 
                 // 预览生成：跟随用户设置
@@ -912,9 +920,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val context = getApplication<Application>()
                 val metadata = (currentPhotoMetadata ?: PhotoMetadata()).copy(
                     lutId = editLutId.value,
-                    frameId = editFrameId,
+                    frameId = editFrameId.value,
                     colorRecipeParams = editLutRecipeParams.value,
-                    customProperties = editCustomProperties.toMap()
+                    customProperties = editFrameCustomProperties.value
                 )
                 val success = PhotoManager.saveMetadata(context, photo.id, metadata)
 
@@ -959,9 +967,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
         val metadata = (photo.metadata ?: PhotoMetadata()).copy(
             lutId = editLutId.value,
-            frameId = editFrameId,
+            frameId = editFrameId.value,
             colorRecipeParams = editLutRecipeParams.value,
-            customProperties = editCustomProperties.toMap()
+            customProperties = editFrameCustomProperties.value
         )
         exportPhotoInternal(
             photo = photo,
