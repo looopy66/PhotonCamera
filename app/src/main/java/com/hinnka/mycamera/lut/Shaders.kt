@@ -221,16 +221,35 @@ object Shaders {
                 float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
                 color.rgb = mix(vec3(gray), color.rgb, uSaturation);
 
-                // 6. 蓝色增强（Vibrance - 选择性增强蓝色）
+                // 6. 色彩增强（Vibrance - 选择性增强蓝色/红橙色）
+                float strength = uVibrance * 0.5;
+                // --- 6.1 蓝色增强 (深邃天空/水面) ---
                 float baseBlue = color.b - (color.r + color.g) * 0.5;
                 float blueMask = smoothstep(0.0, 0.2, baseBlue); 
-                float strength = uVibrance * 0.5;
                 if (blueMask > 0.0) {
-                    vec3 densityCheck = vec3(0.3, 0.3, 0.0) * blueMask * strength;
-                    color.r -= densityCheck.r * color.r;
-                    color.g -= densityCheck.g * color.g;
+                    // 增加蓝色的纯度（减去R和G的干扰）
+                    vec3 blueDensity = vec3(0.3, 0.3, 0.0) * blueMask * strength;
+                    color.r -= blueDensity.r * color.r;
+                    color.g -= blueDensity.g * color.g;
+                    // 稍微压暗蓝色，制造胶片重感
                     color.b -= 0.05 * blueMask * strength;
+                    // 使用 S 曲线增加蓝色区域的对比度/通透感
                     color.rgb = mix(color.rgb, color.rgb * color.rgb * (3.0 - 2.0 * color.rgb), blueMask * strength * 0.2);
+                }
+                // --- 6.2 暖色增强 (新增逻辑：红润肤色/日落) ---
+                // 去除浑浊的蓝色杂质，呈现奶油般质感的红/橙色
+                // 算法：检测红色分量是否显著高于蓝色 (捕捉皮肤、夕阳、木头等)
+                float baseWarm = color.r - (color.g * 0.3 + color.b * 0.7); 
+                float warmMask = smoothstep(0.05, 0.25, baseWarm);
+                if (warmMask > 0.0) {
+                    // 6.2.1 "去脏"：在暖色区域减去互补色(蓝色)，使暖色更干净、通透
+                    color.b -= 0.15 * warmMask * strength; 
+                    // 6.2.2 密度调整：轻微减去绿色，会让黄色向橙/红色偏移
+                    // 如果想要更黄的暖色，可以注释掉下面这行
+                    color.g -= 0.05 * warmMask * strength; 
+                    // 6.2.3 胶片感增强：同样使用 S 曲线混合，增加暖色的"厚度"和饱和度
+                    // 这里的 mix 系数比蓝色稍高，因为人眼对肤色对比度更敏感
+                    color.rgb = mix(color.rgb, color.rgb * color.rgb * (3.0 - 2.0 * color.rgb), warmMask * strength * 0.25);
                 }
 
                 // 7. 褪色效果（降低对比度 + 提升黑电平）

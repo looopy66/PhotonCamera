@@ -61,7 +61,7 @@ data class PhotoMetadata(
                     put("temperature", colorRecipeParams.temperature.toDouble())
                     put("tint", colorRecipeParams.tint.toDouble())
                     put("fade", colorRecipeParams.fade.toDouble())
-                    put("vibrance", colorRecipeParams.blue.toDouble())
+                    put("vibrance", colorRecipeParams.color.toDouble())
                     put("highlights", colorRecipeParams.highlights.toDouble())
                     put("shadows", colorRecipeParams.shadows.toDouble())
                     put("filmGrain", colorRecipeParams.filmGrain.toDouble())
@@ -121,7 +121,7 @@ data class PhotoMetadata(
                         temperature = colorRecipeParamsObj.optDouble("temperature", 0.0).toFloat(),
                         tint = colorRecipeParamsObj.optDouble("tint", 0.0).toFloat(),
                         fade = colorRecipeParamsObj.optDouble("fade", 0.0).toFloat(),
-                        blue = colorRecipeParamsObj.optDouble("vibrance", 0.0).toFloat(),
+                        color = colorRecipeParamsObj.optDouble("vibrance", 0.0).toFloat(),
                         highlights = colorRecipeParamsObj.optDouble("highlights", 0.0).toFloat(),
                         shadows = colorRecipeParamsObj.optDouble("shadows", 0.0).toFloat(),
                         filmGrain = colorRecipeParamsObj.optDouble("filmGrain", 0.0).toFloat(),

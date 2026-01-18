@@ -138,7 +138,7 @@ fun CameraPreviewGL(
                             temperature = colorRecipeParams.temperature,
                             tint = colorRecipeParams.tint,
                             fade = colorRecipeParams.fade,
-                            vibrance = colorRecipeParams.blue,
+                            vibrance = colorRecipeParams.color,
                             highlights = colorRecipeParams.highlights,
                             shadows = colorRecipeParams.shadows,
                             filmGrain = colorRecipeParams.filmGrain,

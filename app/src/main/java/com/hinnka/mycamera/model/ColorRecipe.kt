@@ -14,7 +14,7 @@ data class ColorRecipeParams(
     val temperature: Float = 0f,    // -1.0 ~ +1.0 (色温，负值偏冷，正值偏暖)
     val tint: Float = 0f,           // -1.0 ~ +1.0 (色调，负值偏绿，正值偏品红)
     val fade: Float = 0f,           // 0.0 ~ 1.0 (褪色效果，0为无褪色)
-    val blue: Float = 0f,       // -1.0 ~ 1.0 (蓝色增强，0为无调整)
+    val color: Float = 0f,       // -1.0 ~ 1.0 (蓝色增强，0为无调整)
     val highlights: Float = 0f,     // -1.0 ~ +1.0 (高光调整，0为无调整)
     val shadows: Float = 0f,        // -1.0 ~ +1.0 (阴影调整，0为无调整)
     val filmGrain: Float = 0f,      // 0.0 ~ 1.0 (颗粒强度，0为无颗粒)
@@ -32,7 +32,7 @@ data class ColorRecipeParams(
                 temperature == 0f &&
                 tint == 0f &&
                 fade == 0f &&
-                blue == 0f &&
+                color == 0f &&
                 highlights == 0f &&
                 shadows == 0f &&
                 filmGrain == 0f &&
@@ -51,7 +51,7 @@ data class ColorRecipeParams(
                 temperature == other.temperature &&
                 tint == other.tint &&
                 fade == other.fade &&
-                blue == other.blue &&
+                color == other.color &&
                 highlights == other.highlights &&
                 shadows == other.shadows &&
                 filmGrain == other.filmGrain &&
@@ -85,7 +85,7 @@ enum class RecipeParam(
     TEMPERATURE(R.string.recipe_param_temperature, -1.0f, 1.0f, 0f),
     TINT(R.string.recipe_param_tint, -1.0f, 1.0f, 0f),
     FADE(R.string.recipe_param_fade, 0.0f, 1.0f, 0f),
-    BLUE(R.string.recipe_param_blue, -1.0f, 1.0f, 0f),
+    COLOR(R.string.recipe_param_color, -1.0f, 1.0f, 0f),
     HIGHLIGHTS(R.string.recipe_param_highlights, -1.0f, 1.0f, 0f),
     SHADOWS(R.string.recipe_param_shadows, -1.0f, 1.0f, 0f),
     FILM_GRAIN(R.string.recipe_param_film_grain, 0.0f, 1.0f, 0f),
@@ -111,7 +111,7 @@ enum class RecipeParam(
             TEMPERATURE -> params.temperature
             TINT -> params.tint
             FADE -> params.fade
-            BLUE -> params.blue
+            COLOR -> params.color
             HIGHLIGHTS -> params.highlights
             SHADOWS -> params.shadows
             FILM_GRAIN -> params.filmGrain
@@ -133,7 +133,7 @@ enum class RecipeParam(
             TEMPERATURE -> params.copy(temperature = clampedValue)
             TINT -> params.copy(tint = clampedValue)
             FADE -> params.copy(fade = clampedValue)
-            BLUE -> params.copy(blue = clampedValue)
+            COLOR -> params.copy(color = clampedValue)
             HIGHLIGHTS -> params.copy(highlights = clampedValue)
             SHADOWS -> params.copy(shadows = clampedValue)
             FILM_GRAIN -> params.copy(filmGrain = clampedValue)
