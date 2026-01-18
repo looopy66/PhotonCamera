@@ -10,6 +10,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.FilterNone
 import androidx.compose.material.icons.filled.Article
 import androidx.compose.material3.*
@@ -47,6 +48,8 @@ import com.hinnka.mycamera.viewmodel.CameraViewModel
 fun SettingsScreen(
     viewModel: CameraViewModel,
     onBack: () -> Unit,
+    onFilterManagementClick: () -> Unit,
+    onFrameManagementClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.state.collectAsState()
@@ -156,22 +159,23 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // 自定义导入设置
-            SettingsSection(title = stringResource(R.string.settings_section_custom)) {
-                CustomImportSection(
-                    customImportManager = viewModel.getCustomImportManager(),
-                    onImportSuccess = { viewModel.refreshCustomContent() }
+            // 内容管理设置
+            SettingsSection(title = stringResource(R.string.settings_section_management)) {
+                NavigationSettingItem(
+                    title = stringResource(R.string.settings_filter_management),
+                    description = stringResource(R.string.settings_filter_management_description),
+                    onClick = onFilterManagementClick
                 )
-            }
 
-            Spacer(modifier = Modifier.height(24.dp))
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
 
-            // 边框水印设置
-            SettingsSection(title = stringResource(R.string.settings_section_frame)) {
-                FrameWatermarkSetting(
-                    currentFrameId = viewModel.currentFrameId,
-                    availableFrames = viewModel.availableFrameList,
-                    onFrameSelected = { viewModel.setFrame(it) }
+                NavigationSettingItem(
+                    title = stringResource(R.string.settings_frame_management),
+                    description = stringResource(R.string.settings_frame_management_description),
+                    onClick = onFrameManagementClick
                 )
             }
 
@@ -179,54 +183,6 @@ fun SettingsScreen(
 
             // 拍摄设置
             SettingsSection(title = stringResource(R.string.settings_section_operation)) {
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_shutter_sound),
-                    description = stringResource(R.string.settings_shutter_sound_description),
-                    checked = shutterSoundEnabled,
-                    onCheckedChange = { viewModel.setShutterSoundEnabled(it) }
-                )
-
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_vibration),
-                    description = stringResource(R.string.settings_vibration_description),
-                    checked = vibrationEnabled,
-                    onCheckedChange = { viewModel.setVibrationEnabled(it) }
-                )
-
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_volume_key),
-                    description = stringResource(R.string.settings_volume_key_description),
-                    checked = volumeKeyCapture,
-                    onCheckedChange = { viewModel.setVolumeKeyCapture(it) }
-                )
-
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_auto_save),
-                    description = stringResource(R.string.settings_auto_save_description),
-                    checked = autoSaveAfterCapture,
-                    onCheckedChange = { viewModel.setAutoSaveAfterCapture(it) }
-                )
-
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-
                 val currentCameraInfo = state.getCurrentCameraInfo()
                 val supportsManualProcessing = currentCameraInfo?.supportsManualProcessing ?: false
 
@@ -274,6 +230,54 @@ fun SettingsScreen(
                         )
                     }
                 }
+
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+
+                SwitchSettingItem(
+                    title = stringResource(R.string.settings_shutter_sound),
+                    description = stringResource(R.string.settings_shutter_sound_description),
+                    checked = shutterSoundEnabled,
+                    onCheckedChange = { viewModel.setShutterSoundEnabled(it) }
+                )
+
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+
+                SwitchSettingItem(
+                    title = stringResource(R.string.settings_vibration),
+                    description = stringResource(R.string.settings_vibration_description),
+                    checked = vibrationEnabled,
+                    onCheckedChange = { viewModel.setVibrationEnabled(it) }
+                )
+
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+
+                SwitchSettingItem(
+                    title = stringResource(R.string.settings_volume_key),
+                    description = stringResource(R.string.settings_volume_key_description),
+                    checked = volumeKeyCapture,
+                    onCheckedChange = { viewModel.setVolumeKeyCapture(it) }
+                )
+
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+
+                SwitchSettingItem(
+                    title = stringResource(R.string.settings_auto_save),
+                    description = stringResource(R.string.settings_auto_save_description),
+                    checked = autoSaveAfterCapture,
+                    onCheckedChange = { viewModel.setAutoSaveAfterCapture(it) }
+                )
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -403,6 +407,51 @@ fun SwitchSettingItem(
                 uncheckedThumbColor = Color.White.copy(alpha = 0.6f),
                 uncheckedTrackColor = Color.White.copy(alpha = 0.2f)
             )
+        )
+    }
+}
+
+
+/**
+ * 导航设置项（点击后跳转到其他页面）
+ */
+@Composable
+fun NavigationSettingItem(
+    title: String,
+    description: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Normal
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = description,
+                color = Color.White.copy(alpha = 0.6f),
+                fontSize = 13.sp,
+                lineHeight = 18.sp
+            )
+        }
+
+        Spacer(modifier = Modifier.width(16.dp))
+
+        Icon(
+            imageVector = Icons.Default.ChevronRight,
+            contentDescription = null,
+            tint = Color.White.copy(alpha = 0.6f)
         )
     }
 }

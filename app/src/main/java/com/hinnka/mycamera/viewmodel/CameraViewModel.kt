@@ -184,18 +184,36 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // 订阅 ContentRepository 的 StateFlow，实现自动更新
+        // 订阅 ContentRepository 的 StateFlow，结合用户自定义排序
         viewModelScope.launch {
-            contentRepository.availableLuts.collect { luts ->
-                availableLutList = luts
-                PLog.d(TAG, "CameraViewModel: availableLutList updated to ${luts.size} items")
+            contentRepository.availableLuts.combine(
+                userPreferencesRepository.userPreferences.map { it.filterOrder }
+            ) { luts, order ->
+                if (order.isEmpty()) {
+                    luts
+                } else {
+                    val orderMap = order.withIndex().associate { it.value to it.index }
+                    luts.sortedBy { orderMap[it.id] ?: Int.MAX_VALUE }
+                }
+            }.collect { sortedLuts ->
+                availableLutList = sortedLuts
+                PLog.d(TAG, "CameraViewModel: availableLutList updated to ${sortedLuts.size} items (sorted)")
             }
         }
 
         viewModelScope.launch {
-            contentRepository.availableFrames.collect { frames ->
-                availableFrameList = frames
-                PLog.d(TAG, "CameraViewModel: availableFrameList updated to ${frames.size} items")
+            contentRepository.availableFrames.combine(
+                userPreferencesRepository.userPreferences.map { it.frameOrder }
+            ) { frames, order ->
+                if (order.isEmpty()) {
+                    frames
+                } else {
+                    val orderMap = order.withIndex().associate { it.value to it.index }
+                    frames.sortedBy { orderMap[it.id] ?: Int.MAX_VALUE }
+                }
+            }.collect { sortedFrames ->
+                availableFrameList = sortedFrames
+                PLog.d(TAG, "CameraViewModel: availableFrameList updated to ${sortedFrames.size} items (sorted)")
             }
         }
 
@@ -450,6 +468,34 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 contentRepository.refreshCustomContent()
             }
             PLog.d(TAG, "Custom content refreshed via ContentRepository")
+        }
+    }
+
+    /**
+     * 获取滤镜排序顺序
+     */
+    val filterOrder: Flow<List<String>> = userPreferencesRepository.userPreferences.map { it.filterOrder }
+
+    /**
+     * 获取边框排序顺序
+     */
+    val frameOrder: Flow<List<String>> = userPreferencesRepository.userPreferences.map { it.frameOrder }
+
+    /**
+     * 保存滤镜排序顺序
+     */
+    fun saveFilterOrder(order: List<String>) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveFilterOrder(order)
+        }
+    }
+
+    /**
+     * 保存边框排序顺序
+     */
+    fun saveFrameOrder(order: List<String>) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveFrameOrder(order)
         }
     }
 

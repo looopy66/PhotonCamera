@@ -34,7 +34,10 @@ data class UserPreferences(
     // 软件处理参数（仅在 useSoftwareProcessing=true 时生效）
     val sharpening: Float = 0.3f,              // 0.0 ~ 1.0 锐化强度
     val noiseReduction: Float = 0.25f,         // 0.0 ~ 1.0 降噪强度
-    val chromaNoiseReduction: Float = 0.25f    // 0.0 ~ 1.0 减少杂色强度
+    val chromaNoiseReduction: Float = 0.25f,   // 0.0 ~ 1.0 减少杂色强度
+    // 排序顺序
+    val filterOrder: List<String> = emptyList(),  // 滤镜排序（ID列表）
+    val frameOrder: List<String> = emptyList()    // 边框排序（ID列表）
 )
 
 /**
@@ -60,6 +63,9 @@ class UserPreferencesRepository(private val context: Context) {
         private val SHARPENING = floatPreferencesKey("sharpening")
         private val NOISE_REDUCTION = floatPreferencesKey("noise_reduction")
         private val CHROMA_NOISE_REDUCTION = floatPreferencesKey("chroma_noise_reduction")
+        // 排序 Keys
+        private val FILTER_ORDER = stringPreferencesKey("filter_order")
+        private val FRAME_ORDER = stringPreferencesKey("frame_order")
     }
     
     /**
@@ -82,7 +88,10 @@ class UserPreferencesRepository(private val context: Context) {
                 // 软件处理参数
                 sharpening = preferences[SHARPENING] ?: 0.3f,
                 noiseReduction = preferences[NOISE_REDUCTION] ?: 0.25f,
-                chromaNoiseReduction = preferences[CHROMA_NOISE_REDUCTION] ?: 0.25f
+                chromaNoiseReduction = preferences[CHROMA_NOISE_REDUCTION] ?: 0.25f,
+                // 排序
+                filterOrder = preferences[FILTER_ORDER]?.split(",")?.filter { it.isNotEmpty() } ?: emptyList(),
+                frameOrder = preferences[FRAME_ORDER]?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
             )
         }
     
@@ -217,6 +226,24 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveChromaNoiseReduction(value: Float) {
         context.dataStore.edit { preferences ->
             preferences[CHROMA_NOISE_REDUCTION] = value.coerceIn(0f, 1f)
+        }
+    }
+
+    /**
+     * 保存滤镜排序顺序
+     */
+    suspend fun saveFilterOrder(order: List<String>) {
+        context.dataStore.edit { preferences ->
+            preferences[FILTER_ORDER] = order.joinToString(",")
+        }
+    }
+
+    /**
+     * 保存边框排序顺序
+     */
+    suspend fun saveFrameOrder(order: List<String>) {
+        context.dataStore.edit { preferences ->
+            preferences[FRAME_ORDER] = order.joinToString(",")
         }
     }
 }

@@ -192,18 +192,36 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     init {
         loadPhotos()
 
-        // 订阅 ContentRepository 的 StateFlow，实现自动更新
+        // 订阅 ContentRepository 的 StateFlow，结合用户自定义排序
         viewModelScope.launch {
-            contentRepository.availableLuts.collect { luts ->
-                availableLuts = luts
-                PLog.d(TAG, "GalleryViewModel: availableLuts updated to ${luts.size} items")
+            contentRepository.availableLuts.combine(
+                userPreferencesRepository.userPreferences.map { it.filterOrder }
+            ) { luts, order ->
+                if (order.isEmpty()) {
+                    luts
+                } else {
+                    val orderMap = order.withIndex().associate { it.value to it.index }
+                    luts.sortedBy { orderMap[it.id] ?: Int.MAX_VALUE }
+                }
+            }.collect { sortedLuts ->
+                availableLuts = sortedLuts
+                PLog.d(TAG, "GalleryViewModel: availableLuts updated to ${sortedLuts.size} items (sorted)")
             }
         }
 
         viewModelScope.launch {
-            contentRepository.availableFrames.collect { frames ->
-                availableFrames = frames
-                PLog.d(TAG, "GalleryViewModel: availableFrames updated to ${frames.size} items")
+            contentRepository.availableFrames.combine(
+                userPreferencesRepository.userPreferences.map { it.frameOrder }
+            ) { frames, order ->
+                if (order.isEmpty()) {
+                    frames
+                } else {
+                    val orderMap = order.withIndex().associate { it.value to it.index }
+                    frames.sortedBy { orderMap[it.id] ?: Int.MAX_VALUE }
+                }
+            }.collect { sortedFrames ->
+                availableFrames = sortedFrames
+                PLog.d(TAG, "GalleryViewModel: availableFrames updated to ${sortedFrames.size} items (sorted)")
             }
         }
     }

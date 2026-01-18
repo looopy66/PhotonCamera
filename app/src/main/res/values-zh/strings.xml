@@ -189,4 +189,32 @@
     <string name="settings_log_viewer">日志收集</string>
     <string name="settings_log_viewer_description">查看和导出应用日志，用于问题诊断</string>
     <string name="logs">日志</string>
+
+    <!-- 滤镜/边框管理 -->
+    <string name="settings_section_management">内容管理</string>
+    <string name="settings_filter_management">滤镜管理</string>
+    <string name="settings_filter_management_description">管理滤镜，设置默认，排序</string>
+    <string name="settings_frame_management">边框管理</string>
+    <string name="settings_frame_management_description">管理边框，设置默认，排序</string>
+    <string name="filter_management_title">滤镜管理</string>
+    <string name="frame_management_title">边框管理</string>
+    <string name="set_as_default">设为默认</string>
+    <string name="current_default">默认</string>
+    <string name="rename">重命名</string>
+    <string name="import_filter">导入滤镜</string>
+    <string name="import_frame_json">导入边框配置</string>
+    <string name="import_frame_image">导入图片边框</string>
+    <string name="delete_filter_confirm_message">删除滤镜 "%s"？</string>
+    <string name="delete_frame_confirm_message">删除边框 "%s"？</string>
+    <string name="rename_dialog_title">重命名</string>
+    <string name="built_in">内置</string>
+    <string name="custom">自定义</string>
+    <string name="no_filters">暂无自定义滤镜</string>
+    <string name="no_frames">暂无自定义边框</string>
+
+    <!-- 边框导入帮助 -->
+    <string name="help">帮助</string>
+    <string name="got_it">知道了</string>
+    <string name="frame_import_help_title">边框导入说明</string>
+    <string name="frame_import_help_message">支持的格式：PNG、WebP\n\n要求：\n• 图片必须包含透明区域（Alpha 通道）\n• 您的照片会被自动放置在边框下层，通过透明区域显示\n\n提示：在您希望显示照片的位置设计透明开口即可。</string>
 </resources>

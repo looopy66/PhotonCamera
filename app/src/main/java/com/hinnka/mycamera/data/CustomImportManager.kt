@@ -308,6 +308,46 @@ class CustomImportManager(private val context: Context) {
         }
     }
 
+/**
+ * 更新自定义边框名称
+ */
+fun updateFrameName(frameId: String, newName: String): Boolean {
+    return try {
+        val configFile = File(context.filesDir, CUSTOM_FRAME_CONFIG)
+        if (!configFile.exists()) {
+            return false
+        }
+
+        val configJson = configFile.readText()
+        val jsonArray = JSONArray(configJson)
+        val newArray = JSONArray()
+
+        var updated = false
+        for (i in 0 until jsonArray.length()) {
+            val frameObj = jsonArray.getJSONObject(i)
+            if (frameObj.getString("id") == frameId) {
+                // 更新名称
+                frameObj.put("name", JSONObject().apply {
+                    put("en", newName)
+                    put("zh", newName)
+                })
+                updated = true
+            }
+            newArray.put(frameObj)
+        }
+
+        if (updated) {
+            configFile.writeText(newArray.toString())
+            PLog.d(TAG, "Frame name updated: $frameId -> $newName")
+        }
+
+        updated
+    } catch (e: Exception) {
+        PLog.e(TAG, "Failed to update frame name", e)
+        false
+    }
+}
+
     /**
      * 删除自定义 LUT
      */

@@ -47,6 +47,8 @@ import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.gallery.GalleryScreen
 import com.hinnka.mycamera.ui.gallery.PhotoDetailScreen
 import com.hinnka.mycamera.ui.gallery.PhotoEditScreen
+import com.hinnka.mycamera.ui.settings.FilterManagementScreen
+import com.hinnka.mycamera.ui.settings.FrameManagementScreen
 import com.hinnka.mycamera.ui.settings.SettingsScreen
 import com.hinnka.mycamera.ui.theme.PhotonCameraTheme
 import com.hinnka.mycamera.utils.BuglyHelper
@@ -65,6 +67,8 @@ object Routes {
     const val PHOTO_DETAIL = "photo_detail/{index}"
     const val PHOTO_EDIT = "photo_edit"
     const val SETTINGS = "settings"
+    const val FILTER_MANAGEMENT = "filter_management"
+    const val FRAME_MANAGEMENT = "frame_management"
 
     fun photoDetail(index: Int) = "photo_detail/$index"
 }
@@ -248,6 +252,30 @@ fun NavigationHost(
 
             composable(Routes.SETTINGS) {
                 SettingsScreen(
+                    viewModel = cameraViewModel,
+                    onBack = {
+                        navController.popBackStack()
+                    },
+                    onFilterManagementClick = {
+                        navController.navigate(Routes.FILTER_MANAGEMENT)
+                    },
+                    onFrameManagementClick = {
+                        navController.navigate(Routes.FRAME_MANAGEMENT)
+                    }
+                )
+            }
+
+            composable(Routes.FILTER_MANAGEMENT) {
+                FilterManagementScreen(
+                    viewModel = cameraViewModel,
+                    onBack = {
+                        navController.popBackStack()
+                    }
+                )
+            }
+
+            composable(Routes.FRAME_MANAGEMENT) {
+                FrameManagementScreen(
                     viewModel = cameraViewModel,
                     onBack = {
                         navController.popBackStack()

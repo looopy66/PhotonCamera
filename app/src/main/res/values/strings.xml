@@ -190,4 +190,32 @@
     <string name="settings_log_viewer">Log Viewer</string>
     <string name="settings_log_viewer_description">View and export app logs for diagnostics</string>
     <string name="logs">Logs</string>
+
+    <!-- Filter/Frame Management -->
+    <string name="settings_section_management">Content Management</string>
+    <string name="settings_filter_management">Filter Management</string>
+    <string name="settings_filter_management_description">Manage filters, set default, reorder</string>
+    <string name="settings_frame_management">Frame Management</string>
+    <string name="settings_frame_management_description">Manage frames, set default, reorder</string>
+    <string name="filter_management_title">Filter Management</string>
+    <string name="frame_management_title">Frame Management</string>
+    <string name="set_as_default">Set as Default</string>
+    <string name="current_default">Default</string>
+    <string name="rename">Rename</string>
+    <string name="import_filter">Import Filter</string>
+    <string name="import_frame_json">Import Frame Config</string>
+    <string name="import_frame_image">Import Image Frame</string>
+    <string name="delete_filter_confirm_message">Delete filter \"%s\"?</string>
+    <string name="delete_frame_confirm_message">Delete frame \"%s\"?</string>
+    <string name="rename_dialog_title">Rename</string>
+    <string name="built_in">Built-in</string>
+    <string name="custom">Custom</string>
+    <string name="no_filters">No custom filters</string>
+    <string name="no_frames">No custom frames</string>
+
+    <!-- Frame Import Help -->
+    <string name="help">Help</string>
+    <string name="got_it">Got it</string>
+    <string name="frame_import_help_title">Frame Import Guide</string>
+    <string name="frame_import_help_message">Supported formats: PNG, WebP\n\nRequirements:\n• The image must have a transparent area (alpha channel)\n• Your photo will be placed behind the frame, visible through the transparent region\n\nTip: Design your frame with a transparent cutout where you want the photo to appear.</string>
 </resources>
