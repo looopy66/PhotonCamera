@@ -3,11 +3,14 @@ package com.hinnka.mycamera.ui.settings
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -27,7 +30,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.frame.FrameInfo
+import com.hinnka.mycamera.frame.TextType
 import com.hinnka.mycamera.ui.camera.autoRotate
+import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -77,6 +82,10 @@ fun FrameManagementScreen(
     
     // 帮助对话框状态
     var showHelpDialog by remember { mutableStateOf(false) }
+
+    // 自定义属性编辑状态
+    var showFrameEditSheet by remember { mutableStateOf(false) }
+    var editingFrameId by remember { mutableStateOf<String?>(null) }
 
     // JSON 边框配置文件选择器
     val frameJsonPicker = rememberLauncherForActivityResult(
@@ -216,6 +225,7 @@ fun FrameManagementScreen(
                         viewModel.setFrame(null)
                     },
                     onRename = null,
+                    onEditProperties = null,
                     onDelete = null
                 )
             }
@@ -236,6 +246,12 @@ fun FrameManagementScreen(
                                 renamingFrame = frameInfo
                                 renameText = frameInfo.getName()
                                 showRenameDialog = true
+                            }
+                        } else null,
+                        onEditProperties = if (frameInfo.isEditable) {
+                            {
+                                editingFrameId = frameInfo.id
+                                showFrameEditSheet = true
                             }
                         } else null,
                         onDelete = if (!frameInfo.isBuiltIn) {
@@ -356,6 +372,18 @@ fun FrameManagementScreen(
             viewModel.saveFrameOrder(localFrameList.map { it.id })
         }
     }
+
+    // 自定义属性编辑底部弹窗
+    if (showFrameEditSheet && editingFrameId != null) {
+        FrameEditBottomSheet(
+            viewModel = viewModel,
+            frameId = editingFrameId!!,
+            onDismiss = {
+                showFrameEditSheet = false
+                editingFrameId = null
+            }
+        )
+    }
 }
 
 /**
@@ -370,6 +398,7 @@ private fun FrameManagementItem(
     canDrag: Boolean,
     onSetDefault: () -> Unit,
     onRename: (() -> Unit)?,
+    onEditProperties: (() -> Unit)?,
     onDelete: (() -> Unit)?,
     modifier: Modifier = Modifier
 ) {
@@ -453,6 +482,21 @@ private fun FrameManagementItem(
             }
         }
 
+        // 自定义属性编辑按钮（仅可编辑边框）
+        if (onEditProperties != null) {
+            IconButton(
+                onClick = onEditProperties,
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Tune,
+                    contentDescription = stringResource(R.string.watermark_adjustment),
+                    tint = Color.White.copy(alpha = 0.7f),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+
         // 操作按钮（仅自定义边框）
         if (onRename != null) {
             IconButton(
@@ -478,6 +522,140 @@ private fun FrameManagementItem(
                     contentDescription = stringResource(R.string.delete),
                     tint = Color.White.copy(alpha = 0.7f),
                     modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 边框自定义属性编辑底部弹窗
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FrameEditBottomSheet(
+    viewModel: CameraViewModel,
+    frameId: String,
+    onDismiss: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    val sheetState = rememberModalBottomSheetState()
+    val customProperties = remember(frameId) {
+        mutableStateMapOf<String, String>()
+    }
+
+    // 加载已保存的自定义属性
+    LaunchedEffect(frameId) {
+        val savedProperties = withContext(Dispatchers.IO) {
+            viewModel.getFrameCustomProperties(frameId)
+        }
+        customProperties.clear()
+        customProperties.putAll(savedProperties)
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = {
+            // 关闭时保存属性
+            scope.launch {
+                withContext(Dispatchers.IO) {
+                    viewModel.saveFrameCustomProperties(frameId, customProperties.toMap())
+                }
+            }
+            onDismiss()
+        },
+        sheetState = sheetState,
+        containerColor = Color(0xFF1A1A1A),
+        contentColor = Color.White,
+        scrimColor = Color.Transparent
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+                .padding(bottom = 32.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.watermark_adjustment),
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+
+            // Logo 选择
+            Text(
+                text = stringResource(R.string.logo),
+                fontSize = 14.sp,
+                color = Color.White.copy(alpha = 0.6f),
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            val logos = listOf(
+                "none" to stringResource(R.string.none),
+                "apple" to "Apple",
+                "leica" to "Leica",
+                "hasselblad" to "Hasselblad",
+                "sony" to "Sony",
+                "canon" to "Canon",
+                "nikon" to "Nikon",
+                "fujifilm" to "Fujifilm",
+                "xiaomi" to "Xiaomi",
+                "huawei" to "Huawei",
+                "oppo" to "OPPO",
+                "vivo" to "Vivo"
+            )
+
+            val effectiveLogo = customProperties["LOGO"] ?: "none"
+
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(bottom = 16.dp)
+            ) {
+                items(logos) { (id, name) ->
+                    val isSelected = effectiveLogo == id
+                    Surface(
+                        onClick = { customProperties["LOGO"] = id },
+                        color = if (isSelected) AccentOrange.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.1f),
+                        shape = RoundedCornerShape(8.dp),
+                        border = if (isSelected) BorderStroke(1.dp, AccentOrange) else null
+                    ) {
+                        Text(
+                            text = name,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            fontSize = 13.sp,
+                            color = if (isSelected) AccentOrange else Color.White
+                        )
+                    }
+                }
+            }
+
+            // 文字默认值编辑
+            Text(
+                text = stringResource(R.string.text_content),
+                fontSize = 14.sp,
+                color = Color.White.copy(alpha = 0.6f),
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            val textTypes = listOf(
+                TextType.DEVICE_MODEL to stringResource(R.string.device_model),
+                TextType.BRAND to stringResource(R.string.brand_name)
+            )
+
+            textTypes.forEach { (type, label) ->
+                OutlinedTextField(
+                    value = customProperties[type.name] ?: "",
+                    onValueChange = { customProperties[type.name] = it },
+                    label = { Text(label) },
+                    placeholder = { Text(stringResource(R.string.default_from_photo)) },
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AccentOrange,
+                        unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
+                        focusedLabelColor = AccentOrange,
+                        unfocusedLabelColor = Color.White.copy(alpha = 0.5f),
+                        cursorColor = AccentOrange
+                    ),
+                    singleLine = true
                 )
             }
         }

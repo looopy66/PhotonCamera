@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.ui.camera.autoRotate
+import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -71,6 +72,10 @@ fun FilterManagementScreen(
 
     // 导入状态
     var isImporting by remember { mutableStateOf(false) }
+
+    // 色彩配方编辑状态
+    var showColorRecipeSheet by remember { mutableStateOf(false) }
+    var editingLutId by remember { mutableStateOf<String?>(null) }
 
     // 文件选择器
     val lutFilePicker = rememberLauncherForActivityResult(
@@ -183,6 +188,10 @@ fun FilterManagementScreen(
                                 showRenameDialog = true
                             }
                         } else null,
+                        onEditColorRecipe = {
+                            editingLutId = lutInfo.id
+                            showColorRecipeSheet = true
+                        },
                         onDelete = if (!lutInfo.isBuiltIn) {
                             {
                                 deletingLut = lutInfo
@@ -283,6 +292,17 @@ fun FilterManagementScreen(
             viewModel.saveFilterOrder(localLutList.map { it.id })
         }
     }
+
+    // 色彩配方编辑底部弹窗
+    if (showColorRecipeSheet && editingLutId != null) {
+        LutEditBottomSheet(
+            lutId = editingLutId!!,
+            onDismiss = {
+                showColorRecipeSheet = false
+                editingLutId = null
+            }
+        )
+    }
 }
 
 /**
@@ -295,6 +315,7 @@ private fun FilterManagementItem(
     isDragging: Boolean,
     onSetDefault: () -> Unit,
     onRename: (() -> Unit)?,
+    onEditColorRecipe: (() -> Unit)?,
     onDelete: (() -> Unit)?,
     modifier: Modifier = Modifier
 ) {
@@ -385,6 +406,21 @@ private fun FilterManagementItem(
                     text = stringResource(R.string.current_default),
                     color = Color(0xFFFF6B35),
                     fontSize = 12.sp
+                )
+            }
+        }
+
+        // 色彩配方编辑按钮
+        if (onEditColorRecipe != null) {
+            IconButton(
+                onClick = onEditColorRecipe,
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Tune,
+                    contentDescription = stringResource(R.string.color_recipe),
+                    tint = Color.White.copy(alpha = 0.7f),
+                    modifier = Modifier.size(20.dp)
                 )
             }
         }

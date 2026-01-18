@@ -85,6 +85,7 @@
     <string name="date_label">日期 (DATE)</string>
     <string name="time_label">时间 (TIME)</string>
     <string name="datetime_label">日期时间 (DATETIME)</string>
+    <string name="default_from_photo">默认读取照片信息</string>
 
     <!-- Settings -->
     <string name="settings_title">设置</string>

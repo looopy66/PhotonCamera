@@ -676,6 +676,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * 获取边框的自定义属性
+     */
+    suspend fun getFrameCustomProperties(frameId: String): Map<String, String> {
+        return contentRepository.frameManager.loadCustomProperties(frameId)
+    }
+
+    /**
+     * 保存边框的自定义属性
+     */
+    suspend fun saveFrameCustomProperties(frameId: String, properties: Map<String, String>) {
+        contentRepository.frameManager.saveCustomProperties(frameId, properties)
+    }
+
+    /**
      * 设置是否显示直方图
      */
     fun saveShowHistogram(show: Boolean) {
