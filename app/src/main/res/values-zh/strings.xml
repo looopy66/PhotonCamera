@@ -177,7 +177,7 @@
     <string name="recipe_tab_color">色彩</string>
     <string name="recipe_tab_light">光影</string>
     <string name="recipe_tab_texture">质感</string>
-    <string name="recipe_tab_post">后期</string>
+    <string name="recipe_tab_post">细节</string>
 
     <!-- Post-Processing Parameters (Capture/Edit only) -->
     <string name="recipe_param_sharpening">锐化</string>

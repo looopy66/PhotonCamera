@@ -35,6 +35,7 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.components.CustomSliderThinThumb
+import com.hinnka.mycamera.ui.components.SliderSettingItem
 import com.hinnka.mycamera.ui.components.LogViewerDialog
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 
@@ -406,63 +407,6 @@ fun SwitchSettingItem(
     }
 }
 
-/**
- * 滑块设置项
- */
-@Composable
-fun SliderSettingItem(
-    title: String,
-    description: String,
-    value: Float,
-    valueRange: ClosedFloatingPointRange<Float>,
-    onValueChange: (Float) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = title,
-                color = Color.White,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Normal
-            )
-            Text(
-                text = String.format("%.2f", value),
-                color = Color.White.copy(alpha = 0.8f),
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium
-            )
-        }
-        
-        Spacer(modifier = Modifier.height(4.dp))
-        
-        Text(
-            text = description,
-            color = Color.White.copy(alpha = 0.6f),
-            fontSize = 13.sp,
-            lineHeight = 18.sp
-        )
-        
-        Spacer(modifier = Modifier.height(8.dp))
-
-        CustomSliderThinThumb(
-            value = value,
-            onValueChange = onValueChange,
-            valueRange = valueRange,
-            thumbColor = Color.White,
-            activeTrackColor = Color(0xFFFF6B35),
-            inactiveTrackColor = Color.White.copy(alpha = 0.2f)
-        )
-    }
-}
 
 /**
  * 画面比例设置

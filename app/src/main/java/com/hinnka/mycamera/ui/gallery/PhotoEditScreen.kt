@@ -22,6 +22,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,6 +51,7 @@ import com.hinnka.mycamera.ui.components.LutSelector
 import com.hinnka.mycamera.ui.components.PaymentDialog
 import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
+import com.hinnka.mycamera.ui.components.SliderSettingItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -94,13 +96,32 @@ fun PhotoEditScreen(
     val availableFrames = viewModel.availableFrames
     val editFrameCustomProperties by viewModel.editFrameCustomProperties.collectAsState()
 
+    // 软件处理状态
+    val useSoftwareProcessing by viewModel.useSoftwareProcessing.collectAsState()
+    val sharpening by viewModel.sharpening.collectAsState()
+    val noiseReduction by viewModel.noiseReduction.collectAsState()
+    val chromaNoiseReduction by viewModel.chromaNoiseReduction.collectAsState()
+
+    // 编辑标签页状态
+    var editTab by remember { mutableIntStateOf(0) } // 0: 滤镜/边框, 1: 细节处理
+
+    LaunchedEffect(useSoftwareProcessing) {
+        if (!useSoftwareProcessing) {
+            editTab = 0
+        }
+    }
+
     LaunchedEffect(
         currentPhoto,
         editLutId,
         editLutRecipeParams,
         editLutConfig,
         editFrameId,
-        editFrameCustomProperties
+        editFrameCustomProperties,
+        useSoftwareProcessing,
+        sharpening,
+        noiseReduction,
+        chromaNoiseReduction
     ) {
         if (currentPhoto == null) return@LaunchedEffect
 
@@ -249,64 +270,106 @@ fun PhotoEditScreen(
                 Column(
                     modifier = Modifier.padding(16.dp)
                 ) {
-                    // LUT 选择器
-                    Text(
-                        text = stringResource(R.string.filter),
-                        color = Color.White,
-                        fontSize = 16.sp
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    LutSelector(
-                        availableLuts = viewModel.availableLuts,
-                        currentLutId = editLutId,
-                        lutPreviewBitmaps = lutPreviews,
-                        onLutSelected = { viewModel.setEditLut(it) }
-                    )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // 边框水印选择器
-                    Text(
-                        text = stringResource(R.string.frame),
-                        color = Color.White,
-                        fontSize = 16.sp
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        state = frameScrollState
-                    ) {
-                        // 无边框选项
-                        item {
-                            FrameOption(
-                                name = stringResource(R.string.none),
-                                isSelected = editFrameId == null,
-                                isCustom = false,  // 无边框不是自定义
-                                onClick = { viewModel.setEditFrame(null) }
+                    // 标签页切换
+                    if (useSoftwareProcessing) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(24.dp)
+                        ) {
+                            TabItem(
+                                title = stringResource(R.string.filter) + " & " + stringResource(R.string.frame),
+                                isSelected = editTab == 0,
+                                onClick = { editTab = 0 }
+                            )
+                            TabItem(
+                                title = stringResource(R.string.recipe_tab_post),
+                                isSelected = editTab == 1,
+                                onClick = { editTab = 1 }
                             )
                         }
+                    }
 
-                        // 边框选项
-                        items(availableFrames) { frame ->
-                            FrameOption(
-                                name = frame.name,
-                                isSelected = editFrameId == frame.id,
-                                isCustom = !frame.isBuiltIn,  // 添加自定义标识
-                                isEditable = frame.isEditable,
-                                onClick = {
-                                    if (editFrameId == frame.id) {
-                                        viewModel.showWatermarkSheet = true
-                                    } else {
-                                        viewModel.setEditFrame(frame.id)
+                    if (editTab == 0) {
+                        // LUT 选择器
+                        Text(
+                            text = stringResource(R.string.filter),
+                            color = Color.White,
+                            fontSize = 16.sp
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        LutSelector(
+                            availableLuts = viewModel.availableLuts,
+                            currentLutId = editLutId,
+                            lutPreviewBitmaps = lutPreviews,
+                            onLutSelected = { viewModel.setEditLut(it) }
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // 边框水印选择器
+                        Text(
+                            text = stringResource(R.string.frame),
+                            color = Color.White,
+                            fontSize = 16.sp
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            state = frameScrollState
+                        ) {
+                            // 无边框选项
+                            item {
+                                FrameOption(
+                                    name = stringResource(R.string.none),
+                                    isSelected = editFrameId == null,
+                                    isCustom = false,  // 无边框不是自定义
+                                    onClick = { viewModel.setEditFrame(null) }
+                                )
+                            }
+
+                            // 边框选项
+                            items(availableFrames) { frame ->
+                                FrameOption(
+                                    name = frame.name,
+                                    isSelected = editFrameId == frame.id,
+                                    isCustom = !frame.isBuiltIn,  // 添加自定义标识
+                                    isEditable = frame.isEditable,
+                                    onClick = {
+                                        if (editFrameId == frame.id) {
+                                            viewModel.showWatermarkSheet = true
+                                        } else {
+                                            viewModel.setEditFrame(frame.id)
+                                        }
                                     }
-                                }
-                            )
+                                )
+                            }
                         }
+                    } else {
+                        // 细节处理调整 (锐化, 降噪, 杂色降噪)
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_sharpening),
+                            value = sharpening,
+                            valueRange = 0f..1f,
+                            onValueChange = { viewModel.setSharpening(it) }
+                        )
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_noise_reduction),
+                            value = noiseReduction,
+                            valueRange = 0f..1f,
+                            onValueChange = { viewModel.setNoiseReduction(it) }
+                        )
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_chroma_noise_reduction),
+                            value = chromaNoiseReduction,
+                            valueRange = 0f..1f,
+                            onValueChange = { viewModel.setChromaNoiseReduction(it) }
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
                     }
                 }
             }
@@ -378,6 +441,38 @@ private fun Context.findActivity(): Activity? {
         context = context.baseContext
     }
     return null
+}
+
+/**
+ * 标签页项
+ */
+@Composable
+private fun TabItem(
+    title: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+            onClick = onClick
+        )
+    ) {
+        Text(
+            text = title,
+            color = if (isSelected) Color.White else Color.White.copy(alpha = 0.5f),
+            fontSize = 14.sp,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Box(
+            modifier = Modifier
+                .size(width = 24.dp, height = 2.dp)
+                .background(if (isSelected) AccentOrange else Color.Transparent)
+        )
+    }
 }
 
 /**
@@ -519,7 +614,8 @@ private fun WatermarkEditSheet(
         },
         sheetState = sheetState,
         containerColor = Color(0xFF1A1A1A),
-        contentColor = Color.White
+        contentColor = Color.White,
+        scrimColor = Color.Transparent
     ) {
         Column(
             modifier = Modifier

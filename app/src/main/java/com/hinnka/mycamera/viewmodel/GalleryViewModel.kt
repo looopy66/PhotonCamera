@@ -855,6 +855,33 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
+     * 设置锐化强度
+     */
+    fun setSharpening(value: Float) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveSharpening(value)
+        }
+    }
+
+    /**
+     * 设置降噪强度
+     */
+    fun setNoiseReduction(value: Float) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveNoiseReduction(value)
+        }
+    }
+
+    /**
+     * 设置减少杂色强度
+     */
+    fun setChromaNoiseReduction(value: Float) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveChromaNoiseReduction(value)
+        }
+    }
+
+    /**
      * 获取指定照片的完整转换器（LUT + 边框）
      */
     fun getPhotoTransformation(photo: PhotoData): PhotoTransformation {
