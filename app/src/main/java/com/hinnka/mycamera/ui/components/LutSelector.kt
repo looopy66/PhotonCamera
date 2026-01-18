@@ -1,28 +1,19 @@
 package com.hinnka.mycamera.ui.components
 
 import android.graphics.Bitmap
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FilterNone
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,11 +43,14 @@ fun LutSelector(
     currentLutId: String?,
     lutPreviewBitmaps: Map<String, Bitmap> = emptyMap(),
     onLutSelected: (String?) -> Unit,
+    onEditClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
-    var showLutEditDialog by remember { mutableStateOf(false) }
+    var showLutEditDialogState by remember { mutableStateOf(false) }
+    
+    val actualShowLutEditDialog = onEditClick == null && showLutEditDialogState
     
     // 在组件首次加载时滚动到当前选中的 LUT
     LaunchedEffect(currentLutId) {
@@ -71,12 +65,12 @@ fun LutSelector(
         }
     }
 
-    // 全局 LUT 编辑底部弹窗
-    if (showLutEditDialog && currentLutId != null) {
+    // 全局 LUT 编辑底部弹窗 (如果没有提供外部点击处理)
+    if (actualShowLutEditDialog && currentLutId != null) {
         LutEditBottomSheet(
             lutId = currentLutId,
             onDismiss = {
-                showLutEditDialog = false
+                showLutEditDialogState = false
             }
         )
     }
@@ -98,7 +92,11 @@ fun LutSelector(
                 isCustom = !lut.isBuiltIn,  // 添加自定义标识
                 onClick = {
                     if (currentLutId == lut.id) {
-                        showLutEditDialog = true
+                        if (onEditClick != null) {
+                            onEditClick()
+                        } else {
+                            showLutEditDialogState = true
+                        }
                     } else {
                         onLutSelected(lut.id)
                     }
@@ -198,15 +196,23 @@ private fun LutItem(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.4f)),
+                        .background(Color.Black.copy(alpha = 0.3f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Edit,
-                        contentDescription = stringResource(R.string.edit),
-                        tint = Color(0xFFD7E1F1),
-                        modifier = Modifier.size(16.dp)
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .background(Color.White.copy(alpha = 0.2f), CircleShape)
+                            .border(1.dp, Color.White.copy(alpha = 0.5f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Tune,
+                            contentDescription = stringResource(R.string.edit),
+                            tint = Color.White,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
                 }
             }
 
@@ -282,18 +288,69 @@ fun LutControlPanel(
     onLutSelected: (String?) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var showLutEditDialog by remember { mutableStateOf(false) }
+
+    if (showLutEditDialog && currentLutId != null) {
+        LutEditBottomSheet(
+            lutId = currentLutId,
+            onDismiss = { showLutEditDialog = false }
+        )
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
             .padding(4.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
+        if (currentLutId != null) {
+            val currentLut = availableLuts.find { it.id == currentLutId }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = currentLut?.getName() ?: "",
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color.White.copy(alpha = 0.15f))
+                        .clickable { showLutEditDialog = true }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Tune,
+                        contentDescription = stringResource(R.string.color_recipe),
+                        tint = Color(0xFFFFD700), // Gold color to match VIP/Premium feel
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = stringResource(R.string.color_recipe),
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+        }
+
         // LUT 选择器
         LutSelector(
             availableLuts = availableLuts,
             currentLutId = currentLutId,
             lutPreviewBitmaps = lutPreviewBitmaps,
-            onLutSelected = onLutSelected
+            onLutSelected = onLutSelected,
+            onEditClick = { showLutEditDialog = true }
         )
     }
 }
