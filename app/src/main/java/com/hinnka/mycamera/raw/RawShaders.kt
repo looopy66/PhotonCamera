@@ -64,17 +64,12 @@ object RawShaders {
         uniform sampler2D uLensShadingMap;
         uniform float uPostRawBoost;
 
-        // Base LUT
-        uniform mediump sampler3D uBaseLutTexture;
-        uniform float uBaseLutSize;
-
         // Capture One 风格控制参数
         uniform float uDeconvStrength;     // 输入反卷积强度 (0.0-1.0)
         uniform float uStructureAmount;    // 结构增强强度 (0.0-1.0)
         uniform float uOutputSharpAmount;  // 输出锐化强度 (0.0-1.0)
         uniform float uExposureGain;       // 曝光增益
 
-        // ========== 步骤 1 & 2: 黑电平扣除 + 白平衡 ==========
         // 获取当前像素的颜色通道类型: 0=R, 1=Gr, 2=Gb, 3=B
         // 注意：这里返回的是 RGGB 四通道索引，不是 RGB 三通道索引
         int getChannelIndex(ivec2 coord) {
@@ -104,51 +99,38 @@ object RawShaders {
                 else return 0;               // R
             }
         }
-        
-        // 获取当前像素的镜头阴影增益
-        float getLensShadingGain(ivec2 coord, int channelIdx) {
-            vec2 shadingCoord = (vec2(coord) + 0.5) / uImageSize;
-            vec4 shadingGains = texture(uLensShadingMap, shadingCoord);
-            
-            // LensShadingMap 增益顺序通常为 [R, Geven, Godd, B]
-            // Geven 是偶数行的绿色通道，Godd 是奇数行的绿色通道
-            if (channelIdx == 0) return shadingGains.r; // R
-            if (channelIdx == 3) return shadingGains.a; // B
-            
-            bool isEvenRow = (uCfaPattern == 0 || uCfaPattern == 1); // RGGB(0), GRBG(1) 的 Gr 在偶数行
-            if (channelIdx == 1) { // Gr
-                return isEvenRow ? shadingGains.g : shadingGains.b;
-            } else { // Gb
-                return isEvenRow ? shadingGains.b : shadingGains.g;
-            }
-        }
-        
-        // 获取RAW像素值，应用黑电平和白平衡
+
+        // 获取RAW像素值，应用黑电平和白平衡 (Branchless)
         // uBlackLevel 和 uWhiteBalanceGains 的分量顺序: .r=R, .g=Gr, .b=Gb, .a=B
         float getRawPixel(ivec2 coord) {
             coord = clamp(coord, ivec2(0), ivec2(uImageSize) - 1);
-            uint rawValue = texelFetch(uRawTexture, coord, 0).r;
-            float raw = float(rawValue);
+            float raw = float(texelFetch(uRawTexture, coord, 0).r);
 
-            // 获取当前像素的颜色通道索引 (0=R, 1=Gr, 2=Gb, 3=B)
-            int channelIdx = getChannelIndex(coord);
+            // 获取当前像素的颜色通道索引 (0..3)
+            int idx = getChannelIndex(coord); 
             
-            // 根据通道索引选择对应的黑电平和白平衡增益
-            // uniform vec4 的分量顺序: .r=R, .g=Gr, .b=Gb, .a=B
-            float black;
-            float gain;
-            if (channelIdx == 0) { black = uBlackLevel.r; gain = uWhiteBalanceGains.r; }       // R
-            else if (channelIdx == 1) { black = uBlackLevel.g; gain = uWhiteBalanceGains.g; } // Gr
-            else if (channelIdx == 2) { black = uBlackLevel.b; gain = uWhiteBalanceGains.b; } // Gb
-            else { black = uBlackLevel.a; gain = uWhiteBalanceGains.a; }                      // B
+            // 构造 Mask
+            vec4 mask = vec4(0.0);
+            if (idx == 0) mask.r = 1.0;
+            else if (idx == 1) mask.g = 1.0;
+            else if (idx == 2) mask.b = 1.0;
+            else mask.a = 1.0;
 
-            float pixel = max(0.0, (raw - black) * gain / (uWhiteLevel - black));
+            // 并行计算 Black/Gain
+            float black = dot(uBlackLevel, mask);
+            float wbGain = dot(uWhiteBalanceGains, mask);
             
-            // 步骤 3: 镜头阴影校正 (LSC)
-            // 使用双线性插值采样增益图 (OpenGL 默认线性采样已提供双线性插值)
-            pixel *= getLensShadingGain(coord, channelIdx);
+            // 镜头阴影采样 (LSC)
+            vec2 lscUV = (vec2(coord) + 0.5) / uImageSize;
+            vec4 lscVal = texture(uLensShadingMap, lscUV);
             
-            // 步骤 4: 应用数字增益 (Post RAW Boost)
+            // Android LensShadingMap 顺序始终为 [R, Geven (Gr), Godd (Gb), B]
+            // 这与我们的 mask 分量顺序 (.r=R, .g=Gr, .b=Gb, .a=B) 完美契合，无需交换
+            float lscGain = dot(lscVal, mask);
+
+            // 计算最终像素值
+            float pixel = max(0.0, (raw - black) * wbGain / (uWhiteLevel - black));
+            pixel *= lscGain;
             pixel *= uPostRawBoost;
 
             return pixel;
@@ -428,7 +410,8 @@ object RawShaders {
         }
 
         void main() {
-            ivec2 coord = ivec2(vTexCoord * uImageSize);
+            // Pass 1: 1:1 解马赛克，coord 直接对应像素索引
+            ivec2 coord = ivec2(gl_FragCoord.xy);
 
             // 步骤 1-4: 黑电平、白平衡、反卷积、RCD解马赛克
             vec3 rgb = demosaicRCD(coord);
@@ -450,9 +433,6 @@ object RawShaders {
             
             // 步骤 8: 结构增强 (已注释)
             // rgb = applyStructure(rgb);
-
-            // 步骤 8: 输出锐化 (在 gamma 空间进行)
-            rgb = applyOutputSharpening(rgb, coord);
 
             // 最终输出
             fragColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);
@@ -478,6 +458,70 @@ object RawShaders {
         0.0f, 1.0f,  // LT viewport -> Tex (0,1)
         1.0f, 1.0f   // RT viewport -> Tex (1,1)
     )
+
+    /**
+     * 片元着色器 - 第二步：将解马赛克后的 RGB 纹理渲染到最终尺寸
+     * 应用旋转、裁切和缩放
+     */
+    val PASSTHROUGH_FRAGMENT_SHADER = """
+        #version 300 es
+        precision highp float;
+        
+        in vec2 vTexCoord;
+        out vec4 fragColor;
+        
+        uniform sampler2D uTexture;
+        uniform vec2 uSourceSize;
+        uniform float uSharpAmount;
+        
+        // 简单的 Bilateral 降噪参数
+        const float SIGMA_COLOR = 0.15;
+        
+        void main() {
+            vec2 texelSize = 1.0 / uSourceSize;
+            vec3 center = texture(uTexture, vTexCoord).rgb;
+            
+            // 1. Bilateral 降噪 (3x3 窗口) - 平滑纹理同时保留边缘
+            vec3 denoised = vec3(0.0);
+            float totalWeight = 0.0;
+            
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    vec3 sampleRGB = texture(uTexture, vTexCoord + vec2(float(dx) * texelSize.x, float(dy) * texelSize.y)).rgb;
+                    
+                    // 计算颜色差异权重
+                    float diff = length(center - sampleRGB);
+                    float weight = exp(-(diff * diff) / (2.0 * SIGMA_COLOR * SIGMA_COLOR));
+                    
+                    denoised += sampleRGB * weight;
+                    totalWeight += weight;
+                }
+            }
+            denoised /= totalWeight;
+            
+            // 2. 边缘检测与自适应锐化
+            if (uSharpAmount <= 0.0) {
+                fragColor = vec4(denoised, 1.0);
+                return;
+            }
+
+            // 计算拉普拉斯边缘
+            vec3 n = texture(uTexture, vTexCoord + vec2(0.0, texelSize.y)).rgb;
+            vec3 s = texture(uTexture, vTexCoord - vec2(0.0, texelSize.y)).rgb;
+            vec3 e = texture(uTexture, vTexCoord + vec2(texelSize.x, 0.0)).rgb;
+            vec3 w = texture(uTexture, vTexCoord - vec2(texelSize.x, 0.0)).rgb;
+            
+            vec3 edge = 4.0 * denoised - n - s - e - w;
+            
+            // 亮度加权：暗部不进行锐化（防止噪点放大），亮部适度锐化
+            float luma = dot(denoised, vec3(0.299, 0.587, 0.114));
+            float sharpMask = smoothstep(0.05, 0.2, luma); // 阈值：低于 0.05 不锐化
+            
+            vec3 sharpened = denoised + edge * uSharpAmount * sharpMask;
+            
+            fragColor = vec4(clamp(sharpened, 0.0, 1.0), 1.0);
+        }
+    """.trimIndent()
 
     /**
      * 绘制顺序索引

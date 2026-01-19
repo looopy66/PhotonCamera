@@ -79,9 +79,42 @@ data class RawMetadata(
             captureResult: CaptureResult
         ): RawMetadata {
             // 1. 获取 CFA 排列模式
-            val cfaPatternRaw = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
+            val cfaId = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
                 ?: CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB
-            val cfaPattern = when (cfaPatternRaw) {
+
+            // 获取 Active Array 裁切区
+            val activeArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE)
+
+            // 计算起始偏移量
+            val xOffset = activeArray?.left ?: 0
+            val yOffset = activeArray?.top ?: 0
+
+            // 根据偏移量重新计算 CFA
+            // 如果 x 偏移了奇数位，模式会左右翻转 (RGGB -> GRBG)
+            // 如果 y 偏移了奇数位，模式会上下翻转 (RGGB -> GBRG)
+            var correctedCfa = cfaId
+
+            if (xOffset % 2 == 1) {
+                correctedCfa = when (correctedCfa) {
+                    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB -> CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GRBG
+                    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GRBG -> CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB
+                    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GBRG -> CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_BGGR
+                    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_BGGR -> CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GBRG
+                    else -> correctedCfa
+                }
+            }
+
+            if (yOffset % 2 == 1) {
+                correctedCfa = when (correctedCfa) {
+                    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB -> CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GBRG
+                    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GRBG -> CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_BGGR
+                    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GBRG -> CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB
+                    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_BGGR -> CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GRBG
+                    else -> correctedCfa
+                }
+            }
+
+            val cfaPattern = when (correctedCfa) {
                 CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB -> CFA_RGGB
                 CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GRBG -> CFA_GRBG
                 CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GBRG -> CFA_GBRG
@@ -160,10 +193,13 @@ data class RawMetadata(
             // 4. 获取白平衡增益
             val wbGains = captureResult.get(CaptureResult.COLOR_CORRECTION_GAINS)
             val whiteBalanceGains = if (wbGains != null) {
+                // Android 顺序为 [R, G_even, G_odd, B]
+                // 无论 CFA 模式如何，G_even 始终定义为与 R 同行的绿像素 (Gr)，G_odd 始终定义为与 B 同行的绿像素 (Gb)
+                // 因此顺序始终对应 [R, Gr, Gb, B]
                 floatArrayOf(
                     wbGains.red,
-                    wbGains.greenEven,
-                    wbGains.greenOdd,
+                    wbGains.greenEven, // Gr
+                    wbGains.greenOdd,  // Gb
                     wbGains.blue
                 )
             } else {
