@@ -23,9 +23,11 @@ object RawShaders {
         
         out vec2 vTexCoord;
         
+        uniform mat4 uTexMatrix;
+        
         void main() {
             gl_Position = aPosition;
-            vTexCoord = aTexCoord;
+            vTexCoord = (uTexMatrix * vec4(aTexCoord, 0.0, 1.0)).xy;
         }
     """.trimIndent()
 
@@ -391,10 +393,10 @@ object RawShaders {
      * 纹理坐标（Y 轴翻转，适配 Android Bitmap）
      */
     val TEXTURE_COORDS = floatArrayOf(
-        0.0f, 1.0f,  // 左下 -> Bitmap 左上
-        1.0f, 1.0f,  // 右下 -> Bitmap 右上
-        0.0f, 0.0f,  // 左上 -> Bitmap 左下
-        1.0f, 0.0f   // 右上 -> Bitmap 右下
+        0.0f, 0.0f,  // LB viewport -> Tex (0,0) [Sensor Row 0/Bottom of Tex] -> glReadPixels reads to Bitmap Top
+        1.0f, 0.0f,  // RB viewport -> Tex (1,0)
+        0.0f, 1.0f,  // LT viewport -> Tex (0,1)
+        1.0f, 1.0f   // RT viewport -> Tex (1,1)
     )
 
     /**

@@ -11,6 +11,7 @@ import android.opengl.EGLContext
 import android.opengl.EGLDisplay
 import android.opengl.EGLSurface
 import android.opengl.GLES30
+import android.opengl.Matrix as GlMatrix
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.lut.GlUtils
 import com.hinnka.mycamera.lut.LutParser
@@ -90,6 +91,7 @@ class RawDemosaicProcessor {
     private var uOutputSharpAmountLoc = 0
     private var uBaseLutTextureLoc = 0
     private var uBaseLutSizeLoc = 0
+    private var uTexMatrixLoc = 0
 
     private var isInitialized = false
 
@@ -134,7 +136,7 @@ class RawDemosaicProcessor {
 
             // 上传 RAW 数据到纹理
             val uploadStart = System.currentTimeMillis()
-            uploadRawTexture(rawImage, width, height)
+            uploadRawTexture(rawImage, width, height, rawImage.planes[0].rowStride)
             PLog.d(TAG, "Texture upload took: ${System.currentTimeMillis() - uploadStart}ms")
 
             // 计算曝光增益 (基于 18% 灰)
@@ -148,45 +150,40 @@ class RawDemosaicProcessor {
             }
             PLog.d(TAG, "Luminance calculation took: ${System.currentTimeMillis() - lumiStart}ms, Gain: $exposureGain")
 
-            // 设置帧缓冲
-            val fboStart = System.currentTimeMillis()
-            setupFramebuffer(width, height)
-            PLog.d(TAG, "FBO setup took: ${System.currentTimeMillis() - fboStart}ms")
+            // 1. 计算目标尺寸（处理旋转）
+            val isSwapped = rotation == 90 || rotation == 270
+            val targetWidthPreCrop = if (isSwapped) height else width
+            val targetHeightPreCrop = if (isSwapped) width else height
 
-            // 渲染
+            // 2. 计算裁切后的尺寸
+            val targetRatio = aspectRatio.getValue(false)
+            val curRatio = targetWidthPreCrop.toFloat() / targetHeightPreCrop.toFloat()
+
+            val finalWidth: Int
+            val finalHeight: Int
+            if (curRatio > targetRatio) {
+                finalHeight = targetHeightPreCrop
+                finalWidth = (targetHeightPreCrop * targetRatio).toInt()
+            } else {
+                finalWidth = targetWidthPreCrop
+                finalHeight = (targetWidthPreCrop / targetRatio).toInt()
+            }
+
+            // 3. 设置帧缓冲为最终尺寸
+            setupFramebuffer(finalWidth, finalHeight)
+
+            // 4. 渲染并直接在 GPU 中完成旋转、翻转、裁切
             val renderStart = System.currentTimeMillis()
-            render(metadata, exposureGain)
-            PLog.d(TAG, "Render took: ${System.currentTimeMillis() - renderStart}ms")
+            render(metadata, exposureGain, rotation, aspectRatio, finalWidth, finalHeight)
+            PLog.d(TAG, "Render + Transform took: ${System.currentTimeMillis() - renderStart}ms")
 
-            // 读取结果
-            var resultBitmap = readPixels(width, height)
+            // 5. 直接读取最终结果
+            val readStart = System.currentTimeMillis()
+            val finalBitmap = readPixels(finalWidth, finalHeight)
+            PLog.d(TAG, "readPixels took: ${System.currentTimeMillis() - readStart}ms")
 
-            // 翻转 Y 轴（glReadPixels 从左下角开始）
-            val flipMatrix = Matrix()
-            flipMatrix.preScale(1f, -1f)
-            val flippedBitmap = Bitmap.createBitmap(resultBitmap, 0, 0, width, height, flipMatrix, true)
-            resultBitmap.recycle()
-            resultBitmap = flippedBitmap
-
-            // 旋转
-            if (rotation != 0) {
-                val rotateMatrix = Matrix()
-                rotateMatrix.postRotate(rotation.toFloat())
-                val rotatedBitmap = Bitmap.createBitmap(resultBitmap, 0, 0, width, height, rotateMatrix, true)
-                if (rotatedBitmap != resultBitmap) {
-                    resultBitmap.recycle()
-                }
-                resultBitmap = rotatedBitmap
-            }
-
-            // 裁切到目标宽高比
-            val croppedBitmap = cropToAspectRatio(resultBitmap, aspectRatio)
-            if (croppedBitmap != resultBitmap) {
-                resultBitmap.recycle()
-            }
-
-            PLog.d(TAG, "RAW processing complete: ${croppedBitmap.width}x${croppedBitmap.height}")
-            croppedBitmap
+            PLog.d(TAG, "RAW processing complete: ${finalBitmap.width}x${finalBitmap.height}")
+            finalBitmap
 
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to process RAW image", e)
@@ -348,6 +345,7 @@ class RawDemosaicProcessor {
         uOutputSharpAmountLoc = GLES30.glGetUniformLocation(shaderProgram, "uOutputSharpAmount")
         uBaseLutTextureLoc = GLES30.glGetUniformLocation(shaderProgram, "uBaseLutTexture")
         uBaseLutSizeLoc = GLES30.glGetUniformLocation(shaderProgram, "uBaseLutSize")
+        uTexMatrixLoc = GLES30.glGetUniformLocation(shaderProgram, "uTexMatrix")
 
         PLog.d(TAG, "Shader program created: $shaderProgram")
     }
@@ -396,7 +394,7 @@ class RawDemosaicProcessor {
      * 
      * RAW_SENSOR 格式通常是 16 位（或 10/12 位打包为 16 位）的单通道数据
      */
-    private fun uploadRawTexture(image: Image, width: Int, height: Int) {
+    private fun uploadRawTexture(image: Image, width: Int, height: Int, rowStride: Int) {
         if (rawTextureId == 0) {
             val textures = IntArray(1)
             GLES30.glGenTextures(1, textures, 0)
@@ -412,61 +410,29 @@ class RawDemosaicProcessor {
         // 获取 RAW 数据
         val plane = image.planes[0]
         val buffer = plane.buffer
-        val rowStride = plane.rowStride
-        val pixelStride = plane.pixelStride
+        buffer.position(0)
 
-        PLog.d(
-            TAG,
-            "RAW texture upload: ${width}x${height}, rowStride=$rowStride, pixelStride=$pixelStride, buffer size=${buffer.remaining()}"
+        // 关键优化：使用 GL_UNPACK_ROW_LENGTH 处理 padding，避免 CPU 逐行复制
+        val bytesPerPixel = 2 // 16-bit
+        val rowLength = rowStride / bytesPerPixel
+
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 2)
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, rowLength)
+
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D,
+            0,
+            GLES30.GL_R16UI,
+            width,
+            height,
+            0,
+            GLES30.GL_RED_INTEGER,
+            GLES30.GL_UNSIGNED_SHORT,
+            buffer
         )
 
-        // RAW_SENSOR 通常是连续的 16 位数据
-        // rowStride 应该等于 width * 2 (每像素 2 字节)
-        // 如果有 padding，需要逐行复制
-
-        val expectedRowBytes = width * 2 // 16-bit per pixel
-
-        if (rowStride == expectedRowBytes) {
-            // 无 padding，直接上传
-            buffer.position(0)
-            GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 2)
-            GLES30.glTexImage2D(
-                GLES30.GL_TEXTURE_2D,
-                0,
-                GLES30.GL_R16UI,  // 16 位无符号整数
-                width,
-                height,
-                0,
-                GLES30.GL_RED_INTEGER,
-                GLES30.GL_UNSIGNED_SHORT,
-                buffer
-            )
-        } else {
-            // 有 padding，需要逐行复制
-            val packedBuffer = ByteBuffer.allocateDirect(width * height * 2)
-                .order(ByteOrder.nativeOrder())
-
-            for (y in 0 until height) {
-                buffer.position(y * rowStride)
-                val rowBuffer = ByteArray(expectedRowBytes)
-                buffer.get(rowBuffer)
-                packedBuffer.put(rowBuffer)
-            }
-
-            packedBuffer.position(0)
-            GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 2)
-            GLES30.glTexImage2D(
-                GLES30.GL_TEXTURE_2D,
-                0,
-                GLES30.GL_R16UI,
-                width,
-                height,
-                0,
-                GLES30.GL_RED_INTEGER,
-                GLES30.GL_UNSIGNED_SHORT,
-                packedBuffer
-            )
-        }
+        // 恢复默认设置
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, 0)
 
         checkGlError("uploadRawTexture")
     }
@@ -562,10 +528,46 @@ class RawDemosaicProcessor {
         return if (totalWeight > 0) (weightedSum / totalWeight).toFloat() else 0.15f
     }
 
-    private fun render(metadata: RawMetadata, exposureGain: Float) {
+    private fun render(
+        metadata: RawMetadata,
+        exposureGain: Float,
+        rotation: Int,
+        aspectRatio: AspectRatio,
+        finalWidth: Int,
+        finalHeight: Int
+    ) {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
-        GLES30.glViewport(0, 0, metadata.width, metadata.height)
+        GLES30.glViewport(0, 0, finalWidth, finalHeight)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+
+        // 计算变换矩阵 (处理旋转和裁剪)
+        val texMatrix = FloatArray(16)
+        GlMatrix.setIdentityM(texMatrix, 0)
+
+        // 核心：处理裁剪。由于我们已经计算了最终 Viewport 尺寸，我们只需要在采样输入纹理时决定采样范围。
+        // 输入纹理 [0, 1] 对应完整的 metadata.width x metadata.height。
+        // 旋转 90/270 后，逻辑宽变为 height，逻辑高变为 width。
+        val curWidth = if (rotation == 90 || rotation == 270) metadata.height else metadata.width
+        val curHeight = if (rotation == 90 || rotation == 270) metadata.width else metadata.height
+        val curRatio = curWidth.toFloat() / curHeight.toFloat()
+        val targetRatio = aspectRatio.getValue(false)
+
+        // 1. 先进行旋转 (在采样坐标空间进行，配合 180 度修正倒置问题)
+        GlMatrix.translateM(texMatrix, 0, 0.5f, 0.5f, 0f)
+        GlMatrix.rotateM(texMatrix, 0, (rotation + 180).toFloat(), 0f, 0f, 1f)
+        GlMatrix.translateM(texMatrix, 0, -0.5f, -0.5f, 0f)
+
+        // 2. 然后进行裁剪缩放
+        var scaleX = 1.0f
+        var scaleY = 1.0f
+        if (curRatio > targetRatio) {
+            scaleX = targetRatio / curRatio
+        } else {
+            scaleY = curRatio / targetRatio
+        }
+        GlMatrix.translateM(texMatrix, 0, 0.5f, 0.5f, 0f)
+        GlMatrix.scaleM(texMatrix, 0, scaleX, scaleY, 1.0f)
+        GlMatrix.translateM(texMatrix, 0, -0.5f, -0.5f, 0f)
 
         GLES30.glUseProgram(shaderProgram)
 
@@ -593,6 +595,7 @@ class RawDemosaicProcessor {
             metadata.whiteBalanceGains[3]
         )
         GLES30.glUniformMatrix3fv(uColorCorrectionMatrixLoc, 1, true, metadata.colorCorrectionMatrix, 0)
+        GLES30.glUniformMatrix4fv(uTexMatrixLoc, 1, false, texMatrix, 0)
 
         // Capture One 风格控制 Uniforms
         GLES30.glUniform1f(uExposureGainLoc, exposureGain)
@@ -645,6 +648,7 @@ class RawDemosaicProcessor {
 
     /**
      * 裁切 Bitmap 到目标宽高比（居中裁切）
+     * GPU 已经处理了裁切，此方法作为降级参考
      */
     private fun cropToAspectRatio(bitmap: Bitmap, aspectRatio: AspectRatio): Bitmap {
         val srcWidth = bitmap.width

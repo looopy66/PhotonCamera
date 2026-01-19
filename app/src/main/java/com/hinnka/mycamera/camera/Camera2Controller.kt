@@ -21,6 +21,7 @@ import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.ln
@@ -105,8 +106,11 @@ class Camera2Controller(private val context: Context) {
     private val _state = MutableStateFlow(CameraState())
     val state: StateFlow<CameraState> = _state.asStateFlow()
 
-    // 最后一次拍摄结果，用于提取 EXIF 信息
-    // 标记为 @Volatile 确保多线程可见性
+    // 缓存 CaptureResult 和 Image 用于配对 (timestamp -> Data)
+    private val pendingResults = ConcurrentHashMap<Long, TotalCaptureResult>()
+    private val pendingImages = ConcurrentHashMap<Long, Image>()
+
+    // 保留最近的一个结果作为后备
     @Volatile
     private var lastCaptureResult: TotalCaptureResult? = null
 
@@ -132,6 +136,24 @@ class Camera2Controller(private val context: Context) {
             result: TotalCaptureResult
         ) {
             super.onCaptureCompleted(session, request, result)
+
+            val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
+            if (timestamp != null) {
+                val pendingImage = pendingImages.remove(timestamp)
+                if (pendingImage != null) {
+                    // 找到了匹配的图像，触发回调
+                    processAndTriggerCapture(pendingImage, result)
+                } else {
+                    // 还没找到图像，存入缓存
+                    pendingResults[timestamp] = result
+                    // 限制缓存大小
+                    if (pendingResults.size > 20) {
+                        val oldest = pendingResults.keys.minOrNull()
+                        if (oldest != null) pendingResults.remove(oldest)
+                    }
+                }
+            }
+            lastCaptureResult = result
 
             // 处理拍照状态机
             processCaptureState(result)
@@ -436,40 +458,35 @@ class Camera2Controller(private val context: Context) {
                 2
             ).apply {
                 setOnImageAvailableListener({ reader ->
-                    PLog.d(TAG, "ImageReader onImageAvailableListener triggered")
-                    // 关键修复：使用 acquireNextImage() 而不是 acquireLatestImage()
-                    // acquireLatestImage() 会丢弃队列中的旧图像，在 RAW 拍摄时可能导致第一张图像丢失
-                    val image = reader.acquireNextImage()
-                    if (image != null) {
-                        try {
-                            PLog.d(
-                                TAG,
-                                "Image acquired successfully: ${image.width}x${image.height}, format=${image.format}"
-                            )
+                    try {
+                        PLog.d(TAG, "ImageReader onImageAvailableListener triggered")
+                        // 关键修复：使用 acquireNextImage() 而不是 acquireLatestImage()
+                        val image = reader.acquireNextImage()
+                        if (image != null) {
+                            val timestamp = image.timestamp
+                            val pendingResult = pendingResults.remove(timestamp)
+
+                            if (pendingResult != null) {
+                                // 找到了匹配的结果，触发回调
+                                processAndTriggerCapture(image, pendingResult)
+                            } else {
+                                // 还没找到结果，存入缓存
+                                pendingImages[timestamp] = image
+                                // 限制缓存大小（防御性，防止内存泄漏）
+                                if (pendingImages.size > 5) {
+                                    val oldestKey = pendingImages.keys.minOrNull()
+                                    if (oldestKey != null) {
+                                        pendingImages.remove(oldestKey)?.close()
+                                    }
+                                }
+                            }
+                        } else {
+                            PLog.w(TAG, "acquireNextImage() returned null, resetting capture state")
                             _state.value = _state.value.copy(isCapturing = false)
-                            val width = image.width
-                            val height = image.height
-
-                            // 构建 CaptureInfo (包含正确的传感器方向)
-                            val captureInfo = rebuildCaptureInfo(lastCaptureResult, width, height)
-
-                            // 传递完整的 Image 对象、CaptureInfo、CameraCharacteristics 和 CaptureResult
-                            // 注意：调用者负责关闭 Image
-                            onImageCaptured?.invoke(image, captureInfo, cachedCharacteristics, lastCaptureResult)
-                        } catch (e: Exception) {
-                            PLog.e(TAG, "Error processing captured image", e)
-                            // 关键修复：发生异常时也要关闭 Image，避免资源泄漏
-                            image.close()
-                        } finally {
-                            // 关键修复：在图像数据获取后再重置预览流
-                            // 这样可以避免在 RAW 数据传输过程中中断 ImageReader
                             resetPreviewAfterCapture()
                         }
-                    } else {
-                        // 关键修复：即使图像获取失败，也要重置 isCapturing 状态和预览流
-                        PLog.w(TAG, "acquireNextImage() returned null, resetting capture state")
-                        _state.value = _state.value.copy(isCapturing = false)
-                        resetPreviewAfterCapture()
+                    } catch (e: Exception) {
+                        PLog.e(TAG, "Error in onImageAvailable", e)
                     }
                 }, cameraHandler)
             }
@@ -903,7 +920,7 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    // ==================== 统一参数配置 ====================
+// ==================== 统一参数配置 ====================
 
     /**
      * 将当前状态中的相机参数应用到 CaptureRequest.Builder
@@ -1142,11 +1159,16 @@ class Camera2Controller(private val context: Context) {
                 }
             } else {
                 // 系统处理模式：使用系统的降噪/锐化算法
-                val edgeMode = if (availableEdgeModes.contains(CaptureRequest.EDGE_MODE_ZERO_SHUTTER_LAG)) CaptureRequest.EDGE_MODE_ZERO_SHUTTER_LAG else CaptureRequest.EDGE_MODE_FAST
+                val edgeMode =
+                    if (availableEdgeModes.contains(CaptureRequest.EDGE_MODE_ZERO_SHUTTER_LAG)) CaptureRequest.EDGE_MODE_ZERO_SHUTTER_LAG else CaptureRequest.EDGE_MODE_FAST
                 if (availableEdgeModes.contains(edgeMode)) builder.set(CaptureRequest.EDGE_MODE, edgeMode)
 
-                val noiseReductionMode = if (availableNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_ZERO_SHUTTER_LAG)) CaptureRequest.NOISE_REDUCTION_MODE_ZERO_SHUTTER_LAG else CaptureRequest.NOISE_REDUCTION_MODE_FAST
-                if (availableNoiseReductionModes.contains(noiseReductionMode)) builder.set(CaptureRequest.NOISE_REDUCTION_MODE, noiseReductionMode)
+                val noiseReductionMode =
+                    if (availableNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_ZERO_SHUTTER_LAG)) CaptureRequest.NOISE_REDUCTION_MODE_ZERO_SHUTTER_LAG else CaptureRequest.NOISE_REDUCTION_MODE_FAST
+                if (availableNoiseReductionModes.contains(noiseReductionMode)) builder.set(
+                    CaptureRequest.NOISE_REDUCTION_MODE,
+                    noiseReductionMode
+                )
 
                 if (isCapture) {
                     PLog.d(TAG, "图像质量设置: 系统处理模式, 锐化=$edgeMode, 降噪=$noiseReductionMode")
@@ -1194,7 +1216,7 @@ class Camera2Controller(private val context: Context) {
         return lastCaptureResult
     }
 
-    // ==================== 镜头切换 ====================
+// ==================== 镜头切换 ====================
 
     /**
      * 获取所有后置摄像头
@@ -1270,7 +1292,7 @@ class Camera2Controller(private val context: Context) {
         } ?: PLog.w(TAG, "Camera with ID $cameraId not found")
     }
 
-    // ==================== 曝光控制 ====================
+// ==================== 曝光控制 ====================
 
     /**
      * 设置曝光补偿
@@ -1635,7 +1657,7 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    // ==================== 变焦控制 ====================
+// ==================== 变焦控制 ====================
 
     /**
      * 设置变焦倍数
@@ -1678,7 +1700,7 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    // ==================== 对焦控制 ====================
+// ==================== 对焦控制 ====================
 
     /**
      * 点击对焦
@@ -1768,7 +1790,7 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    // ==================== 其他设置 ====================
+// ==================== 其他设置 ====================
 
     /**
      * 设置画面比例
@@ -1795,7 +1817,7 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    // ==================== 延时拍摄和网格线 ====================
+// ==================== 延时拍摄和网格线 ====================
 
     /**
      * 设置延时拍摄秒数
@@ -1818,7 +1840,7 @@ class Camera2Controller(private val context: Context) {
         _state.value = _state.value.copy(showGrid = show)
     }
 
-    // ==================== 拍照 ====================
+// ==================== 拍照 ====================
 
     /**
      * 拍照
@@ -1904,7 +1926,7 @@ class Camera2Controller(private val context: Context) {
 
                 PLog.d(
                     TAG,
-                    "Capture with ISO: ${_state.value.iso}, shutterSpeed: ${_state.value.shutterSpeed}, isAutoExposure: ${_state.value.isAutoExposure}"
+                    "Capture request built and ready to send. ISO: ${_state.value.iso}, shutter: ${_state.value.shutterSpeed}, AE: ${_state.value.isAutoExposure}"
                 )
             }
 
@@ -1926,10 +1948,20 @@ class Camera2Controller(private val context: Context) {
                     request: CaptureRequest,
                     result: TotalCaptureResult
                 ) {
-                    // 关键修复：立即保存拍摄结果用于提取 EXIF
-                    // 这个必须在 ImageReader 回调之前完成，但时序上可能做不到
+                    val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
+                    if (timestamp != null) {
+                        val pendingImage = pendingImages.remove(timestamp)
+                        if (pendingImage != null) {
+                            processAndTriggerCapture(pendingImage, result)
+                        } else {
+                            pendingResults[timestamp] = result
+                        }
+                    }
                     lastCaptureResult = result
-                    PLog.d(TAG, "Capture completed, result saved")
+                    PLog.d(
+                        TAG,
+                        "Capture completed, result saved"
+                    )
 
                     // 关键修复：不在这里调用 resetPreviewAfterCapture()
                     // 因为此时 RAW 图像数据可能还未传输完成，过早重置预览流会中断 ImageReader
@@ -2105,7 +2137,7 @@ class Camera2Controller(private val context: Context) {
         shouldCapturePreviewFrame = true
     }
 
-    // ==================== 生命周期 ====================
+// ==================== 生命周期 ====================
 
     /**
      * 关闭相机
@@ -2138,6 +2170,31 @@ class Camera2Controller(private val context: Context) {
             PLog.d(TAG, "Camera closed")
         } catch (e: Exception) {
             PLog.e(TAG, "Error closing camera", e)
+        }
+    }
+
+    private fun processAndTriggerCapture(image: Image, result: TotalCaptureResult) {
+        val processStartTime = System.currentTimeMillis()
+        try {
+            _state.value = _state.value.copy(isCapturing = false)
+            val width = image.width
+            val height = image.height
+            PLog.d(TAG, "Matching Image and CaptureResult found for timestamp ${image.timestamp}")
+
+            // 构建 CaptureInfo
+            val captureInfo = rebuildCaptureInfo(result, width, height)
+
+            // 传递完整的 Image 对象、CaptureInfo、CameraCharacteristics 和 CaptureResult
+            onImageCaptured?.invoke(image, captureInfo, cachedCharacteristics, result)
+        } catch (e: Exception) {
+            PLog.e(TAG, "Error processing joined capture data", e)
+            image.close()
+        } finally {
+            PLog.d(
+                TAG,
+                "Capture data pairing and callback took: ${System.currentTimeMillis() - processStartTime}ms"
+            )
+            resetPreviewAfterCapture()
         }
     }
 

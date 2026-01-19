@@ -844,31 +844,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         characteristics: CameraCharacteristics?,
         captureResult: android.hardware.camera2.CaptureResult?
     ) {
+        val saveStartTime = System.currentTimeMillis()
         var bitmap: Bitmap? = null
         try {
-            PLog.d(TAG, "saveImage called - image: ${image.width}x${image.height}, format: ${image.format}")
+            PLog.d(TAG, "saveImage started - dimensions: ${image.width}x${image.height}, format: ${image.format}")
             val context = getApplication<Application>()
 
-            // 关键修复：如果 captureResult 为 null，短暂等待
-            // 在某些设备上，onCaptureCompleted 可能晚于 ImageReader 回调触发
+            // 关键修复：Camera2Controller 已经尝试根据时间戳配对 CaptureResult
+            // 如果这里还是 null，说明可能真的没等到，或者是在不支持 RAW 的设备上不需要那么精确
             var finalCaptureResult = captureResult
             if (finalCaptureResult == null && cameraController.isRawSupported) {
-                var waitCount = 0
-                while (waitCount < 20) {
-                    kotlinx.coroutines.delay(10)
-                    finalCaptureResult =
-                        cameraController.getLastCaptureResult() as android.hardware.camera2.CaptureResult?
-                    if (finalCaptureResult != null) {
-                        if (waitCount > 2) { // 只有延迟超过 20ms 时才记录日志
-                            PLog.d(TAG, "captureResult became available after ${waitCount * 10}ms")
-                        }
-                        break
-                    }
-                    waitCount++
-                }
-                if (finalCaptureResult == null) {
-                    PLog.w(TAG, "captureResult still null after 200ms, using fallback metadata")
-                }
+                // 如果是 RAW 拍摄，我们必须拿到准确的 metadata
+                PLog.w(TAG, "captureResult is null in onImageCaptured, RAW processing might be affected")
             }
 
             // 保存当前配置信息
@@ -1018,6 +1005,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         }
                     }
                 }
+                PLog.d(TAG, "Total saveImage duration: ${System.currentTimeMillis() - saveStartTime}ms")
             } finally {
                 // 确保 bitmap 在所有操作完成后被回收
                 bitmap.recycle()

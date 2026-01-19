@@ -104,23 +104,56 @@ object PhotoManager {
 
                 // 并行执行所有 IO 操作
                 coroutineScope {
-                    // 任务 1: 保存原图
-                    val saveOriginalJob = async {
+                    // 1. 生成缩略图和预览图的 Bitmap (在 Default 线程池)
+                    // 缩略图 512x512, 预览图按比例缩放至长边 2560
+                    val thumbnailBitmap = async(Dispatchers.Default) {
+                        ThumbnailUtils.extractThumbnail(bitmap, 512, 512)
+                    }
+
+                    val previewBitmap = async(Dispatchers.Default) {
+                        val maxSide = max(bitmap.width, bitmap.height)
+                        if (maxSide > 3840) {
+                            val scale = 2560f / maxSide
+                            val matrix = Matrix().apply { postScale(scale, scale) }
+                            Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+                        } else {
+                            null
+                        }
+                    }
+
+                    // 2. 并行保存所有图片文件
+                    val saveOriginalJob = launch {
                         FileOutputStream(photoFile).use { out ->
-                            // 使用 95 质量以获得更高的图像清晰度
                             bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
                         }
                     }
 
-                    // 任务 2: 保存元数据 JSON（独立任务，可并行）
+                    val saveThumbnailJob = launch {
+                        val thumb = thumbnailBitmap.await()
+                        FileOutputStream(thumbnailFile).use { out ->
+                            thumb.compress(Bitmap.CompressFormat.JPEG, 80, out)
+                        }
+                        thumb.recycle()
+                    }
+
+                    val savePreviewJob = launch {
+                        val preview = previewBitmap.await()
+                        if (preview != null) {
+                            FileOutputStream(previewFile).use { out ->
+                                preview.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                            }
+                            preview.recycle()
+                        }
+                    }
+
+                    // 任务 3: 保存元数据 JSON
                     launch {
                         metadataFile.writeText(metadataJson)
                     }
 
-                    // 任务 3: EXIF 写入，必须在原图保存后进行
-                    // 这个任务完成后，photoFile 才能被其他任务读取
-                    val exifJob = async {
-                        saveOriginalJob.await()
+                    // 任务 4: EXIF 写入，必须在原图保存后进行
+                    launch {
+                        saveOriginalJob.join()
                         captureInfo?.copy(
                             imageWidth = bitmap.width,
                             imageHeight = bitmap.height,
@@ -128,24 +161,6 @@ object PhotoManager {
                             ExifWriter.writeExif(photoFile, info)
                         }
                     }
-
-                    // 任务 4: 生成并保存预览图
-                    // 必须等待 EXIF 写入完成，避免读取到不完整的文件
-                    launch {
-                        exifJob.await()
-                        savePreviewFileIfNeed(photoFile, previewFile)
-                    }
-
-                    // 任务 5: 生成并保存缩略图
-                    // 必须等待 EXIF 写入完成，避免读取到不完整的文件
-                    val thumbnailJob = async {
-                        exifJob.await()
-                        generateThumbnail(photoFile, thumbnailFile)
-                    }
-
-                    // 等待所有任务完成
-                    exifJob.await()
-                    thumbnailJob.await()
                 }
 
                 PLog.d(TAG, "Photo saved: $photoId")
@@ -375,7 +390,8 @@ object PhotoManager {
 
                 // 3. 根据 EXIF 方向旋转图片
                 if (orientation != ExifInterface.ORIENTATION_NORMAL &&
-                    orientation != ExifInterface.ORIENTATION_UNDEFINED) {
+                    orientation != ExifInterface.ORIENTATION_UNDEFINED
+                ) {
                     // 需要旋转图片
                     val bitmap = BitmapFactory.decodeFile(tempFile.absolutePath)
                     if (bitmap != null) {
@@ -387,8 +403,10 @@ object PhotoManager {
 
                         // 设置正确的 EXIF 方向
                         val newExif = ExifInterface(photoFile)
-                        newExif.setAttribute(ExifInterface.TAG_ORIENTATION,
-                            ExifInterface.ORIENTATION_NORMAL.toString())
+                        newExif.setAttribute(
+                            ExifInterface.TAG_ORIENTATION,
+                            ExifInterface.ORIENTATION_NORMAL.toString()
+                        )
                         newExif.saveAttributes()
 
                         if (rotatedBitmap != bitmap) {
@@ -434,18 +452,23 @@ object PhotoManager {
             ExifInterface.ORIENTATION_ROTATE_90 -> {
                 rotateImage(img, 90f)
             }
+
             ExifInterface.ORIENTATION_ROTATE_180 -> {
                 rotateImage(img, 180f)
             }
+
             ExifInterface.ORIENTATION_ROTATE_270 -> {
                 rotateImage(img, 270f)
             }
+
             ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> {
                 flipImage(img, horizontal = true, vertical = false)
             }
+
             ExifInterface.ORIENTATION_FLIP_VERTICAL -> {
                 flipImage(img, horizontal = false, vertical = true)
             }
+
             ExifInterface.ORIENTATION_TRANSPOSE -> {
                 // 先水平翻转，再旋转 270 度
                 val flipped = flipImage(img, horizontal = true, vertical = false)
@@ -453,6 +476,7 @@ object PhotoManager {
                 if (flipped != img) flipped.recycle()
                 rotated
             }
+
             ExifInterface.ORIENTATION_TRANSVERSE -> {
                 // 先垂直翻转，再旋转 270 度
                 val flipped = flipImage(img, horizontal = false, vertical = true)
@@ -460,6 +484,7 @@ object PhotoManager {
                 if (flipped != img) flipped.recycle()
                 rotated
             }
+
             else -> img
         }
     }
