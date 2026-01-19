@@ -11,6 +11,7 @@ import android.opengl.EGLContext
 import android.opengl.EGLDisplay
 import android.opengl.EGLSurface
 import android.opengl.GLES30
+import android.util.Log
 import android.opengl.Matrix as GlMatrix
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.lut.GlUtils
@@ -92,6 +93,11 @@ class RawDemosaicProcessor {
     private var uBaseLutTextureLoc = 0
     private var uBaseLutSizeLoc = 0
     private var uTexMatrixLoc = 0
+    private var uLensShadingMapLoc = 0
+    private var uPostRawBoostLoc = 0
+
+    private var lensShadingTextureId = 0
+    private var dummyShadingTextureId = 0
 
     private var isInitialized = false
 
@@ -139,17 +145,6 @@ class RawDemosaicProcessor {
             uploadRawTexture(rawImage, width, height, rawImage.planes[0].rowStride)
             PLog.d(TAG, "Texture upload took: ${System.currentTimeMillis() - uploadStart}ms")
 
-            // 计算曝光增益 (基于 18% 灰)
-            val lumiStart = System.currentTimeMillis()
-            val avgLuminance = calculateAverageLuminance(rawImage, metadata)
-            val targetLuminance = 0.15f // 降回保守值，配合 ACES 曲线防止过曝
-            val exposureGain = if (avgLuminance > 0.002f) { // 降低噪点门槛
-                (targetLuminance / avgLuminance).coerceIn(1.0f, 5.0f) // 允许更高的增益
-            } else {
-                1.8f // 极暗环境下更积极的提升
-            }
-            PLog.d(TAG, "Luminance calculation took: ${System.currentTimeMillis() - lumiStart}ms, Gain: $exposureGain")
-
             // 1. 计算目标尺寸（处理旋转）
             val isSwapped = rotation == 90 || rotation == 270
             val targetWidthPreCrop = if (isSwapped) height else width
@@ -172,9 +167,13 @@ class RawDemosaicProcessor {
             // 3. 设置帧缓冲为最终尺寸
             setupFramebuffer(finalWidth, finalHeight)
 
-            // 4. 渲染并直接在 GPU 中完成旋转、翻转、裁切
+            // 4. 计算曝光增益 (18% 灰)
+            val exposureGain = calculateExposureGain(rawImage, metadata)
+            Log.d(TAG, "process: exposureGain=$exposureGain")
+
+            // 5. 渲染并直接在 GPU 中完成旋转、翻转、裁切
             val renderStart = System.currentTimeMillis()
-            render(metadata, exposureGain, rotation, aspectRatio, finalWidth, finalHeight)
+            render(metadata, rotation, aspectRatio, finalWidth, finalHeight, exposureGain)
             PLog.d(TAG, "Render + Transform took: ${System.currentTimeMillis() - renderStart}ms")
 
             // 5. 直接读取最终结果
@@ -292,6 +291,9 @@ class RawDemosaicProcessor {
                 PLog.e(TAG, "Failed to load base LUT", e)
             }
 
+            // 创建静默遮挡图
+            dummyShadingTextureId = createDummyShadingTexture()
+
             isInitialized = true
             PLog.d(TAG, "RawDemosaicProcessor initialized")
             return true
@@ -346,6 +348,8 @@ class RawDemosaicProcessor {
         uBaseLutTextureLoc = GLES30.glGetUniformLocation(shaderProgram, "uBaseLutTexture")
         uBaseLutSizeLoc = GLES30.glGetUniformLocation(shaderProgram, "uBaseLutSize")
         uTexMatrixLoc = GLES30.glGetUniformLocation(shaderProgram, "uTexMatrix")
+        uLensShadingMapLoc = GLES30.glGetUniformLocation(shaderProgram, "uLensShadingMap")
+        uPostRawBoostLoc = GLES30.glGetUniformLocation(shaderProgram, "uPostRawBoost")
 
         PLog.d(TAG, "Shader program created: $shaderProgram")
     }
@@ -437,6 +441,52 @@ class RawDemosaicProcessor {
         checkGlError("uploadRawTexture")
     }
 
+    private fun uploadLensShadingTexture(metadata: RawMetadata) {
+        if (metadata.lensShadingMap == null) return
+
+        if (lensShadingTextureId == 0) {
+            val textures = IntArray(1)
+            GLES30.glGenTextures(1, textures, 0)
+            lensShadingTextureId = textures[0]
+        }
+
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, lensShadingTextureId)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+
+        val buffer = ByteBuffer.allocateDirect(metadata.lensShadingMap.size * 4)
+            .order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
+        buffer.put(metadata.lensShadingMap)
+        buffer.position(0)
+
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA32F,
+            metadata.lensShadingMapWidth, metadata.lensShadingMapHeight, 0,
+            GLES30.GL_RGBA, GLES30.GL_FLOAT, buffer
+        )
+    }
+
+    private fun createDummyShadingTexture(): Int {
+        val textures = IntArray(1)
+        GLES30.glGenTextures(1, textures, 0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textures[0])
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
+
+        val buffer = ByteBuffer.allocateDirect(4 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+        buffer.put(floatArrayOf(1f, 1f, 1f, 1f))
+        buffer.position(0)
+
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA32F,
+            1, 1, 0, GLES30.GL_RGBA, GLES30.GL_FLOAT, buffer
+        )
+        return textures[0]
+    }
+
     private fun setupFramebuffer(width: Int, height: Int) {
         // 删除旧资源
         if (framebufferId != 0) {
@@ -478,9 +528,9 @@ class RawDemosaicProcessor {
     }
 
     /**
-     * 计算 RAW 图像的平均亮度（采用高光加权算法）
+     * 计算 RAW 图像的曝光增益（18% 灰算法）
      */
-    private fun calculateAverageLuminance(rawImage: Image, metadata: RawMetadata): Float {
+    private fun calculateExposureGain(rawImage: Image, metadata: RawMetadata): Float {
         val plane = rawImage.planes[0]
         val buffer = plane.buffer
         val width = rawImage.width
@@ -488,53 +538,89 @@ class RawDemosaicProcessor {
         val rowStride = plane.rowStride
         val pixelStride = plane.pixelStride
 
-        var weightedSum = 0.0
-        var totalWeight = 0.0
-        val sampleStep = 8 // 下采样以保证性能
+        // 1. 下采样到约 512x512
+        val sampleSize = 512
+        val stepX = (width / sampleSize).coerceAtLeast(1)
+        val stepY = (height / sampleSize).coerceAtLeast(1)
 
-        val black = metadata.blackLevel[0]
+        val black = metadata.blackLevel[1] // 使用 Gr 通道的黑电平
         val range = metadata.whiteLevel - black
+
+        // 关键修复：RAW 数据一般为小端序 (Little Endian)
+        val savedOrder = buffer.order()
+        buffer.order(ByteOrder.LITTLE_ENDIAN)
+
+        val values = FloatArray(((width / stepX) + 1) * ((height / stepY) + 1))
+        var count = 0
         val savedPos = buffer.position()
 
-        // 预计算平均白平衡增益，用于对齐 CPU 亮度感官和 GPU 渲染结果
-        val avgWbGain = (metadata.whiteBalanceGains[0] + metadata.whiteBalanceGains[1] +
-                metadata.whiteBalanceGains[2] + metadata.whiteBalanceGains[3]) / 4.0f
-
         try {
-            for (y in 0 until height step sampleStep) {
+            for (y in 0 until height step stepY) {
                 val rowOffset = y * rowStride
-                for (x in 0 until width step sampleStep) {
-                    val offset = rowOffset + x * pixelStride
-                    if (offset + 1 < buffer.limit()) {
-                        val value = buffer.getShort(offset).toInt() and 0xFFFF
-                        // 加上白平衡增益修正，防止 CPU 漏算亮部强度导致增益过高
-                        val luma = ((value - black) / range) * avgWbGain
+                for (x in 0 until width step stepX) {
+                    // 确保选中绿色通道像素：(x + y) % 2 == 1
+                    var targetX = x
+                    if ((targetX + y) % 2 == 0) {
+                        targetX += 1
+                        if (targetX >= width) targetX -= 2
+                    }
 
-                        // 权重函数：高光加权检测，抑制死白对整体曝光的影响
-                        val weight = if (luma < 0.1f) 0.5f
-                        else if (luma > 0.8f) 0.1f
-                        else 1.0f
-
-                        weightedSum += luma * weight
-                        totalWeight += weight
+                    if (targetX >= 0 && targetX < width) {
+                        val offset = rowOffset + targetX * pixelStride
+                        if (offset + 1 < buffer.limit()) {
+                            val value = buffer.getShort(offset).toInt() and 0xFFFF
+                            val normalized = (value - black) / range
+                            if (count < values.size) {
+                                values[count++] = normalized.coerceAtLeast(0f)
+                            }
+                        }
                     }
                 }
             }
         } catch (e: Exception) {
-            PLog.e(TAG, "Failed to calculate luminance", e)
+            PLog.e(TAG, "Failed to sample pixels for exposure calculation", e)
         } finally {
             buffer.position(savedPos)
+            buffer.order(savedOrder)
         }
-        return if (totalWeight > 0) (weightedSum / totalWeight).toFloat() else 0.15f
+
+        if (count == 0) return 1.0f
+
+        // 3. 排除极端值：忽略最亮 5% 和最暗 5%
+        val sortedValues = values.copyOfRange(0, count)
+        sortedValues.sort()
+
+        val startIndex = (count * 0.05).toInt()
+        val endIndex = (count * 0.95).toInt()
+
+        if (startIndex >= endIndex) {
+            PLog.w(TAG, "calculateExposureGain early return: startIndex=$startIndex, endIndex=$endIndex")
+            return 1.0f
+        }
+
+        // 4. 计算中道/均值平均亮度
+        var sum = 0.0
+        for (i in startIndex until endIndex) {
+            sum += sortedValues[i]
+        }
+        val avg = (sum / (endIndex - startIndex)).toFloat()
+
+        // 5. 计算 Gain (目标亮度 0.18)
+        val target = 0.18f
+        val calculatedGain = if (avg > 0.0001f) target / avg else 1.0f
+
+        val finalGain = calculatedGain.coerceIn(1.0f, 4.0f)
+
+        return finalGain
     }
 
     private fun render(
         metadata: RawMetadata,
-        exposureGain: Float,
         rotation: Int,
         aspectRatio: AspectRatio,
         finalWidth: Int,
-        finalHeight: Int
+        finalHeight: Int,
+        exposureGain: Float
     ) {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
         GLES30.glViewport(0, 0, finalWidth, finalHeight)
@@ -608,6 +694,17 @@ class RawDemosaicProcessor {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, baseLutTextureId)
         GLES30.glUniform1i(uBaseLutTextureLoc, 1)
         GLES30.glUniform1f(uBaseLutSizeLoc, baseLutSize)
+
+        // 绑定 Lens Shading Map
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
+        if (metadata.lensShadingMap != null) {
+            uploadLensShadingTexture(metadata)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, lensShadingTextureId)
+        } else {
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, dummyShadingTextureId)
+        }
+        GLES30.glUniform1i(uLensShadingMapLoc, 2)
+        GLES30.glUniform1f(uPostRawBoostLoc, metadata.postRawSensitivityBoost)
 
         // 绘制四边形
         val positionHandle = GLES30.glGetAttribLocation(shaderProgram, "aPosition")
@@ -711,6 +808,12 @@ class RawDemosaicProcessor {
         }
         if (baseLutTextureId != 0) {
             GLES30.glDeleteTextures(1, intArrayOf(baseLutTextureId), 0)
+        }
+        if (lensShadingTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(lensShadingTextureId), 0)
+        }
+        if (dummyShadingTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(dummyShadingTextureId), 0)
         }
 
         EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)

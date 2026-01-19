@@ -4,6 +4,7 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.params.ColorSpaceTransform
 import android.hardware.camera2.params.RggbChannelVector
+import android.util.Log
 import android.util.Rational
 
 /**
@@ -15,46 +16,59 @@ import android.util.Rational
 data class RawMetadata(
     val width: Int,
     val height: Int,
-    
+
     /**
      * CFA（彩色滤波阵列）排列模式
      * 0 = RGGB, 1 = GRBG, 2 = GBRG, 3 = BGGR
      */
     val cfaPattern: Int,
-    
+
     /**
      * 每个 RGGB 通道的黑电平值（原始量化值，非归一化）
      * 顺序: [R, Gr, Gb, B]
      */
     val blackLevel: FloatArray,
-    
+
     /**
      * 白电平（传感器饱和值），通常是 1023 (10-bit) 或 4095 (12-bit) 或 65535 (16-bit)
      */
     val whiteLevel: Float,
-    
+
     /**
      * 白平衡增益（RGGB 4 通道）
      * 顺序: [R, Gr, Gb, B]
      */
     val whiteBalanceGains: FloatArray,
-    
+
     /**
      * 色彩校正矩阵（CCM）
      * 3x3 矩阵，行优先存储（9 个元素）
      * 用于将相机原始色彩空间转换到 sRGB
      */
-    val colorCorrectionMatrix: FloatArray
+    val colorCorrectionMatrix: FloatArray,
+
+    /**
+     * 镜头阴影校正图（Gain Map）
+     * 这是一个 4xNxM 的数组，N 和 M 是网格尺寸
+     */
+    val lensShadingMap: FloatArray? = null,
+    val lensShadingMapWidth: Int = 0,
+    val lensShadingMapHeight: Int = 0,
+
+    /**
+     * 数字增益 (Post RAW Boost)
+     */
+    val postRawSensitivityBoost: Float = 1.0f
 ) {
     companion object {
         private const val TAG = "RawMetadata"
-        
+
         // CFA 模式常量
         const val CFA_RGGB = 0
         const val CFA_GRBG = 1
         const val CFA_GBRG = 2
         const val CFA_BGGR = 3
-        
+
         /**
          * 从 CameraCharacteristics 和 CaptureResult 创建 RawMetadata
          */
@@ -74,17 +88,17 @@ data class RawMetadata(
                 CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_BGGR -> CFA_BGGR
                 else -> CFA_RGGB // 默认 RGGB
             }
-            
+
             // 2. 获取白电平
             val whiteLevel = characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)?.toFloat()
                 ?: 1023f // 默认 10-bit
-            
+
             // 3. 获取黑电平（优先使用动态黑电平）
             // 注意：动态黑电平和静态黑电平模式都是按 2x2 Bayer 位置存储的
             // 需要根据 CFA 模式重新排列为 [R, Gr, Gb, B] 通道顺序
             val dynamicBlackLevel = captureResult.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
             val staticBlackLevelPattern = characteristics.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
-            
+
             // 先获取按 Bayer 位置 (0,0), (1,0), (0,1), (1,1) 顺序的黑电平
             val positionBlackLevel = if (dynamicBlackLevel != null) {
                 floatArrayOf(
@@ -104,7 +118,7 @@ data class RawMetadata(
                 // 默认黑电平
                 floatArrayOf(64f, 64f, 64f, 64f)
             }
-            
+
             // 根据 CFA 模式重新排列为 [R, Gr, Gb, B] 通道顺序
             // CFA 模式定义了每个 2x2 位置对应的颜色：
             // RGGB: (0,0)=R,  (1,0)=Gr, (0,1)=Gb, (1,1)=B
@@ -118,27 +132,31 @@ data class RawMetadata(
                     positionBlackLevel[2],  // Gb at (0,1)
                     positionBlackLevel[3]   // B at (1,1)
                 )
+
                 CFA_GRBG -> floatArrayOf(
                     positionBlackLevel[1],  // R at (1,0)
                     positionBlackLevel[0],  // Gr at (0,0)
                     positionBlackLevel[3],  // Gb at (1,1)
                     positionBlackLevel[2]   // B at (0,1)
                 )
+
                 CFA_GBRG -> floatArrayOf(
                     positionBlackLevel[2],  // R at (0,1)
                     positionBlackLevel[3],  // Gr at (1,1)
                     positionBlackLevel[0],  // Gb at (0,0)
                     positionBlackLevel[1]   // B at (1,0)
                 )
+
                 CFA_BGGR -> floatArrayOf(
                     positionBlackLevel[3],  // R at (1,1)
                     positionBlackLevel[2],  // Gr at (0,1)
                     positionBlackLevel[1],  // Gb at (1,0)
                     positionBlackLevel[0]   // B at (0,0)
                 )
+
                 else -> positionBlackLevel
             }
-            
+
             // 4. 获取白平衡增益
             val wbGains = captureResult.get(CaptureResult.COLOR_CORRECTION_GAINS)
             val whiteBalanceGains = if (wbGains != null) {
@@ -152,7 +170,7 @@ data class RawMetadata(
                 // 默认：无增益调整
                 floatArrayOf(1f, 1f, 1f, 1f)
             }
-            
+
             // 5. 获取色彩校正矩阵
             val ccmTransform = captureResult.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)
             val colorCorrectionMatrix = if (ccmTransform != null) {
@@ -165,7 +183,24 @@ data class RawMetadata(
                     0f, 0f, 1f
                 )
             }
-            
+
+            // 6. 获取镜头阴影校正
+            val shadingMap = captureResult.get(CaptureResult.STATISTICS_LENS_SHADING_CORRECTION_MAP)
+            var lensShadingMap: FloatArray? = null
+            var shadingWidth = 0
+            var shadingHeight = 0
+            if (shadingMap != null) {
+                shadingWidth = shadingMap.columnCount
+                shadingHeight = shadingMap.rowCount
+                lensShadingMap = FloatArray(shadingWidth * shadingHeight * 4)
+                shadingMap.copyGainFactors(lensShadingMap, 0)
+            }
+
+            // 7. 获取数字增益
+            val boost = captureResult.get(CaptureResult.CONTROL_POST_RAW_SENSITIVITY_BOOST) ?: 100
+            // Log.d(TAG, "create: boost=$boost")
+            val postRawSensitivityBoost = boost / 100.0f
+
             return RawMetadata(
                 width = width,
                 height = height,
@@ -173,10 +208,14 @@ data class RawMetadata(
                 blackLevel = blackLevel,
                 whiteLevel = whiteLevel,
                 whiteBalanceGains = whiteBalanceGains,
-                colorCorrectionMatrix = colorCorrectionMatrix
+                colorCorrectionMatrix = colorCorrectionMatrix,
+                lensShadingMap = lensShadingMap,
+                lensShadingMapWidth = shadingWidth,
+                lensShadingMapHeight = shadingHeight,
+                postRawSensitivityBoost = postRawSensitivityBoost
             )
         }
-        
+
         /**
          * 从 ColorSpaceTransform 提取 3x3 浮点矩阵
          */
@@ -191,13 +230,13 @@ data class RawMetadata(
             return matrix
         }
     }
-    
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (javaClass != other?.javaClass) return false
-        
+
         other as RawMetadata
-        
+
         if (width != other.width) return false
         if (height != other.height) return false
         if (cfaPattern != other.cfaPattern) return false
@@ -205,10 +244,10 @@ data class RawMetadata(
         if (whiteLevel != other.whiteLevel) return false
         if (!whiteBalanceGains.contentEquals(other.whiteBalanceGains)) return false
         if (!colorCorrectionMatrix.contentEquals(other.colorCorrectionMatrix)) return false
-        
+
         return true
     }
-    
+
     override fun hashCode(): Int {
         var result = width
         result = 31 * result + height
@@ -217,6 +256,10 @@ data class RawMetadata(
         result = 31 * result + whiteLevel.hashCode()
         result = 31 * result + whiteBalanceGains.contentHashCode()
         result = 31 * result + colorCorrectionMatrix.contentHashCode()
+        result = 31 * result + (lensShadingMap?.contentHashCode() ?: 0)
+        result = 31 * result + lensShadingMapWidth
+        result = 31 * result + lensShadingMapHeight
+        result = 31 * result + postRawSensitivityBoost.hashCode()
         return result
     }
 }

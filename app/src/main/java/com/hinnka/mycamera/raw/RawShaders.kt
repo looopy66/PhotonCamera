@@ -61,6 +61,8 @@ object RawShaders {
         uniform float uWhiteLevel;
         uniform vec4 uWhiteBalanceGains;
         uniform mat3 uColorCorrectionMatrix;
+        uniform sampler2D uLensShadingMap;
+        uniform float uPostRawBoost;
 
         // Base LUT
         uniform mediump sampler3D uBaseLutTexture;
@@ -103,6 +105,24 @@ object RawShaders {
             }
         }
         
+        // 获取当前像素的镜头阴影增益
+        float getLensShadingGain(ivec2 coord, int channelIdx) {
+            vec2 shadingCoord = (vec2(coord) + 0.5) / uImageSize;
+            vec4 shadingGains = texture(uLensShadingMap, shadingCoord);
+            
+            // LensShadingMap 增益顺序通常为 [R, Geven, Godd, B]
+            // Geven 是偶数行的绿色通道，Godd 是奇数行的绿色通道
+            if (channelIdx == 0) return shadingGains.r; // R
+            if (channelIdx == 3) return shadingGains.a; // B
+            
+            bool isEvenRow = (uCfaPattern == 0 || uCfaPattern == 1); // RGGB(0), GRBG(1) 的 Gr 在偶数行
+            if (channelIdx == 1) { // Gr
+                return isEvenRow ? shadingGains.g : shadingGains.b;
+            } else { // Gb
+                return isEvenRow ? shadingGains.b : shadingGains.g;
+            }
+        }
+        
         // 获取RAW像素值，应用黑电平和白平衡
         // uBlackLevel 和 uWhiteBalanceGains 的分量顺序: .r=R, .g=Gr, .b=Gb, .a=B
         float getRawPixel(ivec2 coord) {
@@ -122,7 +142,16 @@ object RawShaders {
             else if (channelIdx == 2) { black = uBlackLevel.b; gain = uWhiteBalanceGains.b; } // Gb
             else { black = uBlackLevel.a; gain = uWhiteBalanceGains.a; }                      // B
 
-            return max(0.0, (raw - black) * gain / (uWhiteLevel - black));
+            float pixel = max(0.0, (raw - black) * gain / (uWhiteLevel - black));
+            
+            // 步骤 3: 镜头阴影校正 (LSC)
+            // 使用双线性插值采样增益图 (OpenGL 默认线性采样已提供双线性插值)
+            pixel *= getLensShadingGain(coord, channelIdx);
+            
+            // 步骤 4: 应用数字增益 (Post RAW Boost)
+            pixel *= uPostRawBoost;
+
+            return pixel;
         }
 
         // 获取CFA通道类型: 0=R, 1=G, 2=B (用于解马赛克)
@@ -363,13 +392,13 @@ object RawShaders {
             rgb = linearToSRGB(rgb);
             
             // 步骤 9: 应用基础 LUT
-            float lutScale = (uBaseLutSize - 1.0) / uBaseLutSize;
-            float lutOffset = 1.0 / (2.0 * uBaseLutSize);
-            vec3 lutCoord = clamp(rgb, 0.0, 1.0) * lutScale + lutOffset;
-            rgb = texture(uBaseLutTexture, lutCoord).rgb;
+            // float lutScale = (uBaseLutSize - 1.0) / uBaseLutSize;
+            // float lutOffset = 1.0 / (2.0 * uBaseLutSize);
+            // vec3 lutCoord = clamp(rgb, 0.0, 1.0) * lutScale + lutOffset;
+            // rgb = texture(uBaseLutTexture, lutCoord).rgb;
 
             // 步骤 7: 结构增强 (在 gamma 空间进行，更符合人眼感知)
-            rgb = applyStructure(rgb);
+            // rgb = applyStructure(rgb);
 
             // 步骤 8: 输出锐化 (在 gamma 空间进行)
             rgb = applyOutputSharpening(rgb, coord);

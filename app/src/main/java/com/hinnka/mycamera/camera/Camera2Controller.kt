@@ -947,6 +947,9 @@ class Camera2Controller(private val context: Context) {
 
         // 6. 图像质量设置（锐化、降噪）
         applyImageQualitySettings(builder, isCapture)
+
+        // 7. 统计信息设置
+        builder.set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON)
     }
 
     /**
@@ -1134,7 +1137,8 @@ class Camera2Controller(private val context: Context) {
      */
     private fun applyImageQualitySettings(builder: CaptureRequest.Builder, isCapture: Boolean) {
         try {
-            val edgeMode = if (availableEdgeModes.contains(CaptureRequest.EDGE_MODE_OFF)) CaptureRequest.EDGE_MODE_OFF else CaptureRequest.EDGE_MODE_FAST
+            val edgeMode =
+                if (availableEdgeModes.contains(CaptureRequest.EDGE_MODE_OFF)) CaptureRequest.EDGE_MODE_OFF else CaptureRequest.EDGE_MODE_FAST
             if (availableEdgeModes.contains(edgeMode)) builder.set(CaptureRequest.EDGE_MODE, edgeMode)
             if (nrOff) {
                 val noiseReductionMode = if (isCapture) {
