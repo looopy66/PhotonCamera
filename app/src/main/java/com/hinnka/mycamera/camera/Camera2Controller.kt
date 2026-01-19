@@ -16,8 +16,8 @@ import android.os.HandlerThread
 import android.util.Log
 import android.view.Surface
 import androidx.exifinterface.media.ExifInterface
-import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.OrientationObserver
+import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -826,55 +826,6 @@ class Camera2Controller(private val context: Context) {
             PLog.e(TAG, "Failed to start preview - unconfigured surface", e)
         }
     }
-
-    /**
-     * 设置色调映射模式
-     *
-     * 根据 LUT 启用状态决定是否使用 sRGB 平坦曲线：
-     * - LUT 启用时：使用 sRGB 平坦曲线（避免厂商色调+LUT的双重处理）
-     * - LUT 未启用时：使用厂商优化曲线（更好的对比度和清晰度）
-     *
-     * @param builder 需要配置的 Builder
-     * @param isCapture 是否为拍摄请求
-     */
-    private fun setupFlatProfileRequest(builder: CaptureRequest.Builder, isCapture: Boolean) {
-        val currentState = _state.value
-
-        // 只有在启用 LUT 时才使用平坦曲线
-        if (!currentState.lutEnabled) {
-            // LUT 未启用：使用厂商优化的色调曲线，获得更好的清晰度
-            // 不设置任何 Tonemap 参数，让系统使用默认值
-            return
-        }
-
-        // LUT 已启用：检查硬件级别，只有 FULL 或 LEVEL_3 支持手动 Tonemap
-        val isFullOrAbove = cachedHardwareLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL ||
-                           cachedHardwareLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3
-
-        if (!isFullOrAbove) {
-            // LIMITED 或 LEGACY 设备：不支持手动 Tonemap
-            PLog.d(TAG, "LUT 已启用，但硬件级别不支持 Tonemap 控制 (硬件级别: $cachedHardwareLevel)")
-            return
-        }
-
-        if (availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_PRESET_CURVE) != true) {
-            // 不支持，跳过设置
-            PLog.d(TAG, "LUT 已启用，但硬件不支持 TONEMAP_MODE_PRESET_CURVE")
-            return
-        }
-
-        try {
-            // 只在支持的设备上设置 sRGB 平坦曲线
-            builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_PRESET_CURVE)
-            builder.set(CaptureRequest.TONEMAP_PRESET_CURVE, CaptureRequest.TONEMAP_PRESET_CURVE_SRGB)
-
-            if (isCapture) {
-                PLog.d(TAG, "LUT 已启用，使用 sRGB 平坦曲线")
-            }
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to set tonemap", e)
-        }
-    }
     
     // ==================== 统一参数配置 ====================
     
@@ -900,11 +851,6 @@ class Camera2Controller(private val context: Context) {
 
         // 4. 变焦设置
         applyZoomSettings(builder, currentState)
-
-        // 5. 色调映射（Flat Profile）
-        // 注意：是否启用平坦曲线需要根据 LUT 使用情况决定
-        // 这个决策应该由外部传入，暂时保留接口
-        setupFlatProfileRequest(builder, isCapture)
 
         // 6. 图像质量设置（锐化、降噪）
         applyImageQualitySettings(builder, isCapture)
@@ -980,7 +926,7 @@ class Camera2Controller(private val context: Context) {
         } else {
             // 自动白平衡：尝试使用高质量色彩校正模式，如不支持则不设置（保持模式默认值）
             if (isManualPostProcessingSupported) {
-                builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY)
+                builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
             }
         }
     }
@@ -1083,6 +1029,7 @@ class Camera2Controller(private val context: Context) {
      * @param isCapture 是否为拍摄请求（拍摄时使用高质量模式）
      */
     private fun applyImageQualitySettings(builder: CaptureRequest.Builder, isCapture: Boolean) {
+//        Log.d(TAG, "applyImageQualitySettings: ${availableEdgeModes.contentToString()} ${availableNoiseReductionModes.contentToString()}")
         try {
             if (useSoftwareProcessing) {
                 // 软件处理模式：关闭系统降噪/锐化，由 LutImageProcessor 软件算法处理
@@ -1105,18 +1052,10 @@ class Camera2Controller(private val context: Context) {
                 }
             } else {
                 // 系统处理模式：使用系统的降噪/锐化算法
-                val edgeMode = if (isCapture) {
-                     if (availableEdgeModes.contains(CaptureRequest.EDGE_MODE_HIGH_QUALITY)) CaptureRequest.EDGE_MODE_HIGH_QUALITY else CaptureRequest.EDGE_MODE_FAST
-                } else {
-                    CaptureRequest.EDGE_MODE_FAST
-                }
+                val edgeMode = if (availableEdgeModes.contains(CaptureRequest.EDGE_MODE_ZERO_SHUTTER_LAG)) CaptureRequest.EDGE_MODE_ZERO_SHUTTER_LAG else CaptureRequest.EDGE_MODE_FAST
                 if (availableEdgeModes.contains(edgeMode)) builder.set(CaptureRequest.EDGE_MODE, edgeMode)
 
-                val noiseReductionMode = if (isCapture) {
-                    if (availableNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)) CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY else CaptureRequest.NOISE_REDUCTION_MODE_FAST
-                } else {
-                    CaptureRequest.NOISE_REDUCTION_MODE_FAST
-                }
+                val noiseReductionMode = if (availableNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_ZERO_SHUTTER_LAG)) CaptureRequest.NOISE_REDUCTION_MODE_ZERO_SHUTTER_LAG else CaptureRequest.NOISE_REDUCTION_MODE_FAST
                 if (availableNoiseReductionModes.contains(noiseReductionMode)) builder.set(CaptureRequest.NOISE_REDUCTION_MODE, noiseReductionMode)
 
                 if (isCapture) {
@@ -1395,7 +1334,7 @@ class Camera2Controller(private val context: Context) {
             } else {
                 // 自动白平衡：尝试使用高质量色彩校正模式，如不支持则不设置（保持模式默认值）
                 if (isManualPostProcessingSupported) {
-                    set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY)
+                    set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
                 }
             }
             updatePreview()
@@ -1440,8 +1379,7 @@ class Camera2Controller(private val context: Context) {
 
             previewRequestBuilder?.apply {
                 set(CaptureRequest.CONTROL_AWB_MODE, presetMode)
-                // 自动白平衡：使用高质量色彩校正模式
-                set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY)
+                set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
                 PLog.d(TAG, "AWB temperature set to: ${clampedKelvin}K (preset mode: ${getAwbModeName(presetMode)})")
                 updatePreview()
             }
