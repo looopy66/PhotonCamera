@@ -55,12 +55,13 @@ fun ZoomControlBar(
     val currentCamera = availableCameras.find { it.cameraId == currentCameraId }
 
     // 获取当前相机信息
-    val mainCamera = availableCameras.find { it.lensType == if (currentCamera?.lensType == LensType.FRONT) LensType.FRONT else LensType.BACK_MAIN }
-    
+    val mainCamera =
+        availableCameras.find { it.lensType == if (currentCamera?.lensType == LensType.FRONT) LensType.FRONT else LensType.BACK_MAIN }
+
     // 根据可用相机计算变焦档位
     val lensZoomStops = calculateLensZoomStops(availableCameras, currentCamera)
-    val zoomStops =  allZoomStops(lensZoomStops, mainCamera, currentCamera)
-    
+    val zoomStops = allZoomStops(lensZoomStops, mainCamera, currentCamera)
+
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -136,24 +137,24 @@ private fun calculateLensZoomStops(
     cameras: List<CameraInfo>,
     currentCamera: CameraInfo?
 ): List<Float> {
-    val stops = mutableSetOf<Float>()
+    val stops = mutableListOf<Float>()
 
-    if (currentCamera?.lensType == LensType.FRONT) {
-        // 添加各个镜头的固有变焦比例
-        cameras.filter { it.lensType == LensType.FRONT }.forEach { camera ->
-            if (camera.intrinsicZoomRatio > 0) {
+    val filter: (CameraInfo) -> Boolean = if (currentCamera?.lensType == LensType.FRONT) {
+        { it.lensType == LensType.FRONT }
+    } else {
+        { it.lensType != LensType.FRONT && it.lensType != LensType.BACK_MACRO }
+    }
+
+    // 添加各个镜头的固有变焦比例
+    cameras.filter(filter).forEach { camera ->
+        if (camera.intrinsicZoomRatio > 0) {
+            // 避免添加极其接近的变焦倍率（例如 1.0 和 1.0006）
+            if (stops.none { abs(it - camera.intrinsicZoomRatio) < 0.01f }) {
                 stops.add(camera.intrinsicZoomRatio)
             }
         }
-        return stops.toList()
     }
-    // 添加各个镜头的固有变焦比例
-    cameras.filter { it.lensType != LensType.FRONT && it.lensType != LensType.BACK_MACRO }.forEach { camera ->
-        if (camera.intrinsicZoomRatio > 0) {
-            stops.add(camera.intrinsicZoomRatio)
-        }
-    }
-    return stops.toList()
+    return stops.sorted()
 }
 
 /**
@@ -164,11 +165,11 @@ private fun allZoomStops(
     mainCamera: CameraInfo?,
     currentCamera: CameraInfo?
 ): List<Float> {
-    val stops = mutableSetOf<Float>()
+    val stops = mutableListOf<Float>()
     stops.addAll(lensZoomStops)
 
     if (currentCamera?.lensType == LensType.FRONT) {
-        if (lensZoomStops.find { abs(it - 2f) <= 0.1f } == null) {
+        if (stops.none { abs(it - 2f) <= 0.1f }) {
             stops.add(2f)
         }
         return stops.sorted()
@@ -178,7 +179,7 @@ private fun allZoomStops(
 
     listOf(35f, 50f, 85f, 200f).forEach { fl ->
         val zoom = fl / mainCamera.focalLength35mmEquivalent
-        if (lensZoomStops.find { abs(it - zoom) <= 0.1f } == null) {
+        if (stops.none { abs(it - zoom) <= 0.1f }) {
             stops.add(zoom)
         }
     }
@@ -194,9 +195,13 @@ private fun findOptimalLens(
     currentCameraId: String
 ): CameraInfo? {
     val currentLensType = cameras.find { it.cameraId == currentCameraId }?.lensType
-    val zoomableCameras = cameras.filter { if (currentLensType == LensType.FRONT) it.lensType == LensType.FRONT else (it.lensType != LensType.FRONT && it.lensType != LensType.BACK_MACRO) }
+    val zoomableCameras =
+        cameras.filter { if (currentLensType == LensType.FRONT) it.lensType == LensType.FRONT else (it.lensType != LensType.FRONT && it.lensType != LensType.BACK_MACRO) }
     if (zoomableCameras.isEmpty()) return null
-    return zoomableCameras.filter { it.intrinsicZoomRatio <= targetZoom }.sortedByDescending { it.intrinsicZoomRatio }.getOrNull(0)
+    return zoomableCameras
+        .filter { it.intrinsicZoomRatio <= targetZoom + 0.01f }
+        .sortedByDescending { it.intrinsicZoomRatio }
+        .getOrNull(0)
 }
 
 @Composable
@@ -236,6 +241,7 @@ fun ZoomRuler(
                 ZoomDisplayMode.ZOOM_RATIO -> {
                     formatZoomRatio(stop)
                 }
+
                 ZoomDisplayMode.FOCAL_LENGTH -> {
                     zoomRatioToFocalLength(stop, mainCamera)
                 }
