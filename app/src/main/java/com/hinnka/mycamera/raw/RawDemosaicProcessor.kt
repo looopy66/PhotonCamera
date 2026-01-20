@@ -77,9 +77,6 @@ class RawDemosaicProcessor {
     private var outputFramebufferId = 0
     private var outputTextureId = 0
 
-    private var baseLutTextureId = 0
-    private var baseLutSize = 32f
-
     // 缓冲区
     private var vertexBuffer: FloatBuffer? = null
     private var texCoordBuffer: FloatBuffer? = null
@@ -293,16 +290,6 @@ class RawDemosaicProcessor {
             // 初始化着色器和缓冲区
             initShaderProgram()
             initBuffers()
-
-            // 加载基础 LUT
-            try {
-                val lutConfig = LutParser.parseFromAssets(context, "luts/base.plut")
-                baseLutTextureId = GlUtils.create3DTexture(lutConfig)
-                baseLutSize = lutConfig.size.toFloat()
-                PLog.d(TAG, "Base LUT loaded: id=$baseLutTextureId, size=$baseLutSize")
-            } catch (e: Exception) {
-                PLog.e(TAG, "Failed to load base LUT", e)
-            }
 
             // 创建静默遮挡图
             dummyShadingTextureId = createDummyShadingTexture()
@@ -890,7 +877,6 @@ class RawDemosaicProcessor {
         if (outputTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(outputTextureId), 0)
         if (outputFramebufferId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(outputFramebufferId), 0)
 
-        if (baseLutTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(baseLutTextureId), 0)
         if (lensShadingTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(lensShadingTextureId), 0)
         if (dummyShadingTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(dummyShadingTextureId), 0)
 
