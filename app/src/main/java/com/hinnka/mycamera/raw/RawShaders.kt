@@ -527,32 +527,40 @@ object RawShaders {
             );
         }
         
-        vec3 applyPerChannelReinhardExtended(vec3 color) {
-            // 你的高光通透度控制 (和之前一样)
-            float whitePoint = 4.0;
-            float white2 = whitePoint * whitePoint;
-            
-            // 公式: (x * (1 + x/w^2)) / (1 + x)
-            // GLSL 的向量运算会自动对 r, g, b 分别执行这个数学公式
-            
-            vec3 numerator = color * (1.0 + (color / white2));
-            vec3 denominator = 1.0 + color;
-            
-            return numerator / denominator;
-        }
+        // --- 辅助常量：人眼亮度权重 ---
+        const vec3 LUMA_COEFF = vec3(0.2126, 0.7152, 0.0722);
         
-        // ========================================================================
-        // 2. 安全的线性对比度 (Safe Linear Contrast)
-        // 在 Linear 空间增加对比度，同时以 0.18 (中灰) 为锚点。
-        // 这样调整对比度时，中间调亮度不变，只压暗部、提高光。
-        // ========================================================================
-        vec3 applyLinearContrast(vec3 color, float contrast) {
-            // 锚点：0.18 (中性灰)
-            // 所有的旋转都围绕这个点，保证画面亮度基准不跑偏
-            float midGray = 0.18; 
+        // Uchimura (GT Tone Mapping)
+        vec3 UchimuraToneMapping(vec3 x) {
+            x = max(vec3(0.0), x);
             
-            // Log 域对比度公式 (比直接 pow 更符合人眼对光线的感知)
-            return color * pow(max(vec3(0.0), color / midGray), vec3(contrast - 1.0));
+            float P = 1.0;  // 最大亮度 (Max Brightness)
+            float a = 1.3;  // 对比度 (Contrast) - 相当于你的 S 曲线强度
+            float m = 0.18; // 线性部分的起点 (Linear Section Start)
+            float l = 0.25;  // 线性部分的终点 (Linear Section End)
+            float c = 1.7; // 黑色部分的紧致度 (Black Tightness)
+            float b = 0.0;  // 黑色偏移 (Black Offset) - 通常为0
+        
+            // 公式
+            float l0 = ((P - m) * l) / a;
+            float L0 = m - m / a;
+            float L1 = m + (1.0 - m) / a;
+            float S0 = m + l0;
+            float S1 = m + a * l0;
+            float C2 = (a * P) / (P - S1);
+            float CP = -C2 / P;
+        
+            vec3 w0 = 1.0 - smoothstep(0.0, m, x);
+            vec3 w2 = step(m + l0, x);
+            vec3 w1 = 1.0 - w0 - w2;
+        
+            vec3 T = m * pow(x / m, vec3(c)) + b;
+            vec3 S = P - (P - S1) * exp(CP * (x - S0));
+            vec3 L = m + a * (x - m);
+        
+            vec3 mappedColor = T * w0 + L * w1 + S * w2;
+
+            return mappedColor;
         }
 
         void main() {
@@ -586,8 +594,7 @@ object RawShaders {
                 rgb = mix(vec3(luma), rgb, satFactor);
             }
             
-            rgb = applyPerChannelReinhardExtended(rgb);
-            rgb = applyLinearContrast(rgb, 1.3);
+            rgb = UchimuraToneMapping(rgb);
 
             // 步骤 7: sRGB gamma 编码 (Linear -> sRGB)
             rgb = linearToSRGB(rgb);
