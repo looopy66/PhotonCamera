@@ -59,7 +59,7 @@ fun FrameManagementScreen(
 
     // 本地可变列表用于拖拽排序
     var localFrameList by remember { mutableStateOf(availableFrames) }
-    
+
     // 当 availableFrames 更新时同步本地列表（保留现有顺序，将新项目添加到末尾）
     LaunchedEffect(availableFrames) {
         val existingIds = localFrameList.map { it.id }.toSet()
@@ -67,7 +67,8 @@ fun FrameManagementScreen(
         val updatedExisting = localFrameList.mapNotNull { local ->
             availableFrames.find { it.id == local.id }
         }
-        localFrameList = newItems + updatedExisting
+        // 修正：将新项目添加到末尾，符合注释描述
+        localFrameList = updatedExisting + newItems
     }
 
     // 重命名对话框状态
@@ -81,10 +82,10 @@ fun FrameManagementScreen(
 
     // 导入状态
     var isImporting by remember { mutableStateOf(false) }
-    
+
     // 导入类型选择
     var showImportMenu by remember { mutableStateOf(false) }
-    
+
     // 帮助对话框状态
     var showHelpDialog by remember { mutableStateOf(false) }
 
@@ -123,16 +124,24 @@ fun FrameManagementScreen(
             }
         }
     }
-    
+
     // 拖拽排序状态
     val lazyListState = rememberLazyListState()
     val reorderableLazyListState = rememberReorderableLazyListState(lazyListState) { from, to ->
-        // 注意：第一项是"无边框"选项，不参与排序，所以索引需要减1
-        val fromIndex = from.index - 1
-        val toIndex = to.index - 1
-        if (fromIndex >= 0 && toIndex >= 0 && fromIndex < localFrameList.size && toIndex < localFrameList.size) {
+        val fromId = from.key as? String ?: return@rememberReorderableLazyListState
+        val toId = to.key as? String ?: return@rememberReorderableLazyListState
+
+        // 仅处理边框项的排序，忽略 headers (如 "none")
+        if (fromId == "none" || toId == "none") return@rememberReorderableLazyListState
+
+        // 在原始列表中找到这两个边框的位置
+        val fromIndexInLocal = localFrameList.indexOfFirst { it.id == fromId }
+        val toIndexInLocal = localFrameList.indexOfFirst { it.id == toId }
+
+        if (fromIndexInLocal != -1 && toIndexInLocal != -1) {
+            // 更新本地列表顺序
             localFrameList = localFrameList.toMutableList().apply {
-                add(toIndex, removeAt(fromIndex))
+                add(toIndexInLocal, removeAt(fromIndexInLocal))
             }
         }
     }
@@ -181,7 +190,7 @@ fun FrameManagementScreen(
                         tint = Color.White
                     )
                 }
-                
+
                 // 导入按钮
                 IconButton(
                     onClick = {
@@ -234,7 +243,7 @@ fun FrameManagementScreen(
                     onDelete = null
                 )
             }
-            
+
             itemsIndexed(localFrameList, key = { _, it -> it.id }) { index, frameInfo ->
                 ReorderableItem(reorderableLazyListState, key = frameInfo.id) { isDragging ->
                     FrameManagementItem(
@@ -352,7 +361,7 @@ fun FrameManagementScreen(
             }
         )
     }
-    
+
     // 帮助对话框
     if (showHelpDialog) {
         AlertDialog(
@@ -370,7 +379,7 @@ fun FrameManagementScreen(
             }
         )
     }
-    
+
     // 页面退出时保存排序
     DisposableEffect(Unit) {
         onDispose {
@@ -441,7 +450,7 @@ private fun FrameManagementItem(
         } else {
             Spacer(modifier = Modifier.width(36.dp)) // 保持对齐
         }
-        
+
         // 边框名称和类型
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -454,9 +463,9 @@ private fun FrameManagementItem(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false)
                 )
-                
+
                 Spacer(modifier = Modifier.width(8.dp))
-                
+
                 // 类型标签
                 val typeText = if (isBuiltIn) {
                     stringResource(R.string.built_in)
@@ -476,7 +485,7 @@ private fun FrameManagementItem(
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 )
             }
-            
+
             // 默认标识
             if (isDefault) {
                 Spacer(modifier = Modifier.height(4.dp))

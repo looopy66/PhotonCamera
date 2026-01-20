@@ -66,7 +66,8 @@ fun FilterManagementScreen(
         val updatedExisting = localLutList.mapNotNull { local ->
             availableLuts.find { it.id == local.id }
         }
-        localLutList = newItems + updatedExisting
+        // 修正：将新项目添加到末尾，符合注释描述
+        localLutList = updatedExisting + newItems
     }
 
     // 重命名对话框状态
@@ -172,9 +173,21 @@ fun FilterManagementScreen(
     // 拖拽排序状态
     val lazyListState = rememberLazyListState()
     val reorderableLazyListState = rememberReorderableLazyListState(lazyListState) { from, to ->
-        // 更新本地列表顺序
-        localLutList = localLutList.toMutableList().apply {
-            add(to.index, removeAt(from.index))
+        val fromId = from.key as? String ?: return@rememberReorderableLazyListState
+        val toId = to.key as? String ?: return@rememberReorderableLazyListState
+
+        // 仅处理滤镜项的排序，忽略非滤镜项（如 import_result）
+        if (fromId == "import_result" || toId == "import_result") return@rememberReorderableLazyListState
+
+        // 在原始列表中找到这两个滤镜的位置
+        val fromIndexInLocal = localLutList.indexOfFirst { it.id == fromId }
+        val toIndexInLocal = localLutList.indexOfFirst { it.id == toId }
+
+        if (fromIndexInLocal != -1 && toIndexInLocal != -1) {
+            // 更新本地列表顺序
+            localLutList = localLutList.toMutableList().apply {
+                add(toIndexInLocal, removeAt(fromIndexInLocal))
+            }
         }
     }
 
