@@ -70,4 +70,10 @@
     <string name="settings_log_viewer">日志收集</string>
     <string name="settings_log_viewer_description">查看和导出应用日志，用于问题诊断</string>
     <string name="logs">日志</string>
+    <string name="settings_volume_key_action">音量键功能</string>
+    <string name="settings_volume_key_action_description">设置音量键在拍摄时的操作</string>
+    <string name="settings_volume_key_action_none">系统音量</string>
+    <string name="settings_volume_key_action_capture">快门/拍摄</string>
+    <string name="settings_volume_key_action_exposure">曝光补偿</string>
+    <string name="settings_volume_key_action_zoom">焦距切换</string>
 </resources>

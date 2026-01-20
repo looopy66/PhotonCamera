@@ -15,8 +15,10 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.Camera2Controller
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.CaptureInfo
+import com.hinnka.mycamera.camera.LensType
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.data.UserPreferencesRepository
+import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.gallery.PhotoManager
@@ -35,6 +37,7 @@ import com.hinnka.mycamera.utils.VibrationHelper
 import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlin.math.abs
 
 /**
  * 相机 ViewModel
@@ -128,7 +131,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val showLevelIndicator: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.showLevelIndicator }
     val shutterSoundEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.shutterSoundEnabled }
     val vibrationEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.vibrationEnabled }
-    val volumeKeyCapture: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.volumeKeyCapture }
+    val volumeKeyAction: StateFlow<VolumeKeyAction> = userPreferencesRepository.userPreferences
+        .map { it.volumeKeyAction }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), VolumeKeyAction.CAPTURE)
     val autoSaveAfterCapture: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.autoSaveAfterCapture }
     val nrLevel: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.nrLevel }
@@ -156,6 +161,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     // 保存当前的 SurfaceTexture 以便切换摄像头时重用
     private var currentSurfaceTexture: SurfaceTexture? = null
+
+    // 用于处理音量键连续按下的时间戳，防止抖动和过快响应
+    private var lastVolumeKeyEventTime = 0L
+    private val VOLUME_KEY_DEBOUNCE_TIME = 200L // 毫秒
 
     init {
         cameraController.initialize()
@@ -778,12 +787,153 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * 设置是否启用音量键拍摄
+     * 设置音量键操作
      */
-    fun setVolumeKeyCapture(enabled: Boolean) {
+    fun setVolumeKeyAction(action: VolumeKeyAction) {
         viewModelScope.launch {
-            userPreferencesRepository.saveVolumeKeyCapture(enabled)
+            userPreferencesRepository.saveVolumeKeyAction(action)
         }
+    }
+
+    /**
+     * 处理音量键按下
+     * @return 是否消费了该事件
+     */
+    fun handleVolumeKey(isUp: Boolean): Boolean {
+        val action = volumeKeyAction.value
+        if (action == VolumeKeyAction.NONE) return false
+
+        val currentTime = System.currentTimeMillis()
+        if (currentTime - lastVolumeKeyEventTime < VOLUME_KEY_DEBOUNCE_TIME) {
+            return true // 还在冷却时间内，消费事件但不做处理
+        }
+        lastVolumeKeyEventTime = currentTime
+
+        return when (action) {
+            VolumeKeyAction.NONE -> false
+            VolumeKeyAction.CAPTURE -> {
+                if (isUp) capture()
+                true
+            }
+
+            VolumeKeyAction.EXPOSURE_COMPENSATION -> {
+                val currentEV = state.value.exposureCompensation
+                val range = state.value.getExposureCompensationRange()
+                if (range.lower == 0 && range.upper == 0) return true // 不支持曝光补偿
+
+                if (isUp) {
+                    if (currentEV < range.upper) {
+                        setExposureCompensation(currentEV + 1)
+                    }
+                } else {
+                    if (currentEV > range.lower) {
+                        setExposureCompensation(currentEV - 1)
+                    }
+                }
+                true
+            }
+
+            VolumeKeyAction.ZOOM -> {
+                handleVolumeZoom(isUp)
+                true
+            }
+        }
+    }
+
+    /**
+     * 处理音量键变焦切换
+     * 逻辑：切换到下一个/上一个 ZoomStop
+     */
+    private fun handleVolumeZoom(isUp: Boolean) {
+        val currentState = state.value
+        val availableCameras = currentState.availableCameras
+        val currentCamera = currentState.getCurrentCameraInfo() ?: return
+
+        // 1. 获取主摄
+        val mainCamera = availableCameras.find {
+            it.lensType == if (currentCamera.lensType == LensType.FRONT) LensType.FRONT else LensType.BACK_MAIN
+        } ?: return
+
+        // 2. 计算变焦档位 (逻辑同步自 ZoomControlBar.kt)
+        val lensZoomStops = calculateLensZoomStops(availableCameras, currentCamera)
+        val zoomStops = allZoomStops(lensZoomStops, mainCamera, currentCamera)
+
+        if (zoomStops.isEmpty()) return
+
+        // 3. 找到当前或者最近的档位索引
+        val currentZoomRatio = zoomRatioByMain
+        var currentIndex = zoomStops.indexOfFirst { abs(it - currentZoomRatio) < 0.05f }
+
+        if (currentIndex == -1) {
+            // 如果不在已知档位，找到最近的一个
+            currentIndex = zoomStops.indices.minByOrNull { abs(zoomStops[it] - currentZoomRatio) } ?: 0
+        }
+
+        // 4. 计算下一个索引
+        val nextIndex = if (isUp) {
+            (currentIndex + 1).coerceAtMost(zoomStops.lastIndex)
+        } else {
+            (currentIndex - 1).coerceAtLeast(0)
+        }
+
+        if (nextIndex != currentIndex) {
+            val targetZoom = zoomStops[nextIndex]
+
+            // 5. 检查是否需要切换镜头 (逻辑同步自 ZoomControlBar.kt)
+            val optimalLens = findOptimalLens(targetZoom, availableCameras, currentCamera.cameraId)
+            if (optimalLens != null && optimalLens.cameraId != currentCamera.cameraId) {
+                switchToLens(optimalLens.cameraId)
+            }
+
+            // 6. 应用变焦
+            setZoomRatio(targetZoom)
+        }
+    }
+
+    // --- 变焦档位计算逻辑同步自 ZoomControlBar.kt ---
+
+    private fun calculateLensZoomStops(
+        cameras: List<com.hinnka.mycamera.camera.CameraInfo>,
+        currentCamera: com.hinnka.mycamera.camera.CameraInfo
+    ): List<Float> {
+        val stops = mutableSetOf<Float>()
+        if (currentCamera.lensType == LensType.FRONT) {
+            cameras.filter { it.lensType == LensType.FRONT }
+                .forEach { if (it.intrinsicZoomRatio > 0) stops.add(it.intrinsicZoomRatio) }
+        } else {
+            cameras.filter { it.lensType != LensType.FRONT && it.lensType != LensType.BACK_MACRO }
+                .forEach { if (it.intrinsicZoomRatio > 0) stops.add(it.intrinsicZoomRatio) }
+        }
+        return stops.toList().sorted()
+    }
+
+    private fun allZoomStops(
+        lensZoomStops: List<Float>,
+        mainCamera: com.hinnka.mycamera.camera.CameraInfo,
+        currentCamera: com.hinnka.mycamera.camera.CameraInfo
+    ): List<Float> {
+        val stops = mutableSetOf<Float>()
+        stops.addAll(lensZoomStops)
+        if (currentCamera.lensType == LensType.FRONT) {
+            if (lensZoomStops.none { abs(it - 2f) <= 0.1f }) stops.add(2f)
+        } else {
+            listOf(35f, 50f, 85f, 200f).forEach { fl ->
+                val zoom = fl / mainCamera.focalLength35mmEquivalent
+                if (lensZoomStops.none { abs(it - zoom) <= 0.1f }) stops.add(zoom)
+            }
+        }
+        return stops.sorted()
+    }
+
+    private fun findOptimalLens(
+        targetZoom: Float,
+        cameras: List<com.hinnka.mycamera.camera.CameraInfo>,
+        currentCameraId: String
+    ): com.hinnka.mycamera.camera.CameraInfo? {
+        val currentLensType = cameras.find { it.cameraId == currentCameraId }?.lensType
+        val zoomableCameras =
+            cameras.filter { if (currentLensType == LensType.FRONT) it.lensType == LensType.FRONT else (it.lensType != LensType.FRONT && it.lensType != LensType.BACK_MACRO) }
+        return zoomableCameras.filter { it.intrinsicZoomRatio <= targetZoom }.maxByOrNull { it.intrinsicZoomRatio }
     }
 
     /**

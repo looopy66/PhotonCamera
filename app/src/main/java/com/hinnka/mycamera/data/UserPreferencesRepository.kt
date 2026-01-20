@@ -16,6 +16,13 @@ import kotlinx.coroutines.flow.map
  */
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "user_preferences")
 
+enum class VolumeKeyAction {
+    NONE,
+    CAPTURE,
+    EXPOSURE_COMPENSATION,
+    ZOOM
+}
+
 /**
  * 用户偏好设置数据类
  */
@@ -28,7 +35,7 @@ data class UserPreferences(
     val showLevelIndicator: Boolean = false,  // 水平仪显示
     val shutterSoundEnabled: Boolean = true,  // 快门声音
     val vibrationEnabled: Boolean = true,  // 拍摄震动
-    val volumeKeyCapture: Boolean = false,  // 音量键拍摄
+    val volumeKeyAction: VolumeKeyAction = VolumeKeyAction.CAPTURE,  // 音量键操作
     val autoSaveAfterCapture: Boolean = true,  // 自动保存
     val nrLevel: Int = 1,  // 降噪等级：0=Off, 1=Fast, 2=High Quality, 3=Real-time
     val edgeLevel: Int = 1, // 锐化等级：0=Off, 1=Fast, 2=High Quality, 3=Real-time
@@ -57,7 +64,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val SHOW_LEVEL_INDICATOR = booleanPreferencesKey("show_level_indicator")
         private val SHUTTER_SOUND_ENABLED = booleanPreferencesKey("shutter_sound_enabled")
         private val VIBRATION_ENABLED = booleanPreferencesKey("vibration_enabled")
-        private val VOLUME_KEY_CAPTURE = booleanPreferencesKey("volume_key_capture")
+        private val VOLUME_KEY_ACTION = stringPreferencesKey("volume_key_action")
         private val AUTO_SAVE_AFTER_CAPTURE = booleanPreferencesKey("auto_save_after_capture")
         private val NR_LEVEL = androidx.datastore.preferences.core.intPreferencesKey("nr_level")
         private val EDGE_LEVEL = androidx.datastore.preferences.core.intPreferencesKey("edge_level")
@@ -87,7 +94,9 @@ class UserPreferencesRepository(private val context: Context) {
                 showLevelIndicator = preferences[SHOW_LEVEL_INDICATOR] ?: false,
                 shutterSoundEnabled = preferences[SHUTTER_SOUND_ENABLED] ?: true,
                 vibrationEnabled = preferences[VIBRATION_ENABLED] ?: true,
-                volumeKeyCapture = preferences[VOLUME_KEY_CAPTURE] ?: false,
+                volumeKeyAction = VolumeKeyAction.valueOf(
+                    preferences[VOLUME_KEY_ACTION] ?: VolumeKeyAction.CAPTURE.name
+                ),
                 autoSaveAfterCapture = preferences[AUTO_SAVE_AFTER_CAPTURE] ?: true,
                 nrLevel = preferences[NR_LEVEL] ?: 1,
                 edgeLevel = preferences[EDGE_LEVEL] ?: 1,
@@ -183,11 +192,11 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     /**
-     * 保存是否启用音量键拍摄
+     * 保存音量键操作
      */
-    suspend fun saveVolumeKeyCapture(enabled: Boolean) {
+    suspend fun saveVolumeKeyAction(action: VolumeKeyAction) {
         context.dataStore.edit { preferences ->
-            preferences[VOLUME_KEY_CAPTURE] = enabled
+            preferences[VOLUME_KEY_ACTION] = action.name
         }
     }
 

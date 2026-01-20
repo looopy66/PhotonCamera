@@ -134,26 +134,11 @@ class MainActivity : ComponentActivity() {
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         // 检查是否是音量键
         if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-            // 同步获取音量键拍摄设置状态并判断是否拦截
-            return try {
-                kotlinx.coroutines.runBlocking {
-                    val volumeKeyCaptureEnabled = cameraViewModel.volumeKeyCapture.first()
-                    
-                    if (volumeKeyCaptureEnabled) {
-                        // 在协程中触发拍照
-                        lifecycleScope.launch {
-                            cameraViewModel.capture()
-                        }
-                        true  // 拦截事件
-                    } else {
-                        false  // 不拦截，让系统处理音量调节
-                    }
-                }
-            } catch (e: Exception) {
-                false  // 出错时不拦截
+            if (cameraViewModel.handleVolumeKey(keyCode == KeyEvent.KEYCODE_VOLUME_UP)) {
+                return true
             }
         }
-        
+
         return super.onKeyDown(keyCode, event)
     }
 

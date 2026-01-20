@@ -195,7 +195,6 @@ class Camera2Controller(private val context: Context) {
                 iso = if (isAutoExposure) actualIso ?: _state.value.iso else _state.value.iso,
                 shutterSpeed = if (isAutoExposure) actualExposureTimeNs
                     ?: _state.value.shutterSpeed else _state.value.shutterSpeed,
-                exposureCompensation = exposureCompensation,
                 awbMode = awbMode,
                 aperture = aperture ?: _state.value.aperture,
             )

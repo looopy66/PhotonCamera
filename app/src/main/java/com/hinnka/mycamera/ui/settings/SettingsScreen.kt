@@ -39,6 +39,7 @@ import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.components.SliderSettingItem
 import com.hinnka.mycamera.ui.components.LogViewerDialog
+import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 
 /**
@@ -57,7 +58,7 @@ fun SettingsScreen(
     val showLevelIndicator by viewModel.showLevelIndicator.collectAsState(initial = false)
     val shutterSoundEnabled by viewModel.shutterSoundEnabled.collectAsState(initial = true)
     val vibrationEnabled by viewModel.vibrationEnabled.collectAsState(initial = true)
-    val volumeKeyCapture by viewModel.volumeKeyCapture.collectAsState(initial = false)
+    val volumeKeyAction by viewModel.volumeKeyAction.collectAsState()
     val autoSaveAfterCapture by viewModel.autoSaveAfterCapture.collectAsState(initial = true)
     val nrLevel by viewModel.nrLevel.collectAsState(initial = 1)
     val edgeLevel by viewModel.edgeLevel.collectAsState(initial = 1)
@@ -267,11 +268,9 @@ fun SettingsScreen(
                     modifier = Modifier.padding(vertical = 8.dp)
                 )
 
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_volume_key),
-                    description = stringResource(R.string.settings_volume_key_description),
-                    checked = volumeKeyCapture,
-                    onCheckedChange = { viewModel.setVolumeKeyCapture(it) }
+                VolumeKeyActionSetting(
+                    action = volumeKeyAction,
+                    onActionSelected = { viewModel.setVolumeKeyAction(it) }
                 )
 
                 HorizontalDivider(
@@ -823,4 +822,67 @@ private fun android.content.Context.findActivity(): android.app.Activity? {
         context = context.baseContext
     }
     return null
+}
+
+/**
+ * 音量键操作设置
+ */
+@Composable
+fun VolumeKeyActionSetting(
+    action: VolumeKeyAction,
+    onActionSelected: (VolumeKeyAction) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        Text(
+            text = stringResource(R.string.settings_volume_key_action),
+            color = Color.White,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Normal,
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        Text(
+            text = stringResource(R.string.settings_volume_key_action_description),
+            color = Color.White.copy(alpha = 0.6f),
+            fontSize = 13.sp,
+            lineHeight = 18.sp,
+            modifier = Modifier.padding(bottom = 12.dp)
+        )
+
+        val options = listOf(
+            VolumeKeyAction.NONE to stringResource(R.string.settings_volume_key_action_none),
+            VolumeKeyAction.CAPTURE to stringResource(R.string.settings_volume_key_action_capture),
+            VolumeKeyAction.EXPOSURE_COMPENSATION to stringResource(R.string.settings_volume_key_action_exposure),
+            VolumeKeyAction.ZOOM to stringResource(R.string.settings_volume_key_action_zoom)
+        )
+
+        // Use a wrapping layout or Row with weight
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            options.forEach { (option, label) ->
+                val isSelected = action == option
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(40.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.1f))
+                        .clickable { onActionSelected(option) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = label,
+                        color = if (isSelected) Color.White else Color.White.copy(alpha = 0.7f),
+                        fontSize = 11.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        lineHeight = 12.sp
+                    )
+                }
+            }
+        }
+    }
 }
