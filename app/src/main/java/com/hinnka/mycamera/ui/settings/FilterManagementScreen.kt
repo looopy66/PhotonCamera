@@ -3,9 +3,11 @@ package com.hinnka.mycamera.ui.settings
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -15,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,7 +44,7 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
  * 
  * 支持选择默认滤镜、拖拽排序、重命名、删除（非内建）、导入
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun FilterManagementScreen(
     viewModel: CameraViewModel,
@@ -52,10 +55,10 @@ fun FilterManagementScreen(
     val availableLuts = viewModel.availableLutList
     val customImportManager = viewModel.getCustomImportManager()
     val scope = rememberCoroutineScope()
-    
+
     // 本地可变列表用于拖拽排序
     var localLutList by remember { mutableStateOf(availableLuts) }
-    
+
     // 当 availableLuts 更新时同步本地列表（保留现有顺序，将新项目添加到末尾）
     LaunchedEffect(availableLuts) {
         val existingIds = localLutList.map { it.id }.toSet()
@@ -83,6 +86,12 @@ fun FilterManagementScreen(
     // 色彩配方编辑状态
     var showColorRecipeSheet by remember { mutableStateOf(false) }
     var editingLutId by remember { mutableStateOf<String?>(null) }
+
+    // 分类编辑状态
+    var showCategoryDialog by remember { mutableStateOf(false) }
+    var categorizingLut by remember { mutableStateOf<LutInfo?>(null) }
+    var categoryText by remember { mutableStateOf("") }
+    var categoryToDelete by remember { mutableStateOf<String?>(null) }
 
     // 批量文件选择器
     val lutFilePicker = rememberLauncherForActivityResult(
@@ -120,7 +129,46 @@ fun FilterManagementScreen(
             }
         }
     }
-    
+
+    // 分类删除确认对话框
+    if (categoryToDelete != null) {
+        val target = categoryToDelete!!
+        AlertDialog(
+            onDismissRequest = { categoryToDelete = null },
+            title = { Text(stringResource(R.string.delete_category_title)) },
+            text = { Text(stringResource(R.string.delete_category_message, target)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        scope.launch {
+                            // 立即更新本地 UI 列表防止闪烁
+                            localLutList = localLutList.map {
+                                if (it.category == target) it.copy(category = "") else it
+                            }
+                            withContext(Dispatchers.IO) {
+                                // 批量在持久层清空分类
+                                val impacted = availableLuts.filter { it.category == target }
+                                impacted.forEach { lut ->
+                                    customImportManager.updateLutCategory(lut.id, "")
+                                }
+                            }
+                            viewModel.refreshCustomContent()
+                            categoryToDelete = null
+                        }
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color.Red)
+                ) {
+                    Text(stringResource(R.string.delete))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { categoryToDelete = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
     // 拖拽排序状态
     val lazyListState = rememberLazyListState()
     val reorderableLazyListState = rememberReorderableLazyListState(lazyListState) { from, to ->
@@ -200,6 +248,84 @@ fun FilterManagementScreen(
             )
         )
 
+        // 导入进度提示
+        importProgress?.takeIf { isImporting }?.let { progress ->
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                LinearProgressIndicator(
+                    progress = { progress.first.toFloat() / (progress.second.takeIf { it > 0 } ?: 1) },
+                    modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
+                    color = Color(0xFFFF6B35),
+                    trackColor = Color.White.copy(alpha = 0.1f)
+                )
+            }
+        }
+
+        // 分类 Tabs
+        val allText = stringResource(R.string.category_all)
+        val customText = stringResource(R.string.custom)
+        val categories = remember(localLutList, allText, customText) {
+            // 动态分类提取：只取数据中实际存在的分类，且排除掉“所有”和“自定义”这两个保留词用于逻辑分页
+            val dynamicCategories = localLutList.map { it.category }
+                .distinct()
+                .filter { it.isNotEmpty() && it != allText && it != customText }
+                .sorted()
+            listOf(allText, customText) + dynamicCategories
+        }
+
+        var selectedTabIndex by remember { mutableStateOf(0) }
+
+        // 修正 Tab 越界（如果分类消失了）
+        LaunchedEffect(categories.size) {
+            if (selectedTabIndex >= categories.size) {
+                selectedTabIndex = 0
+            }
+        }
+
+        val filteredLutList = remember(selectedTabIndex, localLutList, categories) {
+            if (selectedTabIndex >= categories.size) return@remember localLutList
+
+            when (selectedTabIndex) {
+                0 -> localLutList // All
+                1 -> localLutList.filter { !it.isBuiltIn } // Custom
+                else -> localLutList.filter { it.category == categories[selectedTabIndex] }
+            }
+        }
+
+
+
+        ScrollableTabRow(
+            selectedTabIndex = selectedTabIndex,
+            containerColor = Color.Transparent,
+            contentColor = Color.White,
+            edgePadding = 16.dp,
+            divider = {},
+            indicator = { tabPositions ->
+                TabRowDefaults.SecondaryIndicator(
+                    modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
+                    color = Color(0xFFFF6B35)
+                )
+            }
+        ) {
+            categories.forEachIndexed { index, category ->
+                Tab(
+                    selected = selectedTabIndex == index,
+                    onClick = { selectedTabIndex = index },
+                    modifier = Modifier.clickable { selectedTabIndex = index },
+                    text = {
+                        Text(
+                            text = category,
+                            fontSize = 14.sp,
+                            fontWeight = if (selectedTabIndex == index) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
+                )
+            }
+        }
+
         // 滤镜列表
         LazyColumn(
             modifier = Modifier
@@ -225,14 +351,14 @@ fun FilterManagementScreen(
                             )
                             .padding(horizontal = 12.dp, vertical = 8.dp)
                     )
-                    
+
                     LaunchedEffect(result) {
                         kotlinx.coroutines.delay(3000)
                         importResult = null
                     }
                 }
             }
-            itemsIndexed(localLutList, key = { _, it -> it.id }) { index, lutInfo ->
+            itemsIndexed(filteredLutList, key = { _, it -> it.id }) { index, lutInfo ->
                 ReorderableItem(reorderableLazyListState, key = lutInfo.id) { isDragging ->
                     FilterManagementItem(
                         lutInfo = lutInfo,
@@ -258,6 +384,11 @@ fun FilterManagementScreen(
                                 showDeleteDialog = true
                             }
                         } else null,
+                        onEditCategory = {
+                            categorizingLut = lutInfo
+                            categoryText = lutInfo.category
+                            showCategoryDialog = true
+                        },
                         dragModifier = Modifier.draggableHandle()
                     )
                 }
@@ -345,7 +476,113 @@ fun FilterManagementScreen(
             }
         )
     }
-    
+
+    // 分类编辑对话框
+    if (showCategoryDialog && categorizingLut != null) {
+        AlertDialog(
+            onDismissRequest = { showCategoryDialog = false },
+            title = {
+                Text(stringResource(R.string.edit_category))
+            },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = categoryText,
+                        onValueChange = { categoryText = it },
+                        label = { Text(stringResource(R.string.category)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        trailingIcon = if (categoryText.isNotEmpty()) {
+                            {
+                                IconButton(onClick = { categoryText = "" }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Clear,
+                                        contentDescription = "Clear",
+                                        tint = Color.White.copy(alpha = 0.5f)
+                                    )
+                                }
+                            }
+                        } else null
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // 常用分类快速选择
+                    val commonCategories = localLutList.map { it.category }.distinct().filter { it.isNotEmpty() }
+                    if (commonCategories.isNotEmpty()) {
+                        Text(
+                            text = stringResource(R.string.common_categories),
+                            fontSize = 12.sp,
+                            color = Color.White.copy(alpha = 0.5f),
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            // 清除选项
+                            if (categoryText.isNotEmpty()) {
+                                SuggestionChip(
+                                    onClick = { categoryText = "" },
+                                    label = { Text(stringResource(R.string.none)) },
+                                    colors = SuggestionChipDefaults.suggestionChipColors(
+                                        labelColor = Color(0xFFFF5252)
+                                    )
+                                )
+                            }
+
+                            commonCategories.forEach { cat ->
+                                InputChip(
+                                    selected = categoryText == cat,
+                                    onClick = { categoryText = cat },
+                                    label = { Text(cat) },
+                                    trailingIcon = {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = "Delete",
+                                            modifier = Modifier.size(16.dp).clickable { categoryToDelete = cat },
+                                            tint = Color.White.copy(alpha = 0.5f)
+                                        )
+                                    }
+                                )
+                            }
+                        }
+                    } else if (categoryText.isNotEmpty()) {
+                        // 如果没有常用分类但当前有文本，也显示清除按钮
+                        SuggestionChip(
+                            onClick = { categoryText = "" },
+                            label = { Text(stringResource(R.string.none)) },
+                            colors = SuggestionChipDefaults.suggestionChipColors(
+                                labelColor = Color(0xFFFF5252)
+                            )
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                customImportManager.updateLutCategory(categorizingLut!!.id, categoryText)
+                            }
+                            viewModel.refreshCustomContent()
+                            showCategoryDialog = false
+                            categorizingLut = null
+                        }
+                    }
+                ) {
+                    Text(stringResource(R.string.confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCategoryDialog = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
     // 页面退出时保存排序
     DisposableEffect(Unit) {
         onDispose {
@@ -377,6 +614,7 @@ private fun FilterManagementItem(
     onRename: (() -> Unit)?,
     onEditColorRecipe: (() -> Unit)?,
     onDelete: (() -> Unit)?,
+    onEditCategory: (() -> Unit)? = null,
     dragModifier: Modifier = Modifier,
     modifier: Modifier = Modifier
 ) {
@@ -397,22 +635,24 @@ private fun FilterManagementItem(
                 color = borderColor,
                 shape = RoundedCornerShape(12.dp)
             )
-            .clickable(onClick = onSetDefault)
-            .padding(horizontal = 12.dp, vertical = 12.dp),
+            .padding(horizontal = 4.dp, vertical = 8.dp), // 减少 Row 整体 Padding
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 拖拽图标 - 仅在此图标上应用拖拽手势
+        // 拖拽图标
         Icon(
             imageVector = Icons.Default.DragHandle,
             contentDescription = "Drag to reorder",
             tint = Color.White.copy(alpha = 0.5f),
-            modifier = dragModifier.size(24.dp)
+            modifier = dragModifier.padding(8.dp).size(24.dp)
         )
-        
-        Spacer(modifier = Modifier.width(12.dp))
-        
-        // 滤镜名称和类型
-        Column(modifier = Modifier.weight(1f)) {
+
+        // 核心信息区（点击设为默认）
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .clickable(onClick = onSetDefault)
+                .padding(vertical = 4.dp, horizontal = 4.dp)
+        ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = lutInfo.getName(),
@@ -423,95 +663,116 @@ private fun FilterManagementItem(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false)
                 )
-                
-                Spacer(modifier = Modifier.width(8.dp))
-                
+
+                Spacer(modifier = Modifier.width(6.dp))
+
                 // 类型标签
-                val typeText = if (lutInfo.isBuiltIn) {
-                    stringResource(R.string.built_in)
-                } else {
-                    stringResource(R.string.custom)
-                }
+                val typeText =
+                    if (lutInfo.isBuiltIn) stringResource(R.string.built_in) else stringResource(R.string.custom)
                 Text(
                     text = typeText,
                     color = if (lutInfo.isBuiltIn) Color.White.copy(alpha = 0.5f) else Color(0xFFFF6B35),
-                    fontSize = 11.sp,
+                    fontSize = 10.sp,
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
                         .background(
-                            if (lutInfo.isBuiltIn) Color.White.copy(alpha = 0.1f)
-                            else Color(0xFFFF6B35).copy(alpha = 0.2f)
+                            if (lutInfo.isBuiltIn) Color.White.copy(alpha = 0.1f) else Color(0xFFFF6B35).copy(
+                                alpha = 0.2f
+                            )
                         )
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .padding(horizontal = 4.dp, vertical = 1.dp)
                 )
-                
+
                 // VIP 标签
                 if (lutInfo.isVip) {
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = stringResource(R.string.billing_vip_tag),
                         color = Color(0xFFFFD700),
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         modifier = Modifier
                             .clip(RoundedCornerShape(4.dp))
                             .background(Color(0xFFFFD700).copy(alpha = 0.2f))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
                     )
                 }
             }
-            
-            // 默认标识
+
             if (isDefault) {
-                Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = stringResource(R.string.current_default),
                     color = Color(0xFFFF6B35),
-                    fontSize = 12.sp
+                    fontSize = 11.sp
                 )
             }
         }
 
-        // 色彩配方编辑按钮
-        if (onEditColorRecipe != null) {
+        // 右侧操作区 (精简为核心操作 + 更多菜单)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // 色彩配方编辑按钮 (高频，保留直达)
             IconButton(
-                onClick = onEditColorRecipe,
+                onClick = onEditColorRecipe ?: {},
                 modifier = Modifier.size(36.dp)
             ) {
                 Icon(
                     imageVector = Icons.Default.Tune,
                     contentDescription = stringResource(R.string.color_recipe),
-                    tint = Color.White.copy(alpha = 0.7f),
+                    tint = Color.White.copy(alpha = 0.8f),
                     modifier = Modifier.size(20.dp)
                 )
             }
-        }
 
-        // 操作按钮（仅自定义滤镜）
-        if (onRename != null) {
-            IconButton(
-                onClick = onRename,
-                modifier = Modifier.size(36.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Edit,
-                    contentDescription = stringResource(R.string.rename),
-                    tint = Color.White.copy(alpha = 0.7f),
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-        }
+            // 更多操作菜单
+            var showMenu by remember { mutableStateOf(false) }
+            Box {
+                IconButton(onClick = { showMenu = true }, modifier = Modifier.size(36.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = "More",
+                        tint = Color.White.copy(alpha = 0.6f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
 
-        if (onDelete != null) {
-            IconButton(
-                onClick = onDelete,
-                modifier = Modifier.size(36.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = stringResource(R.string.delete),
-                    tint = Color.White.copy(alpha = 0.7f),
-                    modifier = Modifier.size(20.dp)
-                )
+                DropdownMenu(
+                    expanded = showMenu,
+                    onDismissRequest = { showMenu = false },
+                    modifier = Modifier.background(Color(0xFF2C313F))
+                ) {
+                    // 分类修改 (所有滤镜可用)
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.category), color = Color.White) },
+                        leadingIcon = { Icon(Icons.Default.Label, null, tint = Color.White.copy(alpha = 0.7f)) },
+                        onClick = {
+                            showMenu = false
+                            onEditCategory?.invoke()
+                        }
+                    )
+
+                    // 重命名 (仅自定义)
+                    if (onRename != null) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.rename), color = Color.White) },
+                            leadingIcon = { Icon(Icons.Default.Edit, null, tint = Color.White.copy(alpha = 0.7f)) },
+                            onClick = {
+                                showMenu = false
+                                onRename()
+                            }
+                        )
+                    }
+
+                    // 删除 (仅自定义)
+                    if (onDelete != null) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.delete), color = Color.Red) },
+                            leadingIcon = { Icon(Icons.Default.Delete, null, tint = Color.Red.copy(alpha = 0.7f)) },
+                            onClick = {
+                                showMenu = false
+                                onDelete()
+                            }
+                        )
+                    }
+                }
             }
         }
     }

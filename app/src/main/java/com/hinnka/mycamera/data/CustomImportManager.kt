@@ -31,6 +31,26 @@ class CustomImportManager(private val context: Context) {
         // 配置文件
         private const val CUSTOM_LUT_CONFIG = "custom_luts.json"
         private const val CUSTOM_FRAME_CONFIG = "custom_frames.json"
+        private const val CATEGORY_OVERRIDES_CONFIG = "category_overrides.json"
+    }
+
+    /**
+     * 获取分类重定向/重写映射
+     */
+    fun getCategoryOverrides(): Map<String, String> {
+        return try {
+            val file = File(context.filesDir, CATEGORY_OVERRIDES_CONFIG)
+            if (!file.exists()) return emptyMap()
+            val json = JSONObject(file.readText())
+            val map = mutableMapOf<String, String>()
+            json.keys().forEach { key ->
+                map[key] = json.getString(key)
+            }
+            map
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to get category overrides", e)
+            emptyMap()
+        }
     }
 
     private val customLutDir: File
@@ -212,7 +232,8 @@ class CustomImportManager(private val context: Context) {
                         fileName = lutFile.absolutePath,
                         isBuiltIn = false,
                         isDefault = false,
-                        isVip = false
+                        isVip = false,
+                        category = lutObj.optString("category", "")
                     )
                 )
             }
@@ -308,45 +329,88 @@ class CustomImportManager(private val context: Context) {
         }
     }
 
-/**
- * 更新自定义边框名称
- */
-fun updateFrameName(frameId: String, newName: String): Boolean {
-    return try {
-        val configFile = File(context.filesDir, CUSTOM_FRAME_CONFIG)
-        if (!configFile.exists()) {
-            return false
-        }
-
-        val configJson = configFile.readText()
-        val jsonArray = JSONArray(configJson)
-        val newArray = JSONArray()
-
-        var updated = false
-        for (i in 0 until jsonArray.length()) {
-            val frameObj = jsonArray.getJSONObject(i)
-            if (frameObj.getString("id") == frameId) {
-                // 更新名称
-                frameObj.put("name", JSONObject().apply {
-                    put("en", newName)
-                    put("zh", newName)
-                })
-                updated = true
+    /**
+     * 更新 LUT 分类（支持内置和自定义）
+     */
+    fun updateLutCategory(lutId: String, newCategory: String): Boolean {
+        return try {
+            // 1. 同步到分类重写文件 (核心：支持内置)
+            val overridesFile = File(context.filesDir, CATEGORY_OVERRIDES_CONFIG)
+            val overridesJson = if (overridesFile.exists()) {
+                JSONObject(overridesFile.readText())
+            } else {
+                JSONObject()
             }
-            newArray.put(frameObj)
-        }
+            overridesJson.put(lutId, newCategory)
+            overridesFile.writeText(overridesJson.toString())
 
-        if (updated) {
-            configFile.writeText(newArray.toString())
-            PLog.d(TAG, "Frame name updated: $frameId -> $newName")
-        }
+            // 2. 如果是自定义滤镜，也同步更新 custom_luts.json (保持一致性)
+            val configFile = File(context.filesDir, CUSTOM_LUT_CONFIG)
+            if (configFile.exists()) {
+                val configJson = configFile.readText()
+                val jsonArray = JSONArray(configJson)
+                val newArray = JSONArray()
+                var updated = false
+                for (i in 0 until jsonArray.length()) {
+                    val lutObj = jsonArray.getJSONObject(i)
+                    if (lutObj.getString("id") == lutId) {
+                        lutObj.put("category", newCategory)
+                        updated = true
+                    }
+                    newArray.put(lutObj)
+                }
+                if (updated) {
+                    configFile.writeText(newArray.toString())
+                }
+            }
 
-        updated
-    } catch (e: Exception) {
-        PLog.e(TAG, "Failed to update frame name", e)
-        false
+            PLog.d(TAG, "LUT category updated: $lutId -> $newCategory")
+            true
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to update LUT category", e)
+            false
+        }
     }
-}
+
+    /**
+     * 更新自定义边框名称
+     */
+    fun updateFrameName(frameId: String, newName: String): Boolean {
+        return try {
+            val configFile = File(context.filesDir, CUSTOM_FRAME_CONFIG)
+            if (!configFile.exists()) {
+                return false
+            }
+
+            val configJson = configFile.readText()
+            val jsonArray = JSONArray(configJson)
+            val newArray = JSONArray()
+
+            var updated = false
+            for (i in 0 until jsonArray.length()) {
+                val frameObj = jsonArray.getJSONObject(i)
+                if (frameObj.getString("id") == frameId) {
+                    // 更新名称
+                    frameObj.put("name", JSONObject().apply {
+                        put("en", newName)
+                        put("zh", newName)
+                    })
+                    updated = true
+                }
+                newArray.put(frameObj)
+            }
+
+            if (updated) {
+                configFile.writeText(newArray.toString())
+                PLog.d(TAG, "Frame name updated: $frameId -> $newName")
+            }
+
+            updated
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to update frame name", e)
+            false
+        }
+    }
 
     /**
      * 删除自定义 LUT

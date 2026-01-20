@@ -87,11 +87,25 @@ class LutManager(private val context: Context) {
      * 初始化，扫描可用的 LUT 文件（包括内置和自定义）
      */
     fun initialize() {
-        val builtInLuts = LutParser.listAvailableLuts(context, BUILT_IN_LUT_FOLDER)
+        // 加载内置滤镜并强制把初始分类设为空（用户不想要内置分类标签）
+        val builtInLuts = LutParser.listAvailableLuts(context, BUILT_IN_LUT_FOLDER).map {
+            it.copy(category = "")
+        }
         val customLuts = customImportManager.getCustomLuts()
+        val categoryOverrides = customImportManager.getCategoryOverrides()
 
-        // 将自定义 LUT 放在最前面
-        availableLuts = customLuts + builtInLuts
+        // 合并列表
+        val allLuts = customLuts + builtInLuts
+
+        // 应用分类重写 (用户手动创建的分类会通过这里恢复)
+        availableLuts = allLuts.map { lut ->
+            val overriddenCategory = categoryOverrides[lut.id]
+            if (overriddenCategory != null) {
+                lut.copy(category = overriddenCategory)
+            } else {
+                lut
+            }
+        }
 
         PLog.d(TAG, "Found ${availableLuts.size} LUT files (${customLuts.size} custom, ${builtInLuts.size} built-in)")
     }
@@ -100,14 +114,14 @@ class LutManager(private val context: Context) {
      * 获取可用的 LUT 列表（自定义 LUT 在前）
      */
     fun getAvailableLuts(): List<LutInfo> = availableLuts
-    
+
     /**
      * 通过 ID 获取 LUT 信息
      */
     fun getLutInfo(id: String): LutInfo? {
         return availableLuts.find { it.id == id }
     }
-    
+
     /**
      * 加载 LUT 配置
      *
@@ -158,7 +172,7 @@ class LutManager(private val context: Context) {
      * 获取自定义导入管理器
      */
     fun getCustomImportManager(): CustomImportManager = customImportManager
-    
+
     /**
      * 预加载 LUT
      * 
@@ -168,20 +182,20 @@ class LutManager(private val context: Context) {
         if (lutCache.get(id) != null) {
             return // 已在缓存中
         }
-        
+
         // 后台加载
         Thread {
             loadLut(id)
         }.start()
     }
-    
+
     /**
      * 清除缓存中的特定 LUT
      */
     fun evictLut(id: String) {
         lutCache.remove(id)
     }
-    
+
     /**
      * 清除所有缓存
      */
@@ -189,7 +203,7 @@ class LutManager(private val context: Context) {
         lutCache.evictAll()
         PLog.d(TAG, "LUT cache cleared")
     }
-    
+
     /**
      * 获取缓存状态信息
      */

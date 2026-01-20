@@ -27,7 +27,7 @@ data class LutConfig(
         if (data != null) {
             return FloatBuffer.wrap(data)
         }
-        
+
         val buffer = byteBuffer ?: throw IllegalStateException("No data available in LutConfig")
         val fb = FloatBuffer.allocate(size * size * size * 3)
         buffer.position(0)
@@ -37,7 +37,7 @@ data class LutConfig(
         fb.position(0)
         return fb
     }
-    
+
     /**
      * 获取用于 OpenGL 纹理上传的 ByteBuffer (GL_RGB8 格式)
      * 将浮点数据转换为 0-255 的字节数据，或者直接返回已有的 byteBuffer
@@ -47,7 +47,7 @@ data class LutConfig(
             byteBuffer.position(0)
             return byteBuffer
         }
-        
+
         val floatData = data ?: throw IllegalStateException("No data available in LutConfig")
         val byteData = ByteArray(floatData.size)
         for (i in floatData.indices) {
@@ -60,7 +60,7 @@ data class LutConfig(
         buffer.position(0)
         return buffer
     }
-    
+
     /**
      * 验证 LUT 数据是否有效
      */
@@ -68,24 +68,24 @@ data class LutConfig(
         val expectedSize = size * size * size * 3
         return size > 0 && (data?.size == expectedSize || byteBuffer?.capacity() == expectedSize)
     }
-    
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (javaClass != other?.javaClass) return false
-        
+
         other as LutConfig
-        
+
         if (size != other.size) return false
         if (data != null) {
             if (other.data == null || !data.contentEquals(other.data)) return false
         } else if (other.data != null) return false
-        
+
         if (byteBuffer != other.byteBuffer) return false
         if (title != other.title) return false
-        
+
         return true
     }
-    
+
     override fun hashCode(): Int {
         var result = size
         result = 31 * result + (data?.contentHashCode() ?: 0)
@@ -105,6 +105,7 @@ data class LutInfo(
     val isBuiltIn: Boolean = true,
     val isDefault: Boolean = false, // 是否为默认 LUT
     val isVip: Boolean = false, // 是否为 VIP LUT
+    val category: String = "", // 分类
 ) {
     /**
      * 获取显示名称（优先当前系统语言）

@@ -2,6 +2,7 @@ package com.hinnka.mycamera.ui.components
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -49,23 +50,38 @@ fun LutSelector(
     val scrollState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     var showLutEditDialogState by remember { mutableStateOf(false) }
-    
+
+    // 分类逻辑
+    val categories = remember(availableLuts) {
+        listOf(null) + availableLuts.map { it.category }.distinct().filter { it.isNotEmpty() } + listOf("Custom")
+    }
+    var selectedCategory by remember { mutableStateOf<String?>(null) }
+
+    val filteredLuts = remember(selectedCategory, availableLuts) {
+        when (selectedCategory) {
+            null -> availableLuts
+            "Custom" -> availableLuts.filter { !it.isBuiltIn }
+            else -> availableLuts.filter { it.category == selectedCategory }
+        }
+    }
+
     val actualShowLutEditDialog = onEditClick == null && showLutEditDialogState
-    
+
     // 在组件首次加载时滚动到当前选中的 LUT
     LaunchedEffect(currentLutId) {
         currentLutId?.let { lutId ->
-            val selectedIndex = availableLuts.indexOfFirst { it.id == lutId }
+            val selectedIndex = filteredLuts.indexOfFirst { it.id == lutId }
             if (selectedIndex >= 2) {
                 coroutineScope.launch {
-                    // 使用 animateScrollTo 进行平滑滚动，将选中项滚动到可视区域中心
                     scrollState.animateScrollToItem(selectedIndex - 2)
                 }
             }
         }
     }
 
-    // 全局 LUT 编辑底部弹窗 (如果没有提供外部点击处理)
+    // 如果选中的 LUT 不在当前分类中，可选：不自动切换分类，或者在切换分类时如果是“全部”则保持选中
+
+    // 全局 LUT 编辑底部弹窗
     if (actualShowLutEditDialog && currentLutId != null) {
         LutEditBottomSheet(
             lutId = currentLutId,
@@ -74,34 +90,69 @@ fun LutSelector(
             }
         )
     }
-    
-    LazyRow(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        state = scrollState
-    ) {
-        // LUT 列表
-        items(availableLuts) { lut ->
-            LutItem(
-                name = lut.getName(),
-                previewBitmap = lutPreviewBitmaps[lut.id],
-                isSelected = currentLutId == lut.id,
-                isVip = lut.isVip,
-                isCustom = !lut.isBuiltIn,  // 添加自定义标识
-                onClick = {
-                    if (currentLutId == lut.id) {
-                        if (onEditClick != null) {
-                            onEditClick()
-                        } else {
-                            showLutEditDialogState = true
-                        }
-                    } else {
-                        onLutSelected(lut.id)
-                    }
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        // 分类选择器 (小芯片样式)
+        LazyRow(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(horizontal = 8.dp)
+        ) {
+            items(categories) { category ->
+                val isSelected = selectedCategory == category
+                val categoryName = when (category) {
+                    null -> stringResource(R.string.category_all)
+                    "Custom" -> stringResource(R.string.category_custom)
+                    else -> category
                 }
-            )
+
+                Text(
+                    text = categoryName,
+                    color = if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.5f),
+                    fontSize = 12.sp,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                    modifier = Modifier
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) {
+                            selectedCategory = category
+                        }
+                        .padding(vertical = 4.dp)
+                )
+            }
+        }
+
+        LazyRow(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            state = scrollState
+        ) {
+            // LUT 列表
+            items(filteredLuts, key = { it.id }) { lut ->
+                LutItem(
+                    name = lut.getName(),
+                    previewBitmap = lutPreviewBitmaps[lut.id],
+                    isSelected = currentLutId == lut.id,
+                    isVip = lut.isVip,
+                    isCustom = !lut.isBuiltIn,
+                    onClick = {
+                        if (currentLutId == lut.id) {
+                            if (onEditClick != null) {
+                                onEditClick()
+                            } else {
+                                showLutEditDialogState = true
+                            }
+                        } else {
+                            onLutSelected(lut.id)
+                        }
+                    }
+                )
+            }
         }
     }
 }

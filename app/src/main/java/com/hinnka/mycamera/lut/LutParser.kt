@@ -20,7 +20,7 @@ object LutParser {
      */
     fun parse(inputStream: InputStream, title: String = ""): LutConfig {
         val stream = if (inputStream.markSupported()) inputStream else inputStream.buffered()
-        
+
         // 先读取前 4 个字节判断是否为二进制格式
         val header = ByteArray(4)
         stream.mark(16)
@@ -51,12 +51,12 @@ object LutParser {
         val dataType = buffer.int
 
         val expectedSize = size * size * size * 3
-        
+
         //dataType 0 = UINT8, 1 = FLOAT32 (未来扩展)
         if (dataType == 0) {
             val directBuffer = ByteBuffer.allocateDirect(expectedSize)
                 .order(ByteOrder.nativeOrder())
-            
+
             // 将数据拷贝到 DirectByteBuffer 以便 OpenGL 使用
             val data = ByteArray(expectedSize)
             buffer.get(data)
@@ -90,13 +90,13 @@ object LutParser {
         return try {
             // 读取 config.json
             val configPath = "$folder/config.json"
-            val configJson = context.assets.open(configPath).use { 
+            val configJson = context.assets.open(configPath).use {
                 it.bufferedReader().readText()
             }
-            
+
             val jsonObject = JSONObject(configJson)
             val lutsArray = jsonObject.getJSONArray("luts")
-            
+
             // 按配置文件中的顺序读取 LUT
             val lutList = mutableListOf<LutInfo>()
             for (i in 0 until lutsArray.length()) {
@@ -106,13 +106,14 @@ object LutParser {
                 val nameObj = lutObj.getJSONObject("name")
                 val isDefault = lutObj.optBoolean("isDefault", false)
                 val isVip = lutObj.getBoolean("isVip")
-                
+                val category = lutObj.optString("category", "Built-in")
+
                 // 读取多语言名称
                 val nameMap = mutableMapOf<String, String>()
                 nameObj.keys().forEach { lang ->
                     nameMap[lang] = nameObj.getString(lang)
                 }
-                
+
                 lutList.add(
                     LutInfo(
                         id = id,
@@ -120,11 +121,12 @@ object LutParser {
                         fileName = "$folder/$path",
                         isBuiltIn = true,
                         isDefault = isDefault,
-                        isVip = isVip
+                        isVip = isVip,
+                        category = category
                     )
                 )
             }
-            
+
             PLog.d(TAG, "Loaded ${lutList.size} LUTs from config.json")
             lutList
         } catch (e: Exception) {
