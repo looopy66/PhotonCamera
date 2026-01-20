@@ -8,6 +8,7 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.DngCreator
 import android.media.Image
+import android.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import kotlinx.coroutines.runBlocking
@@ -192,12 +193,14 @@ object RawProcessor {
      * @param characteristics 相机特性
      * @param captureResult 拍摄结果
      * @param outputStream 输出流
+     * @param rotation 旋转角度 (0, 90, 180, 270)
      */
     fun saveToDng(
         image: Image,
         characteristics: CameraCharacteristics,
         captureResult: CaptureResult,
-        outputStream: java.io.OutputStream
+        outputStream: java.io.OutputStream,
+        rotation: Int = 0
     ) {
         if (!isRawImage(image)) {
             throw IllegalArgumentException("Image is not RAW format: ${image.format}")
@@ -205,6 +208,13 @@ object RawProcessor {
 
         val dngCreator = DngCreator(characteristics, captureResult)
         try {
+            val orientation = when (rotation) {
+                90 -> ExifInterface.ORIENTATION_ROTATE_90
+                180 -> ExifInterface.ORIENTATION_ROTATE_180
+                270 -> ExifInterface.ORIENTATION_ROTATE_270
+                else -> ExifInterface.ORIENTATION_NORMAL
+            }
+            dngCreator.setOrientation(orientation)
             dngCreator.writeImage(outputStream, image)
         } finally {
             dngCreator.close()

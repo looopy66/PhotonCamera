@@ -4,6 +4,7 @@ import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.TotalCaptureResult
 import android.media.Image
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -21,6 +22,7 @@ import com.hinnka.mycamera.data.UserPreferencesRepository
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.frame.FrameRenderer
+import com.hinnka.mycamera.gallery.ExifWriter
 import com.hinnka.mycamera.gallery.PhotoManager
 import com.hinnka.mycamera.gallery.PhotoMetadata
 import com.hinnka.mycamera.gallery.PhotoProcessor
@@ -1073,7 +1075,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // 应用方向偏移
             val rotation = (baseRotation + orientationOffset) % 360
 
-            PLog.d(TAG, "Rotation calculation - CameraId: $currentCameraId, Base: $baseRotation°, Offset: $orientationOffset°, Final: $rotation°")
+            PLog.d(
+                TAG,
+                "Rotation calculation - CameraId: $currentCameraId, Base: $baseRotation°, Offset: $orientationOffset°, Final: $rotation°"
+            )
 
             // 根据图像格式选择处理方式
             bitmap = withContext(Dispatchers.Default) {
@@ -1110,7 +1115,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 // 如果之前没有 captureResult 但现在等到了，尝试重新构建更完整的 CaptureInfo 供 EXIF 使用
                 val finalCaptureInfo =
-                    if (captureResult == null && finalCaptureResult is android.hardware.camera2.TotalCaptureResult) {
+                    if (captureResult == null && finalCaptureResult is TotalCaptureResult) {
                         cameraController.rebuildCaptureInfo(finalCaptureResult, image.width, image.height)
                     } else {
                         captureInfo
@@ -1160,10 +1165,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                                 )
                             }
 
-                            val filename = "PhotonCamera_${
-                                java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
-                                    .format(java.util.Date())
-                            }.jpg"
+                            val timestamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
+                                .format(java.util.Date())
+                            val filename = "PhotonCamera_${timestamp}.jpg"
                             val contentValues = android.content.ContentValues().apply {
                                 put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, filename)
                                 put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
@@ -1183,6 +1187,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                                     processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
                                 }
 
+                                // 写入 EXIF 信息
+                                context.contentResolver.openFileDescriptor(it, "rw")?.use { pfd ->
+                                    ExifWriter.writeExif(
+                                        pfd.fileDescriptor, finalCaptureInfo.copy(
+                                            imageWidth = processedBitmap.width,
+                                            imageHeight = processedBitmap.height
+                                        )
+                                    )
+                                }
+
                                 // 保存导出的 URI 到元数据
                                 val photoId = PhotoManager.getPhotoIds(context).firstOrNull()
                                 if (photoId != null) {
@@ -1197,6 +1211,45 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
                             if (processedBitmap != bitmap) {
                                 processedBitmap.recycle()
+                            }
+                        }
+
+                        // 如果是 RAW 拍摄模式，同时导出一份 DNG 文件
+                        if (image.format == android.graphics.ImageFormat.RAW_SENSOR && characteristics != null && finalCaptureResult != null) {
+                            launch {
+                                try {
+                                    val timestamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
+                                        .format(java.util.Date())
+                                    val dngFilename = "PhotonCamera_${timestamp}.dng"
+                                    val dngContentValues = android.content.ContentValues().apply {
+                                        put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, dngFilename)
+                                        put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/x-adobe-dng")
+                                        put(
+                                            android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
+                                            android.os.Environment.DIRECTORY_DCIM + "/PhotonCamera"
+                                        )
+                                    }
+
+                                    val dngUri = context.contentResolver.insert(
+                                        android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                                        dngContentValues
+                                    )
+
+                                    dngUri?.let { uri ->
+                                        context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                                            RawProcessor.saveToDng(
+                                                image,
+                                                characteristics,
+                                                finalCaptureResult,
+                                                outputStream,
+                                                rotation
+                                            )
+                                        }
+                                        PLog.d(TAG, "DNG exported: $uri")
+                                    }
+                                } catch (e: Exception) {
+                                    PLog.e(TAG, "Failed to export DNG", e)
+                                }
                             }
                         }
                     }

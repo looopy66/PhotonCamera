@@ -1,6 +1,5 @@
 package com.hinnka.mycamera.gallery
 
-import android.util.Log
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.CaptureInfo
 import com.hinnka.mycamera.utils.PLog
@@ -16,12 +15,12 @@ import kotlin.math.abs
  * 使用 ExifInterface 将拍摄信息写入 JPEG 文件
  */
 object ExifWriter {
-    
+
     private const val TAG = "ExifWriter"
-    
+
     // EXIF 日期时间格式
     private val exifDateFormat = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US)
-    
+
     /**
      * 将拍摄信息写入 JPEG 文件的 EXIF
      * 
@@ -31,23 +30,62 @@ object ExifWriter {
     fun writeExif(file: File, captureInfo: CaptureInfo) {
         try {
             val exif = ExifInterface(file)
-            
+            writeExifInternal(exif, captureInfo)
+            exif.saveAttributes()
+            PLog.d(
+                TAG, "EXIF written to ${file.name}: ISO=${captureInfo.iso}, " +
+                        "Exposure=${captureInfo.formatExposureTime()}, " +
+                        "Aperture=${captureInfo.formatAperture()}, " +
+                        "Focal=${captureInfo.formatFocalLength()}"
+            )
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to write EXIF to ${file.name}", e)
+        }
+    }
+
+    /**
+     * 将拍摄信息写入 JPEG 文件的 EXIF (使用 FileDescriptor)
+     * 
+     * @param fd JPEG 文件的 FileDescriptor
+     * @param captureInfo 拍摄信息
+     */
+    fun writeExif(fd: java.io.FileDescriptor, captureInfo: CaptureInfo) {
+        try {
+            val exif = ExifInterface(fd)
+            writeExifInternal(exif, captureInfo)
+            exif.saveAttributes()
+            PLog.d(
+                TAG, "EXIF written to FileDescriptor: ISO=${captureInfo.iso}, " +
+                        "Exposure=${captureInfo.formatExposureTime()}, " +
+                        "Aperture=${captureInfo.formatAperture()}, " +
+                        "Focal=${captureInfo.formatFocalLength()}"
+            )
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to write EXIF to FileDescriptor", e)
+        }
+    }
+
+    /**
+     * 核心写入逻辑
+     */
+    private fun writeExifInternal(exif: ExifInterface, captureInfo: CaptureInfo) {
+        try {
             // ========== 设备信息 ==========
             exif.setAttribute(ExifInterface.TAG_MAKE, captureInfo.make)
             exif.setAttribute(ExifInterface.TAG_MODEL, captureInfo.model)
             exif.setAttribute(ExifInterface.TAG_SOFTWARE, captureInfo.software)
-            
+
             // ========== 日期时间 ==========
             val dateTime = exifDateFormat.format(Date(captureInfo.captureTime))
             exif.setAttribute(ExifInterface.TAG_DATETIME, dateTime)
             exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, dateTime)
             exif.setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, dateTime)
-            
+
             // ========== 图像方向 ==========
             // 由于我们在保存前已经物理旋转了图片字节流（归一化），
             // 此时图片已经是正的，所以 EXIF 方向标志必须设为 NORMAL (1)。
             exif.setAttribute(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL.toString())
-            
+
             // ========== 图像尺寸 ==========
             if (captureInfo.imageWidth > 0) {
                 exif.setAttribute(ExifInterface.TAG_IMAGE_WIDTH, captureInfo.imageWidth.toString())
@@ -57,7 +95,7 @@ object ExifWriter {
                 exif.setAttribute(ExifInterface.TAG_IMAGE_LENGTH, captureInfo.imageHeight.toString())
                 exif.setAttribute(ExifInterface.TAG_PIXEL_Y_DIMENSION, captureInfo.imageHeight.toString())
             }
-            
+
             // ========== 曝光参数 ==========
             captureInfo.exposureTime?.let { exposureNs ->
                 // 曝光时间格式：分子/分母（秒）
@@ -71,40 +109,40 @@ object ExifWriter {
                     exif.setAttribute(ExifInterface.TAG_EXPOSURE_TIME, "1/$denominator")
                 }
             }
-            
+
             captureInfo.iso?.let { iso ->
                 exif.setAttribute(ExifInterface.TAG_ISO_SPEED_RATINGS, iso.toString())
                 // 也设置 ISO_SPEED 用于兼容性
                 exif.setAttribute(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY, iso.toString())
             }
-            
+
             captureInfo.aperture?.let { fNumber ->
                 // 光圈值格式：分子/分母
                 exif.setAttribute(ExifInterface.TAG_F_NUMBER, formatRational(fNumber))
                 exif.setAttribute(ExifInterface.TAG_APERTURE_VALUE, formatApexAperture(fNumber))
             }
-            
+
             captureInfo.focalLength?.let { fl ->
                 // 焦距格式：分子/分母 (mm)
                 exif.setAttribute(ExifInterface.TAG_FOCAL_LENGTH, formatRational(fl))
             }
-            
+
             captureInfo.focalLength35mm?.let { fl35 ->
                 exif.setAttribute(ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM, fl35.toString())
             }
-            
+
             // ========== 白平衡 ==========
             captureInfo.whiteBalance?.let { wb ->
                 // 0 = Auto, 1 = Manual
                 val whiteBalanceValue = if (wb == 0) 0 else 1
                 exif.setAttribute(ExifInterface.TAG_WHITE_BALANCE, whiteBalanceValue.toString())
             }
-            
+
             // ========== 闪光灯 ==========
             captureInfo.flashState?.let { flash ->
                 exif.setAttribute(ExifInterface.TAG_FLASH, flash.toString())
             }
-            
+
             // ========== GPS 信息 ==========
             captureInfo.latitude?.let { lat ->
                 captureInfo.longitude?.let { lng ->
@@ -114,24 +152,16 @@ object ExifWriter {
             captureInfo.altitude?.let { alt ->
                 exif.setAltitude(alt)
             }
-            
+
             // ========== 其他标准标签 ==========
             exif.setAttribute(ExifInterface.TAG_COLOR_SPACE, "1") // sRGB
             exif.setAttribute(ExifInterface.TAG_EXIF_VERSION, "0230") // EXIF 2.3
-            
-            // 保存
-            exif.saveAttributes()
-            
-            PLog.d(TAG, "EXIF written to ${file.name}: ISO=${captureInfo.iso}, " +
-                    "Exposure=${captureInfo.formatExposureTime()}, " +
-                    "Aperture=${captureInfo.formatAperture()}, " +
-                    "Focal=${captureInfo.formatFocalLength()}")
-            
+
         } catch (e: Exception) {
-            PLog.e(TAG, "Failed to write EXIF to ${file.name}", e)
+            throw e
         }
     }
-    
+
     /**
      * 格式化为 EXIF 有理数格式（分子/分母）
      */
@@ -140,13 +170,12 @@ object ExifWriter {
         // 例如：1.8 -> 18/10, 2.0 -> 2/1
         val multiplier = 10
         val numerator = (value * multiplier).toInt()
-        val denominator = multiplier
-        
+
         // 简化分数
-        val gcd = gcd(numerator, denominator)
-        return "${numerator / gcd}/${denominator / gcd}"
+        val gcd = gcd(numerator, multiplier)
+        return "${numerator / gcd}/${multiplier / gcd}"
     }
-    
+
     /**
      * 格式化为 APEX 光圈值
      * APEX Av = 2 * log2(FNumber)
@@ -155,7 +184,7 @@ object ExifWriter {
         val apex = 2.0 * (kotlin.math.ln(fNumber.toDouble()) / kotlin.math.ln(2.0))
         return formatRational(apex.toFloat())
     }
-    
+
     /**
      * 计算最大公约数
      */

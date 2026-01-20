@@ -47,6 +47,42 @@ data class PhotoMetadata(
     val exportedUris: List<String> = emptyList()
 ) {
     /**
+     * 将元数据转换为 CaptureInfo，用于写入 EXIF
+     */
+    fun toCaptureInfo(): com.hinnka.mycamera.camera.CaptureInfo {
+        return com.hinnka.mycamera.camera.CaptureInfo(
+            iso = iso,
+            make = brand ?: Build.MANUFACTURER,
+            model = deviceModel ?: Build.MODEL,
+            captureTime = dateTaken ?: System.currentTimeMillis(),
+            imageWidth = width,
+            imageHeight = height,
+            aperture = aperture?.substringAfter("/")?.toFloatOrNull(),
+            focalLength = focalLength?.substringBefore("mm")?.toFloatOrNull(),
+            focalLength35mm = focalLength35mm?.substringBefore("mm")?.toIntOrNull(),
+            exposureTime = parseExposureTime(shutterSpeed)
+        )
+    }
+
+    private fun parseExposureTime(s: String?): Long? {
+        if (s == null) return null
+        return try {
+            if (s.contains("/")) {
+                val clean = s.substringBefore("s").substringBefore("\"")
+                val parts = clean.split("/")
+                val numerator = parts[0].toDouble()
+                val denominator = parts[1].toDouble()
+                (numerator / denominator * 1_000_000_000).toLong()
+            } else {
+                val clean = s.substringBefore("s").substringBefore("\"")
+                (clean.toDouble() * 1_000_000_000).toLong()
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
      * 分辨率字符串 (用于边框水印显示)
      */
     val resolution: String
@@ -147,8 +183,10 @@ data class PhotoMetadata(
                     lutId = if (obj.isNull("lutId")) null else obj.optString("lutId"),
                     colorRecipeParams = colorRecipeParams,
                     sharpening = if (obj.isNull("sharpening")) null else obj.optDouble("sharpening").toFloat(),
-                    noiseReduction = if (obj.isNull("noiseReduction")) null else obj.optDouble("noiseReduction").toFloat(),
-                    chromaNoiseReduction = if (obj.isNull("chromaNoiseReduction")) null else obj.optDouble("chromaNoiseReduction").toFloat(),
+                    noiseReduction = if (obj.isNull("noiseReduction")) null else obj.optDouble("noiseReduction")
+                        .toFloat(),
+                    chromaNoiseReduction = if (obj.isNull("chromaNoiseReduction")) null else obj.optDouble("chromaNoiseReduction")
+                        .toFloat(),
                     frameId = if (obj.isNull("frameId")) null else obj.optString("frameId"),
                     width = obj.optInt("width", 0),
                     height = obj.optInt("height", 0),

@@ -378,17 +378,19 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             currentPhotoMetadata = PhotoManager.loadMetadata(context, photo.id)
 
             // 更新编辑状态
-        currentPhotoMetadata?.let { metadata ->
-            editLutId.value = metadata.lutId
-            editFrameId.value = metadata.frameId
-            
-            // 智能初始化：导入的照片默认值为 0，App 拍摄的默认跟随全局设置
-            val defaultVal = if (metadata.isImported) 0f else 1f // 辅助判定是否需要使用全局
-            editSharpening.value = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening.value)
-            editNoiseReduction.value = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction.value)
-            editChromaNoiseReduction.value = metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
+            currentPhotoMetadata?.let { metadata ->
+                editLutId.value = metadata.lutId
+                editFrameId.value = metadata.frameId
 
-            // 加载 LUT 配置
+                // 智能初始化：导入的照片默认值为 0，App 拍摄的默认跟随全局设置
+                val defaultVal = if (metadata.isImported) 0f else 1f // 辅助判定是否需要使用全局
+                editSharpening.value = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening.value)
+                editNoiseReduction.value =
+                    metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction.value)
+                editChromaNoiseReduction.value =
+                    metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
+
+                // 加载 LUT 配置
                 editLutId.value?.let { id ->
                     editLutConfig = withContext(Dispatchers.IO) {
                         contentRepository.lutManager.loadLut(id)
@@ -820,21 +822,23 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun enterEditMode() {
         isEditing = true
         // 从当前元数据恢复编辑状态
-    currentPhotoMetadata?.let { metadata ->
-        editLutId.value = metadata.lutId
-        editFrameId.value = metadata.frameId
-        // 智能初始化：导入的照片默认值为 0，App 拍摄的则回退到当前全局配置
-        editSharpening.value = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening.value)
-        editNoiseReduction.value = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction.value)
-        editChromaNoiseReduction.value = metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
-    } ?: run {
-        editLutId.value = null
-        editFrameId.value = null
-        // 这里一般是本 App 预览或拍摄进入，保持跟随全局
-        editSharpening.value = sharpening.value
-        editNoiseReduction.value = noiseReduction.value
-        editChromaNoiseReduction.value = chromaNoiseReduction.value
-    }
+        currentPhotoMetadata?.let { metadata ->
+            editLutId.value = metadata.lutId
+            editFrameId.value = metadata.frameId
+            // 智能初始化：导入的照片默认值为 0，App 拍摄的则回退到当前全局配置
+            editSharpening.value = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening.value)
+            editNoiseReduction.value =
+                metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction.value)
+            editChromaNoiseReduction.value =
+                metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
+        } ?: run {
+            editLutId.value = null
+            editFrameId.value = null
+            // 这里一般是本 App 预览或拍摄进入，保持跟随全局
+            editSharpening.value = sharpening.value
+            editNoiseReduction.value = noiseReduction.value
+            editChromaNoiseReduction.value = chromaNoiseReduction.value
+        }
 
         // 加载当前编辑的 LUT 配置
         editLutId.value?.let { id ->
@@ -1150,6 +1154,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     context.contentResolver.openOutputStream(it)?.use { outputStream ->
                         // 使用 95 质量以获得更高的图像清晰度
                         processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                    }
+
+                    // 写入 EXIF 信息
+                    context.contentResolver.openFileDescriptor(it, "rw")?.use { pfd ->
+                        ExifWriter.writeExif(
+                            pfd.fileDescriptor, metadata.toCaptureInfo().copy(
+                                imageWidth = processedBitmap.width,
+                                imageHeight = processedBitmap.height
+                            )
+                        )
                     }
 
                     // 保存导出的 URI 到元数据
