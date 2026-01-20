@@ -28,6 +28,8 @@ import com.hinnka.mycamera.ui.components.FocusIndicator
 fun CameraPreviewGL(
     aspectRatio: AspectRatio,
     previewSize: Size,
+    sensorOrientation: Int,
+    calibrationOffset: Int,
     currentLut: LutConfig?,
     colorRecipeParams: ColorRecipeParams,
     focusPoint: Pair<Float, Float>?,
@@ -68,7 +70,7 @@ fun CameraPreviewGL(
 
         var viewWidth by remember { mutableIntStateOf(0) }
         var viewHeight by remember { mutableIntStateOf(0) }
-        
+
         // 标记是否已经通知过 SurfaceTexture
         var surfaceTextureNotified by remember { mutableStateOf(false) }
 
@@ -102,12 +104,12 @@ fun CameraPreviewGL(
                                 }
                             }
                         }
-                        
+
                         this.onSurfaceDestroyed = {
                             surfaceTextureNotified = false
                             onSurfaceDestroyed()
                         }
-                        
+
                         // 通知 GLSurfaceView 已准备好
                         onGLSurfaceViewReady?.invoke(this)
                     }
@@ -115,7 +117,9 @@ fun CameraPreviewGL(
                 update = { glSurfaceView ->
                     viewWidth = glSurfaceView.width
                     viewHeight = glSurfaceView.height
-                    
+                    glSurfaceView.setSensorOrientation(sensorOrientation)
+                    glSurfaceView.setCalibrationOffset(calibrationOffset)
+
                     // 如果尺寸有变化且 SurfaceTexture 已准备好，重新通知
                     if (viewWidth > 0 && viewHeight > 0 && !surfaceTextureNotified) {
                         glSurfaceView.getSurfaceTexture()?.let { surfaceTexture ->

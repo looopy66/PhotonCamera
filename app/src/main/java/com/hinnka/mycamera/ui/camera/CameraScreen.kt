@@ -164,10 +164,16 @@ fun CameraScreen(
                     .aspectRatio(3 / 4f)
                     .background(Color.Black),
             ) {
+                val currentCameraId = state.currentCameraId
+                val calibrationOffset by viewModel.getCameraOrientationOffset(currentCameraId)
+                    .collectAsState(initial = 0)
+
                 // 相机预览
                 CameraPreviewGL(
                     aspectRatio = state.aspectRatio,
                     previewSize = previewSize,
+                    sensorOrientation = state.getCurrentCameraInfo()?.sensorOrientation ?: 0,
+                    calibrationOffset = calibrationOffset,
                     currentLut = viewModel.currentLutConfig,
                     colorRecipeParams = currentRecipeParams,
                     focusPoint = state.focusPoint,

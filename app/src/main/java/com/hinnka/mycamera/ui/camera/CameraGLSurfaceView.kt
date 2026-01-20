@@ -21,46 +21,46 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : GLSurfaceView(context, attrs) {
-    
+
     companion object {
         private const val TAG = "CameraGLSurfaceView"
     }
-    
+
     private val renderer: LutRenderer = LutRenderer()
 
     var onSurfaceReady: ((Surface) -> Unit)? = null
     var onSurfaceDestroyed: (() -> Unit)? = null
     private var currentSurface: Surface? = null
-    
+
     init {
         // 设置 OpenGL ES 3.0
         setEGLContextClientVersion(3)
-        
+
         // 设置渲染器
         setRenderer(renderer)
-        
+
         // 按需渲染模式（当有新帧时才渲染）
         renderMode = RENDERMODE_WHEN_DIRTY
-        
+
         // 设置 SurfaceTexture 可用回调
         renderer.onSurfaceTextureAvailable = { surfaceTexture ->
             // 在 GL 线程中创建 Surface
             currentSurface = Surface(surfaceTexture)
-            
+
             // 通知 SurfaceProvider 已准备好
             post {
                 onSurfaceReady?.invoke(currentSurface!!)
             }
         }
-        
+
         // 设置渲染请求回调（当有新帧可用时由 LutRenderer 调用）
         renderer.onRequestRender = {
             requestRender()
         }
-        
+
         // 保持 EGL 上下文
         preserveEGLContextOnPause = true
-        
+
         PLog.d(TAG, "CameraGLSurfaceView initialized")
     }
 
@@ -72,7 +72,19 @@ class CameraGLSurfaceView @JvmOverloads constructor(
             renderer.setPreviewSize(width, height)
         }
     }
-    
+
+    fun setSensorOrientation(orientation: Int) {
+        queueEvent {
+            renderer.setSensorOrientation(orientation)
+        }
+    }
+
+    fun setCalibrationOffset(offset: Int) {
+        queueEvent {
+            renderer.setCalibrationOffset(offset)
+        }
+    }
+
     /**
      * 设置 LUT
      * 
@@ -84,7 +96,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
             requestRender()
         }
     }
-    
+
     /**
      * 设置 LUT 是否启用
      */
@@ -92,12 +104,12 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         renderer.lutEnabled = enabled
         requestRender()
     }
-    
+
     /**
      * 获取当前 LUT 强度
      */
     fun getLutIntensity(): Float = renderer.lutIntensity
-    
+
     /**
      * 获取 LUT 是否启用
      */
@@ -151,12 +163,12 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     fun requestRenderFrame() {
         requestRender()
     }
-    
+
     /**
      * 获取 SurfaceTexture
      */
     fun getSurfaceTexture(): SurfaceTexture? = renderer.getSurfaceTexture()
-    
+
     /**
      * 捕获预览帧
      * @param callback 捕获完成后的回调，在主线程调用
@@ -173,28 +185,28 @@ class CameraGLSurfaceView @JvmOverloads constructor(
             requestRender()
         }
     }
-    
+
     override fun onPause() {
         super.onPause()
         PLog.d(TAG, "onPause")
     }
-    
+
     override fun onResume() {
         super.onResume()
         PLog.d(TAG, "onResume")
     }
-    
+
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         PLog.d(TAG, "onDetachedFromWindow")
-        
+
         // 通知 Surface 销毁
         onSurfaceDestroyed?.invoke()
-        
+
         // 释放 Surface
         currentSurface?.release()
         currentSurface = null
-        
+
         // 在 GL 线程中释放资源
         queueEvent {
             renderer.release()
