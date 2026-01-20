@@ -91,12 +91,9 @@ class RawDemosaicProcessor {
     private var uWhiteBalanceGainsLoc = 0
     private var uColorCorrectionMatrixLoc = 0
     private var uExposureGainLoc = 0
-    private var uDeconvStrengthLoc = 0
-    private var uStructureAmountLoc = 0
     private var uOutputSharpAmountLoc = 0
     private var uDemosaicTexMatrixLoc = 0
     private var uLensShadingMapLoc = 0
-    private var uPostRawBoostLoc = 0
 
     // Passthrough Uniform 位置
     private var uPassTextureLoc = 0
@@ -327,12 +324,9 @@ class RawDemosaicProcessor {
             uWhiteBalanceGainsLoc = GLES30.glGetUniformLocation(demosaicProgram, "uWhiteBalanceGains")
             uColorCorrectionMatrixLoc = GLES30.glGetUniformLocation(demosaicProgram, "uColorCorrectionMatrix")
             uExposureGainLoc = GLES30.glGetUniformLocation(demosaicProgram, "uExposureGain")
-            uDeconvStrengthLoc = GLES30.glGetUniformLocation(demosaicProgram, "uDeconvStrength")
-            uStructureAmountLoc = GLES30.glGetUniformLocation(demosaicProgram, "uStructureAmount")
             uOutputSharpAmountLoc = GLES30.glGetUniformLocation(demosaicProgram, "uOutputSharpAmount")
             uDemosaicTexMatrixLoc = GLES30.glGetUniformLocation(demosaicProgram, "uTexMatrix")
             uLensShadingMapLoc = GLES30.glGetUniformLocation(demosaicProgram, "uLensShadingMap")
-            uPostRawBoostLoc = GLES30.glGetUniformLocation(demosaicProgram, "uPostRawBoost")
 
             GLES30.glDeleteShader(fShaderDemosaic)
         }
@@ -684,6 +678,17 @@ class RawDemosaicProcessor {
         return t * t * (3.0f - 2.0f * t)
     }
 
+    // 辅助函数: 3x3 矩阵转置 (行主序 -> 列主序)
+    // OpenGL ES 的 glUniformMatrix3fv 不支持 transpose=true，必须手动转置
+    private fun transposeMatrix3x3(matrix: FloatArray): FloatArray {
+        require(matrix.size >= 9) { "Matrix must have at least 9 elements" }
+        return floatArrayOf(
+            matrix[0], matrix[3], matrix[6],  // 第一列 (原第一行)
+            matrix[1], matrix[4], matrix[7],  // 第二列 (原第二行)
+            matrix[2], matrix[5], matrix[8]   // 第三列 (原第三行)
+        )
+    }
+
     private fun renderDemosaicPass(metadata: RawMetadata, exposureGain: Float) {
         GLES30.glUseProgram(demosaicProgram)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, demosaicFramebufferId)
@@ -718,11 +723,12 @@ class RawDemosaicProcessor {
             metadata.whiteBalanceGains[2],
             metadata.whiteBalanceGains[3]
         )
-        GLES30.glUniformMatrix3fv(uColorCorrectionMatrixLoc, 1, true, metadata.colorCorrectionMatrix, 0)
+        // OpenGL ES 不支持 transpose=true，必须在 CPU 端预先转置 CCM
+        // 原始 CCM 是行主序 (Row-major)，GLSL mat3 期望列主序 (Column-major)
+        val transposedCCM = transposeMatrix3x3(metadata.colorCorrectionMatrix)
+        GLES30.glUniformMatrix3fv(uColorCorrectionMatrixLoc, 1, false, transposedCCM, 0)
         GLES30.glUniform1f(uExposureGainLoc, exposureGain)
-        GLES30.glUniform1f(uDeconvStrengthLoc, 0.6f) // 重新开启轻微的 RAW 层去卷积
-        GLES30.glUniform1f(uStructureAmountLoc, 0f)
-        GLES30.glUniform1f(uOutputSharpAmountLoc, 0f)
+        GLES30.glUniform1f(uOutputSharpAmountLoc, 0.3f)
 
         // 绑定 LSC
         GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
@@ -733,7 +739,6 @@ class RawDemosaicProcessor {
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, dummyShadingTextureId)
         }
         GLES30.glUniform1i(uLensShadingMapLoc, 2)
-        GLES30.glUniform1f(uPostRawBoostLoc, metadata.postRawSensitivityBoost)
 
         drawQuad(demosaicProgram)
         checkGlError("renderDemosaicPass")
@@ -815,20 +820,34 @@ class RawDemosaicProcessor {
         val positionHandle = GLES30.glGetAttribLocation(program, "aPosition")
         val texCoordHandle = GLES30.glGetAttribLocation(program, "aTexCoord")
 
-        GLES30.glEnableVertexAttribArray(positionHandle)
-        GLES30.glEnableVertexAttribArray(texCoordHandle)
+        // 只有在 handle 有效时才启用和设置 attribute
+        // glGetAttribLocation 返回 -1 表示 attribute 未找到或未使用
+        // 传入 -1 给 glEnableVertexAttribArray 会导致 GL_INVALID_VALUE (1281)
+        if (positionHandle >= 0) {
+            GLES30.glEnableVertexAttribArray(positionHandle)
+            vertexBuffer?.position(0)
+            GLES30.glVertexAttribPointer(positionHandle, 2, GLES30.GL_FLOAT, false, 0, vertexBuffer)
+        } else {
+            PLog.w(TAG, "drawQuad: aPosition attribute not found in program $program")
+        }
 
-        vertexBuffer?.position(0)
-        GLES30.glVertexAttribPointer(positionHandle, 2, GLES30.GL_FLOAT, false, 0, vertexBuffer)
-
-        texCoordBuffer?.position(0)
-        GLES30.glVertexAttribPointer(texCoordHandle, 2, GLES30.GL_FLOAT, false, 0, texCoordBuffer)
+        if (texCoordHandle >= 0) {
+            GLES30.glEnableVertexAttribArray(texCoordHandle)
+            texCoordBuffer?.position(0)
+            GLES30.glVertexAttribPointer(texCoordHandle, 2, GLES30.GL_FLOAT, false, 0, texCoordBuffer)
+        } else {
+            PLog.w(TAG, "drawQuad: aTexCoord attribute not found in program $program")
+        }
 
         indexBuffer?.position(0)
         GLES30.glDrawElements(GLES30.GL_TRIANGLES, 6, GLES30.GL_UNSIGNED_SHORT, indexBuffer)
 
-        GLES30.glDisableVertexAttribArray(positionHandle)
-        GLES30.glDisableVertexAttribArray(texCoordHandle)
+        if (positionHandle >= 0) {
+            GLES30.glDisableVertexAttribArray(positionHandle)
+        }
+        if (texCoordHandle >= 0) {
+            GLES30.glDisableVertexAttribArray(texCoordHandle)
+        }
     }
 
     private fun readPixels(width: Int, height: Int): Bitmap {

@@ -62,11 +62,7 @@ object RawShaders {
         uniform vec4 uWhiteBalanceGains;
         uniform mat3 uColorCorrectionMatrix;
         uniform sampler2D uLensShadingMap;
-        uniform float uPostRawBoost;
 
-        // Capture One 风格控制参数
-        uniform float uDeconvStrength;     // 输入反卷积强度 (0.0-1.0)
-        uniform float uStructureAmount;    // 结构增强强度 (0.0-1.0)
         uniform float uOutputSharpAmount;  // 输出锐化强度 (0.0-1.0)
         uniform float uExposureGain;       // 曝光增益
 
@@ -129,7 +125,6 @@ object RawShaders {
             float lscGain = dot(lscVal, mask);
 
             // 计算最终像素值
-            // 不再应用 uPostRawBoost，避免与 uExposureGain 重复增益导致过曝
             float pixel = max(0.0, (raw - black) * wbGain / (uWhiteLevel - black));
             pixel *= lscGain;
 
@@ -146,221 +141,299 @@ object RawShaders {
             else return 1;               // Gr or Gb -> G
         }
 
-        // ========== 步骤 3: Richardson-Lucy Deconvolution ==========
-        // 模拟光学低通滤镜的点扩散函数 (Gaussian PSF, radius ~0.6 pixel)
-        float applyDeconvolution(ivec2 coord, float center) {
-            if (uDeconvStrength <= 0.0) return center;
+        // ========== 步骤 4b: 基于色差的联合双边解马赛克 ==========
+        // (Chrominance-based Joint Bilateral Demosaicing with LMMSE Green)
+        // 
+        // 核心思路：色度-亮度解耦 (Luma-Chroma Decoupling)
+        // 1. G 通道（亮度主力）：必须锐利，用 LMMSE 算
+        // 2. R/B 通道（色度主力）：必须干净，参考 G 通道的边缘来算
+        //
+        // 公式：R_out = G_lmmse + WeightedAvg(R_neighbors - G_neighbors)
+        // 权重来源：|G_center - G_neighbor| (边缘感知)
         
-            float blurred = 0.0;
-            float sum = 0.0;
-        
-            // 保持高斯核权重不变
-            const float kernel[9] = float[9](
-                0.077847, 0.123317, 0.077847,
-                0.123317, 0.195346, 0.123317,
-                0.077847, 0.123317, 0.077847
-            );
-        
-            int idx = 0;
-            for (int dy = -1; dy <= 1; dy++) {
-                for (int dx = -1; dx <= 1; dx++) {
-                    blurred += getRawPixel(coord + ivec2(dx * 2, dy * 2)) * kernel[idx];
-                    sum += kernel[idx];
-                    idx++;
-                }
+        // 辅助函数：快速估计某位置的 G 值 (用于计算色差)
+        float estimateGreenAt(ivec2 coord) {
+            int type = getChannelType(coord);
+            if (type == 1) {
+                // G 位置，直接返回
+                return getRawPixel(coord);
+            } else {
+                // R/B 位置，用十字形平均估计
+                return (getRawPixel(coord + ivec2(1, 0)) +
+                        getRawPixel(coord + ivec2(-1, 0)) +
+                        getRawPixel(coord + ivec2(0, 1)) +
+                        getRawPixel(coord + ivec2(0, -1))) * 0.25;
             }
-            
-            // 防止除以 0
-            if (sum > 0.001) blurred /= sum;
-            else blurred = center;
-        
-            // Richardson-Lucy 简易版
-            // 增加一个极小值 epsilon 防止噪点爆炸
-            float epsilon = 0.0001;
-            float ratio = center / max(blurred, epsilon);
-            
-            // 限制比率，防止白点/热噪点产生黑圈 (Ringing Artifacts)
-            // 限制在 [0.5, 2.0] 之间能有效减少伪影
-            ratio = clamp(ratio, 0.5, 2.0);
-        
-            float deconvolved = center * ratio;
-        
-            // 混合
-            return mix(center, deconvolved, uDeconvStrength * 0.5); 
         }
-
-        // ========== 步骤 4: RCD (Ratio Corrected Demosaicing) ==========
-        // 基于色度比率的解马赛克算法，能有效减少伪色
-        vec3 demosaicRCD(ivec2 coord) {
+        
+        // 辅助函数：计算联合双边权重
+        // 基于空间距离和亮度相似度
+        float computeBilateralWeight(float gCenter, float gNeighbor, float spatialDist) {
+            // 亮度相似度权重 (Gaussian falloff)
+            float lumaDiff = abs(gCenter - gNeighbor);
+            float sigmaLuma = 0.05; // 亮度差异容忍度
+            float lumaWeight = exp(-lumaDiff * lumaDiff / (2.0 * sigmaLuma * sigmaLuma));
+            
+            // 空间权重 (简化：距离越远权重越小)
+            float sigmaSpatial = 2.0;
+            float spatialWeight = exp(-spatialDist * spatialDist / (2.0 * sigmaSpatial * sigmaSpatial));
+            
+            return lumaWeight * spatialWeight;
+        }
+        
+        vec3 demosaicLMMSE(ivec2 coord) {
             int type = getChannelType(coord); // 0=R, 1=G, 2=B
             float centerRaw = getRawPixel(coord);
-            centerRaw = applyDeconvolution(coord, centerRaw);
-            float g = centerRaw;
-            float r, b;
-        
-            // ========== 第一步：插值绿色通道 (保持你原有的逻辑，这是对的) ==========
-            if (type != 1) { 
-                // Hamilton-Adams 梯度检测
-                float gH = (getRawPixel(coord + ivec2(-1, 0)) + getRawPixel(coord + ivec2(1, 0))) * 0.5;
-                float gV = (getRawPixel(coord + ivec2(0, -1)) + getRawPixel(coord + ivec2(0, 1))) * 0.5;
-                
-                // 你的梯度计算逻辑是正确的，为了简洁这里省略细节，直接用你的 gH/gV 逻辑
-                float gh = abs(getRawPixel(coord + ivec2(-1, 0)) - getRawPixel(coord + ivec2(1, 0)));
-                float gv = abs(getRawPixel(coord + ivec2(0, -1)) - getRawPixel(coord + ivec2(0, 1)));
-                float gh2 = abs(2.0 * centerRaw - getRawPixel(coord + ivec2(-2, 0)) - getRawPixel(coord + ivec2(2, 0)));
-                float gv2 = abs(2.0 * centerRaw - getRawPixel(coord + ivec2(0, -2)) - getRawPixel(coord + ivec2(0, 2)));
-                
-                // 添加色差修正项 (Laplacian Correction)，让G更锐利
-                // R_center - (R_left + R_right)/2
-                float cH = centerRaw - (getRawPixel(coord + ivec2(-2, 0)) + getRawPixel(coord + ivec2(2, 0))) * 0.5; 
-                float cV = centerRaw - (getRawPixel(coord + ivec2(0, -2)) + getRawPixel(coord + ivec2(0, 2))) * 0.5;
-        
-                // 最终的 G 预测值（包含高频细节修正）
-                float gPredH = gH + cH * 0.5; // 色差法核心：G_est = G_avg + (R_center - R_avg) * 0.5
-                float gPredV = gV + cV * 0.5;
-        
-                float dh = gh + gh2;
-                float dv = gv + gv2;
-        
-                if (abs(dh - dv) < 0.1 * (dh + dv)) {
-                     g = (gPredH + gPredV) * 0.5;
-                } else if (dh < dv) {
-                     g = gPredH;
-                } else {
-                     g = gPredV;
-                }
-                
-                // 之前这里有一个 g = clamp(g, 0.0, 1.0); 这会导致高光在 roll-off 前就被截断
-                // 现在允许 g 超过 1.0，以便后续的 applyHighlightRollOff 能处理高增益下的细节
+            
+            float r, g, b;
+            float epsilon = 0.0001;
+            
+            // ========== 第一步：用 LMMSE 算出最完美的 G (Green) ==========
+            // 绿色通道信噪比最高，是后续步骤的 Guide（向导）
+            
+            // 采样 5x5 邻域的像素值 (同色采样，步长为2)
+            float hSamples[5]; // 水平方向采样
+            float vSamples[5]; // 垂直方向采样
+            
+            for (int i = -2; i <= 2; i++) {
+                hSamples[i + 2] = getRawPixel(coord + ivec2(i * 2, 0));
+                vSamples[i + 2] = getRawPixel(coord + ivec2(0, i * 2));
             }
-        
-            // ========== 第二步：修正后的 R/B 插值 (色差法 R-G) ==========
-            // 核心思想：先算出周围像素的 (Color - Green) 差值，然后插值这个差值，最后加回当前的 G
+            
+            // 计算水平和垂直方向的梯度能量 (用于边缘检测)
+            float gradH = abs(hSamples[0] - hSamples[2]) + abs(hSamples[2] - hSamples[4]) + abs(hSamples[1] - hSamples[3]);
+            float gradV = abs(vSamples[0] - vSamples[2]) + abs(vSamples[2] - vSamples[4]) + abs(vSamples[1] - vSamples[3]);
+            
+            // 计算局部方差 (用于噪声估计)
+            float meanH = (hSamples[0] + hSamples[1] + hSamples[2] + hSamples[3] + hSamples[4]) * 0.2;
+            float meanV = (vSamples[0] + vSamples[1] + vSamples[2] + vSamples[3] + vSamples[4]) * 0.2;
+            
+            float varH = 0.0;
+            float varV = 0.0;
+            for (int i = 0; i < 5; i++) {
+                varH += (hSamples[i] - meanH) * (hSamples[i] - meanH);
+                varV += (vSamples[i] - meanV) * (vSamples[i] - meanV);
+            }
+            varH *= 0.2;
+            varV *= 0.2;
+            
+            // LMMSE Wiener 滤波权重
+            float noiseVar = 0.0001;
+            float wH = varH / (varH + noiseVar + epsilon);
+            float wV = varV / (varV + noiseVar + epsilon);
+            
+            // 方向自适应权重
+            float dirWeight = gradV / (gradH + gradV + epsilon);
+            
+            // G 通道插值
+            if (type != 1) {
+                // 水平方向绿色估计
+                float g0 = getRawPixel(coord + ivec2(-1, 0));
+                float g2 = getRawPixel(coord + ivec2(1, 0));
+                float gH_base = (g0 + g2) * 0.5;
+                float cH = centerRaw - (hSamples[1] + hSamples[3]) * 0.5;
+                float gH = gH_base + cH * 0.5 * wH;
+                
+                // 垂直方向绿色估计
+                float g1 = getRawPixel(coord + ivec2(0, -1));
+                float g3 = getRawPixel(coord + ivec2(0, 1));
+                float gV_base = (g1 + g3) * 0.5;
+                float cV = centerRaw - (vSamples[1] + vSamples[3]) * 0.5;
+                float gV = gV_base + cV * 0.5 * wV;
+                
+                // 自适应融合
+                g = mix(gH, gV, dirWeight);
+            } else {
+                g = centerRaw;
+            }
+            
+            // ========== 第二步：基于色差的联合双边滤波重建 R/B ==========
+            // 核心：R_out = G_lmmse + WeightedAvg(R_neighbors - G_neighbors)
+            // 不直接插值 R/B，而是对色差 (R-G, B-G) 进行平滑
             
             if (type == 0) { // Red Center
                 r = centerRaw;
                 
-                // 计算蓝色：四周是蓝，对角线方向
-                // 我们需要周围蓝点的 (B - G)。注意：这里的G必须是那个蓝点位置的G。
-                // 因为单Pass拿不到蓝点插值后的G，我们用蓝点周围的十字形RAW G的平均值代替。
+                // B 通道：扩大采样范围到 5x5 (同色像素间隔为2)
+                // 采样周围所有 B 邻居，使用联合双边滤波计算色差
+                float diffSum = 0.0;
+                float weightSum = 0.0;
+                float minDiff = 1.0;
+                float maxDiff = -1.0;
                 
-                // 左上 B(-1,-1) 处的估算 G
-                float g_at_tl = (getRawPixel(coord + ivec2(-1, 0)) + getRawPixel(coord + ivec2(0, -1))) * 0.5;
-                float diff_tl = getRawPixel(coord + ivec2(-1, -1)) - g_at_tl;
+                // 5x5 范围内的 B 像素 (步长为2，共9个点，中心除外共8个)
+                for (int dy = -2; dy <= 2; dy += 2) {
+                    for (int dx = -2; dx <= 2; dx += 2) {
+                        // R center 的对角线是 B，十字方向也是隔一个的 B
+                        // 对于 RGGB，R位置的对角 (-1,-1), (1,-1), (-1,1), (1,1) 是 B
+                        // 更远的 (-2,-2) 等是 R，需要跳过
+                        // 实际上采样 dx,dy 都是奇数时才是 B
+                        if ((dx & 1) != 1 && (dy & 1) != 1) continue;
+                    }
+                }
                 
-                // 右上 B(1,-1)
-                float g_at_tr = (getRawPixel(coord + ivec2(1, 0)) + getRawPixel(coord + ivec2(0, -1))) * 0.5;
-                float diff_tr = getRawPixel(coord + ivec2(1, -1)) - g_at_tr;
+                // 对于 Red Center，B 在对角线方向 (奇数偏移)
+                // 扩展到更大范围：包括 ±1 和 ±3 的对角线
+                ivec2 bOffsets[8] = ivec2[8](
+                    ivec2(-1, -1), ivec2(1, -1), ivec2(-1, 1), ivec2(1, 1),   // 近邻
+                    ivec2(-3, -1), ivec2(3, -1), ivec2(-1, -3), ivec2(1, -3)  // 远邻 (部分)
+                );
                 
-                // 左下 B(-1,1)
-                float g_at_bl = (getRawPixel(coord + ivec2(-1, 0)) + getRawPixel(coord + ivec2(0, 1))) * 0.5;
-                float diff_bl = getRawPixel(coord + ivec2(-1, 1)) - g_at_bl;
+                for (int i = 0; i < 8; i++) {
+                    ivec2 off = bOffsets[i];
+                    ivec2 neighborCoord = coord + off;
+                    
+                    float bVal = getRawPixel(neighborCoord);
+                    float gEst = estimateGreenAt(neighborCoord);
+                    float diff = bVal - gEst;
+                    
+                    // 记录 min/max 用于噪点剔除
+                    minDiff = min(minDiff, diff);
+                    maxDiff = max(maxDiff, diff);
+                    
+                    // 空间权重
+                    float distSq = float(off.x * off.x + off.y * off.y);
+                    float wSpatial = exp(-distSq / 8.0); // sigma^2 = 4
+                    
+                    // 亮度权重
+                    float lumaDiff = abs(g - gEst);
+                    float wLuma = exp(-lumaDiff * lumaDiff / 0.005); // sigma = 0.05
+                    
+                    float weight = wSpatial * wLuma;
+                    diffSum += diff * weight;
+                    weightSum += weight;
+                }
                 
-                // 右下 B(1,1)
-                float g_at_br = (getRawPixel(coord + ivec2(1, 0)) + getRawPixel(coord + ivec2(0, 1))) * 0.5;
-                float diff_br = getRawPixel(coord + ivec2(1, 1)) - g_at_br;
+                float avgDiff = diffSum / (weightSum + epsilon);
                 
-                // 平均色差
-                float avgDiff = (diff_tl + diff_tr + diff_bl + diff_br) * 0.25;
+                // 中值钳位：限制在邻居的 [min, max] 范围内
+                avgDiff = clamp(avgDiff, minDiff, maxDiff);
+                
+                // 收紧色差范围：在 Raw 域超过 ±0.15 往往是噪点
+                avgDiff = clamp(avgDiff, -0.15, 0.15);
+                
                 b = g + avgDiff;
-        
+                
             } else if (type == 2) { // Blue Center
                 b = centerRaw;
-                // 同理计算红色，代码结构完全一样，只是坐标偏移和 r/b 互换
-                float g_at_tl = (getRawPixel(coord + ivec2(-1, 0)) + getRawPixel(coord + ivec2(0, -1))) * 0.5;
-                float diff_tl = getRawPixel(coord + ivec2(-1, -1)) - g_at_tl;
-                float g_at_tr = (getRawPixel(coord + ivec2(1, 0)) + getRawPixel(coord + ivec2(0, -1))) * 0.5;
-                float diff_tr = getRawPixel(coord + ivec2(1, -1)) - g_at_tr;
-                float g_at_bl = (getRawPixel(coord + ivec2(-1, 0)) + getRawPixel(coord + ivec2(0, 1))) * 0.5;
-                float diff_bl = getRawPixel(coord + ivec2(-1, 1)) - g_at_bl;
-                float g_at_br = (getRawPixel(coord + ivec2(1, 0)) + getRawPixel(coord + ivec2(0, 1))) * 0.5;
-                float diff_br = getRawPixel(coord + ivec2(1, 1)) - g_at_br;
-        
-                float avgDiff = (diff_tl + diff_tr + diff_bl + diff_br) * 0.25;
+                
+                // R 通道：同样扩大采样范围
+                float diffSum = 0.0;
+                float weightSum = 0.0;
+                float minDiff = 1.0;
+                float maxDiff = -1.0;
+                
+                // 对于 Blue Center，R 在对角线方向
+                ivec2 rOffsets[8] = ivec2[8](
+                    ivec2(-1, -1), ivec2(1, -1), ivec2(-1, 1), ivec2(1, 1),
+                    ivec2(-3, -1), ivec2(3, -1), ivec2(-1, -3), ivec2(1, -3)
+                );
+                
+                for (int i = 0; i < 8; i++) {
+                    ivec2 off = rOffsets[i];
+                    ivec2 neighborCoord = coord + off;
+                    
+                    float rVal = getRawPixel(neighborCoord);
+                    float gEst = estimateGreenAt(neighborCoord);
+                    float diff = rVal - gEst;
+                    
+                    minDiff = min(minDiff, diff);
+                    maxDiff = max(maxDiff, diff);
+                    
+                    float distSq = float(off.x * off.x + off.y * off.y);
+                    float wSpatial = exp(-distSq / 8.0);
+                    
+                    float lumaDiff = abs(g - gEst);
+                    float wLuma = exp(-lumaDiff * lumaDiff / 0.005);
+                    
+                    float weight = wSpatial * wLuma;
+                    diffSum += diff * weight;
+                    weightSum += weight;
+                }
+                
+                float avgDiff = diffSum / (weightSum + epsilon);
+                avgDiff = clamp(avgDiff, minDiff, maxDiff);
+                avgDiff = clamp(avgDiff, -0.15, 0.15);
+                
                 r = g + avgDiff;
-        
-            } else { // Green Center
-                g = centerRaw;
-                int channelIdx = getChannelIndex(coord); // 1=Gr (Row R), 2=Gb (Row B)
+                
+            } else { // Green Center (Gr or Gb)
+                int channelIdx = getChannelIndex(coord);
                 bool isGr = (channelIdx == 1);
                 
-                if (isGr) { 
-                    // Gr行：左右是红，上下是蓝
+                if (isGr) {
+                    // Gr 行：左右是红，上下是蓝
                     
-                    // --- 算红色 (左右) ---
-                    // 左边红点的色差：R_left - G_at_left
-                    // G_at_left 估算为 (G_center + G_left_left) 的平均？不，更简单是取上下绿的平均
-                    // 修正：取左边红点 (coord-1,0) 上下两个绿点 ((coord-1,-1), (coord-1,1)) 的平均
-                    float g_at_left = (getRawPixel(coord + ivec2(-1, -1)) + getRawPixel(coord + ivec2(-1, 1))) * 0.5;
-                    float diff_left = getRawPixel(coord + ivec2(-1, 0)) - g_at_left;
+                    // R 通道 (水平方向)
+                    float rVal_left = getRawPixel(coord + ivec2(-1, 0));
+                    float rVal_right = getRawPixel(coord + ivec2(1, 0));
+                    float gEst_left = estimateGreenAt(coord + ivec2(-1, 0));
+                    float gEst_right = estimateGreenAt(coord + ivec2(1, 0));
                     
-                    float g_at_right = (getRawPixel(coord + ivec2(1, -1)) + getRawPixel(coord + ivec2(1, 1))) * 0.5;
-                    float diff_right = getRawPixel(coord + ivec2(1, 0)) - g_at_right;
+                    float diff_left = rVal_left - gEst_left;
+                    float diff_right = rVal_right - gEst_right;
                     
-                    r = g + (diff_left + diff_right) * 0.5;
+                    float w_left = computeBilateralWeight(g, gEst_left, 1.0);
+                    float w_right = computeBilateralWeight(g, gEst_right, 1.0);
                     
-                    // --- 算蓝色 (上下) ---
-                    float g_at_top = (getRawPixel(coord + ivec2(-1, -1)) + getRawPixel(coord + ivec2(1, -1))) * 0.5;
-                    float diff_top = getRawPixel(coord + ivec2(0, -1)) - g_at_top;
+                    float rDiff = (diff_left * w_left + diff_right * w_right) / (w_left + w_right + epsilon);
+                    rDiff = clamp(rDiff, -0.15, 0.15);
+                    r = g + rDiff;
                     
-                    float g_at_bottom = (getRawPixel(coord + ivec2(-1, 1)) + getRawPixel(coord + ivec2(1, 1))) * 0.5;
-                    float diff_bottom = getRawPixel(coord + ivec2(0, 1)) - g_at_bottom;
+                    // B 通道 (垂直方向)
+                    float bVal_top = getRawPixel(coord + ivec2(0, -1));
+                    float bVal_bottom = getRawPixel(coord + ivec2(0, 1));
+                    float gEst_top = estimateGreenAt(coord + ivec2(0, -1));
+                    float gEst_bottom = estimateGreenAt(coord + ivec2(0, 1));
                     
-                    b = g + (diff_top + diff_bottom) * 0.5;
+                    float diff_top = bVal_top - gEst_top;
+                    float diff_bottom = bVal_bottom - gEst_bottom;
                     
-                } else { 
-                    // Gb行：上下是红，左右是蓝
-                    // 逻辑同上，只是方向互换
-                    float g_at_top = (getRawPixel(coord + ivec2(-1, -1)) + getRawPixel(coord + ivec2(1, -1))) * 0.5;
-                    float diff_top = getRawPixel(coord + ivec2(0, -1)) - g_at_top;
+                    float w_top = computeBilateralWeight(g, gEst_top, 1.0);
+                    float w_bottom = computeBilateralWeight(g, gEst_bottom, 1.0);
                     
-                    float g_at_bottom = (getRawPixel(coord + ivec2(-1, 1)) + getRawPixel(coord + ivec2(1, 1))) * 0.5;
-                    float diff_bottom = getRawPixel(coord + ivec2(0, 1)) - g_at_bottom;
+                    float bDiff = (diff_top * w_top + diff_bottom * w_bottom) / (w_top + w_bottom + epsilon);
+                    bDiff = clamp(bDiff, -0.15, 0.15);
+                    b = g + bDiff;
                     
-                    r = g + (diff_top + diff_bottom) * 0.5;
+                } else {
+                    // Gb 行：上下是红，左右是蓝
                     
-                    float g_at_left = (getRawPixel(coord + ivec2(-1, -1)) + getRawPixel(coord + ivec2(-1, 1))) * 0.5;
-                    float diff_left = getRawPixel(coord + ivec2(-1, 0)) - g_at_left;
+                    // R 通道 (垂直方向)
+                    float rVal_top = getRawPixel(coord + ivec2(0, -1));
+                    float rVal_bottom = getRawPixel(coord + ivec2(0, 1));
+                    float gEst_top = estimateGreenAt(coord + ivec2(0, -1));
+                    float gEst_bottom = estimateGreenAt(coord + ivec2(0, 1));
                     
-                    float g_at_right = (getRawPixel(coord + ivec2(1, -1)) + getRawPixel(coord + ivec2(1, 1))) * 0.5;
-                    float diff_right = getRawPixel(coord + ivec2(1, 0)) - g_at_right;
+                    float diff_top = rVal_top - gEst_top;
+                    float diff_bottom = rVal_bottom - gEst_bottom;
                     
-                    b = g + (diff_left + diff_right) * 0.5;
+                    float w_top = computeBilateralWeight(g, gEst_top, 1.0);
+                    float w_bottom = computeBilateralWeight(g, gEst_bottom, 1.0);
+                    
+                    float rDiff = (diff_top * w_top + diff_bottom * w_bottom) / (w_top + w_bottom + epsilon);
+                    rDiff = clamp(rDiff, -0.15, 0.15);
+                    r = g + rDiff;
+                    
+                    // B 通道 (水平方向)
+                    float bVal_left = getRawPixel(coord + ivec2(-1, 0));
+                    float bVal_right = getRawPixel(coord + ivec2(1, 0));
+                    float gEst_left = estimateGreenAt(coord + ivec2(-1, 0));
+                    float gEst_right = estimateGreenAt(coord + ivec2(1, 0));
+                    
+                    float diff_left = bVal_left - gEst_left;
+                    float diff_right = bVal_right - gEst_right;
+                    
+                    float w_left = computeBilateralWeight(g, gEst_left, 1.0);
+                    float w_right = computeBilateralWeight(g, gEst_right, 1.0);
+                    
+                    float bDiff = (diff_left * w_left + diff_right * w_right) / (w_left + w_right + epsilon);
+                    bDiff = clamp(bDiff, -0.15, 0.15);
+                    b = g + bDiff;
                 }
             }
-        
+            
             return vec3(r, g, b);
-        }
-
-        // ========== 步骤 7: 结构增强 (Structure/Clarity) ==========
-        // 基于亮度通道的高通滤波，使用柔光混合
-        vec3 applyStructure(vec3 rgb) {
-            if (uStructureAmount <= 0.0) return rgb;
-
-            // 提取亮度 (L channel approximation)
-            float luma = dot(rgb, vec3(0.299, 0.587, 0.114));
-
-            // 在main函数中使用邻近像素的亮度来计算高通滤波
-            // 这里简化为使用当前像素的色彩信息做近似
-            // 注意: 理想实现需要访问相邻像素的解马赛克结果，这需要两次pass
-
-            // 简化版本: 直接在RGB空间做高通，然后只增强亮度
-            // 高通 = 原始 - 低通（模糊）
-            // 由于无法访问相邻解马赛克结果，这里做近似处理
-
-            // 柔光混合公式
-            float enhanced = luma;
-            if (luma < 0.5) {
-                enhanced = luma * (luma + 0.5);
-            } else {
-                enhanced = 2.0 * luma - 1.0 + sqrt(luma);
-            }
-
-            // 混合增强结果
-            float lumaBoost = mix(luma, enhanced, uStructureAmount * 0.3);
-
-            // 保持色度，只增强亮度
-            return rgb * (lumaBoost / max(luma, 0.001));
         }
 
         // ========== 步骤 8: 输出锐化 (Unsharp Mask) ==========
@@ -486,14 +559,32 @@ object RawShaders {
             // Pass 1: 1:1 解马赛克
             ivec2 coord = ivec2(gl_FragCoord.xy);
 
-            // 步骤 1-4: 解马赛克
-            vec3 rgb = demosaicRCD(coord);
+            // 步骤 1-4: 解马赛克 (联合双边 + 色度降噪内嵌)
+            vec3 rgb = demosaicLMMSE(coord);
 
             // 步骤 5: 色彩转换 (CCM)
             rgb = uColorCorrectionMatrix * rgb;
 
             // 步骤 5b: 应用曝光增益 (Linear HDR Space)
             rgb *= uExposureGain;
+            
+            // ========== 暗部去色 (Shadow Desaturation) ==========
+            // 人眼对暗部色彩不敏感，将暗部的色度噪点转为更自然的灰噪声
+            {
+                float luma = dot(rgb, vec3(0.299, 0.587, 0.114));
+                
+                // 去色阈值 (线性空间)
+                float shadowStart = 0.05; // 开始去色的亮度
+                float shadowEnd = 0.01;   // 完全去色的亮度
+                
+                // 计算饱和度因子 (平滑过渡)
+                // luma > 0.05 -> factor = 1.0 (保持原色)
+                // luma < 0.01 -> factor = 0.0 (完全黑白)
+                float satFactor = smoothstep(shadowEnd, shadowStart, luma);
+                
+                // 混合灰度与原色
+                rgb = mix(vec3(luma), rgb, satFactor);
+            }
             
             rgb = applyPerChannelReinhardExtended(rgb);
             rgb = applyLinearContrast(rgb, 1.3);
