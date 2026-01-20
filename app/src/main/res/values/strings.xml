@@ -102,6 +102,8 @@
     <string name="settings_frame_style">Frame Style</string>
     <string name="settings_frame_description">Add decorative frame and watermark to photos</string>
     <string name="settings_section_operation">Operations</string>
+    <string name="settings_section_image_processing">Image Processing</string>
+    <string name="settings_section_software_processing">Fine Tuning</string>
     <string name="settings_shutter_sound">Shutter Sound</string>
     <string name="settings_shutter_sound_description">Play sound when taking a photo</string>
     <string name="settings_vibration">Vibration</string>
@@ -110,14 +112,22 @@
     <string name="settings_volume_key_description">Use volume keys to take photos</string>
     <string name="settings_auto_save">Auto Save</string>
     <string name="settings_auto_save_description">Automatically save photos after capture</string>
-    <string name="settings_software_processing">Disable System Noise Reduction</string>
-    <string name="settings_software_processing_description">Disable system default noise reduction and sharpening to preserve more details.</string>
+    <string name="settings_nr_level">Noise Reduction Level</string>
+    <string name="settings_nr_level_description">Adjust the hardware noise reduction mode. "Off" helps preserve details when using software processing.</string>
+    <string name="settings_nr_level_off">Off</string>
+    <string name="settings_nr_level_minimal">Minimal</string>
+    <string name="settings_nr_level_fast">Fast</string>
+    <string name="settings_nr_level_high_quality">High Quality</string>
+    <string name="settings_nr_level_zsl">ZSL</string>
+    <string name="settings_edge_level">Sharpening Level</string>
+    <string name="settings_edge_level_description">Adjust the hardware edge enhancement (sharpening) mode.</string>
     <string name="settings_sharpening">Sharpening</string>
     <string name="settings_sharpening_description">Enhance image sharpness and edge definition</string>
     <string name="settings_noise_reduction">Noise Reduction</string>
     <string name="settings_noise_reduction_description">Reduce image noise while preserving detail</string>
     <string name="settings_chroma_noise_reduction">Chroma Noise Reduction</string>
     <string name="settings_chroma_noise_reduction_description">Reduce color noise and artifacts</string>
+    <string name="settings_detail_enhancement_description">Fine-tune sharpening and noise reduction parameters</string>
     
     <!-- LUT -->
     <string name="filter_intensity">Filter Intensity</string>

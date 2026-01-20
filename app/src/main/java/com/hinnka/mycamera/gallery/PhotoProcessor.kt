@@ -36,9 +36,9 @@ class PhotoProcessor(
         input: Bitmap,
         metadata: PhotoMetadata,
         uri: Uri? = null,
-        sharpening: Float = 0.2f,
+        sharpening: Float = 0f,
         noiseReduction: Float = 0f,
-        chromaNoiseReduction: Float = 0.25f
+        chromaNoiseReduction: Float = 0f
     ): Bitmap = withContext(Dispatchers.Default) {
         var result = input
         

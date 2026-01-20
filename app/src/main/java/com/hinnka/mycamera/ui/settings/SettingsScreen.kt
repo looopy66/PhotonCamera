@@ -11,6 +11,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FilterNone
 import androidx.compose.material.icons.filled.Article
 import androidx.compose.material3.*
@@ -57,18 +59,20 @@ fun SettingsScreen(
     val vibrationEnabled by viewModel.vibrationEnabled.collectAsState(initial = true)
     val volumeKeyCapture by viewModel.volumeKeyCapture.collectAsState(initial = false)
     val autoSaveAfterCapture by viewModel.autoSaveAfterCapture.collectAsState(initial = true)
-    val nrOff by viewModel.nrOff.collectAsState(initial = false)
+    val nrLevel by viewModel.nrLevel.collectAsState(initial = 1)
+    val edgeLevel by viewModel.edgeLevel.collectAsState(initial = 1)
     val useRaw by viewModel.useRaw.collectAsState(initial = false)
     // 软件处理参数
-    val sharpening by viewModel.sharpening.collectAsState(initial = 0.2f)
+    val sharpening by viewModel.sharpening.collectAsState(initial = 0f)
     val noiseReduction by viewModel.noiseReduction.collectAsState(initial = 0f)
-    val chromaNoiseReduction by viewModel.chromaNoiseReduction.collectAsState(initial = 0.25f)
+    val chromaNoiseReduction by viewModel.chromaNoiseReduction.collectAsState(initial = 0f)
     val isPurchased by viewModel.isPurchased.collectAsState()
 
     val context = androidx.compose.ui.platform.LocalContext.current
 
     // 日志查看器弹窗状态
     var showLogViewerDialog by remember { mutableStateOf(false) }
+    var softwareProcessingExpanded by remember { mutableStateOf(false) }
 
     val backgroundColor = Color(0xFF434A5D)
 
@@ -126,19 +130,9 @@ fun SettingsScreen(
             }
 
             // 画面比例设置
-            SettingsSection(title = stringResource(R.string.settings_section_capture)) {
-                AspectRatioSetting(
-                    currentRatio = state.aspectRatio,
-                    onRatioSelected = { viewModel.setAspectRatio(it) }
-                )
-
-                val currentCameraInfo = state.getCurrentCameraInfo()
-                if (currentCameraInfo?.supportsRaw == true) {
-                    HorizontalDivider(
-                        color = Color.White.copy(alpha = 0.1f),
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-
+            val currentCameraInfo = state.getCurrentCameraInfo()
+            if (currentCameraInfo?.supportsRaw == true) {
+                SettingsSection(title = stringResource(R.string.settings_section_capture)) {
                     SwitchSettingItem(
                         title = stringResource(R.string.settings_use_raw),
                         description = stringResource(R.string.settings_use_raw_description),
@@ -146,33 +140,8 @@ fun SettingsScreen(
                         onCheckedChange = { viewModel.setUseRaw(it) }
                     )
                 }
+                Spacer(modifier = Modifier.height(24.dp))
             }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // 显示设置
-            SettingsSection(title = stringResource(R.string.settings_section_display)) {
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_level_indicator),
-                    description = stringResource(R.string.settings_level_description),
-                    checked = showLevelIndicator,
-                    onCheckedChange = { viewModel.setShowLevelIndicator(it) }
-                )
-
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_grid_lines),
-                    description = stringResource(R.string.settings_grid_description),
-                    checked = state.showGrid,
-                    onCheckedChange = { viewModel.toggleGrid() }
-                )
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
 
             // 内容管理设置
             SettingsSection(title = stringResource(R.string.settings_section_management)) {
@@ -196,58 +165,84 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // 拍摄设置
-            SettingsSection(title = stringResource(R.string.settings_section_operation)) {
-                val currentCameraInfo = state.getCurrentCameraInfo()
-                val supportsManualProcessing = currentCameraInfo?.supportsManualProcessing ?: false
-
-                if (supportsManualProcessing) {
-                    SwitchSettingItem(
-                        title = stringResource(R.string.settings_software_processing),
-                        description = stringResource(R.string.settings_software_processing_description),
-                        checked = nrOff,
-                        onCheckedChange = { viewModel.setNROff(it) }
-                    )
-
-                    HorizontalDivider(
-                        color = Color.White.copy(alpha = 0.1f),
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-
-                    SliderSettingItem(
-                        title = stringResource(R.string.settings_sharpening),
-                        description = stringResource(R.string.settings_sharpening_description),
-                        value = sharpening,
-                        valueRange = 0f..1f,
-                        onValueChange = { viewModel.setSharpening(it) }
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    SliderSettingItem(
-                        title = stringResource(R.string.settings_noise_reduction),
-                        description = stringResource(R.string.settings_noise_reduction_description),
-                        value = noiseReduction,
-                        valueRange = 0f..1f,
-                        onValueChange = { viewModel.setNoiseReduction(it) }
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    SliderSettingItem(
-                        title = stringResource(R.string.settings_chroma_noise_reduction),
-                        description = stringResource(R.string.settings_chroma_noise_reduction_description),
-                        value = chromaNoiseReduction,
-                        valueRange = 0f..1f,
-                        onValueChange = { viewModel.setChromaNoiseReduction(it) }
-                    )
-                }
+            // 影像处理设置
+            SettingsSection(title = stringResource(R.string.settings_section_image_processing)) {
+                QualityLevelSetting(
+                    title = stringResource(R.string.settings_nr_level),
+                    description = stringResource(R.string.settings_nr_level_description),
+                    levels = listOf(
+                        0 to stringResource(R.string.settings_nr_level_off),
+                        4 to stringResource(R.string.settings_nr_level_minimal),
+                        1 to stringResource(R.string.settings_nr_level_fast),
+                        2 to stringResource(R.string.settings_nr_level_high_quality),
+                        3 to stringResource(R.string.settings_nr_level_zsl)
+                    ),
+                    currentLevel = nrLevel,
+                    onLevelSelected = { viewModel.setNRLevel(it) }
+                )
 
                 HorizontalDivider(
                     color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 8.dp)
+                    modifier = Modifier.padding(vertical = 12.dp)
                 )
 
+                QualityLevelSetting(
+                    title = stringResource(R.string.settings_edge_level),
+                    description = stringResource(R.string.settings_edge_level_description),
+                    levels = listOf(
+                        0 to stringResource(R.string.settings_nr_level_off),
+                        1 to stringResource(R.string.settings_nr_level_fast),
+                        2 to stringResource(R.string.settings_nr_level_high_quality),
+                        3 to stringResource(R.string.settings_nr_level_zsl)
+                    ),
+                    currentLevel = edgeLevel,
+                    onLevelSelected = { viewModel.setEdgeLevel(it) }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // 软件细节微调 (Fine Tuning Sliders)
+            SettingsSection(
+                title = stringResource(R.string.settings_section_software_processing),
+                description = stringResource(R.string.settings_detail_enhancement_description),
+                isExpandable = true,
+                isExpanded = softwareProcessingExpanded,
+                onToggleExpand = { softwareProcessingExpanded = !softwareProcessingExpanded }
+            ) {
+                SliderSettingItem(
+                    title = stringResource(R.string.settings_sharpening),
+                    description = stringResource(R.string.settings_sharpening_description),
+                    value = sharpening,
+                    valueRange = 0f..1f,
+                    onValueChange = { viewModel.setSharpening(it) }
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                SliderSettingItem(
+                    title = stringResource(R.string.settings_noise_reduction),
+                    description = stringResource(R.string.settings_noise_reduction_description),
+                    value = noiseReduction,
+                    valueRange = 0f..1f,
+                    onValueChange = { viewModel.setNoiseReduction(it) }
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                SliderSettingItem(
+                    title = stringResource(R.string.settings_chroma_noise_reduction),
+                    description = stringResource(R.string.settings_chroma_noise_reduction_description),
+                    value = chromaNoiseReduction,
+                    valueRange = 0f..1f,
+                    onValueChange = { viewModel.setChromaNoiseReduction(it) }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // 拍摄设置（开关项）
+            SettingsSection(title = stringResource(R.string.settings_section_operation)) {
                 SwitchSettingItem(
                     title = stringResource(R.string.settings_shutter_sound),
                     description = stringResource(R.string.settings_shutter_sound_description),
@@ -350,25 +345,81 @@ fun SettingsScreen(
 fun SettingsSection(
     title: String,
     modifier: Modifier = Modifier,
+    description: String? = null,
+    isExpandable: Boolean = false,
+    isExpanded: Boolean = true,
+    onToggleExpand: () -> Unit = {},
     content: @Composable ColumnScope.() -> Unit
 ) {
     Column(modifier = modifier) {
-        Text(
-            text = title,
-            color = Color.White.copy(alpha = 0.6f),
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(bottom = 12.dp)
-        )
+        if (!isExpandable) {
+            Text(
+                text = title,
+                color = Color.White.copy(alpha = 0.6f),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+        }
 
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
                 .background(Color.White.copy(alpha = 0.05f))
-                .padding(16.dp)
         ) {
-            content()
+            if (isExpandable) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onToggleExpand)
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = title,
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Normal
+                        )
+                        if (description != null) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = description,
+                                color = Color.White.copy(alpha = 0.6f),
+                                fontSize = 13.sp,
+                                lineHeight = 18.sp
+                            )
+                        }
+                    }
+
+                    Icon(
+                        imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.6f),
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+
+            if (isExpanded) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                        .then(if (isExpandable) Modifier.padding(top = 0.dp) else Modifier)
+                ) {
+                    if (isExpandable) {
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(bottom = 16.dp)
+                        )
+                    }
+                    content()
+                }
+            }
         }
     }
 }
@@ -468,70 +519,6 @@ fun NavigationSettingItem(
     }
 }
 
-
-/**
- * 画面比例设置
- */
-@Composable
-fun AspectRatioSetting(
-    currentRatio: AspectRatio,
-    onRatioSelected: (AspectRatio) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Column(modifier = modifier.fillMaxWidth()) {
-        Text(
-            text = stringResource(R.string.aspect_ratio),
-            color = Color.White,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Normal,
-            modifier = Modifier.padding(bottom = 12.dp)
-        )
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            AspectRatio.entries.forEach { ratio ->
-                AspectRatioButton(
-                    ratio = ratio,
-                    isSelected = currentRatio == ratio,
-                    onClick = { onRatioSelected(ratio) },
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
-    }
-}
-
-/**
- * 画面比例按钮
- */
-@Composable
-fun AspectRatioButton(
-    ratio: AspectRatio,
-    isSelected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier = modifier
-            .aspectRatio(1f)
-            .clip(RoundedCornerShape(8.dp))
-            .background(
-                if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.1f)
-            )
-            .clickable(onClick = onClick)
-            .padding(8.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = ratio.getDisplayName(),
-            color = Color.White,
-            fontSize = 14.sp,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-        )
-    }
-}
 
 /**
  * 边框水印设置
@@ -765,6 +752,65 @@ private fun PremiumCard(
                         .background(Color.Black.copy(alpha = 0.1f), CircleShape)
                         .padding(8.dp)
                 )
+            }
+        }
+    }
+}
+
+
+/**
+ * 图像质量等级设置（通用组件）
+ */
+@Composable
+fun QualityLevelSetting(
+    title: String,
+    description: String,
+    levels: List<Pair<Int, String>>,
+    currentLevel: Int,
+    onLevelSelected: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        Text(
+            text = title,
+            color = Color.White,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Normal,
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        Text(
+            text = description,
+            color = Color.White.copy(alpha = 0.6f),
+            fontSize = 13.sp,
+            lineHeight = 18.sp,
+            modifier = Modifier.padding(bottom = 12.dp)
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            levels.forEach { (level, label) ->
+                val isSelected = currentLevel == level
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(36.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(
+                            if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.1f)
+                        )
+                        .clickable { onLevelSelected(level) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = label,
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                    )
+                }
             }
         }
     }

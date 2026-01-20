@@ -130,23 +130,26 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val vibrationEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.vibrationEnabled }
     val volumeKeyCapture: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.volumeKeyCapture }
     val autoSaveAfterCapture: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.autoSaveAfterCapture }
-    val nrOff: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.nrOff }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+    val nrLevel: StateFlow<Int> = userPreferencesRepository.userPreferences
+        .map { it.nrLevel }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 1)
     val useRaw: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useRaw }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+    val edgeLevel: StateFlow<Int> = userPreferencesRepository.userPreferences
+        .map { it.edgeLevel }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 1)
 
     // 软件处理参数 Flow
     val sharpening: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.sharpening }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.2f)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0f)
     val noiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.noiseReduction }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0f)
     val chromaNoiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.chromaNoiseReduction }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.25f)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0f)
 
     private var isShutterSoundEnabled = true
     private var isVibrationEnabled = true
@@ -178,8 +181,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             userPreferencesRepository.userPreferences.collect {
                 isShutterSoundEnabled = it.shutterSoundEnabled
                 isVibrationEnabled = it.vibrationEnabled
-                // 同步软件处理设置到相机控制器
-                cameraController.setNROff(it.nrOff)
+                // 同步降噪等级到相机控制器
+                cameraController.setNRLevel(it.nrLevel)
+                // 同步锐化等级到相机控制器
+                cameraController.setEdgeLevel(it.edgeLevel)
                 // 同步 RAW 设置到相机控制器
                 cameraController.setUseRaw(it.useRaw)
             }
@@ -791,11 +796,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * 设置是否使用软件降噪/锐化
+     * 设置降噪等级
      */
-    fun setNROff(enabled: Boolean) {
+    fun setNRLevel(level: Int) {
         viewModelScope.launch {
-            userPreferencesRepository.saveNROff(enabled)
+            userPreferencesRepository.saveNRLevel(level)
+        }
+    }
+
+    /**
+     * 设置锐化等级
+     */
+    fun setEdgeLevel(level: Int) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveEdgeLevel(level)
         }
     }
 

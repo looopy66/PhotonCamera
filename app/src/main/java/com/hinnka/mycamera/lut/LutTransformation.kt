@@ -21,9 +21,9 @@ class PhotoTransformation(
     private val uri: Uri,
     private val metadata: PhotoMetadata,
     private val photoProcessor: PhotoProcessor,
-    private val sharpening: Float = 0.2f,
+    private val sharpening: Float = 0f,
     private val noiseReduction: Float = 0f,
-    private val chromaNoiseReduction: Float = 0.25f
+    private val chromaNoiseReduction: Float = 0f
 ) : Transformation {
     
     override val cacheKey: String = "photo_${uri}_${metadata.toJson().hashCode()}_s${sharpening}_n${noiseReduction}_c${chromaNoiseReduction}"

@@ -82,8 +82,11 @@ class Camera2Controller(private val context: Context) {
 
     private var meteringSkipFrames = 0 // Frame skip counter for software metering stabilization
 
-    // 软件降噪/锐化设置（true=使用软件算法，false=使用系统算法）
-    private var nrOff = true
+    // 降噪等级 (0=Off, 1=Fast, 2=High Quality, 3=Real-time)
+    private var nrLevel = 1
+
+    // 锐化等级 (0=Off, 1=Fast, 2=High Quality, 3=Zero Shutter Lag/Real-time)
+    private var edgeLevel = 1
     private var useRaw = false
 
     private var cameraThread: HandlerThread? = null
@@ -1137,27 +1140,46 @@ class Camera2Controller(private val context: Context) {
      */
     private fun applyImageQualitySettings(builder: CaptureRequest.Builder, isCapture: Boolean) {
         try {
-            val edgeMode =
-                if (availableEdgeModes.contains(CaptureRequest.EDGE_MODE_OFF)) CaptureRequest.EDGE_MODE_OFF else CaptureRequest.EDGE_MODE_FAST
-            if (availableEdgeModes.contains(edgeMode)) builder.set(CaptureRequest.EDGE_MODE, edgeMode)
-            if (nrOff) {
-                val noiseReductionMode = if (isCapture) {
-                    if (availableNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_OFF)) CaptureRequest.NOISE_REDUCTION_MODE_OFF else CaptureRequest.NOISE_REDUCTION_MODE_FAST
+            val edgeMode = when (edgeLevel) {
+                0 -> CaptureRequest.EDGE_MODE_OFF
+                1 -> CaptureRequest.EDGE_MODE_FAST
+                2 -> CaptureRequest.EDGE_MODE_HIGH_QUALITY
+                3 -> if (availableEdgeModes.contains(CaptureRequest.EDGE_MODE_ZERO_SHUTTER_LAG)) {
+                    CaptureRequest.EDGE_MODE_ZERO_SHUTTER_LAG
+                } else {
+                    CaptureRequest.EDGE_MODE_FAST
+                }
+
+                else -> CaptureRequest.EDGE_MODE_FAST
+            }
+            if (availableEdgeModes.contains(edgeMode)) {
+                builder.set(CaptureRequest.EDGE_MODE, edgeMode)
+            } else if (availableEdgeModes.contains(CaptureRequest.EDGE_MODE_FAST)) {
+                builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
+            }
+            val noiseReductionMode = when (nrLevel) {
+                0 -> CaptureRequest.NOISE_REDUCTION_MODE_OFF
+                4 -> if (availableNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_MINIMAL)) {
+                    CaptureRequest.NOISE_REDUCTION_MODE_MINIMAL
                 } else {
                     CaptureRequest.NOISE_REDUCTION_MODE_FAST
                 }
-                if (availableNoiseReductionModes.contains(noiseReductionMode)) builder.set(
-                    CaptureRequest.NOISE_REDUCTION_MODE,
-                    noiseReductionMode
-                )
-            } else {
-                // 系统处理模式：使用系统的降噪算法
-                val noiseReductionMode =
-                    if (availableNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_ZERO_SHUTTER_LAG)) CaptureRequest.NOISE_REDUCTION_MODE_ZERO_SHUTTER_LAG else CaptureRequest.NOISE_REDUCTION_MODE_FAST
-                if (availableNoiseReductionModes.contains(noiseReductionMode)) builder.set(
-                    CaptureRequest.NOISE_REDUCTION_MODE,
-                    noiseReductionMode
-                )
+
+                1 -> CaptureRequest.NOISE_REDUCTION_MODE_FAST
+                2 -> CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
+                3 -> if (availableNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_ZERO_SHUTTER_LAG)) {
+                    CaptureRequest.NOISE_REDUCTION_MODE_ZERO_SHUTTER_LAG
+                } else {
+                    CaptureRequest.NOISE_REDUCTION_MODE_FAST
+                }
+
+                else -> CaptureRequest.NOISE_REDUCTION_MODE_FAST
+            }
+
+            if (availableNoiseReductionModes.contains(noiseReductionMode)) {
+                builder.set(CaptureRequest.NOISE_REDUCTION_MODE, noiseReductionMode)
+            } else if (availableNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_FAST)) {
+                builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
             }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to apply image quality settings", e)
@@ -1165,10 +1187,17 @@ class Camera2Controller(private val context: Context) {
     }
 
     /**
-     * 设置是否使用软件处理（降噪/锐化）
+     * 设置锐化等级
      */
-    fun setNROff(enabled: Boolean) {
-        nrOff = enabled
+    fun setEdgeLevel(level: Int) {
+        edgeLevel = level
+    }
+
+    /**
+     * 设置降噪等级
+     */
+    fun setNRLevel(level: Int) {
+        nrLevel = level
     }
 
     /**

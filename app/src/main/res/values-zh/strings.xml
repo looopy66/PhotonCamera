@@ -101,6 +101,8 @@
     <string name="settings_frame_style">边框样式</string>
     <string name="settings_frame_description">为拍摄的照片添加装饰性边框和水印</string>
     <string name="settings_section_operation">拍摄操作</string>
+    <string name="settings_section_image_processing">影像处理</string>
+    <string name="settings_section_software_processing">细节微调</string>
     <string name="settings_shutter_sound">快门声音</string>
     <string name="settings_shutter_sound_description">拍照时播放快门声音</string>
     <string name="settings_vibration">拍摄震动</string>
@@ -109,14 +111,22 @@
     <string name="settings_volume_key_description">使用音量键进行拍摄</string>
     <string name="settings_auto_save">拍摄后自动保存</string>
     <string name="settings_auto_save_description">拍摄后自动保存照片，否则需要手动确认</string>
-    <string name="settings_software_processing">禁用系统降噪</string>
-    <string name="settings_software_processing_description">禁用系统默认的降噪处理以获得更多细节。</string>
+    <string name="settings_nr_level">降噪等级</string>
+    <string name="settings_nr_level_description">调整系统硬件降噪模式。“关闭”常用于配合软件算法以获得更多细节。</string>
+    <string name="settings_nr_level_off">关闭</string>
+    <string name="settings_nr_level_minimal">极低</string>
+    <string name="settings_nr_level_fast">快速</string>
+    <string name="settings_nr_level_high_quality">高质量</string>
+    <string name="settings_nr_level_zsl">零延迟</string>
+    <string name="settings_edge_level">锐化等级</string>
+    <string name="settings_edge_level_description">调整系统硬件边缘增强（锐化）模式。</string>
     <string name="settings_sharpening">锐化</string>
     <string name="settings_sharpening_description">增强图像锐度和边缘清晰度</string>
     <string name="settings_noise_reduction">降噪</string>
     <string name="settings_noise_reduction_description">减少图像噪点，同时保留细节</string>
     <string name="settings_chroma_noise_reduction">减少杂色</string>
     <string name="settings_chroma_noise_reduction_description">减少彩色噪点和伪影</string>
+    <string name="settings_detail_enhancement_description">手动微调锐化和降噪参数</string>
 
     <!-- LUT -->
     <string name="filter_intensity">滤镜强度</string>

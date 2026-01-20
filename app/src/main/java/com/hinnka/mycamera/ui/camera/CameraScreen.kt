@@ -35,8 +35,10 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.hinnka.mycamera.R
+import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.CameraUtils
+import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.components.GalleryThumbnail
 import com.hinnka.mycamera.ui.components.HistogramView
 import com.hinnka.mycamera.ui.components.LutControlPanel
@@ -149,7 +151,10 @@ fun CameraScreen(
                 },
                 showGrid = state.showGrid,
                 onGridToggle = { viewModel.toggleGrid() },
-                onSettingsClick = onSettingsClick
+                onSettingsClick = {
+                    activePanel = if (activePanel == ActivePanel.SETTINGS) ActivePanel.NONE else ActivePanel.SETTINGS
+                    selectedParameter = null
+                }
             )
 
             Box(
@@ -289,6 +294,11 @@ fun CameraScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .then(
+                        if (activePanel == ActivePanel.SETTINGS) {
+                            Modifier.background(Color.Black.copy(alpha = 0.4f))
+                        } else Modifier
+                    )
                     .pointerInput(Unit) {
                         detectTapGestures {
                             // 点击遮罩关闭 LUT 面板
@@ -298,6 +308,21 @@ fun CameraScreen(
                     }
             )
         }
+
+        // TopSheet for settings
+        CameraTopSheet(
+            visible = activePanel == ActivePanel.SETTINGS,
+            aspectRatio = state.aspectRatio,
+            onAspectRatioChange = { viewModel.setAspectRatio(it) },
+            showLevel = showLevelIndicator,
+            onLevelToggle = { viewModel.setShowLevelIndicator(it) },
+            showGrid = state.showGrid,
+            onGridToggle = { viewModel.toggleGrid() },
+            onMoreSettingsClick = {
+                activePanel = ActivePanel.NONE
+                onSettingsClick()
+            }
+        )
 
         // LutControlPanel 显示在遮罩层之上，确保能接收点击事件
         if (activePanel != ActivePanel.NONE) {
@@ -497,7 +522,8 @@ fun CaptureButton(
 
 
 fun Modifier.autoRotate(dx: Dp = 0.dp, dy: Dp = 0.dp): Modifier = composed {
-    val targetDegrees = if (OrientationObserver.rotationDegrees != 0f) OrientationObserver.rotationDegrees - 180 else 0f
+    val targetDegrees =
+        if (OrientationObserver.rotationDegrees != 0f) OrientationObserver.rotationDegrees - 180 else 0f
 
     // 2. 创建动画状态
     // label 是为了调试方便，animationSpec 可以调整快慢和回弹

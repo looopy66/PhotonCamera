@@ -62,7 +62,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     // 软件处理参数
     val sharpening: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.sharpening }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.2f)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0f)
 
     val noiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.noiseReduction }
@@ -70,7 +70,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     val chromaNoiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.chromaNoiseReduction }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.25f)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0f)
 
     // 计费管理器
     private val billingManager = com.hinnka.mycamera.billing.BillingManagerImpl(application)
@@ -160,11 +160,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     )
 
     // 细节处理编辑状态 (Sharpening, Noise Reduction, Chroma Noise Reduction)
-    var editSharpening = MutableStateFlow(0.2f)
+    var editSharpening = MutableStateFlow(0f)
         private set
     var editNoiseReduction = MutableStateFlow(0f)
         private set
-    var editChromaNoiseReduction = MutableStateFlow(0.25f)
+    var editChromaNoiseReduction = MutableStateFlow(0f)
         private set
 
     // 最新照片（用于相机界面显示入口）
