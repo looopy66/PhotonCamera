@@ -104,6 +104,8 @@ class Camera2Controller(private val context: Context) {
     private var availableEdgeModes: IntArray = intArrayOf()
     private var availableNoiseReductionModes: IntArray = intArrayOf()
     private var availableTonemapModes: IntArray = intArrayOf()
+    private var availableVideoStabilizationModes: IntArray = intArrayOf()
+    private var availableOpticalStabilizationModes: IntArray = intArrayOf()
     var isRawSupported = false
 
     private val _state = MutableStateFlow(CameraState())
@@ -413,6 +415,12 @@ class Camera2Controller(private val context: Context) {
                         ?: intArrayOf()
                 availableTonemapModes =
                     cachedCharacteristics?.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES) ?: intArrayOf()
+                availableVideoStabilizationModes =
+                    cachedCharacteristics?.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES)
+                        ?: intArrayOf()
+                availableOpticalStabilizationModes =
+                    cachedCharacteristics?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
+                        ?: intArrayOf()
                 isRawSupported = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)
 
                 PLog.i(
@@ -950,7 +958,10 @@ class Camera2Controller(private val context: Context) {
         // 6. 图像质量设置（锐化、降噪）
         applyImageQualitySettings(builder, isCapture)
 
-        // 7. 统计信息设置
+        // 7. 防抖设置
+        applyStabilizationSettings(builder)
+
+        // 8. 统计信息设置
         builder.set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON)
     }
 
@@ -1126,6 +1137,35 @@ class Camera2Controller(private val context: Context) {
             builder.set(CaptureRequest.SCALER_CROP_REGION, cropRect)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to apply zoom settings", e)
+        }
+    }
+
+    /**
+     * 应用防抖设置
+     *
+     * 优先开启 OIS (光学防抖)
+     */
+    private fun applyStabilizationSettings(builder: CaptureRequest.Builder) {
+        try {
+            // 1. 处理 OIS (光学防抖)
+            if (availableOpticalStabilizationModes.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)) {
+                builder.set(
+                    CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                    CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
+                )
+                PLog.d(TAG, "Enabled Optical Image Stabilization (OIS)")
+            }
+
+            // 2. 处理 EIS (视频/数字防抖)
+            // 同样，只有在设备列出的支持模式中包含时才设置
+            if (availableVideoStabilizationModes.contains(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)) {
+                builder.set(
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
+                )
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to apply stabilization settings", e)
         }
     }
 
@@ -1529,7 +1569,10 @@ class Camera2Controller(private val context: Context) {
             previewRequestBuilder?.apply {
                 set(CaptureRequest.CONTROL_AWB_MODE, presetMode)
                 set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
-                PLog.d(TAG, "AWB temperature set to: ${clampedKelvin}K (preset mode: ${getAwbModeName(presetMode)})")
+                PLog.d(
+                    TAG,
+                    "AWB temperature set to: ${clampedKelvin}K (preset mode: ${getAwbModeName(presetMode)})"
+                )
                 updatePreview()
             }
         }
@@ -2034,7 +2077,10 @@ class Camera2Controller(private val context: Context) {
             session.capture(builder.build(), null, cameraHandler)
 
             // 关键修复：发送完 CANCEL 后立即将触发器重置为 IDLE，用于后续的重复预览请求
-            builder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE)
+            builder.set(
+                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
+                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE
+            )
 
             // 重新应用所有设置（确保使用正确的预览参数）
             applyBaseCameraSettings(builder, isCapture = false)
