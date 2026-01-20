@@ -242,4 +242,17 @@
     <string name="got_it">Got it</string>
     <string name="frame_import_help_title">Frame Import Guide</string>
     <string name="frame_import_help_message">Supported formats: PNG, WebP\n\nRequirements:\n• The image must have a transparent area (alpha channel)\n• Your photo will be placed behind the frame, visible through the transparent region\n\nTip: Design your frame with a transparent cutout where you want the photo to appear.</string>
+
+    <!-- Camera Calibration -->
+    <string name="settings_section_calibration">Camera Calibration</string>
+    <string name="settings_camera_orientation">Photo Orientation</string>
+    <string name="settings_camera_orientation_description">Adjust if photos from this camera are rotated incorrectly. Changes apply to this specific camera only.</string>
+    <string name="settings_orientation_normal">0°</string>
+    <string name="settings_orientation_90">90°</string>
+    <string name="settings_orientation_180">180°</string>
+    <string name="settings_orientation_270">270°</string>
+    <string name="rear_camera">Rear Camera</string>
+    <string name="front_camera">Front Camera</string>
+    <string name="camera">Camera</string>
+    <string name="current_camera">Current Camera</string>
 </resources>

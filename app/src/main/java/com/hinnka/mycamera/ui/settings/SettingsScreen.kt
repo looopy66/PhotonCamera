@@ -74,6 +74,7 @@ fun SettingsScreen(
     // 日志查看器弹窗状态
     var showLogViewerDialog by remember { mutableStateOf(false) }
     var softwareProcessingExpanded by remember { mutableStateOf(false) }
+    var calibrationExpanded by remember { mutableStateOf(false) }
 
     val backgroundColor = Color(0xFF434A5D)
 
@@ -130,7 +131,7 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(24.dp))
             }
 
-            // 画面比例设置
+            // 拍摄设置
             val currentCameraInfo = state.getCurrentCameraInfo()
             if (currentCameraInfo?.supportsRaw == true) {
                 SettingsSection(title = stringResource(R.string.settings_section_capture)) {
@@ -161,6 +162,41 @@ fun SettingsScreen(
                     title = stringResource(R.string.settings_frame_management),
                     description = stringResource(R.string.settings_frame_management_description),
                     onClick = onFrameManagementClick
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // 相机校正设置
+            val currentCameraId = state.currentCameraId
+            val cameraOrientationOffset by viewModel.getCameraOrientationOffset(currentCameraId)
+                .collectAsState(initial = 0)
+            val cameraName = currentCameraInfo?.let { info ->
+                val prefix = when (info.lensFacing) {
+                    android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK -> stringResource(R.string.rear_camera)
+                    android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT -> stringResource(R.string.front_camera)
+                    else -> stringResource(R.string.camera)
+                }
+                "$prefix ${info.cameraId}"
+            } ?: stringResource(R.string.current_camera)
+
+            SettingsSection(
+                title = stringResource(R.string.settings_section_calibration),
+                isExpandable = true,
+                isExpanded = calibrationExpanded,
+                onToggleExpand = { calibrationExpanded = !calibrationExpanded }
+            ) {
+                QualityLevelSetting(
+                    title = stringResource(R.string.settings_camera_orientation) + " ($cameraName)",
+                    description = stringResource(R.string.settings_camera_orientation_description),
+                    levels = listOf(
+                        0 to stringResource(R.string.settings_orientation_normal),
+                        90 to stringResource(R.string.settings_orientation_90),
+                        180 to stringResource(R.string.settings_orientation_180),
+                        270 to stringResource(R.string.settings_orientation_270)
+                    ),
+                    currentLevel = cameraOrientationOffset,
+                    onLevelSelected = { viewModel.setCameraOrientationOffset(currentCameraId, it) }
                 )
             }
 

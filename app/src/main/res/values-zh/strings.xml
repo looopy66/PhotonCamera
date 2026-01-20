@@ -241,4 +241,17 @@
     <string name="got_it">知道了</string>
     <string name="frame_import_help_title">边框导入说明</string>
     <string name="frame_import_help_message">支持的格式：PNG、WebP\n\n要求：\n• 图片必须包含透明区域（Alpha 通道）\n• 您的照片会被自动放置在边框下层，通过透明区域显示\n\n提示：在您希望显示照片的位置设计透明开口即可。</string>
+
+    <!-- Camera Calibration -->
+    <string name="settings_section_calibration">相机校正</string>
+    <string name="settings_camera_orientation">照片方向校正</string>
+    <string name="settings_camera_orientation_description">如果该摄像头的照片旋转方向不正确，可在此调整。此设置仅对当前摄像头生效。</string>
+    <string name="settings_orientation_normal">0°</string>
+    <string name="settings_orientation_90">90°</string>
+    <string name="settings_orientation_180">180°</string>
+    <string name="settings_orientation_270">270°</string>
+    <string name="rear_camera">后置摄像头</string>
+    <string name="front_camera">前置摄像头</string>
+    <string name="camera">摄像头</string>
+    <string name="current_camera">当前摄像头</string>
 </resources>

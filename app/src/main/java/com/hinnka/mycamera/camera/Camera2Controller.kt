@@ -1208,6 +1208,13 @@ class Camera2Controller(private val context: Context) {
     }
 
     /**
+     * 获取当前摄像头 ID
+     */
+    fun getCurrentCameraId(): String {
+        return _state.value.currentCameraId
+    }
+
+    /**
      * 获取传感器方向（供外部 YUV 处理使用）
      */
     fun getSensorOrientation(): Int {

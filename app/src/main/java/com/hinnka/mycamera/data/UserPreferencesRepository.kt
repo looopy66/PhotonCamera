@@ -43,6 +43,8 @@ data class UserPreferences(
     val sharpening: Float = 0f,              // 0.0 ~ 1.0 锐化强度
     val noiseReduction: Float = 0f,         // 0.0 ~ 1.0 降噪强度
     val chromaNoiseReduction: Float = 0f,   // 0.0 ~ 1.0 减少杂色强度
+    // 摄像头方向校正：Map<CameraId, 旋转偏移角度(0/90/180/270)>
+    val cameraOrientationOffsets: Map<String, Int> = emptyMap(),
     // 排序顺序
     val filterOrder: List<String> = emptyList(),  // 滤镜排序（ID列表）
     val frameOrder: List<String> = emptyList()    // 边框排序（ID列表）
@@ -78,6 +80,9 @@ class UserPreferencesRepository(private val context: Context) {
         // 排序 Keys
         private val FILTER_ORDER = stringPreferencesKey("filter_order")
         private val FRAME_ORDER = stringPreferencesKey("frame_order")
+
+        // 摄像头方向偏移 Key
+        private val CAMERA_ORIENTATION_OFFSETS = stringPreferencesKey("camera_orientation_offsets")
     }
 
     /**
@@ -105,11 +110,42 @@ class UserPreferencesRepository(private val context: Context) {
                 sharpening = preferences[SHARPENING] ?: 0f,
                 noiseReduction = preferences[NOISE_REDUCTION] ?: 0f,
                 chromaNoiseReduction = preferences[CHROMA_NOISE_REDUCTION] ?: 0f,
+                // 摄像头方向偏移
+                cameraOrientationOffsets = parseCameraOrientationOffsets(preferences[CAMERA_ORIENTATION_OFFSETS]),
                 // 排序
                 filterOrder = preferences[FILTER_ORDER]?.split(",")?.filter { it.isNotEmpty() } ?: emptyList(),
                 frameOrder = preferences[FRAME_ORDER]?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
             )
         }
+
+    /**
+     * 解析摄像头方向偏移字符串
+     * 格式：cameraId1:offset1,cameraId2:offset2
+     */
+    private fun parseCameraOrientationOffsets(value: String?): Map<String, Int> {
+        if (value.isNullOrEmpty()) return emptyMap()
+        return value.split(",")
+            .mapNotNull { entry ->
+                val parts = entry.split(":")
+                if (parts.size == 2) {
+                    val cameraId = parts[0]
+                    val offset = parts[1].toIntOrNull()
+                    if (offset != null && offset in listOf(0, 90, 180, 270)) {
+                        cameraId to offset
+                    } else null
+                } else null
+            }
+            .toMap()
+    }
+
+    /**
+     * 序列化摄像头方向偏移为字符串
+     */
+    private fun serializeCameraOrientationOffsets(offsets: Map<String, Int>): String {
+        return offsets.entries
+            .filter { it.value in listOf(0, 90, 180, 270) }
+            .joinToString(",") { "${it.key}:${it.value}" }
+    }
 
     /**
      * 保存画面比例
@@ -280,5 +316,37 @@ class UserPreferencesRepository(private val context: Context) {
         context.dataStore.edit { preferences ->
             preferences[FRAME_ORDER] = order.joinToString(",")
         }
+    }
+
+    /**
+     * 保存摄像头方向偏移
+     * @param cameraId 摄像头 ID
+     * @param offset 旋转偏移角度 (0, 90, 180, 270)
+     */
+    suspend fun saveCameraOrientationOffset(cameraId: String, offset: Int) {
+        require(offset in listOf(0, 90, 180, 270)) { "Offset must be 0, 90, 180, or 270" }
+
+        context.dataStore.edit { preferences ->
+            val current = parseCameraOrientationOffsets(preferences[CAMERA_ORIENTATION_OFFSETS])
+            val updated = current.toMutableMap()
+
+            if (offset == 0) {
+                // 0度偏移相当于无偏移，删除这个条目
+                updated.remove(cameraId)
+            } else {
+                updated[cameraId] = offset
+            }
+
+            preferences[CAMERA_ORIENTATION_OFFSETS] = serializeCameraOrientationOffsets(updated)
+        }
+    }
+
+    /**
+     * 获取摄像头方向偏移
+     * @param cameraId 摄像头 ID
+     * @return 旋转偏移角度，如果没有设置则返回 0
+     */
+    fun getCameraOrientationOffset(cameraId: String, preferences: UserPreferences): Int {
+        return preferences.cameraOrientationOffsets[cameraId] ?: 0
     }
 }

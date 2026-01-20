@@ -151,24 +151,28 @@ class RawDemosaicProcessor {
             uploadRawTexture(rawImage, width, height, rawImage.planes[0].rowStride)
             PLog.d(TAG, "Texture upload took: ${System.currentTimeMillis() - uploadStart}ms")
 
-            // 1. 计算目标尺寸（处理旋转）
+            // 1. 计算裁切后的尺寸
+            // 关键：直接使用 targetRatio 在原始纹理空间裁切，然后根据旋转交换最终尺寸
             val isSwapped = rotation == 90 || rotation == 270
-            val targetWidthPreCrop = if (isSwapped) height else width
-            val targetHeightPreCrop = if (isSwapped) width else height
+            val srcRatio = width.toFloat() / height.toFloat()
+            val targetRatio = aspectRatio.getValue(true)  // 使用横向比例，因为 RAW 纹理始终是横向的
 
-            // 2. 计算裁切后的尺寸
-            val targetRatio = aspectRatio.getValue(false)
-            val curRatio = targetWidthPreCrop.toFloat() / targetHeightPreCrop.toFloat()
-
-            val finalWidth: Int
-            val finalHeight: Int
-            if (curRatio > targetRatio) {
-                finalHeight = targetHeightPreCrop
-                finalWidth = (targetHeightPreCrop * targetRatio).toInt()
+            // 在原始空间计算裁切后的尺寸（不翻转 targetRatio）
+            val croppedWidth: Int
+            val croppedHeight: Int
+            if (srcRatio > targetRatio) {
+                // 原图更宽，水平方向裁切
+                croppedHeight = height
+                croppedWidth = (height * targetRatio).toInt()
             } else {
-                finalWidth = targetWidthPreCrop
-                finalHeight = (targetWidthPreCrop / targetRatio).toInt()
+                // 原图更高，垂直方向裁切
+                croppedWidth = width
+                croppedHeight = (width / targetRatio).toInt()
             }
+
+            // 旋转后的最终输出尺寸
+            val finalWidth = if (isSwapped) croppedHeight else croppedWidth
+            val finalHeight = if (isSwapped) croppedWidth else croppedHeight
 
             // 3. 曝光增益计算 (18% 灰)
             val exposureGain = calculateExposureGain(rawImage, metadata)
@@ -749,26 +753,50 @@ class RawDemosaicProcessor {
         GLES30.glUseProgram(passthroughProgram)
 
         // 计算变换矩阵
+        // 
+        // 关键理解：
+        // 1. demosaicTexture 是原始 RAW 尺寸（横向），坐标系 (0,0) 在左下角
+        // 2. 最终输出需要：先裁切到目标比例，再旋转到正确方向
+        // 3. OpenGL 矩阵变换是右乘，所以代码顺序与实际变换顺序相反
+        //    代码中先写的变换实际上最后执行
+        //
+        // 实际变换顺序（从纹理坐标到最终坐标）：
+        // 1. 先在原始纹理空间裁切（缩放）
+        // 2. 再旋转到目标方向
+
         val texMatrix = FloatArray(16)
         GlMatrix.setIdentityM(texMatrix, 0)
 
-        // 处理旋转和裁剪 (与之前相同，但在 outputProgram 中应用)
-        val curWidth = if (rotation == 90 || rotation == 270) metadata.height else metadata.width
-        val curHeight = if (rotation == 90 || rotation == 270) metadata.width else metadata.height
-        val curRatio = curWidth.toFloat() / curHeight.toFloat()
-        val targetRatio = aspectRatio.getValue(false)
-
+        // === 第一步：旋转变换 ===
+        // 注意：这里先写旋转，但由于矩阵右乘，实际上旋转是在裁切之后执行的
+        // 
+        // rotation 参数含义：
+        // - 0: 传感器与设备当前方向一致（通常是横屏）
+        // - 90: 需要顺时针旋转 90 度（手机竖屏拍摄，传感器仍是横向）
+        // - 180: 需要旋转 180 度
+        // - 270: 需要顺时针旋转 270 度（或逆时针 90 度）
+        //
+        // OpenGL 的 rotateM 使用逆时针为正，所以需要取负值
         GlMatrix.translateM(texMatrix, 0, 0.5f, 0.5f, 0f)
-        GlMatrix.rotateM(texMatrix, 0, (rotation + 180).toFloat(), 0f, 0f, 1f)
+        GlMatrix.rotateM(texMatrix, 0, -rotation.toFloat(), 0f, 0f, 1f)
         GlMatrix.translateM(texMatrix, 0, -0.5f, -0.5f, 0f)
+
+        // === 第二步：裁切变换（实际先于旋转执行）===
+        // 在原始纹理空间（横向）进行裁切
+        // 直接使用 targetRatio，不需要翻转
+        val srcRatio = metadata.width.toFloat() / metadata.height.toFloat()
+        val targetRatio = aspectRatio.getValue(true)  // 使用横向比例，因为 RAW 纹理始终是横向的
 
         var scaleX = 1.0f
         var scaleY = 1.0f
-        if (curRatio > targetRatio) {
-            scaleX = targetRatio / curRatio
+        if (srcRatio > targetRatio) {
+            // 原图更宽，水平方向缩放裁切
+            scaleX = targetRatio / srcRatio
         } else {
-            scaleY = curRatio / targetRatio
+            // 原图更高，垂直方向缩放裁切
+            scaleY = srcRatio / targetRatio
         }
+
         GlMatrix.translateM(texMatrix, 0, 0.5f, 0.5f, 0f)
         GlMatrix.scaleM(texMatrix, 0, scaleX, scaleY, 1.0f)
         GlMatrix.translateM(texMatrix, 0, -0.5f, -0.5f, 0f)

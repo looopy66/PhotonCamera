@@ -1000,6 +1000,28 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * 设置摄像头方向偏移
+     * @param cameraId 摄像头 ID
+     * @param offset 旋转偏移角度 (0, 90, 180, 270)
+     */
+    fun setCameraOrientationOffset(cameraId: String, offset: Int) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveCameraOrientationOffset(cameraId, offset)
+        }
+    }
+
+    /**
+     * 获取摄像头方向偏移
+     * @param cameraId 摄像头 ID
+     * @return 旋转偏移角度的 Flow
+     */
+    fun getCameraOrientationOffset(cameraId: String): Flow<Int> {
+        return userPreferencesRepository.userPreferences.map { prefs ->
+            prefs.cameraOrientationOffsets[cameraId] ?: 0
+        }
+    }
+
+    /**
      * 保存图片
      */
     private suspend fun saveImage(
@@ -1030,16 +1052,28 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val sharpeningValue = sharpening.value
             val noiseReductionValue = noiseReduction.value
             val chromaNoiseReductionValue = chromaNoiseReduction.value
+            val currentCameraId = cameraController.getCurrentCameraId()
 
             // 计算旋转角度
             val sensorOrientation = cameraController.getSensorOrientation()
             val lensFacing = cameraController.getLensFacing()
             val deviceRotation = OrientationObserver.rotationDegrees.toInt()
-            val rotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+
+            // 基础旋转角度计算
+            val baseRotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
                 (sensorOrientation - deviceRotation + 360) % 360
             } else {
                 (sensorOrientation + deviceRotation) % 360
             }
+
+            // 获取用户配置的摄像头方向偏移
+            val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
+            val orientationOffset = userPrefs?.cameraOrientationOffsets?.get(currentCameraId) ?: 0
+
+            // 应用方向偏移
+            val rotation = (baseRotation + orientationOffset) % 360
+
+            PLog.d(TAG, "Rotation calculation - CameraId: $currentCameraId, Base: $baseRotation°, Offset: $orientationOffset°, Final: $rotation°")
 
             // 根据图像格式选择处理方式
             bitmap = withContext(Dispatchers.Default) {
