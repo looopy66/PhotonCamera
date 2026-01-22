@@ -406,7 +406,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     suspend fun loadLutPreviews(photo: PhotoData): Map<String, Bitmap> {
         val context = getApplication<Application>()
-        val inputStream = context.contentResolver.openInputStream(photo.uri)
+        val inputStream = context.contentResolver.openInputStream(photo.thumbnailUri)
         val options = BitmapFactory.Options().apply {
             inSampleSize = max(photo.width, photo.height) / 128
         }
@@ -941,11 +941,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         return withContext(Dispatchers.IO) {
             try {
                 val context = getApplication<Application>()
-                val inputStream = context.contentResolver.openInputStream(photo.previewUri)
-                val bitmap = BitmapFactory.decodeStream(inputStream)
-                inputStream?.close()
-
-                if (bitmap == null) return@withContext null
+                val bitmap = PhotoManager.loadTiffImage(context, photo.id)?.toBitmap() ?: return@withContext null
 
                 val metadata = (photo.metadata ?: PhotoMetadata()).copy(
                     lutId = editLutId.value,

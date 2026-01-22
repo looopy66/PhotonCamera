@@ -527,15 +527,14 @@ object RawShaders {
             );
         }
         
-        // Uchimura (GT Tone Mapping)
-        vec3 UchimuraToneMapping(vec3 x) {
+        vec3 ApplyToneMapping(vec3 x) {
             x = max(vec3(0.0), x);
             
-            float P = 1.0;  // 最大亮度 (Max Brightness)
-            float a = 1.2;  // 对比度 (Contrast) - 相当于你的 S 曲线强度
-            float m = 0.15; // 线性部分的起点 (Linear Section Start)
-            float l = 0.25;  // 线性部分的终点 (Linear Section End)
-            float c = 1.6; // 黑色部分的紧致度 (Black Tightness)
+            float P = 1.4;  // 最大亮度 (Max Brightness)
+            float a = 1.4;  // 对比度 (Contrast) - 相当于你的 S 曲线强度
+            float m = 0.1; // 线性部分的起点 (Linear Section Start)
+            float l = 0.3;  // 线性部分的终点 (Linear Section End)
+            float c = 1.5; // 黑色部分的紧致度 (Black Tightness)
             float b = 0.0;  // 黑色偏移 (Black Offset) - 通常为0
         
             // 公式
@@ -559,6 +558,39 @@ object RawShaders {
 
             return mappedColor;
         }
+        
+        // 辅助函数：计算亮度 (Rec.709 权重，适用于 sRGB/Linear)
+        float getLuma(vec3 color) {
+            return dot(color, vec3(0.2126, 0.7152, 0.0722));
+        }
+        
+        /**
+         * 双端去色函数
+         * @param color   输入 RGB 颜色
+         * @param sLimit  暗部完全去色阈值 (低于此值饱和度为0)
+         * @param sStart  暗部开始去色阈值 (高于此值饱和度为1)
+         * @param hStart  亮部开始去色阈值 (低于此值饱和度为1)
+         * @param hLimit  亮部完全去色阈值 (高于此值饱和度为0，通常设为 1.0)
+         */
+        vec3 applyDoubleEndedDesaturation(vec3 color) {
+            float sLimit = 0.002;
+            float sStart = 0.02;
+            float hStart = 0.9;
+            float hLimit = 1.0;
+            float luma = getLuma(color);
+        
+            // 1. 计算暗部权重：Luma 在 [sLimit, sStart] 之间平滑过渡 0->1
+            float shadowFactor = smoothstep(sLimit, sStart, luma);
+        
+            // 2. 计算亮部权重：Luma 在 [hStart, hLimit] 之间平滑过渡 1->0
+            float highlightFactor = 1.0 - smoothstep(hStart, hLimit, luma);
+        
+            // 3. 混合权重 (两者相乘，只有中间调是 1.0)
+            float satWeight = shadowFactor * highlightFactor;
+        
+            // 4. 在 Luma 和 原色 之间混合
+            return mix(vec3(luma), color, satWeight);
+        }
 
         void main() {
             // Pass 1: 1:1 解马赛克
@@ -573,25 +605,9 @@ object RawShaders {
             // 步骤 5b: 应用曝光增益 (Linear HDR Space)
             rgb *= uExposureGain;
             
-            // ========== 暗部去色 (Shadow Desaturation) ==========
-            // 人眼对暗部色彩不敏感，将暗部的色度噪点转为更自然的灰噪声
-            {
-                float luma = dot(rgb, vec3(0.299, 0.587, 0.114));
-                
-                // 去色阈值 (线性空间)
-                float shadowStart = 0.05; // 开始去色的亮度
-                float shadowEnd = 0.01;   // 完全去色的亮度
-                
-                // 计算饱和度因子 (平滑过渡)
-                // luma > 0.05 -> factor = 1.0 (保持原色)
-                // luma < 0.01 -> factor = 0.0 (完全黑白)
-                float satFactor = smoothstep(shadowEnd, shadowStart, luma);
-                
-                // 混合灰度与原色
-                rgb = mix(vec3(luma), rgb, satFactor);
-            }
+            rgb = applyDoubleEndedDesaturation(rgb);
             
-            rgb = UchimuraToneMapping(rgb);
+            rgb = ApplyToneMapping(rgb);
 
             // 步骤 7: sRGB gamma 编码 (Linear -> sRGB)
             rgb = linearToSRGB(rgb);

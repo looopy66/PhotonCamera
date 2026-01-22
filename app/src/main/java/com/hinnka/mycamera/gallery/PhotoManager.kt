@@ -1,25 +1,37 @@
 package com.hinnka.mycamera.gallery
 
 import android.app.PendingIntent
+import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ImageFormat
 import android.graphics.Matrix
+import android.graphics.Rect
+import android.graphics.YuvImage
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CaptureResult
+import android.media.Image
 import android.media.ThumbnailUtils
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.provider.MediaStore
 import androidx.exifinterface.media.ExifInterface
+import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CaptureInfo
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.utils.RawProcessor
+import com.hinnka.mycamera.utils.YuvProcessor
+import com.hinnka.mycamera.viewmodel.CameraViewModel
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -70,19 +82,119 @@ object PhotoManager {
         return File(getPhotoDir(context, photoId), PREVIEW_FILE)
     }
 
+    suspend fun exportPhoto(context: Context, photoProcessor: PhotoProcessor, bitmap: Bitmap, metadata: PhotoMetadata, finalCaptureInfo: CaptureInfo, sharpeningValue: Float, noiseReductionValue: Float, chromaNoiseReductionValue: Float) {
+        val processedBitmap = withContext(Dispatchers.Default) {
+            photoProcessor.process(
+                context = context,
+                input = bitmap,
+                metadata = metadata,
+                sharpening = sharpeningValue,
+                noiseReduction = noiseReductionValue,
+                chromaNoiseReduction = chromaNoiseReductionValue
+            )
+        }
+
+        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+            .format(Date())
+        val filename = "PhotonCamera_${timestamp}.jpg"
+        val contentValues = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+            put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+            put(
+                MediaStore.MediaColumns.RELATIVE_PATH,
+                Environment.DIRECTORY_DCIM + "/PhotonCamera"
+            )
+        }
+
+        val uri = context.contentResolver.insert(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            contentValues
+        )
+
+        uri?.let {
+            context.contentResolver.openOutputStream(it)?.use { outputStream ->
+                processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+            }
+
+            // 写入 EXIF 信息
+            context.contentResolver.openFileDescriptor(it, "rw")?.use { pfd ->
+                ExifWriter.writeExif(
+                    pfd.fileDescriptor, finalCaptureInfo.copy(
+                        imageWidth = processedBitmap.width,
+                        imageHeight = processedBitmap.height
+                    )
+                )
+            }
+
+            // 保存导出的 URI 到元数据
+            val photoId = getPhotoIds(context).firstOrNull()
+            if (photoId != null) {
+                val currentMetadata = loadMetadata(context, photoId) ?: metadata
+                val updatedMetadata = currentMetadata.copy(
+                    exportedUris = currentMetadata.exportedUris + it.toString()
+                )
+                saveMetadata(context, photoId, updatedMetadata)
+                PLog.d(TAG, "Exported URI saved: $it")
+            }
+        }
+
+        if (processedBitmap != bitmap) {
+            processedBitmap.recycle()
+        }
+    }
+
+    suspend fun exportDng(context: Context, image: Image, characteristics: CameraCharacteristics, finalCaptureResult: CaptureResult, rotation: Int) = withContext(Dispatchers.IO) {
+        try {
+            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+                .format(Date())
+            val dngFilename = "PhotonCamera_${timestamp}.dng"
+            val dngContentValues = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, dngFilename)
+                put(MediaStore.MediaColumns.MIME_TYPE, "image/x-adobe-dng")
+                put(
+                    MediaStore.MediaColumns.RELATIVE_PATH,
+                    Environment.DIRECTORY_DCIM + "/PhotonCamera"
+                )
+            }
+
+            val dngUri = context.contentResolver.insert(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                dngContentValues
+            )
+
+            dngUri?.let { uri ->
+                context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                    RawProcessor.saveToDng(
+                        image,
+                        characteristics,
+                        finalCaptureResult,
+                        outputStream,
+                        rotation
+                    )
+                }
+                PLog.d(TAG, "DNG exported: $uri")
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to export DNG", e)
+        }
+    }
+
     /**
      * 保存新拍摄的照片
      *
      * @param context Context
-     * @param bitmap 原始 Bitmap 图片
+     * @param image 原始 Image (YUV420 或 RAW_SENSOR)
      * @param metadata 编辑元数据（LUT、边框等）
-     * @param captureInfo 拍摄信息（用于写入 EXIF）
      */
     suspend fun savePhoto(
         context: Context,
-        bitmap: Bitmap,
+        image: Image,
         metadata: PhotoMetadata,
-        captureInfo: CaptureInfo? = null,
+        rotation: Int,
+        aspectRatio: AspectRatio,
+        characteristics: CameraCharacteristics,
+        captureResult: CaptureResult,
+        shouldAutoSave: Boolean = true
     ): String? {
         return withContext(Dispatchers.IO) {
             try {
@@ -93,83 +205,310 @@ object PhotoManager {
                 val photoFile = File(photoDir, PHOTO_FILE)
                 val metadataFile = File(photoDir, METADATA_FILE)
                 val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
-                val previewFile = File(photoDir, PREVIEW_FILE)
 
-                // 预先计算元数据（避免在协程中访问可能被回收的 bitmap
-                val metadataWithInfo = metadata.copy(
-                    width = bitmap.width,
-                    height = bitmap.height,
-                )
-                val metadataJson = metadataWithInfo.toJson()
+                val format = image.format
 
-                // 并行执行所有 IO 操作
-                coroutineScope {
-                    // 1. 生成缩略图和预览图的 Bitmap (在 Default 线程池)
-                    // 缩略图 512x512, 预览图按比例缩放至长边 2560
-                    val thumbnailBitmap = async(Dispatchers.Default) {
-                        ThumbnailUtils.extractThumbnail(bitmap, 512, 512)
-                    }
+                var width: Int
+                var height: Int
 
-                    val previewBitmap = async(Dispatchers.Default) {
-                        val maxSide = max(bitmap.width, bitmap.height)
-                        if (maxSide > 3840) {
-                            val scale = 2560f / maxSide
-                            val matrix = Matrix().apply { postScale(scale, scale) }
-                            Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-                        } else {
-                            null
-                        }
-                    }
+                // 根据图像格式处理
+                when (format) {
+                    ImageFormat.YUV_420_888, ImageFormat.NV21 -> {
+                        // YUV 格式：使用 native 处理（包含旋转和裁切）
+                        val result = YuvProcessor.processAndToBitmap(image, aspectRatio, rotation)
 
-                    // 2. 并行保存所有图片文件
-                    val saveOriginalJob = launch {
-                        FileOutputStream(photoFile).use { out ->
-                            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
-                        }
-                    }
+                        width = result.width
+                        height = result.height
 
-                    val saveThumbnailJob = launch {
-                        val thumb = thumbnailBitmap.await()
-                        FileOutputStream(thumbnailFile).use { out ->
-                            thumb.compress(Bitmap.CompressFormat.JPEG, 80, out)
-                        }
-                        thumb.recycle()
-                    }
-
-                    val savePreviewJob = launch {
-                        val preview = previewBitmap.await()
-                        if (preview != null) {
-                            FileOutputStream(previewFile).use { out ->
-                                preview.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                        // 保存为 16-bit TIFF
+                        launch {
+                            FileOutputStream(photoFile).use { outputStream ->
+                                result.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
                             }
-                            preview.recycle()
                         }
+                        // 直接从内存中的 Bitmap 生成缩略图
+                        generateThumbnailFromTiff(result, thumbnailFile)
                     }
+                    ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12 -> {
+                        // RAW 格式：使用 RawProcessor 解马赛克处理
+                        val rawBitmap = RawProcessor.processAndToBitmap(
+                            context, image, characteristics, captureResult, aspectRatio, rotation
+                        )
 
-                    // 任务 3: 保存元数据 JSON
-                    launch {
-                        metadataFile.writeText(metadataJson)
-                    }
-
-                    // 任务 4: EXIF 写入，必须在原图保存后进行
-                    launch {
-                        saveOriginalJob.join()
-                        captureInfo?.copy(
-                            imageWidth = bitmap.width,
-                            imageHeight = bitmap.height,
-                        )?.let { info ->
-                            ExifWriter.writeExif(photoFile, info)
+                        if (rawBitmap == null) {
+                            PLog.e(TAG, "Failed to process RAW to Bitmap")
+                            return@withContext null
                         }
+
+                        width = rawBitmap.width
+                        height = rawBitmap.height
+
+                        // 将 Bitmap 转换为 16-bit RGB 数据
+                        val rgbData = bitmapToRgb16(rawBitmap)
+
+                        // 保存为 16-bit TIFF
+                        launch {
+                            saveTiffImage(context, photoId, width, height, rgbData)
+                        }
+                        // 直接从内存中的 RGB16 数据生成缩略图
+                        generateThumbnailFromRgb16(width, height, rgbData, thumbnailFile)
+
+                        // 回收 Bitmap
+                        rawBitmap.recycle()
+                    }
+                    else -> {
+                        PLog.e(TAG, "Unsupported image format: $format")
+                        return@withContext null
                     }
                 }
 
-                PLog.d(TAG, "Photo saved: $photoId")
+                // 保存元数据
+                val metadataWithInfo = metadata.copy(
+                    width = width,
+                    height = height,
+                )
+                metadataFile.writeText(metadataWithInfo.toJson())
+
+                PLog.d(TAG, "Photo saved as TIFF: $photoId (${width}x${height}, format=$format)")
                 photoId
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to save photo", e)
                 null
             }
         }
+    }
+
+    /**
+     * 将 Bitmap 转换为 16-bit RGB 数据
+     *
+     * @param bitmap Bitmap
+     * @return 16-bit RGB 数据 (R-G-B-R-G-B...)
+     */
+    private fun bitmapToRgb16(bitmap: Bitmap): ShortArray {
+        val width = bitmap.width
+        val height = bitmap.height
+        val rgbData = ShortArray(width * height * 3)
+
+        // 检测是否为 RGBA_F16 格式
+        if (false) {
+            // 处理 16-bit 半精度浮点格式
+            val buffer = java.nio.ByteBuffer.allocate(bitmap.byteCount)
+            bitmap.copyPixelsToBuffer(buffer)
+            buffer.rewind()
+
+            val shortBuffer = buffer.asShortBuffer()
+            for (i in 0 until width * height) {
+                // RGBA_F16: 每个通道是 16-bit 半精度浮点数
+                val r = android.util.Half.toFloat(shortBuffer.get())
+                val g = android.util.Half.toFloat(shortBuffer.get())
+                val b = android.util.Half.toFloat(shortBuffer.get())
+                shortBuffer.get() // 跳过 alpha 通道
+
+                // 转换到 16-bit 整数范围 [0, 65535]
+                rgbData[i * 3] = (r * 65535f).coerceIn(0f, 65535f).toInt().toShort()
+                rgbData[i * 3 + 1] = (g * 65535f).coerceIn(0f, 65535f).toInt().toShort()
+                rgbData[i * 3 + 2] = (b * 65535f).coerceIn(0f, 65535f).toInt().toShort()
+            }
+        } else {
+            // 处理 8-bit 格式 (ARGB_8888 等)
+            val pixels = IntArray(width * height)
+            bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+
+            // 转换为 16-bit RGB（左移 8 位）
+            for (i in pixels.indices) {
+                val pixel = pixels[i]
+                val r = ((pixel shr 16) and 0xFF) shl 8  // 8-bit -> 16-bit
+                val g = ((pixel shr 8) and 0xFF) shl 8
+                val b = (pixel and 0xFF) shl 8
+
+                rgbData[i * 3] = r.toShort()
+                rgbData[i * 3 + 1] = g.toShort()
+                rgbData[i * 3 + 2] = b.toShort()
+            }
+        }
+
+        return rgbData
+    }
+
+    /**
+     * 将 YUV Image 转换为 16-bit RGB 数据
+     */
+    private fun yuvToRgb16(image: Image): ShortArray {
+        val width = image.width
+        val height = image.height
+        val nv21Data = imageToNV21(image)
+        val rgbData = ShortArray(width * height * 3)
+
+        for (i in 0 until width * height) {
+            val y = (nv21Data[i].toInt() and 0xFF) shl 8  // 扩展到 16-bit
+            val uvIndex = width * height + (i / width / 2) * width + (i % width / 2) * 2
+            val v = (nv21Data[uvIndex].toInt() and 0xFF) shl 8
+            val u = (nv21Data[uvIndex + 1].toInt() and 0xFF) shl 8
+
+            // YUV 转 RGB (BT.601)
+            val r = (y + 1.402 * (v - 32768)).toInt().coerceIn(0, 65535)
+            val g = (y - 0.344136 * (u - 32768) - 0.714136 * (v - 32768)).toInt().coerceIn(0, 65535)
+            val b = (y + 1.772 * (u - 32768)).toInt().coerceIn(0, 65535)
+
+            rgbData[i * 3] = r.toShort()
+            rgbData[i * 3 + 1] = g.toShort()
+            rgbData[i * 3 + 2] = b.toShort()
+        }
+
+        return rgbData
+    }
+
+    /**
+     * 将 YUV Image 转换为 8-bit 预览 Bitmap
+     */
+    private fun yuvToPreviewBitmap(image: Image): Bitmap? {
+        return try {
+            val nv21Data = imageToNV21(image)
+            val yuvImage = YuvImage(nv21Data, ImageFormat.NV21, image.width, image.height, null)
+            val jpegStream = ByteArrayOutputStream()
+            yuvImage.compressToJpeg(Rect(0, 0, image.width, image.height), 90, jpegStream)
+            val jpegData = jpegStream.toByteArray()
+            BitmapFactory.decodeByteArray(jpegData, 0, jpegData.size)
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to convert YUV to preview bitmap", e)
+            null
+        }
+    }
+
+    /**
+     * 将 RAW Image 转换为 16-bit RGB 数据
+     * 简化版本：直接将 Bayer 数据复制为灰度图
+     */
+    private fun rawToRgb16(image: Image): ShortArray {
+        val width = image.width
+        val height = image.height
+        val rgbData = ShortArray(width * height * 3)
+
+        val buffer = image.planes[0].buffer
+        val rowStride = image.planes[0].rowStride
+        val pixelStride = image.planes[0].pixelStride
+
+        // 简化处理：直接将 RAW 数据作为灰度值
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val pos = y * rowStride + x * pixelStride
+                val value = when (image.format) {
+                    ImageFormat.RAW10 -> {
+                        // 10-bit 扩展到 16-bit
+                        ((buffer.get(pos).toInt() and 0xFF) shl 8) or ((buffer.get(pos).toInt() and 0xFF))
+                    }
+                    ImageFormat.RAW12 -> {
+                        // 12-bit 扩展到 16-bit
+                        ((buffer.get(pos).toInt() and 0xFF) shl 8) or ((buffer.get(pos + 1).toInt() and 0xFF))
+                    }
+                    else -> {
+                        // RAW_SENSOR 通常是 16-bit
+                        ((buffer.get(pos + 1).toInt() and 0xFF) shl 8) or (buffer.get(pos).toInt() and 0xFF)
+                    }
+                }
+
+                val index = (y * width + x) * 3
+                rgbData[index] = value.toShort()
+                rgbData[index + 1] = value.toShort()
+                rgbData[index + 2] = value.toShort()
+            }
+        }
+
+        return rgbData
+    }
+
+    /**
+     * 将 RAW Image 转换为 8-bit 预览 Bitmap
+     */
+    private fun rawToPreviewBitmap(image: Image): Bitmap? {
+        return try {
+            val width = image.width
+            val height = image.height
+            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val pixels = IntArray(width * height)
+
+            val buffer = image.planes[0].buffer
+            val rowStride = image.planes[0].rowStride
+            val pixelStride = image.planes[0].pixelStride
+
+            for (y in 0 until height) {
+                for (x in 0 until width) {
+                    val pos = y * rowStride + x * pixelStride
+                    val value = ((buffer.get(pos).toInt() and 0xFF) shr 0) and 0xFF
+                    pixels[y * width + x] = (0xFF shl 24) or (value shl 16) or (value shl 8) or value
+                }
+            }
+
+            bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+            bitmap
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to convert RAW to preview bitmap", e)
+            null
+        }
+    }
+
+    /**
+     * 将 Image (YUV_420_888) 转换为 NV21 字节数组
+     */
+    private fun imageToNV21(image: Image): ByteArray {
+        val width = image.width
+        val height = image.height
+        val ySize = width * height
+        val uvSize = width * height / 2
+
+        val nv21 = ByteArray(ySize + uvSize)
+
+        val yBuffer = image.planes[0].buffer
+        val uBuffer = image.planes[1].buffer
+        val vBuffer = image.planes[2].buffer
+
+        val yRowStride = image.planes[0].rowStride
+        val yPixelStride = image.planes[0].pixelStride
+        val uvRowStride = image.planes[1].rowStride
+        val uvPixelStride = image.planes[1].pixelStride
+
+        // 复制 Y 平面
+        var pos = 0
+        if (yPixelStride == 1) {
+            // 连续存储，直接复制
+            for (row in 0 until height) {
+                yBuffer.position(row * yRowStride)
+                yBuffer.get(nv21, pos, width)
+                pos += width
+            }
+        } else {
+            // 非连续存储，逐像素复制
+            for (row in 0 until height) {
+                for (col in 0 until width) {
+                    nv21[pos++] = yBuffer.get(row * yRowStride + col * yPixelStride)
+                }
+            }
+        }
+
+        // 复制 UV 平面 (交错存储为 NV21 格式: VUVUVU...)
+        val uvHeight = height / 2
+        val uvWidth = width / 2
+
+        if (uvPixelStride == 2) {
+            // 已经是 NV21 格式，直接复制 V 平面
+            for (row in 0 until uvHeight) {
+                vBuffer.position(row * uvRowStride)
+                for (col in 0 until uvWidth) {
+                    nv21[pos++] = vBuffer.get()
+                    vBuffer.position(vBuffer.position() + 1) // 跳过 U
+                }
+            }
+        } else {
+            // 需要手动交错 V 和 U
+            for (row in 0 until uvHeight) {
+                for (col in 0 until uvWidth) {
+                    nv21[pos++] = vBuffer.get(row * uvRowStride + col * uvPixelStride)
+                    nv21[pos++] = uBuffer.get(row * uvRowStride + col * uvPixelStride)
+                }
+            }
+        }
+
+        return nv21
     }
 
     private fun savePreviewFileIfNeed(sourceFile: File, targetFile: File) {
@@ -190,6 +529,92 @@ object PhotoManager {
             }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save thumbnail from source", e)
+        }
+    }
+
+    /**
+     * 直接从内存中的 16-bit RGB 数据生成 512x512 缩略图
+     * 性能优化：避免文件 I/O 和重复解析
+     *
+     * @param width 原始图像宽度
+     * @param height 原始图像高度
+     * @param rgbData 16-bit RGB 数据 (R-G-B-R-G-B...)
+     * @param targetFile 缩略图输出文件
+     */
+    private fun generateThumbnailFromRgb16(
+        width: Int,
+        height: Int,
+        rgbData: ShortArray,
+        targetFile: File
+    ) {
+        try {
+            // 计算缩略图尺寸和采样步长
+            val thumbnailSize = 512
+            val scale = max(width, height).toFloat() / thumbnailSize
+            val thumbnailWidth = (width / scale).toInt()
+            val thumbnailHeight = (height / scale).toInt()
+
+            // 创建缩略图像素数组 (ARGB_8888)
+            val pixels = IntArray(thumbnailWidth * thumbnailHeight)
+
+            // 降采样：从原始 RGB16 数据中提取像素
+            for (y in 0 until thumbnailHeight) {
+                for (x in 0 until thumbnailWidth) {
+                    // 计算原始图像中的对应位置
+                    val srcX = (x * scale).toInt().coerceIn(0, width - 1)
+                    val srcY = (y * scale).toInt().coerceIn(0, height - 1)
+                    val srcIndex = (srcY * width + srcX) * 3
+
+                    // 将 16-bit RGB 转换为 8-bit (右移 8 位)
+                    val r = ((rgbData[srcIndex].toInt() and 0xFFFF) shr 8) and 0xFF
+                    val g = ((rgbData[srcIndex + 1].toInt() and 0xFFFF) shr 8) and 0xFF
+                    val b = ((rgbData[srcIndex + 2].toInt() and 0xFFFF) shr 8) and 0xFF
+
+                    pixels[y * thumbnailWidth + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+                }
+            }
+
+            // 创建 Bitmap
+            val bitmap = Bitmap.createBitmap(pixels, thumbnailWidth, thumbnailHeight, Bitmap.Config.ARGB_8888)
+
+            // 裁剪为正方形 512x512
+            val thumbnail = ThumbnailUtils.extractThumbnail(bitmap, thumbnailSize, thumbnailSize)
+
+            // 保存为 JPEG
+            FileOutputStream(targetFile).use { out ->
+                thumbnail.compress(Bitmap.CompressFormat.JPEG, 80, out)
+            }
+
+            bitmap.recycle()
+            thumbnail.recycle()
+
+            PLog.d(TAG, "Thumbnail generated from RGB16 data: ${thumbnailWidth}x${thumbnailHeight} -> ${thumbnailSize}x${thumbnailSize}")
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to generate thumbnail from RGB16", e)
+        }
+    }
+
+    /**
+     * 从 TIFF 文件生成 512x512 缩略图
+     */
+    private suspend fun generateThumbnailFromTiff(context: Context, photoId: String, targetFile: File) {
+        withContext(Dispatchers.IO) {
+            try {
+                val bitmap = BitmapFactory.decodeFile(getPhotoFile(context, photoId).absolutePath)
+
+                // 生成 512x512 缩略图
+                val thumbnail = ThumbnailUtils.extractThumbnail(bitmap, 512, 512)
+                FileOutputStream(targetFile).use { out ->
+                    thumbnail.compress(Bitmap.CompressFormat.JPEG, 80, out)
+                }
+
+                bitmap.recycle()
+                thumbnail.recycle()
+
+                PLog.d(TAG, "Thumbnail generated from TIFF: $photoId")
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to generate thumbnail from TIFF", e)
+            }
         }
     }
 
@@ -371,7 +796,6 @@ object PhotoManager {
                 val photoFile = File(photoDir, PHOTO_FILE)
                 val metadataFile = File(photoDir, METADATA_FILE)
                 val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
-                val previewFile = File(photoDir, PREVIEW_FILE)
 
                 // 1. 复制文件到临时位置
                 val tempFile = File(photoDir, "temp.jpg")
@@ -432,7 +856,6 @@ object PhotoManager {
                 metadataFile.writeText(metadata.toJson())
 
                 // 5. 生成缩略图
-                savePreviewFileIfNeed(photoFile, previewFile)
                 generateThumbnail(photoFile, thumbnailFile)
 
                 PLog.d(TAG, "Photo imported: $photoId (orientation: $orientation)")
@@ -510,4 +933,3 @@ object PhotoManager {
         return Bitmap.createBitmap(img, 0, 0, img.width, img.height, matrix, true)
     }
 }
-

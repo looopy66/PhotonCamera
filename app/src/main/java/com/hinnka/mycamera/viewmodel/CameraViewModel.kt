@@ -4,7 +4,7 @@ import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
-import android.hardware.camera2.TotalCaptureResult
+import android.hardware.camera2.CaptureResult
 import android.media.Image
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -12,17 +12,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.hinnka.mycamera.camera.AspectRatio
-import com.hinnka.mycamera.camera.Camera2Controller
-import com.hinnka.mycamera.camera.CameraState
-import com.hinnka.mycamera.camera.CaptureInfo
-import com.hinnka.mycamera.camera.LensType
+import com.hinnka.mycamera.camera.*
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.data.UserPreferencesRepository
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.frame.FrameRenderer
-import com.hinnka.mycamera.gallery.ExifWriter
 import com.hinnka.mycamera.gallery.PhotoManager
 import com.hinnka.mycamera.gallery.PhotoMetadata
 import com.hinnka.mycamera.gallery.PhotoProcessor
@@ -30,13 +25,10 @@ import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.model.ColorRecipeParams
-import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.utils.PLog
-import com.hinnka.mycamera.utils.RawProcessor
 import com.hinnka.mycamera.utils.ShutterSoundPlayer
 import com.hinnka.mycamera.utils.VibrationHelper
-import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlin.math.abs
@@ -287,8 +279,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun openCamera(surfaceTexture: SurfaceTexture) {
         PLog.d(TAG, "openCamera")
-        // 预加载 RAW 处理器
-        RawDemosaicProcessor.getInstance().preload(getApplication())
         currentSurfaceTexture = surfaceTexture
         cameraController.openCamera(surfaceTexture)
     }
@@ -1044,21 +1034,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         image: Image,
         captureInfo: CaptureInfo,
         characteristics: CameraCharacteristics?,
-        captureResult: android.hardware.camera2.CaptureResult?
+        captureResult: CaptureResult
     ) {
-        val saveStartTime = System.currentTimeMillis()
-        var bitmap: Bitmap? = null
         try {
             PLog.d(TAG, "saveImage started - dimensions: ${image.width}x${image.height}, format: ${image.format}")
             val context = getApplication<Application>()
-
-            // 关键修复：Camera2Controller 已经尝试根据时间戳配对 CaptureResult
-            // 如果这里还是 null，说明可能真的没等到，或者是在不支持 RAW 的设备上不需要那么精确
-            var finalCaptureResult = captureResult
-            if (finalCaptureResult == null && cameraController.isRawSupported) {
-                // 如果是 RAW 拍摄，我们必须拿到准确的 metadata
-                PLog.w(TAG, "captureResult is null in onImageCaptured, RAW processing might be affected")
-            }
 
             // 保存当前配置信息
             val lutIdToSave = currentLutId.value
@@ -1089,189 +1069,39 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // 应用方向偏移
             val rotation = (baseRotation + orientationOffset) % 360
 
-            PLog.d(
-                TAG,
-                "Rotation calculation - CameraId: $currentCameraId, Base: $baseRotation°, Offset: $orientationOffset°, Final: $rotation°"
+            // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
+            val metadata = PhotoMetadata(
+                lutId = lutIdToSave,
+                frameId = frameIdToSave,
+                colorRecipeParams = currentRecipeParams.value,
+                sharpening = sharpeningValue,
+                noiseReduction = noiseReductionValue,
+                chromaNoiseReduction = chromaNoiseReductionValue,
+                deviceModel = captureInfo.model,
+                brand = captureInfo.make.replaceFirstChar { it.uppercase() },
+                dateTaken = captureInfo.captureTime,
+                iso = captureInfo.iso,
+                shutterSpeed = captureInfo.formatExposureTime(),
+                focalLength = captureInfo.formatFocalLength(),
+                focalLength35mm = captureInfo.formatFocalLength35mm(),
+                aperture = captureInfo.formatAperture(),
             )
 
-            // 根据图像格式选择处理方式
-            bitmap = withContext(Dispatchers.Default) {
-                if (image.format == android.graphics.ImageFormat.RAW_SENSOR) {
-                    // RAW 图像：使用 RawProcessor 处理
-                    if (characteristics != null && finalCaptureResult != null) {
-                        PLog.d(TAG, "Processing RAW image")
-                        RawProcessor.processAndToBitmap(
-                            context,
-                            image,
-                            characteristics,
-                            finalCaptureResult,
-                            aspectRatio,
-                            rotation
+            coroutineScope {
+                // 保存原始照片到数据库
+                launch {
+                    val photoId = characteristics?.let {
+                        PhotoManager.savePhoto(
+                            context, image, metadata, rotation, aspectRatio, it, captureResult, shouldAutoSave
                         )
+                    }
+                    if (photoId != null) {
+                        PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
+                        _imageSavedEvent.emit(Unit)
                     } else {
-                        PLog.e(
-                            TAG,
-                            "Cannot process RAW: characteristics=${characteristics != null}, finalCaptureResult=${finalCaptureResult != null}"
-                        )
-                        null
-                    }
-                } else {
-                    // YUV 图像：使用 YuvProcessor 处理
-                    YuvProcessor.processAndToBitmap(image, aspectRatio, rotation)
-                }
-            }
-
-            if (bitmap == null) {
-                PLog.e(TAG, "Failed to process image, bitmap is null")
-                return
-            }
-
-            try {
-                // 如果之前没有 captureResult 但现在等到了，尝试重新构建更完整的 CaptureInfo 供 EXIF 使用
-                val finalCaptureInfo =
-                    if (captureResult == null && finalCaptureResult is TotalCaptureResult) {
-                        cameraController.rebuildCaptureInfo(finalCaptureResult, image.width, image.height)
-                    } else {
-                        captureInfo
-                    }
-
-                // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
-                val metadata = PhotoMetadata(
-                    lutId = lutIdToSave,
-                    frameId = frameIdToSave,
-                    colorRecipeParams = currentRecipeParams.value,
-                    sharpening = sharpeningValue,
-                    noiseReduction = noiseReductionValue,
-                    chromaNoiseReduction = chromaNoiseReductionValue,
-                    deviceModel = finalCaptureInfo.model,
-                    brand = finalCaptureInfo.make.replaceFirstChar { it.uppercase() },
-                    dateTaken = finalCaptureInfo.captureTime,
-                    iso = finalCaptureInfo.iso,
-                    shutterSpeed = finalCaptureInfo.formatExposureTime(),
-                    focalLength = finalCaptureInfo.formatFocalLength(),
-                    focalLength35mm = finalCaptureInfo.formatFocalLength35mm(),
-                    aperture = finalCaptureInfo.formatAperture(),
-                )
-
-                coroutineScope {
-                    // 保存原始照片到数据库
-                    launch {
-                        val photoId = PhotoManager.savePhoto(context, bitmap!!, metadata, finalCaptureInfo)
-                        if (photoId != null) {
-                            PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
-                            _imageSavedEvent.emit(Unit)
-                        } else {
-                            PLog.e(TAG, "Failed to save image via PhotoManager")
-                        }
-                    }
-
-                    // 如果启用自动保存,导出处理后的图片到系统相册
-                    if (shouldAutoSave) {
-                        launch {
-                            val processedBitmap = withContext(Dispatchers.Default) {
-                                photoProcessor.process(
-                                    context = context,
-                                    input = bitmap,
-                                    metadata = metadata,
-                                    sharpening = sharpeningValue,
-                                    noiseReduction = noiseReductionValue,
-                                    chromaNoiseReduction = chromaNoiseReductionValue
-                                )
-                            }
-
-                            val timestamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
-                                .format(java.util.Date())
-                            val filename = "PhotonCamera_${timestamp}.jpg"
-                            val contentValues = android.content.ContentValues().apply {
-                                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, filename)
-                                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-                                put(
-                                    android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
-                                    android.os.Environment.DIRECTORY_DCIM + "/PhotonCamera"
-                                )
-                            }
-
-                            val uri = context.contentResolver.insert(
-                                android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                                contentValues
-                            )
-
-                            uri?.let {
-                                context.contentResolver.openOutputStream(it)?.use { outputStream ->
-                                    processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
-                                }
-
-                                // 写入 EXIF 信息
-                                context.contentResolver.openFileDescriptor(it, "rw")?.use { pfd ->
-                                    ExifWriter.writeExif(
-                                        pfd.fileDescriptor, finalCaptureInfo.copy(
-                                            imageWidth = processedBitmap.width,
-                                            imageHeight = processedBitmap.height
-                                        )
-                                    )
-                                }
-
-                                // 保存导出的 URI 到元数据
-                                val photoId = PhotoManager.getPhotoIds(context).firstOrNull()
-                                if (photoId != null) {
-                                    val currentMetadata = PhotoManager.loadMetadata(context, photoId) ?: metadata
-                                    val updatedMetadata = currentMetadata.copy(
-                                        exportedUris = currentMetadata.exportedUris + it.toString()
-                                    )
-                                    PhotoManager.saveMetadata(context, photoId, updatedMetadata)
-                                    PLog.d(TAG, "Exported URI saved: $it")
-                                }
-                            }
-
-                            if (processedBitmap != bitmap) {
-                                processedBitmap.recycle()
-                            }
-                        }
-
-                        // 如果是 RAW 拍摄模式，同时导出一份 DNG 文件
-                        if (image.format == android.graphics.ImageFormat.RAW_SENSOR && characteristics != null && finalCaptureResult != null) {
-                            launch {
-                                try {
-                                    val timestamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
-                                        .format(java.util.Date())
-                                    val dngFilename = "PhotonCamera_${timestamp}.dng"
-                                    val dngContentValues = android.content.ContentValues().apply {
-                                        put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, dngFilename)
-                                        put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/x-adobe-dng")
-                                        put(
-                                            android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
-                                            android.os.Environment.DIRECTORY_DCIM + "/PhotonCamera"
-                                        )
-                                    }
-
-                                    val dngUri = context.contentResolver.insert(
-                                        android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                                        dngContentValues
-                                    )
-
-                                    dngUri?.let { uri ->
-                                        context.contentResolver.openOutputStream(uri)?.use { outputStream ->
-                                            RawProcessor.saveToDng(
-                                                image,
-                                                characteristics,
-                                                finalCaptureResult,
-                                                outputStream,
-                                                rotation
-                                            )
-                                        }
-                                        PLog.d(TAG, "DNG exported: $uri")
-                                    }
-                                } catch (e: Exception) {
-                                    PLog.e(TAG, "Failed to export DNG", e)
-                                }
-                            }
-                        }
+                        PLog.e(TAG, "Failed to save image via PhotoManager")
                     }
                 }
-                PLog.d(TAG, "Total saveImage duration: ${System.currentTimeMillis() - saveStartTime}ms")
-            } finally {
-                // 确保 bitmap 在所有操作完成后被回收
-                bitmap.recycle()
             }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save image", e)

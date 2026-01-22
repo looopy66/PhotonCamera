@@ -120,7 +120,7 @@ class Camera2Controller(private val context: Context) {
     private var lastCaptureResult: TotalCaptureResult? = null
 
     // 图片拍摄回调（携带 CaptureInfo, CameraCharacteristics 和 CaptureResult 用于 RAW 处理）
-    var onImageCaptured: ((Image, CaptureInfo, CameraCharacteristics?, CaptureResult?) -> Unit)? = null
+    var onImageCaptured: ((Image, CaptureInfo, CameraCharacteristics?, CaptureResult) -> Unit)? = null
 
     // 快门音效播放回调
     var onPlayShutterSound: (() -> Unit)? = null

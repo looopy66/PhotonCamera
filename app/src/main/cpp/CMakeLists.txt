@@ -12,8 +12,12 @@ add_subdirectory(libyuv_source)
 # 3. 添加 libyuv 头文件路径
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libyuv_source/include)
 
-# 4. 将你的 native 库链接到 libyuv
+
+# 6. 将你的 native 库链接到 libyuv
 add_library(my-native-lib SHARED native-lib.cpp)
+
+# 启用优化
+target_compile_options(my-native-lib PRIVATE -O3 -ffast-math)
 
 target_link_libraries(
     my-native-lib

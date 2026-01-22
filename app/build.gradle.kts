@@ -87,6 +87,9 @@ dependencies {
     
     // Coil for image loading
     implementation(libs.coil.compose)
+
+    // Telephoto for large image viewing with zoom support
+    implementation("me.saket.telephoto:zoomable-image-coil:0.18.0")
     
     // Navigation Compose
     implementation(libs.androidx.navigation.compose)

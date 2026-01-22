@@ -1,9 +1,8 @@
 /**
  * native-lib.cpp
- * 
+ *
  * 使用 libyuv 实现 YUV 图像处理：旋转、裁切、转换为 ARGB
  */
-
 #include <jni.h>
 #include <android/log.h>
 #include <cstring>
@@ -253,5 +252,245 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processYuv(
     
     return result;
 }
+
+/**
+ * 处理 YUV_420_888 图像并转换为 16-bit RGB：旋转、裁切、转换为 RGB16
+ *
+ * @param yBuffer Y 平面数据
+ * @param uBuffer U 平面数据
+ * @param vBuffer V 平面数据
+ * @param width 原始宽度
+ * @param height 原始高度
+ * @param yRowStride Y 平面行跨度
+ * @param uvRowStride UV 平面行跨度
+ * @param uvPixelStride UV 平面像素跨度
+ * @param rotation 旋转角度 (0, 90, 180, 270)
+ * @param targetRatio 目标宽高比 (长边/短边)
+ * @return short 数组: [width, height, r1, g1, b1, r2, g2, b2, ...]
+ */
+JNIEXPORT jshortArray JNICALL
+Java_com_hinnka_mycamera_utils_YuvProcessor_processYuvToRgb16Native(
+        JNIEnv *env,
+        jobject /* this */,
+        jobject yBuffer,
+        jobject uBuffer,
+        jobject vBuffer,
+        jint width,
+        jint height,
+        jint yRowStride,
+        jint uvRowStride,
+        jint uvPixelStride,
+        jint rotation,
+        jfloat targetRatio) {
+
+    // 获取 buffer 指针
+    auto *yData = static_cast<uint8_t *>(env->GetDirectBufferAddress(yBuffer));
+    auto *uData = static_cast<uint8_t *>(env->GetDirectBufferAddress(uBuffer));
+    auto *vData = static_cast<uint8_t *>(env->GetDirectBufferAddress(vBuffer));
+
+    if (yData == nullptr || uData == nullptr || vData == nullptr) {
+        LOGE("Failed to get buffer addresses");
+        return nullptr;
+    }
+
+    LOGI("Processing YUV to RGB16: %dx%d, rotation=%d, targetRatio=%.2f",
+         width, height, rotation, targetRatio);
+
+    // === Step 1: 将 YUV_420_888 转换为 I420 ===
+    int i420Size = width * height * 3 / 2;
+    auto *i420Data = static_cast<uint8_t *>(malloc(i420Size));
+    if (i420Data == nullptr) {
+        LOGE("Failed to allocate I420 buffer");
+        return nullptr;
+    }
+
+    uint8_t *i420Y = i420Data;
+    uint8_t *i420U = i420Data + width * height;
+    uint8_t *i420V = i420U + (width / 2) * (height / 2);
+
+    // 处理 Y 平面
+    if (yRowStride == width) {
+        memcpy(i420Y, yData, width * height);
+    } else {
+        for (int row = 0; row < height; row++) {
+            memcpy(i420Y + row * width, yData + row * yRowStride, width);
+        }
+    }
+
+    // 处理 UV 平面
+    int uvWidth = width / 2;
+    int uvHeight = height / 2;
+
+    if (uvPixelStride == 1 && uvRowStride == uvWidth) {
+        // 已经是紧凑格式
+        memcpy(i420U, uData, uvWidth * uvHeight);
+        memcpy(i420V, vData, uvWidth * uvHeight);
+    } else if (uvPixelStride == 2) {
+        // NV21/NV12 交错格式
+        for (int row = 0; row < uvHeight; row++) {
+            for (int col = 0; col < uvWidth; col++) {
+                i420U[row * uvWidth + col] = uData[row * uvRowStride + col * uvPixelStride];
+                i420V[row * uvWidth + col] = vData[row * uvRowStride + col * uvPixelStride];
+            }
+        }
+    } else {
+        // 通用情况
+        for (int row = 0; row < uvHeight; row++) {
+            for (int col = 0; col < uvWidth; col++) {
+                i420U[row * uvWidth + col] = uData[row * uvRowStride + col * uvPixelStride];
+                i420V[row * uvWidth + col] = vData[row * uvRowStride + col * uvPixelStride];
+            }
+        }
+    }
+
+    // === Step 2: 旋转 I420 ===
+    int rotatedWidth = (rotation == 90 || rotation == 270) ? height : width;
+    int rotatedHeight = (rotation == 90 || rotation == 270) ? width : height;
+
+    auto *rotatedI420 = static_cast<uint8_t *>(malloc(rotatedWidth * rotatedHeight * 3 / 2));
+    if (rotatedI420 == nullptr) {
+        LOGE("Failed to allocate rotated I420 buffer");
+        free(i420Data);
+        return nullptr;
+    }
+
+    uint8_t *rotatedY = rotatedI420;
+    uint8_t *rotatedU = rotatedI420 + rotatedWidth * rotatedHeight;
+    uint8_t *rotatedV = rotatedU + (rotatedWidth / 2) * (rotatedHeight / 2);
+
+    libyuv::RotationMode mode;
+    switch (rotation) {
+        case 90: mode = libyuv::kRotate90; break;
+        case 180: mode = libyuv::kRotate180; break;
+        case 270: mode = libyuv::kRotate270; break;
+        default: mode = libyuv::kRotate0; break;
+    }
+
+    if (mode == libyuv::kRotate0) {
+        // 无需旋转，直接复制
+        memcpy(rotatedI420, i420Data, rotatedWidth * rotatedHeight * 3 / 2);
+    } else {
+        libyuv::I420Rotate(
+            i420Y, width,
+            i420U, width / 2,
+            i420V, width / 2,
+            rotatedY, rotatedWidth,
+            rotatedU, rotatedWidth / 2,
+            rotatedV, rotatedWidth / 2,
+            width, height,
+            mode
+        );
+    }
+
+    free(i420Data);
+
+    // === Step 3: 计算裁切区域 ===
+    int visualWidth = rotatedWidth;
+    int visualHeight = rotatedHeight;
+    int finalWidth, finalHeight;
+
+    // 判断是横图还是竖图
+    if (visualWidth > visualHeight) {
+        // 横图
+        float expectedWidth = visualHeight * targetRatio;
+        if (expectedWidth <= visualWidth) {
+            finalHeight = visualHeight;
+            finalWidth = static_cast<int>(expectedWidth);
+        } else {
+            finalWidth = visualWidth;
+            finalHeight = static_cast<int>(visualWidth / targetRatio);
+        }
+    } else {
+        // 竖图
+        float expectedHeight = visualWidth * targetRatio;
+        if (expectedHeight <= visualHeight) {
+            finalWidth = visualWidth;
+            finalHeight = static_cast<int>(expectedHeight);
+        } else {
+            finalHeight = visualHeight;
+            finalWidth = static_cast<int>(visualHeight / targetRatio);
+        }
+    }
+
+    // 确保尺寸为偶数（YUV 要求）
+    finalWidth = (finalWidth / 2) * 2;
+    finalHeight = (finalHeight / 2) * 2;
+
+    int cropX = (rotatedWidth - finalWidth) / 2;
+    int cropY = (rotatedHeight - finalHeight) / 2;
+    cropX = (cropX / 2) * 2;  // 确保偶数
+    cropY = (cropY / 2) * 2;
+
+    LOGI("Crop: %dx%d at (%d, %d) from %dx%d",
+         finalWidth, finalHeight, cropX, cropY, rotatedWidth, rotatedHeight);
+
+    // === Step 4: 裁切并转换为 RGB24 (8-bit) ===
+    int rgbSize = finalWidth * finalHeight * 3;
+    auto *rgb24Data = static_cast<uint8_t *>(malloc(rgbSize));
+    if (rgb24Data == nullptr) {
+        LOGE("Failed to allocate RGB24 buffer");
+        free(rotatedI420);
+        return nullptr;
+    }
+
+    // 计算裁切后的 Y/U/V 起始位置
+    uint8_t *croppedY = rotatedY + cropY * rotatedWidth + cropX;
+    uint8_t *croppedU = rotatedU + (cropY / 2) * (rotatedWidth / 2) + (cropX / 2);
+    uint8_t *croppedV = rotatedV + (cropY / 2) * (rotatedWidth / 2) + (cropX / 2);
+
+    // I420 to RGB24
+    libyuv::I420ToRGB24(
+        croppedY, rotatedWidth,
+        croppedU, rotatedWidth / 2,
+        croppedV, rotatedWidth / 2,
+        rgb24Data, finalWidth * 3,
+        finalWidth, finalHeight
+    );
+
+    free(rotatedI420);
+
+    // === Step 5: 转换为 16-bit RGB ===
+    int pixelCount = finalWidth * finalHeight;
+    jshortArray result = env->NewShortArray(pixelCount * 3 + 2);
+    if (result == nullptr) {
+        LOGE("Failed to create result array");
+        free(rgb24Data);
+        return nullptr;
+    }
+
+    // 前两个元素存储宽高
+    jshort dimensions[2] = {static_cast<jshort>(finalWidth), static_cast<jshort>(finalHeight)};
+    env->SetShortArrayRegion(result, 0, 2, dimensions);
+
+    // 转换 8-bit BGR 为 16-bit RGB (左移 8 位，并交换 R 和 B)
+    auto *rgb16Data = static_cast<jshort *>(malloc(pixelCount * 3 * sizeof(jshort)));
+    if (rgb16Data == nullptr) {
+        LOGE("Failed to allocate RGB16 buffer");
+        free(rgb24Data);
+        return nullptr;
+    }
+
+    // libyuv::I420ToRGB24 输出的是 BGR 顺序，需要转换为 RGB
+    for (int i = 0; i < pixelCount; i++) {
+        uint8_t b = rgb24Data[i * 3];      // B
+        uint8_t g = rgb24Data[i * 3 + 1];  // G
+        uint8_t r = rgb24Data[i * 3 + 2];  // R
+
+        // 按 RGB 顺序存储，并扩展到 16-bit
+        rgb16Data[i * 3] = static_cast<jshort>(r << 8);      // R
+        rgb16Data[i * 3 + 1] = static_cast<jshort>(g << 8);  // G
+        rgb16Data[i * 3 + 2] = static_cast<jshort>(b << 8);  // B
+    }
+
+    env->SetShortArrayRegion(result, 2, pixelCount * 3, rgb16Data);
+
+    free(rgb24Data);
+    free(rgb16Data);
+
+    LOGI("YUV to RGB16 processing completed: output %dx%d", finalWidth, finalHeight);
+
+    return result;
+}
+
 
 } // extern "C"

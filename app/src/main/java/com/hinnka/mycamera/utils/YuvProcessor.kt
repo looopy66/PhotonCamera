@@ -115,8 +115,60 @@ object YuvProcessor {
     }
     
     /**
+     * 处理 YUV Image 并转换为 16-bit RGB 数据
+     * 包含旋转和裁切功能
+     *
+     * @param image YUV_420_888 格式的 Image
+     * @param aspectRatio 目标宽高比
+     * @param rotation 旋转角度 (0, 90, 180, 270)
+     * @return Pair<IntArray, ShortArray>: 前者为 [width, height]，后者为 16-bit RGB 数据
+     */
+    fun processYuvToRgb16(image: Image, aspectRatio: AspectRatio, rotation: Int): Pair<IntArray, ShortArray>? {
+        val planes = image.planes
+
+        val yBuffer = planes[0].buffer
+        val uBuffer = planes[1].buffer
+        val vBuffer = planes[2].buffer
+
+        val width = image.width
+        val height = image.height
+        val yRowStride = planes[0].rowStride
+        val uvRowStride = planes[1].rowStride
+        val uvPixelStride = planes[1].pixelStride
+
+        // 获取目标宽高比（长边/短边）
+        val targetRatio = aspectRatio.getValue(true)
+
+        PLog.d(TAG, "Processing YUV to RGB16: ${width}x${height}, rotation=$rotation, ratio=$targetRatio")
+
+        // 调用 native 方法处理
+        val result = processYuvToRgb16Native(
+            yBuffer, uBuffer, vBuffer,
+            width, height,
+            yRowStride, uvRowStride, uvPixelStride,
+            rotation, targetRatio
+        )
+
+        if (result == null || result.size < 3) {
+            PLog.e(TAG, "Native RGB16 processing failed")
+            return null
+        }
+
+        // 结果前两个元素是宽高
+        val outputWidth = result[0].toInt()
+        val outputHeight = result[1].toInt()
+
+        // 剩余部分是 RGB16 数据
+        val rgb16Data = result.copyOfRange(2, result.size)
+
+        PLog.d(TAG, "RGB16 processing completed: ${outputWidth}x${outputHeight}")
+
+        return Pair(intArrayOf(outputWidth, outputHeight), rgb16Data)
+    }
+
+    /**
      * Native YUV 处理方法
-     * 
+     *
      * @return IntArray: [width, height, pixel1, pixel2, ...]
      */
     private external fun processYuv(
@@ -131,4 +183,22 @@ object YuvProcessor {
         rotation: Int,
         targetRatio: Float
     ): IntArray?
+
+    /**
+     * Native YUV 转 16-bit RGB 处理方法（包含旋转和裁切）
+     *
+     * @return ShortArray: [width, height, r1, g1, b1, r2, g2, b2, ...]
+     */
+    private external fun processYuvToRgb16Native(
+        yBuffer: ByteBuffer,
+        uBuffer: ByteBuffer,
+        vBuffer: ByteBuffer,
+        width: Int,
+        height: Int,
+        yRowStride: Int,
+        uvRowStride: Int,
+        uvPixelStride: Int,
+        rotation: Int,
+        targetRatio: Float
+    ): ShortArray?
 }

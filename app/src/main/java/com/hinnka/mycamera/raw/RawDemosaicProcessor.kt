@@ -25,6 +25,7 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import java.nio.ShortBuffer
 import java.util.concurrent.Executors
+import kotlin.math.min
 
 /**
  * RAW 图像解马赛克处理器
@@ -559,7 +560,8 @@ class RawDemosaicProcessor {
     }
 
     /**
-     * 计算 RAW 图像的曝光增益（18% 灰算法）
+     * 计算 RAW 图像的曝光增益
+     * 策略：获取最亮的2%像素，将其映射到0.9所需的增益
      */
     private fun calculateExposureGain(rawImage: Image, metadata: RawMetadata): Float {
         val plane = rawImage.planes[0]
@@ -569,22 +571,14 @@ class RawDemosaicProcessor {
         val rowStride = plane.rowStride
         val pixelStride = plane.pixelStride
 
-        // 1. 采样参数 (保持不变)
-        val sampleSize = 512
+        // 采样参数 - 128采样
+        val sampleSize = 128
         val stepX = (width / sampleSize).coerceAtLeast(1)
         val stepY = (height / sampleSize).coerceAtLeast(1)
         val black = metadata.blackLevel[1]
         val range = metadata.whiteLevel - black
 
-        // 权重矩阵中心点
-        val centerX = width / 2.0
-        val centerY = height / 2.0
-        val maxDistSq = (width * width + height * height) / 4.0 // 对角线半径平方
-
-        // 统计变量
-        var weightedSum = 0.0
-        var totalWeight = 0.0
-        val valueList = ArrayList<Float>(2048) // 用于计算高光百分位
+        val valueList = ArrayList<Float>(sampleSize * sampleSize)
 
         // RAW 数据一般为小端序
         val savedOrder = buffer.order()
@@ -608,18 +602,6 @@ class RawDemosaicProcessor {
                             val value = buffer.getShort(offset).toInt() and 0xFFFF
                             // 归一化并 Clamp，防止坏点
                             val normalized = ((value - black) / range).coerceIn(0f, 1f)
-
-                            // === 改进点 1: 中心权重计算 ===
-                            // 距离中心越近，权重越高 (高斯分布模拟)
-                            val distSq = (targetX - centerX) * (targetX - centerX) + (y - centerY) * (y - centerY)
-                            // 权重衰减系数：边缘处的权重约为中心的 0.2
-                            val weight = Math.exp(-distSq / (2.0 * (maxDistSq * 0.4))).toFloat()
-
-                            weightedSum += normalized * weight
-                            totalWeight += weight
-
-                            // 收集样本用于高光计算 (不需要全部收集，随机/间隔收集即可)
-                            // 这里直接复用循环，由于下采样了，List不会太大
                             valueList.add(normalized)
                         }
                     }
@@ -632,50 +614,24 @@ class RawDemosaicProcessor {
             buffer.order(savedOrder)
         }
 
-        if (totalWeight == 0.0 || valueList.isEmpty()) return 1.0f
+        if (valueList.isEmpty()) return 1.0f
 
-        // 2. 计算加权平均亮度 (Weighted Average)
-        val weightedAvg = (weightedSum / totalWeight).toFloat()
-
-        // 3. 计算高光阈值 (98th Percentile)
-        // 只需要保护前 2% 的极亮像素不溢出，允许 specular highlights (太阳、反光) 溢出
+        // 获取最亮的2%像素（98th百分位数）
         valueList.sort()
-        val highIndex = (valueList.size * 0.98).toInt().coerceAtMost(valueList.size - 1)
-        val highlightLuma = valueList[highIndex]
+        val highlightLuma = valueList[(valueList.size * 0.98).toInt().coerceAtMost(valueList.size - 1)]
+        val averageLuma = valueList.average().toFloat()
 
-        // === 核心改进逻辑 ===
+        // 混合测光逻辑
+        // 目标：平均亮度映射到中性灰(0.22)，高光映射到(0.9)
+        // 注意：0.18是标准中性灰，但手机摄影通常倾向于稍微亮一点，所以用0.22-0.24
+        val gainAvg = if (averageLuma > 0.0001f) 0.22f / averageLuma else 1.0f
+        val gainHigh = if (highlightLuma > 0.0001f) 0.90f / highlightLuma else 1.0f
 
-        // 策略 A: 基础 18% 灰增益
-        // 改进点 2: 暗光场景补偿 (Dark Scene Compensation)
-        // 如果平均亮度极低，说明是夜景，Target 不应该是 0.18，而应该更低 (比如 0.05)
-        // 使用一个平滑函数调整 Target
-        val baseTarget = 0.18f
-        val darkSceneFactor = smoothStep(0.0f, 0.05f, weightedAvg) // 0~0.05 之间平滑过渡
-        val dynamicTarget = 0.05f + (baseTarget - 0.05f) * darkSceneFactor
+        // 取两者的较小值，既保证了亮度，又绝对压制了过曝
+        val gain = min(gainAvg, gainHigh)
 
-        val gainAvg = if (weightedAvg > 0.0001f) dynamicTarget / weightedAvg else 1.0f
-
-        // 策略 B: 高光保护增益
-        // 我们希望 98% 亮度的像素，在应用 Gain 之后，不要超过 1.0 (或者 0.9 以留余地)
-        // maxLuma * gain <= 1.0  =>  gain <= 1.0 / maxLuma
-        val gainHighlight = if (highlightLuma > 0.0001f) 1.0f / highlightLuma else 4.0f
-
-        // 4. 最终决策：取两者较小值，但允许一定程度的过曝以换取亮度
-        // 通常高光限制会非常严格，导致画面太暗，所以我们给高光增益一个 "软膝" 或者放宽一点 (比如 1.2 / highlightLuma)
-        // 这里采用保守策略：优先满足中性灰，但如果高光溢出太严重，就被高光强行拉回来
-
-        // 混合逻辑：final = min(gainAvg, gainHighlight * bias)
-        // bias = 1.25 表示允许最亮部溢出 25% (Tone Mapping 会救回来)
-        val finalGain = kotlin.math.min(gainAvg, gainHighlight * 1.5f)
-
-        // 5. 硬限制 (防止增益过大导致噪点失控)
-        return finalGain.coerceIn(1.0f, 8.0f) // 适当放宽上限到 8.0，但受高光约束
-    }
-
-    // 辅助函数: 平滑阶梯
-    private fun smoothStep(edge0: Float, edge1: Float, x: Float): Float {
-        val t = ((x - edge0) / (edge1 - edge0)).coerceIn(0.0f, 1.0f)
-        return t * t * (3.0f - 2.0f * t)
+        // 硬限制防止增益过大或过小
+        return gain.coerceIn(1.0f, 2.4f)
     }
 
     // 辅助函数: 3x3 矩阵转置 (行主序 -> 列主序)
