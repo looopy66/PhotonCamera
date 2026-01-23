@@ -21,6 +21,58 @@ class PhotoProcessor(
     private val frameManager: FrameManager,
     private val frameRenderer: FrameRenderer
 ) {
+
+    /**
+     * @param context 上下文
+     * @param input 输入 ARGB的像素数组
+     * @param metadata 照片元数据（包含编辑配置和拍摄信息）
+     * @param uri 照片 URI（用于提取 EXIF，仅在 metadata 中没有拍摄信息时使用）
+     * @param sharpening 锐化强度
+     * @param noiseReduction 降噪强度
+     * @param chromaNoiseReduction 减少杂色强度
+     * @return 处理后的 Bitmap
+     */
+    suspend fun process(
+        context: Context,
+        input: IntArray,
+        metadata: PhotoMetadata,
+        uri: Uri? = null,
+        sharpening: Float = 0f,
+        noiseReduction: Float = 0f,
+        chromaNoiseReduction: Float = 0f
+    ): Bitmap = withContext(Dispatchers.Default) {
+        var result: Bitmap? = null
+
+        // 优先从元数据中获取软件处理参数
+        // 智能回退：如果是导入的照片且元数据中没存过，则默认值为 0，不应用额外处理
+        val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
+        val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
+        val finalChromaNoiseReduction = metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
+
+        // 1. 应用 LUT
+        if (metadata.lutId != null) {
+            val lutConfig = lutManager.loadLut(metadata.lutId)
+            val colorRecipeParams = lutManager.loadColorRecipeParams(metadata.lutId)
+            if (lutConfig != null && colorRecipeParams.lutIntensity > 0f) {
+                val lutResult = lutImageProcessor.applyLut(
+                    input,
+                    lutConfig,
+                    colorRecipeParams,
+                    finalSharpening,
+                    finalNoiseReduction,
+                    finalChromaNoiseReduction
+                )
+                result = lutResult
+            }
+        }
+
+        result ?: return@withContext Bitmap.createBitmap(input, input[0], input[1], Bitmap.Config.ARGB_8888)
+
+        result = applyFrame(context, result, metadata, uri)
+
+        result
+    }
+
     /**
      * @param context 上下文
      * @param input 输入 Bitmap
@@ -65,6 +117,19 @@ class PhotoProcessor(
             }
         }
 
+        result = applyFrame(context, result, metadata, uri)
+        
+        result
+    }
+
+
+    private fun applyFrame(
+        context: Context,
+        input: Bitmap,
+        metadata: PhotoMetadata,
+        uri: Uri? = null,
+    ) : Bitmap {
+        var result = input
         // 2. 应用边框水印
         if (metadata.frameId != null) {
             val template = frameManager.loadTemplate(metadata.frameId)
@@ -108,57 +173,12 @@ class PhotoProcessor(
                     template,
                     finalMetadata,
                 )
-                if (framedResult != result && result != input) {
+                if (framedResult != result) {
                     result.recycle()
                 }
                 result = framedResult
             }
         }
-        
-        result
-    }
-
-    /**
-     * 应用旋转和亮度调整
-     */
-    private fun applyEdits(bitmap: Bitmap, rotation: Float, brightness: Float): Bitmap {
-        val matrix = Matrix()
-        
-        // 旋转
-        if (rotation != 0f) {
-            matrix.postRotate(rotation)
-        }
-        
-        var result = if (rotation != 0f) {
-            try {
-                Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-            } catch (e: Exception) {
-                bitmap
-            }
-        } else {
-            bitmap
-        }
-        
-        // 亮度调整
-        if (brightness != 1f) {
-            try {
-                val adjustedBitmap = Bitmap.createBitmap(result.width, result.height, Bitmap.Config.ARGB_8888)
-                val canvas = Canvas(adjustedBitmap)
-                val paint = Paint()
-                val colorMatrix = ColorMatrix().apply {
-                    setScale(brightness, brightness, brightness, 1f)
-                }
-                paint.colorFilter = ColorMatrixColorFilter(colorMatrix)
-                canvas.drawBitmap(result, 0f, 0f, paint)
-                if (result != bitmap) {
-                    result.recycle()
-                }
-                result = adjustedBitmap
-            } catch (e: Exception) {
-                // Ignore and keep result as is
-            }
-        }
-        
         return result
     }
 }

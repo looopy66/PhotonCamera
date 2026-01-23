@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.raw
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.hardware.camera2.CameraCharacteristics
@@ -117,7 +118,7 @@ class RawDemosaicProcessor {
      * @return 处理后的 Bitmap，失败返回 null
      */
     suspend fun process(
-        context: android.content.Context,
+        context: Context,
         rawImage: Image,
         characteristics: CameraCharacteristics,
         captureResult: CaptureResult,
@@ -173,7 +174,7 @@ class RawDemosaicProcessor {
             val finalWidth = if (isSwapped) croppedHeight else croppedWidth
             val finalHeight = if (isSwapped) croppedWidth else croppedHeight
 
-            // 3. 曝光增益计算 (18% 灰)
+            // 3. 曝光增益计算
             val exposureGain = calculateExposureGain(rawImage, metadata)
             Log.d(TAG, "process: exposureGain=$exposureGain")
 

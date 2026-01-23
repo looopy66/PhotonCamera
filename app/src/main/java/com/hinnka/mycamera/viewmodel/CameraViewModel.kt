@@ -1085,7 +1085,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     val photoId = characteristics?.let {
                         PhotoManager.savePhoto(
                             context, image, preview, metadata, rotation, aspectRatio, it, captureResult, shouldAutoSave,
-                            photoProcessor, captureInfo,  sharpening.value, noiseReduction.value, chromaNoiseReduction.value
+                            photoProcessor, sharpening.value, noiseReduction.value, chromaNoiseReduction.value
                         )
                     }
                     if (photoId != null) {

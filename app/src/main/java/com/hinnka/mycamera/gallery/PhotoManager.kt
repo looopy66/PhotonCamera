@@ -6,7 +6,6 @@ import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.ImageDecoder
 import android.graphics.ImageFormat
 import android.graphics.Matrix
 import android.graphics.Rect
@@ -19,20 +18,16 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
-import com.hinnka.mycamera.camera.CaptureInfo
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.RawProcessor
 import com.hinnka.mycamera.utils.YuvProcessor
-import com.hinnka.mycamera.viewmodel.CameraViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -76,6 +71,10 @@ object PhotoManager {
         return File(getPhotoDir(context, photoId), PHOTO_FILE)
     }
 
+    fun getYuvFile(context: Context, photoId: String): File {
+        return File(getPhotoDir(context, photoId), YUV_FILE)
+    }
+
     fun getMetadataFile(context: Context, photoId: String): File {
         return File(getPhotoDir(context, photoId), METADATA_FILE)
     }
@@ -84,69 +83,83 @@ object PhotoManager {
         return File(getPhotoDir(context, photoId), THUMBNAIL_FILE)
     }
 
+    suspend fun exportPhoto(
+        context: Context,
+        id: String,
+        photoProcessor: PhotoProcessor,
+        metadata: PhotoMetadata,
+        sharpeningValue: Float,
+        noiseReductionValue: Float,
+        chromaNoiseReductionValue: Float,
+        onComplete: (Boolean) -> Unit = {}
+    ) {
+        withContext(Dispatchers.IO) {
+            try {
+                // 读取照片
+                val file = getYuvFile(context, id)
+                val argb = YuvProcessor.loadCompressedArgb(file.absolutePath) ?: return@withContext
 
-    suspend fun exportPhoto(context: Context, photoProcessor: PhotoProcessor, bitmap: Bitmap, metadata: PhotoMetadata, finalCaptureInfo: CaptureInfo, sharpeningValue: Float, noiseReductionValue: Float, chromaNoiseReductionValue: Float) {
-        val processedBitmap = withContext(Dispatchers.Default) {
-            photoProcessor.process(
-                context = context,
-                input = bitmap,
-                metadata = metadata,
-                sharpening = sharpeningValue,
-                noiseReduction = noiseReductionValue,
-                chromaNoiseReduction = chromaNoiseReductionValue
-            )
-        }
+                val photoUri = Uri.fromFile(getPhotoFile(context, id))
+                // 处理照片：跟随用户设置
+                val processedBitmap = photoProcessor.process(
+                    context, argb, metadata, photoUri,
+                    sharpeningValue, noiseReductionValue, chromaNoiseReductionValue
+                )
 
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
-            .format(Date())
-        val filename = "PhotonCamera_${timestamp}.jpg"
-        val contentValues = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
-            put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-            put(
-                MediaStore.MediaColumns.RELATIVE_PATH,
-                Environment.DIRECTORY_DCIM + "/PhotonCamera"
-            )
-        }
+                // 保存到指定目录
+                val filename =
+                    "PhotonCamera_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.jpg"
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                    put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/PhotonCamera")
+                }
 
-        val uri = context.contentResolver.insert(
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            contentValues
-        )
+                val uri = context.contentResolver.insert(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    contentValues
+                )
 
-        uri?.let {
-            context.contentResolver.openOutputStream(it)?.use { outputStream ->
-                processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
-            }
+                uri?.let {
+                    context.contentResolver.openOutputStream(it)?.use { outputStream ->
+                        // 使用 95 质量以获得更高的图像清晰度
+                        processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                    }
 
-            // 写入 EXIF 信息
-            context.contentResolver.openFileDescriptor(it, "rw")?.use { pfd ->
-                ExifWriter.writeExif(
-                    pfd.fileDescriptor, finalCaptureInfo.copy(
-                        imageWidth = processedBitmap.width,
-                        imageHeight = processedBitmap.height
+                    // 写入 EXIF 信息
+                    context.contentResolver.openFileDescriptor(it, "rw")?.use { pfd ->
+                        ExifWriter.writeExif(
+                            pfd.fileDescriptor, metadata.toCaptureInfo().copy(
+                                imageWidth = processedBitmap.width,
+                                imageHeight = processedBitmap.height
+                            )
+                        )
+                    }
+
+                    // 保存导出的 URI 到元数据
+                    val currentMetadata = loadMetadata(context,  id) ?: metadata
+                    val updatedMetadata = currentMetadata.copy(
+                        exportedUris = currentMetadata.exportedUris + it.toString()
                     )
-                )
-            }
+                    saveMetadata(context, id, updatedMetadata)
+                    PLog.d(TAG, "Exported URI saved: $it for photo $id")
+                }
 
-            // 保存导出的 URI 到元数据
-            val photoId = getPhotoIds(context).firstOrNull()
-            if (photoId != null) {
-                val currentMetadata = loadMetadata(context, photoId) ?: metadata
-                val updatedMetadata = currentMetadata.copy(
-                    exportedUris = currentMetadata.exportedUris + it.toString()
-                )
-                saveMetadata(context, photoId, updatedMetadata)
-                PLog.d(TAG, "Exported URI saved: $it")
-            }
-        }
+                processedBitmap.recycle()
+                withContext(Dispatchers.Main) {
+                    onComplete(uri != null)
+                }
 
-        if (processedBitmap != bitmap) {
-            processedBitmap.recycle()
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to export photo", e)
+                withContext(Dispatchers.Main) {
+                    onComplete(false)
+                }
+            }
         }
     }
 
-    suspend fun exportDng(context: Context, image: Image, characteristics: CameraCharacteristics, finalCaptureResult: CaptureResult, rotation: Int) = withContext(Dispatchers.IO) {
+    suspend fun exportDng(context: Context, image: Image, metadata: PhotoMetadata, characteristics: CameraCharacteristics, finalCaptureResult: CaptureResult, rotation: Int) = withContext(Dispatchers.IO) {
         try {
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
                 .format(Date())
@@ -176,6 +189,16 @@ object PhotoManager {
                     )
                 }
                 PLog.d(TAG, "DNG exported: $uri")
+
+                val photoId = getPhotoIds(context).firstOrNull()
+                if (photoId != null) {
+                    val currentMetadata = loadMetadata(context, photoId) ?: metadata
+                    val updatedMetadata = currentMetadata.copy(
+                        exportedUris = currentMetadata.exportedUris + uri.toString()
+                    )
+                    saveMetadata(context, photoId, updatedMetadata)
+                    PLog.d(TAG, "Exported URI saved: $uri")
+                }
             }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to export DNG", e)
@@ -200,7 +223,6 @@ object PhotoManager {
         captureResult: CaptureResult,
         shouldAutoSave: Boolean = true,
         photoProcessor: PhotoProcessor,
-        captureInfo: CaptureInfo,
         sharpeningValue: Float,
         noiseReductionValue: Float,
         chromaNoiseReductionValue: Float,
@@ -239,12 +261,18 @@ object PhotoManager {
                             val bitmap = Bitmap.createBitmap(result, width, height, Bitmap.Config.ARGB_8888)
                             launch {
                                 withContext(Dispatchers.IO) {
+                                    // 保存元数据
+                                    val metadataWithInfo = metadata.copy(
+                                        width = width,
+                                        height = height,
+                                    )
+                                    metadataFile.writeText(metadataWithInfo.toJson())
                                     FileOutputStream(photoFile).use { outputStream ->
                                         // 直接从内存中的 Bitmap 生成缩略图
                                         bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
                                     }
                                     if (shouldAutoSave) {
-                                        exportPhoto(context, photoProcessor, bitmap, metadata, captureInfo, sharpeningValue, noiseReductionValue, chromaNoiseReductionValue)
+                                        exportPhoto(context, photoId, photoProcessor, metadata, sharpeningValue, noiseReductionValue, chromaNoiseReductionValue)
                                     }
                                     bitmap.recycle()
                                 }
@@ -274,11 +302,17 @@ object PhotoManager {
 
                             launch {
                                 withContext(Dispatchers.IO) {
+                                    // 保存元数据
+                                    val metadataWithInfo = metadata.copy(
+                                        width = width,
+                                        height = height,
+                                    )
+                                    metadataFile.writeText(metadataWithInfo.toJson())
                                     FileOutputStream(photoFile).use { outputStream ->
                                         bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
                                     }
                                     if (shouldAutoSave) {
-                                        exportPhoto(context, photoProcessor, bitmap, metadata, captureInfo, sharpeningValue, noiseReductionValue, chromaNoiseReductionValue)
+                                        exportPhoto(context, photoId, photoProcessor, metadata, sharpeningValue, noiseReductionValue, chromaNoiseReductionValue)
                                     }
                                     bitmap.recycle()
                                 }
@@ -289,7 +323,7 @@ object PhotoManager {
                                         RawProcessor.saveToDng(image, characteristics, captureResult, it, rotation)
                                     }
                                     if (shouldAutoSave) {
-                                        exportDng(context, image, characteristics, captureResult, rotation)
+                                        exportDng(context, image, metadata, characteristics, captureResult, rotation)
                                     }
                                 }
                             }
@@ -307,12 +341,7 @@ object PhotoManager {
                     }
                 }
 
-                // 保存元数据
-                val metadataWithInfo = metadata.copy(
-                    width = width,
-                    height = height,
-                )
-                metadataFile.writeText(metadataWithInfo.toJson())
+
 
                 photoId
             } catch (e: Exception) {

@@ -10,12 +10,15 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
-import android.util.Log
-import androidx.compose.runtime.*
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hinnka.mycamera.data.ContentRepository
+import com.hinnka.mycamera.data.UserPreferencesRepository
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.gallery.*
@@ -31,8 +34,6 @@ import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
-import kotlin.math.max
-import com.hinnka.mycamera.data.UserPreferencesRepository
 
 /**
  * 相册 ViewModel
@@ -927,7 +928,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         // 导入的照片默认不应用处理（除非用户编辑过）
         val photoSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening.value)
         val photoNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction.value)
-        val photoChromaNoiseReduction = metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
+        val photoChromaNoiseReduction =
+            metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
 
         return PhotoTransformation(
             context = context,
@@ -970,8 +972,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 } else {
                     finalMetadata = photo.metadata ?: PhotoMetadata()
                     finalS = finalMetadata.sharpening ?: (if (finalMetadata.isImported) 0f else sharpening.value)
-                    finalNR = finalMetadata.noiseReduction ?: (if (finalMetadata.isImported) 0f else noiseReduction.value)
-                    finalCNR = finalMetadata.chromaNoiseReduction ?: (if (finalMetadata.isImported) 0f else chromaNoiseReduction.value)
+                    finalNR =
+                        finalMetadata.noiseReduction ?: (if (finalMetadata.isImported) 0f else noiseReduction.value)
+                    finalCNR = finalMetadata.chromaNoiseReduction
+                        ?: (if (finalMetadata.isImported) 0f else chromaNoiseReduction.value)
                 }
 
                 // 预览生成
@@ -1060,18 +1064,20 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             noiseReduction = editNoiseReduction.value,
             chromaNoiseReduction = editChromaNoiseReduction.value
         )
-        exportPhotoInternal(
-            photo = photo,
-            metadata = metadata,
-            directory = Environment.DIRECTORY_DCIM + "/PhotonCamera",
-            onComplete = { success ->
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            PhotoManager.exportPhoto(
+                context, photo.id, photoProcessor, metadata,
+                sharpening.value, noiseReduction.value,
+                chromaNoiseReduction.value
+            ) { success ->
                 if (success) {
                     exitEditMode()
                     loadPhotos()
                 }
                 onComplete(success)
             }
-        )
+        }
     }
 
     /**
@@ -1080,12 +1086,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun exportPhoto(photo: PhotoData, onComplete: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             val metadata = photo.metadata ?: PhotoManager.loadMetadata(getApplication(), photo.id) ?: PhotoMetadata()
-            exportPhotoInternal(
-                photo = photo,
-                metadata = metadata,
-                directory = Environment.DIRECTORY_DCIM + "/PhotonCamera",
-                onComplete = onComplete
-            )
+            val context = getApplication<Application>()
+            PhotoManager.exportPhoto(context, photo.id, photoProcessor, metadata,
+                sharpening.value, noiseReduction.value,
+                chromaNoiseReduction.value) { success ->
+                if (success) {
+                    exitEditMode()
+                    loadPhotos()
+                }
+                onComplete(success)
+            }
         }
     }
 
@@ -1124,85 +1134,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to prepare shared photo", e)
             null
-        }
-    }
-
-    /**
-     * 内部导出逻辑实现
-     */
-    private fun exportPhotoInternal(
-        photo: PhotoData,
-        metadata: PhotoMetadata,
-        directory: String,
-        filenameSuffix: String = "",
-        onComplete: (Boolean) -> Unit = {}
-    ) {
-        viewModelScope.launch {
-            try {
-                val context = getApplication<Application>()
-
-                // 读取照片
-                val inputStream = context.contentResolver.openInputStream(photo.uri)
-                val bitmap = BitmapFactory.decodeStream(inputStream)
-                inputStream?.close()
-
-                if (bitmap == null) {
-                    onComplete(false)
-                    return@launch
-                }
-
-                // 处理照片：跟随用户设置
-                val processedBitmap = photoProcessor.process(
-                    context, bitmap, metadata, photo.uri,
-                    sharpening.value, noiseReduction.value, chromaNoiseReduction.value
-                )
-
-                // 保存到指定目录
-                val filename =
-                    "PhotonCamera_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}$filenameSuffix.jpg"
-                val contentValues = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
-                    put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, directory)
-                }
-
-                val uri = context.contentResolver.insert(
-                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                    contentValues
-                )
-
-                uri?.let {
-                    context.contentResolver.openOutputStream(it)?.use { outputStream ->
-                        // 使用 95 质量以获得更高的图像清晰度
-                        processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
-                    }
-
-                    // 写入 EXIF 信息
-                    context.contentResolver.openFileDescriptor(it, "rw")?.use { pfd ->
-                        ExifWriter.writeExif(
-                            pfd.fileDescriptor, metadata.toCaptureInfo().copy(
-                                imageWidth = processedBitmap.width,
-                                imageHeight = processedBitmap.height
-                            )
-                        )
-                    }
-
-                    // 保存导出的 URI 到元数据
-                    val currentMetadata = PhotoManager.loadMetadata(context, photo.id) ?: metadata
-                    val updatedMetadata = currentMetadata.copy(
-                        exportedUris = currentMetadata.exportedUris + it.toString()
-                    )
-                    PhotoManager.saveMetadata(context, photo.id, updatedMetadata)
-                    PLog.d(TAG, "Exported URI saved: $it for photo ${photo.id}")
-                }
-
-                processedBitmap.recycle()
-                onComplete(uri != null)
-
-            } catch (e: Exception) {
-                PLog.e(TAG, "Failed to export photo", e)
-                onComplete(false)
-            }
         }
     }
 

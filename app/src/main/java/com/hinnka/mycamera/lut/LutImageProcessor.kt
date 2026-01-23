@@ -160,8 +160,83 @@ class LutImageProcessor {
     }
     
     /**
+     * 应用 LUT 到 ARGB 数据
+     *
+     * @param argbData ARGB 格式的像素数据 (IntArray)
+     * @param lutConfig LUT 配置
+     * @param colorRecipeParams 色彩配方参数
+     * @param sharpeningValue 锐化强度
+     * @param noiseReductionValue 降噪强度
+     * @param chromaNoiseReductionValue 减少杂色强度
+     */
+    suspend fun applyLut(
+        argbData: IntArray,
+        lutConfig: LutConfig?,
+        colorRecipeParams: ColorRecipeParams?,
+        sharpeningValue: Float = 0f,
+        noiseReductionValue: Float = 0f,
+        chromaNoiseReductionValue: Float = 0f,
+    ): Bitmap = withContext(glDispatcher) {
+        val width = argbData[0]
+        val height = argbData[1]
+        if (!isInitialized) {
+            if (!initialize()) {
+                // 创建一个空白 Bitmap 返回
+                return@withContext Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            }
+        }
+
+        // 提取色彩配方参数
+        val colorRecipeEnabled = colorRecipeParams != null && !colorRecipeParams.isDefault()
+        val exposure = colorRecipeParams?.exposure ?: 0f
+        val contrast = colorRecipeParams?.contrast ?: 1f
+        val saturation = colorRecipeParams?.saturation ?: 1f
+        val temperature = colorRecipeParams?.temperature ?: 0f
+        val tint = colorRecipeParams?.tint ?: 0f
+        val fade = colorRecipeParams?.fade ?: 0f
+        val vibrance = colorRecipeParams?.color ?: 0f
+        val highlights = colorRecipeParams?.highlights ?: 0f
+        val shadows = colorRecipeParams?.shadows ?: 0f
+        val filmGrain = colorRecipeParams?.filmGrain ?: 0f
+        val vignette = colorRecipeParams?.vignette ?: 0f
+        val bleachBypass = colorRecipeParams?.bleachBypass ?: 0f
+        val intensity = colorRecipeParams?.lutIntensity ?: 1f
+
+        // 后期处理参数
+        val sharpening: Float = sharpeningValue
+        val noiseReduction: Float = noiseReductionValue
+        val chromaNoiseReduction: Float = chromaNoiseReductionValue
+
+        // 确保上下文激活
+        EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+
+        // 创建/更新帧缓冲
+        setupFramebuffer(width, height)
+
+        // 上传 ARGB 数据作为图片纹理
+        uploadImageTextureFromArgb(argbData, width, height)
+
+        // 上传 LUT 纹理
+        if (lutConfig != null) {
+            uploadLutTexture(lutConfig)
+        }
+
+        // 执行渲染（与 Bitmap 版本相同的处理流程）
+        val outputBitmap = performRender(
+            width, height,
+            lutConfig,
+            colorRecipeEnabled,
+            exposure, contrast, saturation, temperature, tint, fade,
+            vibrance, highlights, shadows, filmGrain, vignette, bleachBypass,
+            intensity, sharpening, noiseReduction, chromaNoiseReduction
+        )
+
+        outputBitmap
+    }
+
+    /**
      * 应用 LUT 到 Bitmap
-     * 
+     *
      * @param bitmap 输入图片
      * @param lutConfig LUT 配置
      * @param colorRecipeParams 色彩配方参数
@@ -221,7 +296,44 @@ class LutImageProcessor {
             uploadLutTexture(lutConfig)
         }
 
-        // 绑定帧缓冲
+        // 执行渲染
+        val outputBitmap = performRender(
+            width, height,
+            lutConfig,
+            colorRecipeEnabled,
+            exposure, contrast, saturation, temperature, tint, fade,
+            vibrance, highlights, shadows, filmGrain, vignette, bleachBypass,
+            intensity, sharpening, noiseReduction, chromaNoiseReduction
+        )
+
+        outputBitmap
+    }
+
+    /**
+     * 执行渲染操作（共享的渲染逻辑）
+     */
+    private fun performRender(
+        width: Int,
+        height: Int,
+        lutConfig: LutConfig?,
+        colorRecipeEnabled: Boolean,
+        exposure: Float,
+        contrast: Float,
+        saturation: Float,
+        temperature: Float,
+        tint: Float,
+        fade: Float,
+        vibrance: Float,
+        highlights: Float,
+        shadows: Float,
+        filmGrain: Float,
+        vignette: Float,
+        bleachBypass: Float,
+        intensity: Float,
+        sharpening: Float,
+        noiseReduction: Float,
+        chromaNoiseReduction: Float
+    ): Bitmap {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
         GLES30.glViewport(0, 0, width, height)
 
@@ -309,7 +421,7 @@ class LutImageProcessor {
         // 解绑帧缓冲
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
 
-        outputBitmap
+        return outputBitmap
     }
     
     private fun setupFramebuffer(width: Int, height: Int) {
@@ -353,14 +465,53 @@ class LutImageProcessor {
             GLES30.glGenTextures(1, textures, 0)
             imageTextureId = textures[0]
         }
-        
+
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, imageTextureId)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-        
+
         android.opengl.GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, bitmap, 0)
+    }
+
+    private fun uploadImageTextureFromArgb(argbData: IntArray, width: Int, height: Int) {
+        if (imageTextureId == 0) {
+            val textures = IntArray(1)
+            GLES30.glGenTextures(1, textures, 0)
+            imageTextureId = textures[0]
+        }
+
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, imageTextureId)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+
+        // 将 ARGB IntArray 转换为 RGBA ByteBuffer
+        val buffer = ByteBuffer.allocateDirect(argbData.size * 4)
+        buffer.order(ByteOrder.nativeOrder())
+
+        for (pixel in argbData) {
+            // ARGB 格式: 0xAARRGGBB
+            val a = (pixel shr 24) and 0xFF
+            val r = (pixel shr 16) and 0xFF
+            val g = (pixel shr 8) and 0xFF
+            val b = pixel and 0xFF
+
+            // 写入 RGBA 格式
+            buffer.put(r.toByte())
+            buffer.put(g.toByte())
+            buffer.put(b.toByte())
+            buffer.put(a.toByte())
+        }
+        buffer.position(0)
+
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA,
+            width, height, 0,
+            GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, buffer
+        )
     }
     
     private fun uploadLutTexture(lutConfig: LutConfig) {
