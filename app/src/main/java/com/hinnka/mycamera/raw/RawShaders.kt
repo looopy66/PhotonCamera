@@ -602,13 +602,14 @@ object RawShaders {
 
             // 步骤 5: 色彩转换 (CCM)
             rgb = uColorCorrectionMatrix * rgb;
+            
+            rgb = applyDoubleEndedDesaturation(rgb);
 
             // 步骤 5b: 应用曝光增益 (Linear HDR Space)
             rgb *= uExposureGain;
             
             rgb = applyTonemap(rgb);
             
-            rgb = applyDoubleEndedDesaturation(rgb);
 
             // 步骤 7: sRGB gamma 编码 (Linear -> sRGB)
             rgb = linearToSRGB(rgb);
