@@ -223,7 +223,7 @@ object RawShaders {
             float wV = varV / (varV + noiseVar + epsilon);
             
             // 方向自适应权重
-            float dirWeight = gradV / (gradH + gradV + epsilon);
+            float dirWeight = gradH / (gradH + gradV + epsilon);
             
             // G 通道插值
             if (type != 1) {
@@ -306,8 +306,8 @@ object RawShaders {
                 
                 float avgDiff = diffSum / (weightSum + epsilon);
                 
-                // 中值钳位：限制在邻居的 [min, max] 范围内
-                avgDiff = clamp(avgDiff, minDiff, maxDiff);
+                // 中值钳位：限制在邻居的 [min, max] 范围内 (适当放宽范围以减少边缘断层)
+                avgDiff = clamp(avgDiff, minDiff - 0.02, maxDiff + 0.02);
                 
                 // 收紧色差范围：在 Raw 域超过 ±0.15 往往是噪点
                 avgDiff = clamp(avgDiff, -0.15, 0.15);
@@ -352,7 +352,8 @@ object RawShaders {
                 }
                 
                 float avgDiff = diffSum / (weightSum + epsilon);
-                avgDiff = clamp(avgDiff, minDiff, maxDiff);
+                // 中值钳位：限制在邻居的 [min, max] 范围内 (适当放宽范围以减少边缘断层)
+                avgDiff = clamp(avgDiff, minDiff - 0.02, maxDiff + 0.02);
                 avgDiff = clamp(avgDiff, -0.15, 0.15);
                 
                 r = g + avgDiff;

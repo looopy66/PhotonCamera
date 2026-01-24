@@ -159,13 +159,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         cameraController.initialize()
-        cameraController.onImageCaptured = { image, preview, captureInfo, characteristics, captureResult ->
+        cameraController.onImageCaptured = { image, captureInfo, characteristics, captureResult ->
             PLog.d(
                 TAG,
                 "onImageCaptured callback triggered - image: ${image.width}x${image.height}, format: ${image.format}"
             )
             viewModelScope.launch {
-                saveImage(image, preview, captureInfo, characteristics, captureResult)
+                saveImage(image, captureInfo, characteristics, captureResult)
             }
         }
 
@@ -1023,7 +1023,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     private suspend fun saveImage(
         image: Image,
-        preview: Bitmap?,
         captureInfo: CaptureInfo,
         characteristics: CameraCharacteristics?,
         captureResult: CaptureResult
@@ -1079,32 +1078,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 aperture = captureInfo.formatAperture(),
             )
 
-            coroutineScope {
-                // 保存原始照片到数据库
-                launch {
-                    val photoId = characteristics?.let {
-                        PhotoManager.savePhoto(
-                            context, image, preview, metadata, rotation, aspectRatio, it, captureResult, shouldAutoSave,
-                            photoProcessor, sharpening.value, noiseReduction.value, chromaNoiseReduction.value
-                        )
-                    }
-                    if (photoId != null) {
-                        PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
-                        _imageSavedEvent.emit(Unit)
-                    } else {
-                        PLog.e(TAG, "Failed to save image via PhotoManager")
-                    }
-                }
+            val photoId = characteristics?.let {
+                PhotoManager.savePhoto(
+                    context, image, cameraController.rawPreviewFrame, metadata, rotation, aspectRatio, it, captureResult, shouldAutoSave,
+                    photoProcessor, sharpening.value, noiseReduction.value, chromaNoiseReduction.value
+                )
+            }
+            if (photoId != null) {
+                PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
+                _imageSavedEvent.emit(Unit)
+            } else {
+                PLog.e(TAG, "Failed to save image via PhotoManager")
             }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save image", e)
-        } finally {
-            // 确保即使出错也关闭 Image
-            try {
-                image.close()
-            } catch (ex: Exception) {
-                // Image 可能已经关闭
-            }
         }
     }
 

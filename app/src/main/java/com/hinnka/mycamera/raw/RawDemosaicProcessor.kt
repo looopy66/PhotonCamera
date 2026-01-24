@@ -1,6 +1,5 @@
 package com.hinnka.mycamera.raw
 
-import android.content.Context
 import android.graphics.Bitmap
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
@@ -145,6 +144,7 @@ class RawDemosaicProcessor {
 
     companion object {
         private const val TAG = "RawDemosaicProcessor"
+        private const val TILE_SIZE = 512 // 增加分片渲染，避免长时间占用 GPU 导致 UI 卡顿
 
         init {
             // 加载 JNI 库
@@ -492,6 +492,7 @@ class RawDemosaicProcessor {
     private var vertexBuffer: FloatBuffer? = null
     private var texCoordBuffer: FloatBuffer? = null
     private var indexBuffer: ShortBuffer? = null
+    private var pboId = 0
 
     // Demosaic Uniform 位置
     private var uRawTextureLoc = 0
@@ -547,7 +548,6 @@ class RawDemosaicProcessor {
     /**
      * 处理 DNG 文件
      *
-     * @param context 上下文
      * @param dngFilePath DNG 文件路径
      * @param aspectRatio 目标宽高比
      * @param lutConfig LUT 配置（可选）
@@ -558,7 +558,6 @@ class RawDemosaicProcessor {
      * @return 处理后的 Bitmap，失败返回 null
      */
     suspend fun process(
-        context: Context,
         dngFilePath: String,
         aspectRatio: AspectRatio,
         lutConfig: LutConfig? = null,
@@ -586,7 +585,6 @@ class RawDemosaicProcessor {
                 // 使用提取的数据调用内部处理方法
                 // 注意：使用从 DNG 文件读取的 rotation，而不是外部传入的参数
                 processInternal(
-                    context = context,
                     rawData = it.rawData,
                     width = it.width,
                     height = it.height,
@@ -623,7 +621,6 @@ class RawDemosaicProcessor {
      * @return 处理后的 Bitmap，失败返回 null
      */
     suspend fun process(
-        context: Context,
         rawImage: Image,
         characteristics: CameraCharacteristics,
         captureResult: CaptureResult,
@@ -637,7 +634,7 @@ class RawDemosaicProcessor {
     ): Bitmap? = withContext(glDispatcher) {
         try {
             if (!isInitialized) {
-                if (!initializeOnGlThread(context)) {
+                if (!initializeOnGlThread()) {
                     PLog.e(TAG, "Failed to initialize processor")
                     return@withContext null
                 }
@@ -651,7 +648,6 @@ class RawDemosaicProcessor {
 
             // 使用内部处理方法
             processInternal(
-                context = context,
                 rawData = rawImage.planes[0].buffer,
                 width = width,
                 height = height,
@@ -675,7 +671,6 @@ class RawDemosaicProcessor {
      * 内部处理方法（共享的核心处理逻辑）
      */
     private suspend fun processInternal(
-        context: Context,
         rawData: ByteBuffer,
         width: Int,
         height: Int,
@@ -690,7 +685,7 @@ class RawDemosaicProcessor {
         chromaNoiseReductionValue: Float = 0f
     ): Bitmap? = withContext(glDispatcher) {
         if (!isInitialized) {
-            if (!initializeOnGlThread(context)) {
+            if (!initializeOnGlThread()) {
                 PLog.e(TAG, "Failed to initialize processor")
                 return@withContext null
             }
@@ -790,24 +785,24 @@ class RawDemosaicProcessor {
     /**
      * 预加载 EGL 环境和 Shader
      */
-    fun preload(context: android.content.Context) {
+    fun preload() {
         Executors.newSingleThreadExecutor().execute {
             runBlocking {
                 withContext(glDispatcher) {
-                    initializeOnGlThread(context)
+                    initializeOnGlThread()
                 }
             }
         }
     }
 
-    private suspend fun initializeOnGlThread(context: android.content.Context): Boolean = withContext(glDispatcher) {
-        initialize(context)
+    private suspend fun initializeOnGlThread(): Boolean = withContext(glDispatcher) {
+        initialize()
     }
 
     /**
      * 初始化 EGL 环境
      */
-    fun initialize(context: android.content.Context): Boolean {
+    fun initialize(): Boolean {
         if (isInitialized) return true
 
         try {
@@ -1401,13 +1396,10 @@ class RawDemosaicProcessor {
     ) {
         GLES30.glUseProgram(lutProgram)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, lutFramebufferId)
+        
+        // 全量清除
         GLES30.glViewport(0, 0, metadata.width, metadata.height)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-
-        // 设置变换矩阵为单位矩阵
-        val identityMatrix = FloatArray(16)
-        GlMatrix.setIdentityM(identityMatrix, 0)
-        GLES30.glUniformMatrix4fv(uLutTexMatrixLoc, 1, false, identityMatrix, 0)
 
         // 绑定解马赛克输出纹理
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
@@ -1456,20 +1448,39 @@ class RawDemosaicProcessor {
         GLES30.glUniform1f(uNoiseReductionLoc, noiseReductionValue)
         GLES30.glUniform1f(uChromaNoiseReductionLoc, chromaNoiseReductionValue)
 
-        drawQuad(lutProgram)
+        // 分片渲染
+        GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
+        for (y in 0 until metadata.height step TILE_SIZE) {
+            val h = min(TILE_SIZE, metadata.height - y)
+            for (x in 0 until metadata.width step TILE_SIZE) {
+                val w = min(TILE_SIZE, metadata.width - x)
+                
+                GLES30.glViewport(x, y, w, h)
+                GLES30.glScissor(x, y, w, h)
+
+                // 计算变换矩阵，确保采样正确的纹理区域
+                val tileMatrix = FloatArray(16)
+                GlMatrix.setIdentityM(tileMatrix, 0)
+                GlMatrix.translateM(tileMatrix, 0, x.toFloat() / metadata.width, y.toFloat() / metadata.height, 0f)
+                GlMatrix.scaleM(tileMatrix, 0, w.toFloat() / metadata.width, h.toFloat() / metadata.height, 1f)
+                GLES30.glUniformMatrix4fv(uLutTexMatrixLoc, 1, false, tileMatrix, 0)
+
+                drawQuad(lutProgram)
+                GLES30.glFlush()
+            }
+        }
+        GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
+        
         checkGlError("renderLutPass")
     }
 
     private fun renderDemosaicPass(metadata: RawMetadata, exposureGain: Float) {
         GLES30.glUseProgram(demosaicProgram)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, demosaicFramebufferId)
+        
+        // 全量清除
         GLES30.glViewport(0, 0, metadata.width, metadata.height)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-
-        // 设置变换矩阵为单位矩阵 (1:1)
-        val identityMatrix = FloatArray(16)
-        GlMatrix.setIdentityM(identityMatrix, 0)
-        GLES30.glUniformMatrix4fv(uDemosaicTexMatrixLoc, 1, false, identityMatrix, 0)
 
         // 绑定 RAW 纹理
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
@@ -1511,7 +1522,29 @@ class RawDemosaicProcessor {
         }
         GLES30.glUniform1i(uLensShadingMapLoc, 2)
 
-        drawQuad(demosaicProgram)
+        // 分片渲染
+        GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
+        for (y in 0 until metadata.height step TILE_SIZE) {
+            val h = min(TILE_SIZE, metadata.height - y)
+            for (x in 0 until metadata.width step TILE_SIZE) {
+                val w = min(TILE_SIZE, metadata.width - x)
+                
+                GLES30.glViewport(x, y, w, h)
+                GLES30.glScissor(x, y, w, h)
+
+                // 虽然 demosaic 用的 gl_FragCoord 不需要矩阵，但为了规范还是设置一下
+                val tileMatrix = FloatArray(16)
+                GlMatrix.setIdentityM(tileMatrix, 0)
+                GlMatrix.translateM(tileMatrix, 0, x.toFloat() / metadata.width, y.toFloat() / metadata.height, 0f)
+                GlMatrix.scaleM(tileMatrix, 0, w.toFloat() / metadata.width, h.toFloat() / metadata.height, 1f)
+                GLES30.glUniformMatrix4fv(uDemosaicTexMatrixLoc, 1, false, tileMatrix, 0)
+
+                drawQuad(demosaicProgram)
+                GLES30.glFlush() // 提示 GPU 尽早开始执行
+            }
+        }
+        GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
+
         checkGlError("renderDemosaicPass")
     }
 
@@ -1623,15 +1656,40 @@ class RawDemosaicProcessor {
     }
 
     private fun readPixels(width: Int, height: Int): Bitmap {
-        val buffer = ByteBuffer.allocateDirect(width * height * 4)
-        buffer.order(ByteOrder.nativeOrder())
+        val pixelSize = width * height * 4
+        
+        // 使用 PBO 优化 glReadPixels
+        if (pboId == 0) {
+            val pbos = IntArray(1)
+            GLES30.glGenBuffers(1, pbos, 0)
+            pboId = pbos[0]
+        }
+
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pboId)
+        GLES30.glBufferData(GLES30.GL_PIXEL_PACK_BUFFER, pixelSize, null, GLES30.GL_STREAM_READ)
 
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, outputFramebufferId)
-        GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, buffer)
-        buffer.position(0)
+        GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, 0)
 
+        // 映射内存并读取
+        val mappedBuffer = GLES30.glMapBufferRange(
+            GLES30.GL_PIXEL_PACK_BUFFER,
+            0,
+            pixelSize,
+            GLES30.GL_MAP_READ_BIT
+        ) as? ByteBuffer
+        
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        bitmap.copyPixelsFromBuffer(buffer)
+        
+        if (mappedBuffer != null) {
+            val buffer = ByteBuffer.allocateDirect(pixelSize).order(ByteOrder.nativeOrder())
+            buffer.put(mappedBuffer)
+            buffer.position(0)
+            bitmap.copyPixelsFromBuffer(buffer)
+            GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
+        }
+        
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
 
         return bitmap
     }
@@ -1699,6 +1757,7 @@ class RawDemosaicProcessor {
         if (lut3DTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(lut3DTextureId), 0)
         if (outputTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(outputTextureId), 0)
         if (outputFramebufferId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(outputFramebufferId), 0)
+        if (pboId != 0) GLES30.glDeleteBuffers(1, intArrayOf(pboId), 0)
 
         if (lensShadingTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(lensShadingTextureId), 0)
         if (dummyShadingTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(dummyShadingTextureId), 0)

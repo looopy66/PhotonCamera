@@ -122,7 +122,7 @@ class Camera2Controller(private val context: Context) {
     private var lastCaptureResult: TotalCaptureResult? = null
 
     // 图片拍摄回调（携带 CaptureInfo, CameraCharacteristics 和 CaptureResult 用于 RAW 处理）
-    var onImageCaptured: ((Image, Bitmap?, CaptureInfo, CameraCharacteristics?, CaptureResult) -> Unit)? = null
+    var onImageCaptured: ((Image, CaptureInfo, CameraCharacteristics?, CaptureResult) -> Unit)? = null
 
     // 快门音效播放回调
     var onPlayShutterSound: (() -> Unit)? = null
@@ -151,7 +151,7 @@ class Camera2Controller(private val context: Context) {
                 val pendingImage = pendingImages.remove(timestamp)
                 if (pendingImage != null) {
                     // 找到了匹配的图像，触发回调
-                    processAndTriggerCapture(pendingImage, rawPreviewFrame, result)
+                    processAndTriggerCapture(pendingImage, result)
                 } else {
                     // 还没找到图像，存入缓存
                     pendingResults[timestamp] = result
@@ -370,7 +370,7 @@ class Camera2Controller(private val context: Context) {
             discoverCameras()
         }
 
-        RawDemosaicProcessor.getInstance().preload(context)
+        RawDemosaicProcessor.getInstance().preload()
 
         val cameraId = _state.value.currentCameraId
         val aspectRatio = _state.value.aspectRatio
@@ -494,7 +494,7 @@ class Camera2Controller(private val context: Context) {
 
                             if (pendingResult != null) {
                                 // 找到了匹配的结果，触发回调
-                                processAndTriggerCapture(image, rawPreviewFrame, pendingResult)
+                                processAndTriggerCapture(image, pendingResult)
                             } else {
                                 // 还没找到结果，存入缓存
                                 pendingImages[timestamp] = image
@@ -2032,7 +2032,7 @@ class Camera2Controller(private val context: Context) {
                     if (timestamp != null) {
                         val pendingImage = pendingImages.remove(timestamp)
                         if (pendingImage != null) {
-                            processAndTriggerCapture(pendingImage, rawPreviewFrame, result)
+                            processAndTriggerCapture(pendingImage, result)
                         } else {
                             pendingResults[timestamp] = result
                         }
@@ -2252,7 +2252,7 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    private fun processAndTriggerCapture(image: Image, preview: Bitmap?, result: TotalCaptureResult) {
+    private fun processAndTriggerCapture(image: Image, result: TotalCaptureResult) {
         val processStartTime = System.currentTimeMillis()
         try {
             _state.value = _state.value.copy(isCapturing = false)
@@ -2264,7 +2264,7 @@ class Camera2Controller(private val context: Context) {
             val captureInfo = rebuildCaptureInfo(result, width, height)
 
             // 传递完整的 Image 对象、CaptureInfo、CameraCharacteristics 和 CaptureResult
-            onImageCaptured?.invoke(image, preview, captureInfo, cachedCharacteristics, result)
+            onImageCaptured?.invoke(image, captureInfo, cachedCharacteristics, result)
         } catch (e: Exception) {
             PLog.e(TAG, "Error processing joined capture data", e)
             image.close()

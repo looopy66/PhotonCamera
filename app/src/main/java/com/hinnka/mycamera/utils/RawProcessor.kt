@@ -11,11 +11,8 @@ import android.hardware.camera2.DngCreator
 import android.media.Image
 import android.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
-import com.hinnka.mycamera.gallery.PhotoMetadata
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 
@@ -73,7 +70,7 @@ object RawProcessor {
             // 使用 GPU 加速的 RAW 处理器
             val processor = RawDemosaicProcessor.getInstance()
             val result = runBlocking {
-                processor.process(context, image, characteristics, captureResult, aspectRatio, rotation)
+                processor.process(image, characteristics, captureResult, aspectRatio, rotation)
             }
 
             if (result != null) {

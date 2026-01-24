@@ -1,6 +1,5 @@
 package com.hinnka.mycamera.gallery
 
-import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.ContentValues
 import android.content.Context
@@ -8,8 +7,6 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
 import android.graphics.Matrix
-import android.graphics.Rect
-import android.graphics.YuvImage
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.media.Image
@@ -26,18 +23,16 @@ import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.RawProcessor
 import com.hinnka.mycamera.utils.YuvProcessor
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
-import kotlin.math.max
-import kotlin.math.roundToInt
 
 /**
  * 照片管理器
@@ -53,6 +48,8 @@ object PhotoManager {
     private const val DNG_FILE = "original.dng"
     private const val METADATA_FILE = "metadata.json"
     private const val THUMBNAIL_FILE = "thumbnail.jpg"
+
+    val processingScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     private fun getPhotosBaseDir(context: Context): File {
         val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), PHOTOS_DIR)
@@ -209,6 +206,8 @@ object PhotoManager {
         }
     }
 
+
+
     /**
      * 保存新拍摄的照片
      *
@@ -219,7 +218,7 @@ object PhotoManager {
     suspend fun savePhoto(
         context: Context,
         image: Image,
-        preview: Bitmap?,
+        thumbnail: Bitmap?,
         metadata: PhotoMetadata,
         rotation: Int,
         aspectRatio: AspectRatio,
@@ -231,38 +230,38 @@ object PhotoManager {
         noiseReductionValue: Float,
         chromaNoiseReductionValue: Float,
     ): String? {
-        return withContext(Dispatchers.IO) {
-            try {
-                val photoId = UUID.randomUUID().toString()
-                val photoDir = getPhotoDir(context, photoId)
+        return try {
+            val photoId = UUID.randomUUID().toString()
+            val photoDir = getPhotoDir(context, photoId)
 
-                // 预先准备所有文件路径
-                val photoFile = File(photoDir, PHOTO_FILE)
-                val yuvFile = File(photoDir, YUV_FILE)
-                val dngFile = File(photoDir, DNG_FILE)
-                val metadataFile = File(photoDir, METADATA_FILE)
-                val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
+            // 预先准备所有文件路径
+            val photoFile = File(photoDir, PHOTO_FILE)
+            val yuvFile = File(photoDir, YUV_FILE)
+            val dngFile = File(photoDir, DNG_FILE)
+            val metadataFile = File(photoDir, METADATA_FILE)
+            val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
 
-                val format = image.format
+            val format = image.format
 
-                var width = image.width
-                var height = image.height
+            var width = image.width
+            var height = image.height
 
-                var thumbnailGenerated = false
-                if (preview != null) {
-                    generateThumbnail(preview, thumbnailFile)
-                    thumbnailGenerated = true
-                }
+            if (thumbnail != null) {
+                generateThumbnail(thumbnail, thumbnailFile)
+            }
 
-                // 根据图像格式处理
-                when (format) {
-                    ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
-                        val deferred = async {
-                            // 计算处理后的尺寸
-                            val dimensions = BitmapUtils.calculateProcessedDimensions(width, height, aspectRatio, rotation)
-                            val finalWidth = dimensions.first
-                            val finalHeight = dimensions.second
-                            
+            // 计算处理后的尺寸
+            val dimensions = BitmapUtils.calculateProcessedDimensions(width, height, aspectRatio, rotation)
+            val finalWidth = dimensions.first
+            val finalHeight = dimensions.second
+
+            // 根据图像格式处理
+            when (format) {
+                ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
+                    processingScope.launch {
+                        withContext(Dispatchers.IO) {
+                            photoFile.createNewFile()
+
                             // 创建预览用的 Bitmap
                             val previewBitmap = createBitmap(finalWidth, finalHeight)
 
@@ -271,16 +270,7 @@ object PhotoManager {
                                 image, aspectRatio, rotation,
                                 yuvFile.absolutePath, previewBitmap
                             )
-
-                            launch {
-                                withContext(Dispatchers.IO) {
-                                    FileOutputStream(photoFile).use { outputStream ->
-                                        // 直接从内存中的 Bitmap 生成 8-bit JPEG 副本
-                                        previewBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
-                                    }
-                                }
-                            }
-                            launch {
+                            if (success) {
                                 // 保存元数据
                                 val metadataWithInfo = metadata.copy(
                                     width = finalWidth,
@@ -288,79 +278,64 @@ object PhotoManager {
                                     ratio = aspectRatio,
                                 )
                                 metadataFile.writeText(metadataWithInfo.toJson())
-                                
-                                if (shouldAutoSave && success) {
+                                if (thumbnail == null) {
+                                    generateThumbnail(previewBitmap, thumbnailFile)
+                                }
+                                FileOutputStream(photoFile).use { outputStream ->
+                                    // 直接从内存中的 Bitmap 生成 8-bit JPEG 副本
+                                    previewBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                                }
+                                if (shouldAutoSave) {
                                     exportPhoto(context, photoId, photoProcessor, metadata, sharpeningValue, noiseReductionValue, chromaNoiseReductionValue)
                                 }
                             }
-                            previewBitmap
                         }
-                        if (!thumbnailGenerated) {
-                            val bitmap = deferred.await()
-                            generateThumbnail(bitmap, thumbnailFile)
-                            bitmap.recycle()
-                        }
-                    }
-                    ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12 -> {
-                        val deferred = async {
-//                            val bitmap = RawProcessor.processWithImageDecoder(image, characteristics, captureResult, aspectRatio, rotation) ?: return@async null
-                            val bitmap = RawProcessor.processAndToBitmap(context, image, characteristics, captureResult, aspectRatio, rotation) ?: return@async null
-
-                            val dimensions = BitmapUtils.calculateProcessedDimensions(width, height, aspectRatio, rotation)
-
-                            width = dimensions.first
-                            height = dimensions.second
-
-                            launch {
-                                withContext(Dispatchers.IO) {
-                                    FileOutputStream(photoFile).use { outputStream ->
-                                        bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
-                                    }
-                                    bitmap.recycle()
-                                }
-                            }
-                            launch {
-                                withContext(Dispatchers.IO) {
-                                    // 保存元数据
-                                    val metadataWithInfo = metadata.copy(
-                                        width = width,
-                                        height = height,
-                                        ratio = aspectRatio,
-                                        sharpening = 0.2f,
-                                        noiseReduction = 0f,
-                                        chromaNoiseReduction = 0.25f,
-                                    )
-                                    metadataFile.writeText(metadataWithInfo.toJson())
-                                    FileOutputStream(dngFile).use {
-                                        RawProcessor.saveToDng(image, characteristics, captureResult, it, rotation)
-                                    }
-                                    if (shouldAutoSave) {
-                                        exportDng(context, image, metadata, characteristics, captureResult, rotation)
-                                        exportPhoto(context, photoId, photoProcessor, metadata, sharpeningValue, noiseReductionValue, chromaNoiseReductionValue)
-                                    }
-                                }
-                            }
-                            bitmap
-                        }
-                        if (!thumbnailGenerated) {
-                            val bitmap = deferred.await() ?: return@withContext null
-                            generateThumbnail(bitmap, thumbnailFile)
-                            bitmap.recycle()
-                        }
-                    }
-                    else -> {
-                        PLog.e(TAG, "Unsupported image format: $format")
-                        return@withContext null
                     }
                 }
-
-
-
-                photoId
-            } catch (e: Exception) {
-                PLog.e(TAG, "Failed to save photo", e)
-                null
+                ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12 -> {
+                    processingScope.launch {
+                        withContext(Dispatchers.IO) {
+                            photoFile.createNewFile()
+                            val bitmap = RawProcessor.processAndToBitmap(context, image, characteristics, captureResult, aspectRatio, rotation) ?: return@withContext
+                            if (thumbnail == null) {
+                                generateThumbnail(bitmap, thumbnailFile)
+                            }
+                            FileOutputStream(photoFile).use { outputStream ->
+                                bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                            }
+                            bitmap.recycle()
+                        }
+                    }
+                    processingScope.launch {
+                        withContext(Dispatchers.IO) {
+                            // 保存元数据
+                            val metadataWithInfo = metadata.copy(
+                                width = width,
+                                height = height,
+                                ratio = aspectRatio,
+                                sharpening = 0.2f,
+                                noiseReduction = 0f,
+                                chromaNoiseReduction = 0.25f,
+                            )
+                            metadataFile.writeText(metadataWithInfo.toJson())
+                            FileOutputStream(dngFile).use {
+                                RawProcessor.saveToDng(image, characteristics, captureResult, it, rotation)
+                            }
+                            if (shouldAutoSave) {
+                                exportDng(context, image, metadata, characteristics, captureResult, rotation)
+                                exportPhoto(context, photoId, photoProcessor, metadata, sharpeningValue, noiseReductionValue, chromaNoiseReductionValue)
+                            }
+                        }
+                    }
+                }
+                else -> {
+                    PLog.e(TAG, "Unsupported image format: $format")
+                }
             }
+            photoId
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to save photo", e)
+            null
         }
     }
 

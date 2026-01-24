@@ -39,6 +39,7 @@ class LutImageProcessor {
     private var lutTextureId = 0
     private var framebufferId = 0
     private var outputTextureId = 0
+    private var pboId = 0
 
     private var vertexBuffer: FloatBuffer? = null
     private var texCoordBuffer: FloatBuffer? = null
@@ -422,15 +423,39 @@ class LutImageProcessor {
         GLES30.glDisableVertexAttribArray(positionHandle)
         GLES30.glDisableVertexAttribArray(texCoordHandle)
 
-        // 读取像素
-        val buffer = ByteBuffer.allocateDirect(width * height * 4)
-        buffer.order(ByteOrder.nativeOrder())
-        GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, buffer)
-        buffer.position(0)
+        // 使用 PBO 优化 glReadPixels
+        if (pboId == 0) {
+            val pbos = IntArray(1)
+            GLES30.glGenBuffers(1, pbos, 0)
+            pboId = pbos[0]
+        }
 
+        val pixelSize = width * height * 4
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pboId)
+        GLES30.glBufferData(GLES30.GL_PIXEL_PACK_BUFFER, pixelSize, null, GLES30.GL_STREAM_READ)
+
+        GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, 0)
+
+        // 映射内存并读取
+        val mappedBuffer = GLES30.glMapBufferRange(
+            GLES30.GL_PIXEL_PACK_BUFFER,
+            0,
+            pixelSize,
+            GLES30.GL_MAP_READ_BIT
+        ) as? ByteBuffer
+        
         // 创建临时 Bitmap
         val tempBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        tempBitmap.copyPixelsFromBuffer(buffer)
+        
+        if (mappedBuffer != null) {
+            val buffer = ByteBuffer.allocateDirect(pixelSize).order(ByteOrder.nativeOrder())
+            buffer.put(mappedBuffer)
+            buffer.position(0)
+            tempBitmap.copyPixelsFromBuffer(buffer)
+            GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
+        }
+        
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
 
         // 翻转 Y 轴（glReadPixels 从左下角开始读取，需要翻转）
         val matrix = android.graphics.Matrix()
@@ -667,6 +692,10 @@ class LutImageProcessor {
         }
         if (outputTextureId != 0) {
             GLES30.glDeleteTextures(1, intArrayOf(outputTextureId), 0)
+        }
+        if (pboId != 0) {
+            GLES30.glDeleteBuffers(1, intArrayOf(pboId), 0)
+            pboId = 0
         }
 
         EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
