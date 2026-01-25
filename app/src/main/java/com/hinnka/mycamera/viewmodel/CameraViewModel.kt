@@ -32,6 +32,7 @@ import com.hinnka.mycamera.utils.ShutterSoundPlayer
 import com.hinnka.mycamera.utils.VibrationHelper
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.first
 import kotlin.math.abs
 
 /**
@@ -486,6 +487,49 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 contentRepository.refreshCustomContent()
             }
             PLog.d(TAG, "Custom content refreshed via ContentRepository")
+        }
+    }
+
+    /**
+     * 复制 LUT
+     */
+    fun copyLut(lut: LutInfo, copyName: String) {
+        viewModelScope.launch {
+            val newLutId = withContext(Dispatchers.IO) {
+                contentRepository.getCustomImportManager().copyLut(lut, copyName)
+            }
+            if (newLutId != null) {
+                withContext(Dispatchers.IO) {
+                    // 同时复制色彩配方
+                    val params = contentRepository.lutManager.loadColorRecipeParams(lut.id)
+                    contentRepository.lutManager.saveColorRecipeParams(newLutId, params)
+
+                    // 更新排序顺序：放在原版下面
+                    val currentOrder = userPreferencesRepository.userPreferences.first().filterOrder.toMutableList()
+                    if (currentOrder.isEmpty()) {
+                        // 如果当前没有排序，则从当前列表初始化并插入
+                        val allIds = availableLutList.map { it.id }.toMutableList()
+                        val index = allIds.indexOf(lut.id)
+                        if (index != -1) {
+                            allIds.add(index + 1, newLutId)
+                        } else {
+                            allIds.add(newLutId)
+                        }
+                        userPreferencesRepository.saveFilterOrder(allIds)
+                    } else {
+                        val index = currentOrder.indexOf(lut.id)
+                        if (index != -1) {
+                            currentOrder.add(index + 1, newLutId)
+                        } else {
+                            currentOrder.add(newLutId)
+                        }
+                        userPreferencesRepository.saveFilterOrder(currentOrder)
+                    }
+
+                    // 刷新列表
+                    contentRepository.refreshCustomContent()
+                }
+            }
         }
     }
 

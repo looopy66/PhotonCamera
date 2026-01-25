@@ -67,8 +67,7 @@ fun FrameManagementScreen(
         val updatedExisting = localFrameList.mapNotNull { local ->
             availableFrames.find { it.id == local.id }
         }
-        // 修正：将新项目添加到末尾，符合注释描述
-        localFrameList = updatedExisting + newItems
+        localFrameList = newItems + updatedExisting
     }
 
     // 重命名对话框状态

@@ -100,6 +100,57 @@ class CustomImportManager(private val context: Context) {
     }
 
     /**
+     * 复制 LUT
+     *
+     * @param lut 要复制的 LUT 信息
+     * @param copyName 复制后的显示名称
+     * @return 复制成功的 LUT ID，失败返回 null
+     */
+    fun copyLut(lut: LutInfo, copyName: String): String? {
+        return try {
+            val lutId = "custom_${UUID.randomUUID()}"
+            val plutFileName = "$lutId.plut"
+            val plutFile = File(customLutDir, plutFileName)
+
+            if (lut.isBuiltIn) {
+                // 如果是内置 LUT，从 assets 复制到 custom 目录
+                context.assets.open(lut.fileName).use { inputStream ->
+                    FileOutputStream(plutFile).use { outputStream ->
+                        inputStream.copyTo(outputStream)
+                    }
+                }
+            } else {
+                // 如果是自定义 LUT，直接从文件复制
+                val originalFile = File(lut.fileName)
+                if (originalFile.exists()) {
+                    originalFile.inputStream().use { inputStream ->
+                        FileOutputStream(plutFile).use { outputStream ->
+                            inputStream.copyTo(outputStream)
+                        }
+                    }
+                } else {
+                    PLog.e(TAG, "Copy failed: original file not found: ${lut.fileName}")
+                    return null
+                }
+            }
+
+            // 保存到配置文件
+            saveLutToConfig(lutId, copyName, plutFileName)
+
+            // 如果原 LUT 有分类，也同步分类
+            if (lut.category.isNotEmpty()) {
+                updateLutCategory(lutId, lut.category)
+            }
+
+            PLog.d(TAG, "LUT copied successfully: $lutId ($copyName)")
+            lutId
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to copy LUT", e)
+            null
+        }
+    }
+
+    /**
      * 导入边框样式文件
      *
      * @param uri 选择的边框配置文件 URI (JSON)

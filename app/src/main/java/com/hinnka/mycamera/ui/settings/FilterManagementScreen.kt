@@ -23,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -55,25 +56,53 @@ fun FilterManagementScreen(
     val availableLuts = viewModel.availableLutList
     val customImportManager = viewModel.getCustomImportManager()
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     // 本地可变列表用于拖拽排序
     var localLutList by remember { mutableStateOf(availableLuts) }
 
-    // 当 availableLuts 更新时同步本地列表（保留现有顺序，将新项目添加到末尾）
+    // 当 availableLuts 更新时同步本地列表
     LaunchedEffect(availableLuts) {
         val existingIds = localLutList.map { it.id }.toSet()
         val newItems = availableLuts.filter { it.id !in existingIds }
-        val updatedExisting = localLutList.mapNotNull { local ->
-            availableLuts.find { it.id == local.id }
+
+        if (newItems.isEmpty()) {
+            localLutList = localLutList.mapNotNull { local ->
+                availableLuts.find { it.id == local.id }
+            }
+        } else {
+            // 如果新项是一个（如复制）或多个（如批量导入），按 availableLuts 的顺序插入到 localLutList 的合适位置
+            val updatedList = localLutList.mapNotNull { local ->
+                availableLuts.find { it.id == local.id }
+            }.toMutableList()
+
+            newItems.forEach { newItem ->
+                val idxInAvailable = availableLuts.indexOfFirst { it.id == newItem.id }
+                if (idxInAvailable > 0) {
+                    val prevId = availableLuts[idxInAvailable - 1].id
+                    val insertPos = updatedList.indexOfFirst { it.id == prevId }
+                    if (insertPos != -1) {
+                        updatedList.add(insertPos + 1, newItem)
+                    } else {
+                        updatedList.add(0, newItem)
+                    }
+                } else {
+                    updatedList.add(0, newItem)
+                }
+            }
+            localLutList = updatedList
         }
-        // 修正：将新项目添加到末尾，符合注释描述
-        localLutList = updatedExisting + newItems
     }
 
     // 重命名对话框状态
     var showRenameDialog by remember { mutableStateOf(false) }
     var renamingLut by remember { mutableStateOf<LutInfo?>(null) }
     var renameText by remember { mutableStateOf("") }
+
+    // 复制对话框状态
+    var showCopyDialog by remember { mutableStateOf(false) }
+    var copyingLut by remember { mutableStateOf<LutInfo?>(null) }
+    var copyText by remember { mutableStateOf("") }
 
     // 删除确认对话框状态
     var showDeleteDialog by remember { mutableStateOf(false) }
@@ -498,6 +527,13 @@ fun FilterManagementScreen(
                                     showRenameDialog = true
                                 }
                             } else null,
+                            onCopy = if (!isSelectionMode) {
+                                {
+                                    copyingLut = lutInfo
+                                    copyText = lutInfo.getName() + context.getString(R.string.copy_suffix)
+                                    showCopyDialog = true
+                                }
+                            } else null,
                             onEditColorRecipe = if (!isSelectionMode) {
                                 {
                                     editingLutId = lutInfo.id
@@ -559,6 +595,41 @@ fun FilterManagementScreen(
                 },
                 dismissButton = {
                     TextButton(onClick = { showRenameDialog = false }) {
+                        Text(stringResource(R.string.cancel))
+                    }
+                }
+            )
+        }
+
+        // 复制对话框
+        if (showCopyDialog && copyingLut != null) {
+            AlertDialog(
+                onDismissRequest = { showCopyDialog = false },
+                title = {
+                    Text(stringResource(R.string.copy_lut_dialog_title))
+                },
+                text = {
+                    OutlinedTextField(
+                        value = copyText,
+                        onValueChange = { copyText = it },
+                        label = { Text(stringResource(R.string.name)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            viewModel.copyLut(copyingLut!!, copyText)
+                            showCopyDialog = false
+                            copyingLut = null
+                        }
+                    ) {
+                        Text(stringResource(R.string.confirm))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showCopyDialog = false }) {
                         Text(stringResource(R.string.cancel))
                     }
                 }
@@ -852,6 +923,7 @@ private fun FilterManagementItem(
     onSetDefault: () -> Unit,
     onToggleSelection: () -> Unit,
     onRename: (() -> Unit)?,
+    onCopy: (() -> Unit)? = null,
     onEditColorRecipe: (() -> Unit)?,
     onDelete: (() -> Unit)?,
     onEditCategory: (() -> Unit)? = null,
@@ -1035,6 +1107,16 @@ private fun FilterManagementItem(
                             }
                         )
                     }
+
+                    // 复制 (所有滤镜可用)
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.copy), color = Color.White) },
+                        leadingIcon = { Icon(Icons.Default.ContentCopy, null, tint = Color.White.copy(alpha = 0.7f)) },
+                        onClick = {
+                            showMenu = false
+                            onCopy?.invoke()
+                        }
+                    )
 
                     // 删除 (仅自定义)
                     if (onDelete != null) {
