@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.raw
 
+import androidx.annotation.Keep
 import java.nio.ByteBuffer
 
 /**
@@ -20,7 +21,8 @@ import java.nio.ByteBuffer
  * @param lensShadingMapWidth LSC 表宽度
  * @param lensShadingMapHeight LSC 表高度
  */
-data class DngRawData(
+@Keep
+data class DngRawData @Keep constructor(
     val rawData: ByteBuffer,
     val width: Int,
     val height: Int,

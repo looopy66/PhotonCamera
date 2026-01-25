@@ -21,3 +21,14 @@
 -renamesourcefileattribute SourceFile
 
 -repackageclasses
+
+# Keep JNI used classes
+-keep class com.hinnka.mycamera.raw.DngRawData {
+    <init>(...);
+    *;
+}
+
+# Keep native methods and their classes
+-keepclasseswithmembernames class * {
+    native <methods>;
+}
