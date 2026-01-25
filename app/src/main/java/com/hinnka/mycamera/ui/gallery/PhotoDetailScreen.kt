@@ -448,9 +448,12 @@ private fun ZoomableImage(
                         // 确认第一个手指按下，且当前只有一个指针
                         val downEvent = awaitPointerEvent(PointerEventPass.Initial)
                         if (downEvent.type == PointerEventType.Press && downEvent.changes.size == 1) {
+                            val touchSlop = viewConfiguration.touchSlop
+                            val initialPosition = downEvent.changes[0].position
                             val longPressTimeout = viewConfiguration.longPressTimeoutMillis
                             var upEvent: PointerEvent? = null
                             var isMultiTouch = false
+                            var isMoved = false
 
                             // 期间如果出现第二个手指，立即标志并退出
                             withTimeoutOrNull(longPressTimeout) {
@@ -460,6 +463,13 @@ private fun ZoomableImage(
                                         isMultiTouch = true
                                         break
                                     }
+
+                                    val currentPosition = event.changes[0].position
+                                    if ((currentPosition - initialPosition).getDistance() > touchSlop) {
+                                        isMoved = true
+                                        break
+                                    }
+
                                     if (event.type == PointerEventType.Release) {
                                         upEvent = event
                                         break
@@ -468,7 +478,7 @@ private fun ZoomableImage(
                             }
 
                             // 如果不是多指操作，才根据结果执行逻辑
-                            if (!isMultiTouch) {
+                            if (!isMultiTouch && !isMoved) {
                                 if (upEvent == null) {
                                     // 确认为长按：显示原图
                                     showOrigin = true

@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -101,6 +102,7 @@ fun PhotoEditScreen(
     // 编辑标签页状态
     var editTab by remember { mutableIntStateOf(0) } // 0: 滤镜/边框, 1: 细节处理
     var showControls by remember { mutableStateOf(true) }
+    var isZoomed by remember { mutableStateOf(false) }
 
     LaunchedEffect(
         currentPhoto,
@@ -236,11 +238,14 @@ fun PhotoEditScreen(
                                 // 确认第一个手指按下，且当前只有一个指针
                                 val downEvent = awaitPointerEvent(PointerEventPass.Initial)
                                 if (downEvent.type == PointerEventType.Press && downEvent.changes.size == 1) {
+                                    val touchSlop = viewConfiguration.touchSlop
+                                    val initialPosition = downEvent.changes[0].position
                                     val longPressTimeout = viewConfiguration.longPressTimeoutMillis
                                     var upEvent: PointerEvent? = null
                                     var isMultiTouch = false
+                                    var isMoved = false
 
-                                    // 期间如果出现第二个手指，立即标志并退出
+                                    // 期间如果出现第二个手指或位移过大，立即标志并退出
                                     withTimeoutOrNull(longPressTimeout) {
                                         while (true) {
                                             val event = awaitPointerEvent(PointerEventPass.Initial)
@@ -248,6 +253,13 @@ fun PhotoEditScreen(
                                                 isMultiTouch = true
                                                 break
                                             }
+                                            
+                                            val currentPosition = event.changes[0].position
+                                            if ((currentPosition - initialPosition).getDistance() > touchSlop) {
+                                                isMoved = true
+                                                break
+                                            }
+
                                             if (event.type == PointerEventType.Release) {
                                                 upEvent = event
                                                 break
@@ -255,8 +267,8 @@ fun PhotoEditScreen(
                                         }
                                     }
 
-                                    // 如果不是多指操作，才根据结果执行逻辑
-                                    if (!isMultiTouch) {
+                                    // 如果既没有多指操作也没有明显位移，才根据结果执行逻辑
+                                    if (!isMultiTouch && !isMoved) {
                                         if (upEvent != null) {
                                             // 快速点击：切换控制区域显隐
                                             showControls = !showControls
@@ -283,6 +295,9 @@ fun PhotoEditScreen(
                 ZoomableEditImage(
                     previewBitmap = previewBitmap,
                     contentDescription = stringResource(R.string.edit),
+                    onZoomChange = {
+                        isZoomed = it
+                    },
                     modifier = Modifier.fillMaxSize()
                 )
 
@@ -842,12 +857,17 @@ private fun WatermarkEditSheet(
 private fun ZoomableEditImage(
     previewBitmap: Bitmap?,
     contentDescription: String,
+    onZoomChange: (isZoomed: Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val zoomableState = rememberZoomableImageState(
         zoomableState = rememberZoomableState(zoomSpec = ZoomSpec(maxZoomFactor = 10f))
     )
+
+    LaunchedEffect(zoomableState.zoomableState.zoomFraction) {
+        onZoomChange((zoomableState.zoomableState.zoomFraction ?: 0f) > 0.01f)
+    }
 
     val model = ImageRequest.Builder(context)
         .data(previewBitmap)
