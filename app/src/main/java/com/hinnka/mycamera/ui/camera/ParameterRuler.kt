@@ -54,11 +54,9 @@ fun ParameterRuler(
     showAutoButton: Boolean,
     onValueChange: (Float) -> Unit,
     onAutoModeToggle: () -> Unit,
-    onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val yellow = Color(0xFFFFD700)
-    val backgroundColor = Color.Black.copy(alpha = 0.95f)
 
     val currentValueState by rememberUpdatedState(currentValue)
     var selectedValue by remember(parameter) { mutableStateOf(currentValue) }
@@ -75,10 +73,9 @@ fun ParameterRuler(
 
     Box(
         modifier = modifier
-            .padding(8.dp)
             .fillMaxWidth()
             .height(48.dp)
-            .background(backgroundColor, RoundedCornerShape(24.dp))
+            .padding(horizontal = 8.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxSize(),

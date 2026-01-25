@@ -6,7 +6,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -28,8 +30,13 @@ fun CameraTopSheet(
     onAspectRatioChange: (AspectRatio) -> Unit,
     showLevel: Boolean,
     onLevelToggle: (Boolean) -> Unit,
-    showGrid: Boolean,
-    onGridToggle: (Boolean) -> Unit,
+    useRaw: Boolean,
+    onRawToggle: (Boolean) -> Unit,
+    isRawSupported: Boolean,
+    nrLevel: Int,
+    availableNrLevels: IntArray,
+    onNRLevelChange: (Int) -> Unit,
+    onFilterManageClick: () -> Unit,
     onMoreSettingsClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -94,11 +101,52 @@ fun CameraTopSheet(
                     modifier = Modifier.weight(1f)
                 )
 
-                // Grid Toggle
-                QuickSettingToggle(
-                    title = stringResource(R.string.settings_grid_lines),
-                    checked = showGrid,
-                    onCheckedChange = onGridToggle,
+                // RAW Toggle (if supported)
+                if (isRawSupported) {
+                    QuickSettingToggle(
+                        title = stringResource(R.string.settings_use_raw),
+                        checked = useRaw,
+                        onCheckedChange = onRawToggle,
+                        modifier = Modifier.weight(1f)
+                    )
+                } else {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // NR Level Cycle
+                val nrLevelNames = availableNrLevels.map {
+                    when (it) {
+                        0 -> stringResource(R.string.settings_nr_level_off)
+                        1 -> stringResource(R.string.settings_nr_level_fast)
+                        2 -> stringResource(R.string.settings_nr_level_high_quality)
+                        3 -> stringResource(R.string.settings_nr_level_minimal)
+                        4 -> stringResource(R.string.settings_nr_level_zsl)
+                        else -> "Unknown"
+                    }
+                }
+                QuickSettingValue(
+                    title = stringResource(R.string.settings_nr_level),
+                    value = nrLevelNames.getOrElse(nrLevel) { "Unknown" },
+                    onClick = {
+                        val nextIndex = (availableNrLevels.indexOf(nrLevel) + 1) % availableNrLevels.size
+                        val nextLevel = availableNrLevels[nextIndex]
+                        onNRLevelChange(nextLevel)
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+
+                // Filter Management Button
+                QuickSettingButton(
+                    title = stringResource(R.string.settings_filter_management),
+                    icon = Icons.Default.AutoAwesome,
+                    onClick = onFilterManageClick,
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -147,6 +195,76 @@ fun CameraTopSheet(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun QuickSettingValue(
+    title: String,
+    value: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .height(56.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = 0.05f))
+            .clickable { onClick() }
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Column {
+            Text(
+                text = title,
+                color = Color.White.copy(alpha = 0.6f),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Normal
+            )
+            Text(
+                text = value,
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+    }
+}
+
+@Composable
+fun QuickSettingButton(
+    title: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .height(56.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = 0.05f))
+            .clickable { onClick() }
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Normal
+            )
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.6f),
+                modifier = Modifier.size(18.dp)
+            )
         }
     }
 }

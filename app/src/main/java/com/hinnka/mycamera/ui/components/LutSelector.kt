@@ -330,7 +330,7 @@ private fun LutItem(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth().basicMarquee()
         )
     }
 }

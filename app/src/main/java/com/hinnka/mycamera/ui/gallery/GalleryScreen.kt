@@ -42,6 +42,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.font.FontWeight
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.hinnka.mycamera.R
@@ -68,7 +69,7 @@ fun GalleryScreen(
     val selectedPhotos = viewModel.selectedPhotos
 
     val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetMultipleContents()
+        contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
         if (uris.isNotEmpty()) {
             viewModel.importPhotos(uris)
@@ -103,13 +104,13 @@ fun GalleryScreen(
     }
 
     var showDeleteDialog by remember { mutableStateOf(false) }
-    
+
     // 延迟加载照片列表，避免与跳转动画冲突导致卡顿
     LaunchedEffect(Unit) {
         kotlinx.coroutines.delay(500) // 等待跳转动画完成
         viewModel.loadPhotos()
     }
-    
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -152,7 +153,7 @@ fun GalleryScreen(
                             )
                         }
                     } else {
-                        IconButton(onClick = { launcher.launch("image/*") }) {
+                        IconButton(onClick = { launcher.launch(arrayOf("image/*")) }) {
                             Icon(
                                 imageVector = Icons.Default.AddPhotoAlternate,
                                 contentDescription = stringResource(R.string.import_photo),
@@ -201,7 +202,7 @@ fun GalleryScreen(
                                 fontSize = 12.sp
                             )
                         }
-                        
+
                         // 分享按钮
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -366,7 +367,7 @@ private fun PhotoGridItem(
     onLongClick: () -> Unit
 ) {
     val context = LocalContext.current
-    
+
     Box(
         modifier = Modifier
             .aspectRatio(1f)
@@ -390,7 +391,7 @@ private fun PhotoGridItem(
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
         )
-        
+
         // 选择指示器
         if (isSelectionMode) {
             Box(
@@ -400,7 +401,7 @@ private fun PhotoGridItem(
                         if (isSelected) AccentOrange.copy(alpha = 0.3f) else Color.Transparent
                     )
             )
-            
+
             Icon(
                 imageVector = if (isSelected) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
                 contentDescription = if (isSelected) stringResource(R.string.selected) else stringResource(R.string.not_selected),
@@ -411,22 +412,44 @@ private fun PhotoGridItem(
                     .size(24.dp)
             )
         }
-        
-        // 导入标记
-        if (photo.metadata?.isImported == true) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(4.dp)
-                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(2.dp))
-                    .padding(horizontal = 4.dp, vertical = 2.dp)
-            ) {
-                Text(
-                    text = stringResource(R.string.imported),
-                    color = Color.White,
-                    fontSize = 8.sp,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-                )
+
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+        ) {
+            // RAW 标记
+            val isRaw = remember(photo.id) { viewModel.isRaw(photo.id) }
+            if (isRaw) {
+                Box(
+                    modifier = Modifier
+                        .padding(3.dp)
+                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(2.dp))
+                        .padding(horizontal = 4.dp)
+                ) {
+                    Text(
+                        text = "RAW",
+                        color = Color.White,
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            // 导入标记
+            if (photo.metadata?.isImported == true) {
+                Box(
+                    modifier = Modifier
+                        .padding(3.dp)
+                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(2.dp))
+                        .padding(horizontal = 4.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.imported),
+                        color = Color.White,
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
     }

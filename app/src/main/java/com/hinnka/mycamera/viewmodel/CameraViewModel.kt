@@ -6,6 +6,7 @@ import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.media.Image
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -754,6 +755,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /**
+     * 切换 RAW 格式拍摄
+     */
+    fun toggleRaw() {
+        val nextValue = !useRaw.value
+        cameraController.setUseRaw(nextValue)
+        reopenCamera()
+
+        viewModelScope.launch {
+            userPreferencesRepository.saveUseRaw(nextValue)
+        }
+    }
+
     // ==================== 新增设置项方法 ====================
 
     /**
@@ -957,15 +971,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setEdgeLevel(level: Int) {
         viewModelScope.launch {
             userPreferencesRepository.saveEdgeLevel(level)
-        }
-    }
-
-    /**
-     * 设置是否使用 RAW 格式拍照
-     */
-    fun setUseRaw(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveUseRaw(enabled)
         }
     }
 

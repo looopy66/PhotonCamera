@@ -193,6 +193,9 @@ fun NavigationHost(
                     },
                     onSettingsClick = {
                         navController.navigate(Routes.SETTINGS)
+                    },
+                    onFilterManagementClick = {
+                        navController.navigate(Routes.FILTER_MANAGEMENT)
                     }
                 )
             }

@@ -215,7 +215,7 @@ class Camera2Controller(private val context: Context) {
     private fun processCaptureState(result: CaptureResult) {
         val aeState = result.get(CaptureResult.CONTROL_AE_STATE) ?: return
         if (aeState != lastAeState) {
-            Log.d(TAG, "processCaptureState: aeState = $aeState")
+            //Log.d(TAG, "processCaptureState: aeState = $aeState")
             lastAeState = aeState
         }
         when (internalCaptureState) {
@@ -417,6 +417,11 @@ class Camera2Controller(private val context: Context) {
                 PLog.i(
                     TAG, "Camera characteristics cached - ID: $cameraId, Level: $hardwareLevelName, " +
                             "ManualSensor: $isManualSensorSupported, ManualPost: $isManualPostProcessingSupported, RAW: $isRawSupported, P010: $isP010Supported"
+                )
+
+                _state.value = _state.value.copy(
+                    isRawSupported = isRawSupported,
+                    availableNrModes = availableNoiseReductionModes
                 )
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to cache camera characteristics", e)
@@ -1201,6 +1206,7 @@ class Camera2Controller(private val context: Context) {
      */
     fun setNRLevel(level: Int) {
         nrLevel = level
+        _state.value = _state.value.copy(nrLevel = level)
     }
 
     /**

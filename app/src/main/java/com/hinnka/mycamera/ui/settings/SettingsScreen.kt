@@ -135,7 +135,7 @@ fun SettingsScreen(
 
             // 拍摄设置
             val currentCameraInfo = state.getCurrentCameraInfo()
-            if (currentCameraInfo?.supportsRaw == true) {
+            /*if (currentCameraInfo?.supportsRaw == true) {
                 SettingsSection(title = stringResource(R.string.settings_section_capture)) {
                     SwitchSettingItem(
                         title = stringResource(R.string.settings_use_raw),
@@ -145,7 +145,7 @@ fun SettingsScreen(
                     )
                 }
                 Spacer(modifier = Modifier.height(24.dp))
-            }
+            }*/
 
             // 内容管理设置
             SettingsSection(title = stringResource(R.string.settings_section_management)) {

@@ -164,6 +164,12 @@ data class CameraState(
 
     // 网格线
     val showGrid: Boolean = false, // 是否显示网格线
+
+    // 降噪等级 (0=Off, 1=Fast, 2=High Quality, 3=Real-time, 4=Minimal)
+    val nrLevel: Int = 1,
+    val availableNrModes: IntArray = intArrayOf(),
+
+    val isRawSupported: Boolean = false,
 ) {
     /**
      * 是否全自动曝光

@@ -52,7 +52,7 @@ fun CustomImportSection(
 
     // LUT 文件选择器（支持批量导入）
     val lutLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetMultipleContents()
+        contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris: List<Uri> ->
         scope.launch {
             if (uris.isNotEmpty()) {
@@ -148,7 +148,7 @@ fun CustomImportSection(
             // 导入 LUT 按钮
             ImportButton(
                 text = stringResource(R.string.import_lut),
-                onClick = { lutLauncher.launch("*/*") },
+                onClick = { lutLauncher.launch(arrayOf("*/*")) },
                 enabled = !isImporting,  // 导入时禁用
                 modifier = Modifier.weight(1f)
             )

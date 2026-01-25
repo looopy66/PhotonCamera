@@ -187,9 +187,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     var batchDeletePendingIntent: android.app.PendingIntent? by mutableStateOf(null)
         private set
 
-
-    private var previewBitmapCache = WeakHashMap<String, Bitmap>()
-
     init {
         loadPhotos()
 
@@ -917,11 +914,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editChromaNoiseReduction.value = value
     }
 
+
+    fun isRaw(photoId: String): Boolean {
+        val context = getApplication<Application>()
+        return PhotoManager.getDngFile(context, photoId).exists()
+    }
+
     /**
      * 获取指定照片的完整转换器（LUT + 边框）
      */
     fun getPhotoTransformation(photo: PhotoData): PhotoTransformation {
-        val context = getApplication<Application>()
         val metadata = photo.metadata ?: PhotoMetadata()
 
         // 使用照片自己的 metadata 中保存的处理参数，如果没有则使用全局设置
@@ -975,8 +977,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         ?: (if (finalMetadata.isImported) 0f else chromaNoiseReduction.value)
                 }
 
-                val bitmap = previewBitmapCache[photo.id] ?: PhotoManager.loadBitmap(context, photo.id) ?: return@withContext null
-                previewBitmapCache[photo.id] = bitmap
+                val bitmap = PhotoManager.loadBitmap(context, photo.id) ?: return@withContext null
 
                 if (showOrigin) {
                     bitmap
@@ -987,6 +988,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         finalS, finalNR, finalCNR
                     )
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to create preview", e)
                 null
