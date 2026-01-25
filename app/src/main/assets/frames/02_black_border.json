@@ -26,16 +26,17 @@
             "type": "text",
             "textType": "DEVICE_MODEL",
             "alignment": "CENTER",
-            "fontSize": 24,
+            "fontSize": 28,
             "color": "#C6AE7A",
             "fontWeight": "BOLD",
+            "fontFamily": "SlacksideOne.ttf",
             "line": 1
         },
         {
             "type": "text",
             "textType": "FOCAL_LENGTH_35MM",
             "alignment": "CENTER",
-            "fontSize": 16,
+            "fontSize": 14,
             "color": "#C6AE7A",
             "fontWeight": "NORMAL",
             "line": 2
@@ -44,7 +45,7 @@
             "type": "text",
             "textType": "APERTURE",
             "alignment": "CENTER",
-            "fontSize": 16,
+            "fontSize": 14,
             "color": "#C6AE7A",
             "fontWeight": "NORMAL",
             "line": 2
@@ -53,7 +54,7 @@
             "type": "text",
             "textType": "SHUTTER_SPEED",
             "alignment": "CENTER",
-            "fontSize": 16,
+            "fontSize": 14,
             "color": "#C6AE7A",
             "fontWeight": "NORMAL",
             "line": 2
@@ -62,7 +63,7 @@
             "type": "text",
             "textType": "ISO",
             "alignment": "CENTER",
-            "fontSize": 16,
+            "fontSize": 14,
             "color": "#C6AE7A",
             "fontWeight": "NORMAL",
             "line": 2

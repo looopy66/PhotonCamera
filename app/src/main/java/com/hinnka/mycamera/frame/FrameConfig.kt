@@ -96,6 +96,7 @@ sealed class FrameElement {
         val fontSizeSp: Int = 14,
         val color: Int = Color.DKGRAY,
         val fontWeight: FontWeight = FontWeight.NORMAL,
+        val fontFamily: String? = null,
         val format: String? = null,
         val prefix: String? = null,
         val suffix: String? = null,

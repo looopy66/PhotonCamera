@@ -184,18 +184,6 @@ class FrameRenderer(private val context: Context) {
                 // 叠加模式：绘制从全透明到半透明的渐变背景
                 val overlayTop = (originalBitmap.height - frameHeight).toFloat()
 
-                // 创建线性渐变：从顶部全透明到底部半透明
-                val gradientShader = LinearGradient(
-                    0f, overlayTop,
-                    0f, outputHeight.toFloat(),
-                    Color.TRANSPARENT,
-                    layout.backgroundColor,
-                    Shader.TileMode.CLAMP
-                )
-                backgroundPaint.shader = gradientShader
-                canvas.drawRect(0f, overlayTop, outputWidth.toFloat(), outputHeight.toFloat(), backgroundPaint)
-                backgroundPaint.shader = null  // 重置 shader
-
                 // 绘制水印内容
                 drawFrameContent(
                     canvas, template.elements, metadata,
@@ -255,7 +243,7 @@ class FrameRenderer(private val context: Context) {
         val height = bottom - top
 
         val logoLineSet = visibleElements.filterIsInstance<FrameElement.Logo>().map { it.line }.toSet()
-        val lineWeights = allLines.map { if (logoLineSet.contains(it)) 3f else 1.0f }
+        val lineWeights = allLines.map { if (logoLineSet.contains(it)) 2f else 1.0f }
         val totalWeight = lineWeights.sum()
 
         /**
@@ -452,7 +440,7 @@ class FrameRenderer(private val context: Context) {
             is FrameElement.Text -> {
                 val text = getTextContent(element, metadata) ?: return 0f
                 textPaint.textSize = spToPx(element.fontSizeSp) * scale
-                textPaint.typeface = getTypeface(element.fontWeight)
+                textPaint.typeface = getTypeface(element.fontWeight, element.fontFamily)
                 textPaint.measureText(text) + dpToPx(8) * scale
             }
 
@@ -533,7 +521,7 @@ class FrameRenderer(private val context: Context) {
 
         textPaint.color = element.color
         textPaint.textSize = spToPx(element.fontSizeSp) * scale
-        textPaint.typeface = getTypeface(element.fontWeight)
+        textPaint.typeface = getTypeface(element.fontWeight, element.fontFamily)
 
         val textWidth = textPaint.measureText(text)
         val textHeight = textPaint.descent() - textPaint.ascent()
@@ -970,7 +958,26 @@ class FrameRenderer(private val context: Context) {
         }
     }
 
-    private fun getTypeface(weight: FontWeight): Typeface {
+    private val typefaceCache = mutableMapOf<String, Typeface>()
+
+    private fun getTypeface(weight: FontWeight, fontFamily: String? = null): Typeface {
+        if (fontFamily != null) {
+            val cacheKey = "$fontFamily-$weight"
+            typefaceCache[cacheKey]?.let { return it }
+
+            try {
+                val base = Typeface.createFromAsset(context.assets, "fonts/$fontFamily")
+                val style = when (weight) {
+                    FontWeight.BOLD -> Typeface.BOLD
+                    else -> Typeface.NORMAL
+                }
+                val typeface = Typeface.create(base, style)
+                typefaceCache[cacheKey] = typeface
+                return typeface
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to load font: fonts/$fontFamily", e)
+            }
+        }
         return when (weight) {
             FontWeight.NORMAL -> Typeface.DEFAULT
             FontWeight.MEDIUM -> Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)

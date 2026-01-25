@@ -10,7 +10,7 @@
         "position": "OVERLAY",
         "height": 150,
         "backgroundColor": "#EE000000",
-        "padding": 20
+        "padding": 10
     },
     "elements": [
         {
@@ -25,9 +25,10 @@
             "type": "text",
             "textType": "DEVICE_MODEL",
             "alignment": "CENTER",
-            "fontSize": 16,
+            "fontSize": 30,
             "color": "#FFFFFF",
             "fontWeight": "MEDIUM",
+            "fontFamily": "SlacksideOne.ttf",
             "line": 1
         },
         {
@@ -35,7 +36,7 @@
             "textType": "FOCAL_LENGTH_35MM",
             "alignment": "CENTER",
             "fontSize": 14,
-            "color": "#AAAAAA",
+            "color": "#FDFDFD",
             "fontWeight": "NORMAL",
             "line": 2
         },
@@ -44,7 +45,7 @@
             "textType": "APERTURE",
             "alignment": "CENTER",
             "fontSize": 14,
-            "color": "#AAAAAA",
+            "color": "#FDFDFD",
             "fontWeight": "NORMAL",
             "line": 2
         },
@@ -53,7 +54,7 @@
             "textType": "SHUTTER_SPEED",
             "alignment": "CENTER",
             "fontSize": 14,
-            "color": "#AAAAAA",
+            "color": "#FDFDFD",
             "fontWeight": "NORMAL",
             "line": 2
         },
@@ -62,7 +63,7 @@
             "textType": "ISO",
             "alignment": "CENTER",
             "fontSize": 14,
-            "color": "#AAAAAA",
+            "color": "#FDFDFD",
             "fontWeight": "NORMAL",
             "line": 2
         }

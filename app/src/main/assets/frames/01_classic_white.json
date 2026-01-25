@@ -17,9 +17,10 @@
       "type": "text",
       "textType": "DEVICE_MODEL",
       "alignment": "START",
-      "fontSize": 16,
+      "fontSize": 20,
       "color": "#000000",
       "fontWeight": "BOLD",
+      "fontFamily": "SlacksideOne.ttf",
       "line": -1
     },
     {
@@ -45,7 +46,7 @@
       "textType": "APERTURE",
       "alignment": "END",
       "fontSize": 16,
-      "color": "#000000",
+      "color": "#333333",
       "fontWeight": "BOLD",
       "line": 0
     },
@@ -54,7 +55,7 @@
       "textType": "FOCAL_LENGTH_35MM",
       "alignment": "END",
       "fontSize": 16,
-      "color": "#000000",
+      "color": "#333333",
       "fontWeight": "BOLD",
       "line": 0
     },
@@ -63,7 +64,7 @@
       "textType": "SHUTTER_SPEED",
       "alignment": "END",
       "fontSize": 16,
-      "color": "#000000",
+      "color": "#333333",
       "fontWeight": "BOLD",
       "line": 0
     },
@@ -72,7 +73,7 @@
       "textType": "ISO",
       "alignment": "END",
       "fontSize": 16,
-      "color": "#000000",
+      "color": "#333333",
       "fontWeight": "BOLD",
       "line": 0
     },
@@ -81,7 +82,7 @@
       "textType": "DATETIME",
       "alignment": "END",
       "fontSize": 12,
-      "color": "#999999",
+      "color": "#666666",
       "format": "yyyy.MM.dd HH:mm:ss",
       "line": 1
     }

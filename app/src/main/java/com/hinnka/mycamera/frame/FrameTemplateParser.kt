@@ -194,6 +194,7 @@ object FrameTemplateParser {
             fontSizeSp = obj.optInt("fontSize", 14),
             color = parseColor(obj.optString("color", "#333333")),
             fontWeight = FontWeight.valueOf(obj.optString("fontWeight", "NORMAL")),
+            fontFamily = obj.optString("fontFamily").takeIf { it.isNotEmpty() },
             format = obj.optString("format").takeIf { it.isNotEmpty() },
             prefix = obj.optString("prefix").takeIf { it.isNotEmpty() },
             suffix = obj.optString("suffix").takeIf { it.isNotEmpty() },
