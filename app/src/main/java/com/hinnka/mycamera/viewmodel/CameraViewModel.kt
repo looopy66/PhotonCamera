@@ -360,7 +360,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * 获取所有后置摄像头
      */
-    fun getBackCameras(): List<com.hinnka.mycamera.camera.CameraInfo> {
+    fun getBackCameras(): List<CameraInfo> {
         return cameraController.getBackCameras()
     }
 
@@ -945,50 +945,78 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    // --- 变焦档位计算逻辑同步自 ZoomControlBar.kt ---
-
-    private fun calculateLensZoomStops(
-        cameras: List<com.hinnka.mycamera.camera.CameraInfo>,
-        currentCamera: com.hinnka.mycamera.camera.CameraInfo
+    /**
+     * 计算变焦档位
+     */
+    fun calculateLensZoomStops(
+        cameras: List<CameraInfo>,
+        currentCamera: CameraInfo?
     ): List<Float> {
-        val stops = mutableSetOf<Float>()
-        if (currentCamera.lensType == LensType.FRONT) {
-            cameras.filter { it.lensType == LensType.FRONT }
-                .forEach { if (it.intrinsicZoomRatio > 0) stops.add(it.intrinsicZoomRatio) }
+        val stops = mutableListOf<Float>()
+
+        val filter: (CameraInfo) -> Boolean = if (currentCamera?.lensType == LensType.FRONT) {
+            { it.lensType == LensType.FRONT }
         } else {
-            cameras.filter { it.lensType != LensType.FRONT && it.lensType != LensType.BACK_MACRO }
-                .forEach { if (it.intrinsicZoomRatio > 0) stops.add(it.intrinsicZoomRatio) }
+            { it.lensType != LensType.FRONT && it.lensType != LensType.BACK_MACRO }
         }
-        return stops.toList().sorted()
-    }
 
-    private fun allZoomStops(
-        lensZoomStops: List<Float>,
-        mainCamera: com.hinnka.mycamera.camera.CameraInfo,
-        currentCamera: com.hinnka.mycamera.camera.CameraInfo
-    ): List<Float> {
-        val stops = mutableSetOf<Float>()
-        stops.addAll(lensZoomStops)
-        if (currentCamera.lensType == LensType.FRONT) {
-            if (lensZoomStops.none { abs(it - 2f) <= 0.1f }) stops.add(2f)
-        } else {
-            listOf(35f, 50f, 85f, 200f).forEach { fl ->
-                val zoom = fl / mainCamera.focalLength35mmEquivalent
-                if (lensZoomStops.none { abs(it - zoom) <= 0.1f }) stops.add(zoom)
+        // 添加各个镜头的固有变焦比例
+        cameras.filter(filter).forEach { camera ->
+            if (camera.intrinsicZoomRatio > 0) {
+                // 避免添加极其接近的变焦倍率（例如 1.0 和 1.0006）
+                if (stops.none { abs(it - camera.intrinsicZoomRatio) < 0.01f }) {
+                    stops.add(camera.intrinsicZoomRatio)
+                }
             }
         }
         return stops.sorted()
     }
 
-    private fun findOptimalLens(
+    /**
+     * 计算变焦档位
+     */
+    fun allZoomStops(
+        lensZoomStops: List<Float>,
+        mainCamera: CameraInfo?,
+        currentCamera: CameraInfo?
+    ): List<Float> {
+        val stops = mutableListOf<Float>()
+        stops.addAll(lensZoomStops)
+
+        if (currentCamera?.lensType == LensType.FRONT) {
+            if (stops.none { abs(it - 2f) <= 0.1f }) {
+                stops.add(2f)
+            }
+            return stops.sorted()
+        }
+
+        mainCamera ?: return stops.sorted()
+
+        listOf(35f, 50f, 85f, 200f).forEach { fl ->
+            val zoom = fl / mainCamera.focalLength35mmEquivalent
+            if (stops.none { abs(it - zoom) <= 0.1f }) {
+                stops.add(zoom)
+            }
+        }
+        return stops.sorted()
+    }
+
+    /**
+     * 根据变焦倍率找到最佳镜头
+     */
+    fun findOptimalLens(
         targetZoom: Float,
-        cameras: List<com.hinnka.mycamera.camera.CameraInfo>,
+        cameras: List<CameraInfo>,
         currentCameraId: String
-    ): com.hinnka.mycamera.camera.CameraInfo? {
+    ): CameraInfo? {
         val currentLensType = cameras.find { it.cameraId == currentCameraId }?.lensType
         val zoomableCameras =
             cameras.filter { if (currentLensType == LensType.FRONT) it.lensType == LensType.FRONT else (it.lensType != LensType.FRONT && it.lensType != LensType.BACK_MACRO) }
-        return zoomableCameras.filter { it.intrinsicZoomRatio <= targetZoom }.maxByOrNull { it.intrinsicZoomRatio }
+        if (zoomableCameras.isEmpty()) return null
+        return zoomableCameras
+            .filter { it.intrinsicZoomRatio <= targetZoom + 0.01f }
+            .sortedByDescending { it.intrinsicZoomRatio }
+            .getOrNull(0)
     }
 
     /**

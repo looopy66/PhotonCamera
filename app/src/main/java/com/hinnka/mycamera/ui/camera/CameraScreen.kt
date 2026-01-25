@@ -228,6 +228,7 @@ fun CameraScreen(
                         if (activePanel == ActivePanel.NONE) {
                             // Zoom Control Bar (Overlay at bottom of preview)
                             ZoomControlBar(
+                                viewModel = viewModel,
                                 zoomRatio = viewModel.zoomRatioByMain,
                                 availableCameras = state.availableCameras,
                                 currentCameraId = state.getCurrentCameraInfo()?.cameraId ?: "0",
