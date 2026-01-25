@@ -76,4 +76,6 @@
     <string name="settings_volume_key_action_capture">快门/拍摄</string>
     <string name="settings_volume_key_action_exposure">曝光补偿</string>
     <string name="settings_volume_key_action_zoom">焦距切换</string>
+    <string name="settings_default_focal_length">默认焦段</string>
+    <string name="settings_default_focal_length_description">设置启动 App 时自动切换到的焦段</string>
 </resources>

@@ -267,4 +267,6 @@
     <string name="settings_section_about">About</string>
     <string name="settings_donation">Donation</string>
     <string name="settings_donation_description">Support the development of Photon Camera</string>
+    <string name="settings_default_focal_length">Default Focal Length</string>
+    <string name="settings_default_focal_length_description">Set the focal length to automatically switch to when the app starts.</string>
 </resources>

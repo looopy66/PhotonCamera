@@ -138,6 +138,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .map { it.edgeLevel }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 1)
 
+    val defaultFocalLength: Flow<Float> = userPreferencesRepository.userPreferences.map { it.defaultFocalLength }
+
     // 软件处理参数 Flow
     val sharpening: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.sharpening }
@@ -158,6 +160,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     // 用于处理音量键连续按下的时间戳，防止抖动和过快响应
     private var lastVolumeKeyEventTime = 0L
     private val VOLUME_KEY_DEBOUNCE_TIME = 200L // 毫秒
+
+    private var hasAppliedDefaultFocalLength = false
 
     init {
         cameraController.initialize()
@@ -269,6 +273,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 // 如果没有任何偏好设置，使用配置文件中的默认 LUT（第一个）
                 val defaultLut = availableLutList.firstOrNull { it.isDefault }
                 defaultLut?.let { setLut(it.id) }
+            }
+        }
+
+        // 监听相机状态，用于首次启动应用默认焦段
+        viewModelScope.launch {
+            state.collect { currentState ->
+                val availableCameras = currentState.availableCameras
+                if (availableCameras.isNotEmpty() && !hasAppliedDefaultFocalLength) {
+                    val prefs = userPreferencesRepository.userPreferences.firstOrNull()
+                    val defaultFL = prefs?.defaultFocalLength ?: 0f
+                    if (defaultFL > 0f) {
+                        applyDefaultFocalLength(defaultFL)
+                    }
+                    hasAppliedDefaultFocalLength = true
+                }
             }
         }
     }
@@ -992,10 +1011,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         mainCamera ?: return stops.sorted()
 
-        listOf(35f, 50f, 85f, 200f).forEach { fl ->
-            val zoom = fl / mainCamera.focalLength35mmEquivalent
-            if (stops.none { abs(it - zoom) <= 0.1f }) {
-                stops.add(zoom)
+        if (mainCamera.focalLength35mmEquivalent > 0) {
+            listOf(35f, 50f, 85f, 200f).forEach { fl ->
+                val zoom = fl / mainCamera.focalLength35mmEquivalent
+                if (stops.none { abs(it - zoom) <= 0.1f }) {
+                    stops.add(zoom)
+                }
             }
         }
         return stops.sorted()
@@ -1085,6 +1106,42 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * 设置默认焦段
+     */
+    fun setDefaultFocalLength(focalLength: Float) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveDefaultFocalLength(focalLength)
+        }
+    }
+
+    /**
+     * 应用默认焦段
+     */
+    private fun applyDefaultFocalLength(focalLength: Float) {
+        val currentState = state.value
+        val availableCameras = currentState.availableCameras
+        val currentCamera = currentState.getCurrentCameraInfo() ?: return
+
+        // 找到主摄来计算变焦倍率
+        val mainCamera = availableCameras.find {
+            it.lensType == if (currentCamera.lensType == LensType.FRONT) LensType.FRONT else LensType.BACK_MAIN
+        } ?: return
+
+        if (mainCamera.focalLength35mmEquivalent <= 0) return
+
+        val targetZoom = focalLength / mainCamera.focalLength35mmEquivalent
+
+        // 找到该变焦倍率下的最佳镜头
+        val optimalLens = findOptimalLens(targetZoom, availableCameras, currentCamera.cameraId)
+        if (optimalLens != null && optimalLens.cameraId != currentCamera.cameraId) {
+            switchToLens(optimalLens.cameraId)
+        }
+
+        setZoomRatio(targetZoom)
+        PLog.d(TAG, "Applied default focal length: ${focalLength}mm (zoom: $targetZoom)")
+    }
+
+    /**
      * 获取摄像头方向偏移
      * @param cameraId 摄像头 ID
      * @return 旋转偏移角度的 Flow
@@ -1170,6 +1227,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save image", e)
         }
+    }
+
+    fun getAvailableFocalLengths(): List<Float> {
+        val currentState = state.value
+        val availableCameras = currentState.availableCameras
+        if (availableCameras.isEmpty()) return emptyList()
+
+        val mainCamera = availableCameras.find {
+            it.lensType == LensType.BACK_MAIN
+        } ?: availableCameras.firstOrNull { it.lensFacing == CameraCharacteristics.LENS_FACING_BACK }
+        ?: return emptyList()
+
+        if (mainCamera.focalLength35mmEquivalent <= 0) return emptyList()
+
+        val lensZoomStops = calculateLensZoomStops(availableCameras, mainCamera)
+        val zoomStops = allZoomStops(lensZoomStops, mainCamera, mainCamera)
+
+        return zoomStops.map { it * mainCamera.focalLength35mmEquivalent }
     }
 
     override fun onCleared() {

@@ -43,6 +43,9 @@ import com.hinnka.mycamera.ui.components.SliderSettingItem
 import com.hinnka.mycamera.ui.components.LogViewerDialog
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.viewmodel.CameraViewModel
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import kotlin.math.roundToInt
 
 /**
  * 设置页面
@@ -69,6 +72,7 @@ fun SettingsScreen(
     val sharpening by viewModel.sharpening.collectAsState(initial = 0f)
     val noiseReduction by viewModel.noiseReduction.collectAsState(initial = 0f)
     val chromaNoiseReduction by viewModel.chromaNoiseReduction.collectAsState(initial = 0f)
+    val defaultFocalLength by viewModel.defaultFocalLength.collectAsState(initial = 0f)
     val isPurchased by viewModel.isPurchased.collectAsState()
 
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -321,6 +325,17 @@ fun SettingsScreen(
                     description = stringResource(R.string.settings_auto_save_description),
                     checked = autoSaveAfterCapture,
                     onCheckedChange = { viewModel.setAutoSaveAfterCapture(it) }
+                )
+
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+
+                DefaultFocalLengthSetting(
+                    viewModel = viewModel,
+                    currentFocalLength = defaultFocalLength,
+                    onFocalLengthSelected = { viewModel.setDefaultFocalLength(it) }
                 )
             }
 
@@ -951,6 +966,71 @@ fun VolumeKeyActionSetting(
                         textAlign = TextAlign.Center,
                         maxLines = 2,
                         lineHeight = 12.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 默认焦段设置
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun DefaultFocalLengthSetting(
+    viewModel: CameraViewModel,
+    currentFocalLength: Float,
+    onFocalLengthSelected: (Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        Text(
+            text = stringResource(R.string.settings_default_focal_length),
+            color = Color.White,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Normal,
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        Text(
+            text = stringResource(R.string.settings_default_focal_length_description),
+            color = Color.White.copy(alpha = 0.6f),
+            fontSize = 13.sp,
+            lineHeight = 18.sp,
+            modifier = Modifier.padding(bottom = 12.dp)
+        )
+
+        val availableFLs = remember { viewModel.getAvailableFocalLengths() }
+        val options = remember(availableFLs) {
+            val list = mutableListOf(0f to "None")
+            availableFLs.forEach { fl ->
+                list.add(fl to "${fl.roundToInt()}mm")
+            }
+            list
+        }
+
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            options.forEach { (fl, label) ->
+                val isSelected = if (fl == 0f) currentFocalLength == 0f else kotlin.math.abs(currentFocalLength - fl) < 0.5f
+                Box(
+                    modifier = Modifier
+                        .width(64.dp)
+                        .height(40.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.1f))
+                        .clickable { onFocalLengthSelected(fl) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (fl == 0f) stringResource(R.string.none) else label,
+                        color = if (isSelected) Color.White else Color.White.copy(alpha = 0.7f),
+                        fontSize = 11.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        textAlign = TextAlign.Center
                     )
                 }
             }

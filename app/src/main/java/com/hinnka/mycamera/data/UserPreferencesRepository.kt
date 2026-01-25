@@ -48,7 +48,8 @@ data class UserPreferences(
     // 排序顺序
     val filterOrder: List<String> = emptyList(),  // 滤镜排序（ID列表）
     val frameOrder: List<String> = emptyList(),    // 边框排序（ID列表）
-    val categoryOrder: List<String> = emptyList() // 分类排序
+    val categoryOrder: List<String> = emptyList(), // 分类排序
+    val defaultFocalLength: Float = 0f // 默认焦段 (mm)，0表示不设置
 )
 
 /**
@@ -85,6 +86,9 @@ class UserPreferencesRepository(private val context: Context) {
 
         // 摄像头方向偏移 Key
         private val CAMERA_ORIENTATION_OFFSETS = stringPreferencesKey("camera_orientation_offsets")
+
+        // 默认焦段 Key
+        private val DEFAULT_FOCAL_LENGTH = floatPreferencesKey("default_focal_length")
     }
 
     /**
@@ -117,7 +121,8 @@ class UserPreferencesRepository(private val context: Context) {
                 // 排序
                 filterOrder = preferences[FILTER_ORDER]?.split(",")?.filter { it.isNotEmpty() } ?: emptyList(),
                 frameOrder = preferences[FRAME_ORDER]?.split(",")?.filter { it.isNotEmpty() } ?: emptyList(),
-                categoryOrder = preferences[CATEGORY_ORDER]?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
+                categoryOrder = preferences[CATEGORY_ORDER]?.split(",")?.filter { it.isNotEmpty() } ?: emptyList(),
+                defaultFocalLength = preferences[DEFAULT_FOCAL_LENGTH] ?: 0f
             )
         }
 
@@ -360,5 +365,14 @@ class UserPreferencesRepository(private val context: Context) {
      */
     fun getCameraOrientationOffset(cameraId: String, preferences: UserPreferences): Int {
         return preferences.cameraOrientationOffsets[cameraId] ?: 0
+    }
+
+    /**
+     * 保存默认焦段
+     */
+    suspend fun saveDefaultFocalLength(focalLength: Float) {
+        context.dataStore.edit { preferences ->
+            preferences[DEFAULT_FOCAL_LENGTH] = focalLength
+        }
     }
 }
