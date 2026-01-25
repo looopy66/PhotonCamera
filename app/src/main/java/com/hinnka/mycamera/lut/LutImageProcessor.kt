@@ -744,8 +744,6 @@ class LutImageProcessor {
         """.trimIndent()
 
         private val SHADER_BODY = """
-            precision highp float;
-
             in vec2 vTexCoord;
             out vec4 fragColor;
 
@@ -1123,6 +1121,7 @@ class LutImageProcessor {
         """.trimIndent()
 
         private val IMAGE_FRAGMENT_SHADER_COLOR_RECIPE = "#version 300 es\n" +
+                "precision highp float;\n" +
                 "uniform sampler2D uImageTexture;\n" +
                 "vec4 sampleImage(vec2 uv) { return texture(uImageTexture, uv); }\n" +
                 SHADER_BODY

@@ -69,7 +69,7 @@ fun GalleryScreen(
     val selectedPhotos = viewModel.selectedPhotos
 
     val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenMultipleDocuments()
+        contract = ActivityResultContracts.GetMultipleContents()
     ) { uris ->
         if (uris.isNotEmpty()) {
             viewModel.importPhotos(uris)
@@ -153,7 +153,7 @@ fun GalleryScreen(
                             )
                         }
                     } else {
-                        IconButton(onClick = { launcher.launch(arrayOf("image/*")) }) {
+                        IconButton(onClick = { launcher.launch("image/*") }) {
                             Icon(
                                 imageVector = Icons.Default.AddPhotoAlternate,
                                 contentDescription = stringResource(R.string.import_photo),
