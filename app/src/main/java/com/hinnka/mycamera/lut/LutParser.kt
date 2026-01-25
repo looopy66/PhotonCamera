@@ -50,10 +50,12 @@ object LutParser {
         val size = buffer.int
         val dataType = buffer.int
 
-        val expectedSize = size * size * size * 3
+        val count = size * size * size * 3
+        val bytesPerComponent = if (dataType == 1) 2 else 1
+        val expectedSize = count * bytesPerComponent
 
-        //dataType 0 = UINT8, 1 = FLOAT32 (未来扩展)
-        if (dataType == 0) {
+        //dataType 0 = UINT8, 1 = UINT16 (新支持), 2 = FLOAT32 (未来扩展)
+        if (dataType == 0 || dataType == 1) {
             val directBuffer = ByteBuffer.allocateDirect(expectedSize)
                 .order(ByteOrder.nativeOrder())
 
@@ -66,7 +68,8 @@ object LutParser {
             return LutConfig(
                 size = size,
                 byteBuffer = directBuffer,
-                title = title
+                title = title,
+                configDataType = if (dataType == 1) LutConfig.CONFIG_DATA_TYPE_UINT16 else LutConfig.CONFIG_DATA_TYPE_UINT8
             )
         } else {
             // 未来可以支持 Float32

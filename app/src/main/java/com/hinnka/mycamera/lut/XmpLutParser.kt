@@ -170,7 +170,7 @@ object XmpLutParser {
         }
 
         val size = divisions * divisions * divisions
-        val samples = FloatArray(size * 3)
+        val samples = ShortArray(size * 3)
         
         for (bd in 0 until divisions) {
             for (gd in 0 until divisions) {
@@ -181,9 +181,9 @@ object XmpLutParser {
                     val gf = ((buffer.short.toInt() and 0xFFFF) + nopValue[gd]) and 0xFFFF
                     val rf = ((buffer.short.toInt() and 0xFFFF) + nopValue[rd]) and 0xFFFF
 
-                    samples[index] = rf.toFloat() / 65535f
-                    samples[index + 1] = gf.toFloat() / 65535f
-                    samples[index + 2] = bf.toFloat() / 65535f
+                    samples[index] = rf.toShort()
+                    samples[index + 1] = gf.toShort()
+                    samples[index + 2] = bf.toShort()
                 }
             }
         }
@@ -193,16 +193,17 @@ object XmpLutParser {
 
     private fun writePlutFile(outputStream: OutputStream, lut: LutData): Boolean {
         val size = lut.divisions
-        val expectedSize = size * size * size * 3
-        val buffer = ByteBuffer.allocate(16 + expectedSize).order(ByteOrder.LITTLE_ENDIAN)
+        val count = size * size * size * 3
+        val expectedSizeInBytes = count * 2 // 16-bit
+        val buffer = ByteBuffer.allocate(16 + expectedSizeInBytes).order(ByteOrder.LITTLE_ENDIAN)
 
         buffer.putInt(MAGIC_PLUT)
         buffer.putInt(1) // version
         buffer.putInt(size)
-        buffer.putInt(0) // dataType: 0 = UINT8
+        buffer.putInt(1) // dataType: 1 = UINT16
 
-        for (f in lut.samples) {
-            buffer.put((f.coerceIn(0f, 1f) * 255f).toInt().toByte())
+        for (s in lut.samples) {
+            buffer.putShort(s)
         }
 
         outputStream.write(buffer.array())
@@ -210,5 +211,5 @@ object XmpLutParser {
         return true
     }
 
-    class LutData(val divisions: Int, val samples: FloatArray)
+    class LutData(val divisions: Int, val samples: ShortArray)
 }

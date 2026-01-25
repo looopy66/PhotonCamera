@@ -378,7 +378,8 @@ fun LutControlPanel(
                     text = currentLut?.getName() ?: "",
                     color = Color.White,
                     fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f).basicMarquee()
                 )
 
                 Row(

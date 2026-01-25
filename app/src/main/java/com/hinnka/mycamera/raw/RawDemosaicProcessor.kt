@@ -1398,12 +1398,22 @@ class RawDemosaicProcessor {
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_R, GLES30.GL_CLAMP_TO_EDGE)
 
-        val buffer = lutConfig.toByteBuffer()
-        GLES30.glTexImage3D(
-            GLES30.GL_TEXTURE_3D, 0, GLES30.GL_RGB8,
-            lutConfig.size, lutConfig.size, lutConfig.size,
-            0, GLES30.GL_RGB, GLES30.GL_UNSIGNED_BYTE, buffer
-        )
+        if (lutConfig.configDataType == LutConfig.CONFIG_DATA_TYPE_UINT16) {
+            // 对于 16 位 LUT，使用 GL_RGB16F 以保持精度
+            val floatBuffer = lutConfig.toFloatBuffer()
+            GLES30.glTexImage3D(
+                GLES30.GL_TEXTURE_3D, 0, GLES30.GL_RGB16F,
+                lutConfig.size, lutConfig.size, lutConfig.size,
+                0, GLES30.GL_RGB, GLES30.GL_FLOAT, floatBuffer
+            )
+        } else {
+            val buffer = lutConfig.toByteBuffer()
+            GLES30.glTexImage3D(
+                GLES30.GL_TEXTURE_3D, 0, GLES30.GL_RGB8,
+                lutConfig.size, lutConfig.size, lutConfig.size,
+                0, GLES30.GL_RGB, GLES30.GL_UNSIGNED_BYTE, buffer
+            )
+        }
 
         // 恢复默认对齐
         GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 4)

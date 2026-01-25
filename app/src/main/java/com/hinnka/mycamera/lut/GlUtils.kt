@@ -104,21 +104,38 @@ object GlUtils {
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_R, GLES30.GL_CLAMP_TO_EDGE)
         
-        // 上传 LUT 数据 - 使用 GL_RGB8 格式，比 GL_RGB16F 更高效
-        // 对于移动设备，8 位精度已经足够
-        val buffer = lutConfig.toByteBuffer()
-        GLES30.glTexImage3D(
-            GLES30.GL_TEXTURE_3D,
-            0,
-            GLES30.GL_RGB8,  // 使用 8 位格式，更高效
-            lutConfig.size,
-            lutConfig.size,
-            lutConfig.size,
-            0,
-            GLES30.GL_RGB,
-            GLES30.GL_UNSIGNED_BYTE,
-            buffer
-        )
+        // 上传 LUT 数据
+        if (lutConfig.configDataType == LutConfig.CONFIG_DATA_TYPE_UINT16) {
+            // 对于 16 位 LUT，使用 GL_RGB16F 以保持精度
+            val buffer = lutConfig.toFloatBuffer()
+            GLES30.glTexImage3D(
+                GLES30.GL_TEXTURE_3D,
+                0,
+                GLES30.GL_RGB16F,
+                lutConfig.size,
+                lutConfig.size,
+                lutConfig.size,
+                0,
+                GLES30.GL_RGB,
+                GLES30.GL_FLOAT,
+                buffer
+            )
+        } else {
+            // 对于旧的 8 位 LUT，使用 GL_RGB8 格式以保持性能
+            val buffer = lutConfig.toByteBuffer()
+            GLES30.glTexImage3D(
+                GLES30.GL_TEXTURE_3D,
+                0,
+                GLES30.GL_RGB8,
+                lutConfig.size,
+                lutConfig.size,
+                lutConfig.size,
+                0,
+                GLES30.GL_RGB,
+                GLES30.GL_UNSIGNED_BYTE,
+                buffer
+            )
+        }
         
         // 恢复默认对齐
         GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 4)

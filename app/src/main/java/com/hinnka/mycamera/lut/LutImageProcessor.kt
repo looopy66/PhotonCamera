@@ -578,11 +578,27 @@ class LutImageProcessor {
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_R, GLES30.GL_CLAMP_TO_EDGE)
 
-        val buffer = lutConfig.toByteBuffer()
+        val buffer: java.nio.Buffer
+        val internalFormat: Int
+        val format: Int
+        val type: Int
+
+        if (lutConfig.configDataType == LutConfig.CONFIG_DATA_TYPE_UINT16) {
+            buffer = lutConfig.toFloatBuffer()
+            internalFormat = GLES30.GL_RGB16F
+            format = GLES30.GL_RGB
+            type = GLES30.GL_FLOAT
+        } else {
+            buffer = lutConfig.toByteBuffer()
+            internalFormat = GLES30.GL_RGB8
+            format = GLES30.GL_RGB
+            type = GLES30.GL_UNSIGNED_BYTE
+        }
+
         GLES30.glTexImage3D(
-            GLES30.GL_TEXTURE_3D, 0, GLES30.GL_RGB8,
+            GLES30.GL_TEXTURE_3D, 0, internalFormat,
             lutConfig.size, lutConfig.size, lutConfig.size,
-            0, GLES30.GL_RGB, GLES30.GL_UNSIGNED_BYTE, buffer
+            0, format, type, buffer
         )
 
         // 恢复默认对齐

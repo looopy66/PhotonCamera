@@ -17,7 +17,7 @@ object LutConverter {
 
     private const val MAGIC_PLUT = "PLUT"
     private const val VERSION = 1
-    private const val DATA_TYPE_UINT8 = 0
+    private const val DATA_TYPE_UINT16 = 1
 
     /**
      * 将 .cube 文件转换为 .plut 格式
@@ -59,7 +59,7 @@ object LutConverter {
         var size = 0
         var domainMin = floatArrayOf(0f, 0f, 0f)
         var domainMax = floatArrayOf(1f, 1f, 1f)
-        var data: ByteArray? = null
+        var data: ShortArray? = null
         var dataIndex = 0
 
         // 临时存储 RGB 数据（只在找到 size 之前使用）
@@ -78,14 +78,14 @@ object LutConverter {
                     trimmed.startsWith("LUT_3D_SIZE") -> {
                         size = trimmed.split("\\s+".toRegex())[1].toInt()
                         // 找到 size 后，立即分配数组并写入已缓存的数据
-                        data = ByteArray(size * size * size * 3)
+                        data = ShortArray(size * size * size * 3)
 
                         // 将临时数据写入数组
                         for (rgb in tempDataList) {
                             for (i in 0..2) {
                                 var value = (rgb[i] - domainMin[i]) / (domainMax[i] - domainMin[i])
                                 value = max(0f, min(1f, value))
-                                data!![dataIndex++] = (value * 255f + 0.5f).toInt().toByte()
+                                data!![dataIndex++] = (value * 65535f + 0.5f).toInt().toShort()
                             }
                         }
                         tempDataList.clear()  // 释放临时列表内存
@@ -122,7 +122,7 @@ object LutConverter {
                                     for (i in 0..2) {
                                         var value = (rgb[i] - domainMin[i]) / (domainMax[i] - domainMin[i])
                                         value = max(0f, min(1f, value))
-                                        data!![dataIndex++] = (value * 255f + 0.5f).toInt().toByte()
+                                        data!![dataIndex++] = (value * 65535f + 0.5f).toInt().toShort()
                                     }
                                 } else {
                                     // 还未分配数组，暂存数据
@@ -148,7 +148,7 @@ object LutConverter {
      * 写入 .plut 文件
      */
     private fun writePLutFile(cubeData: CubeData, outputStream: OutputStream) {
-        val buffer = ByteBuffer.allocate(16 + cubeData.data.size)
+        val buffer = ByteBuffer.allocate(16 + cubeData.data.size * 2)
             .order(ByteOrder.LITTLE_ENDIAN)
 
         // Magic
@@ -160,11 +160,12 @@ object LutConverter {
         // Size
         buffer.putInt(cubeData.size)
 
-        // Data Type (0 = UINT8)
-        buffer.putInt(DATA_TYPE_UINT8)
+        // Data Type (1 = UINT16)
+        buffer.putInt(DATA_TYPE_UINT16)
 
         // Data
-        buffer.put(cubeData.data)
+        val shortBuffer = buffer.asShortBuffer()
+        shortBuffer.put(cubeData.data)
 
         outputStream.write(buffer.array())
         outputStream.flush()
@@ -175,7 +176,7 @@ object LutConverter {
      */
     private data class CubeData(
         val size: Int,
-        val data: ByteArray
+        val data: ShortArray
     ) {
         override fun equals(other: Any?): Boolean {
             if (this === other) return true

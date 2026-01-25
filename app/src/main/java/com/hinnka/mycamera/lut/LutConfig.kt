@@ -17,11 +17,17 @@ data class LutConfig(
     val size: Int,
     val data: FloatArray? = null,
     val byteBuffer: ByteBuffer? = null,
-    val title: String = ""
+    val title: String = "",
+    val configDataType: Int = CONFIG_DATA_TYPE_UINT8
 ) {
+    companion object {
+        const val CONFIG_DATA_TYPE_UINT8 = 0
+        const val CONFIG_DATA_TYPE_UINT16 = 1
+    }
+
     /**
      * 获取用于 OpenGL 纹理上传的 FloatBuffer
-     * 注意：如果只有 byteBuffer，此操作可能较慢，建议优先使用 toByteBuffer() 上传 GL_RGB8
+     * 注意：如果只有 byteBuffer，此操作可能较慢，建议优先使用 toByteBuffer() 上传 GL_RGB8 或 GL_RGB16F
      */
     fun toFloatBuffer(): FloatBuffer {
         if (data != null) {
@@ -31,16 +37,24 @@ data class LutConfig(
         val buffer = byteBuffer ?: throw IllegalStateException("No data available in LutConfig")
         val fb = FloatBuffer.allocate(size * size * size * 3)
         buffer.position(0)
-        while (buffer.hasRemaining()) {
-            fb.put((buffer.get().toInt() and 0xFF) / 255f)
+        
+        if (configDataType == CONFIG_DATA_TYPE_UINT16) {
+            val shortBuffer = buffer.asShortBuffer()
+            while (shortBuffer.hasRemaining()) {
+                fb.put((shortBuffer.get().toInt() and 0xFFFF) / 65535f)
+            }
+        } else {
+            while (buffer.hasRemaining()) {
+                fb.put((buffer.get().toInt() and 0xFF) / 255f)
+            }
         }
         fb.position(0)
         return fb
     }
 
     /**
-     * 获取用于 OpenGL 纹理上传的 ByteBuffer (GL_RGB8 格式)
-     * 将浮点数据转换为 0-255 的字节数据，或者直接返回已有的 byteBuffer
+     * 获取用于 OpenGL 纹理上传的 ByteBuffer (格式取决于 configDataType)
+     * 将浮点数据转换为字节数据，或者直接返回已有的 byteBuffer
      */
     fun toByteBuffer(): ByteBuffer {
         if (byteBuffer != null) {
@@ -49,14 +63,21 @@ data class LutConfig(
         }
 
         val floatData = data ?: throw IllegalStateException("No data available in LutConfig")
-        val byteData = ByteArray(floatData.size)
-        for (i in floatData.indices) {
-            // 将 0.0-1.0 的浮点值转换为 0-255 的字节值
-            byteData[i] = (floatData[i].coerceIn(0f, 1f) * 255f).toInt().toByte()
+        val buffer: ByteBuffer
+        if (configDataType == CONFIG_DATA_TYPE_UINT16) {
+            buffer = ByteBuffer.allocateDirect(floatData.size * 2)
+                .order(ByteOrder.nativeOrder())
+            val shortBuffer = buffer.asShortBuffer()
+            for (f in floatData) {
+                shortBuffer.put((f.coerceIn(0f, 1f) * 65535f + 0.5f).toInt().toShort())
+            }
+        } else {
+            buffer = ByteBuffer.allocateDirect(floatData.size)
+                .order(ByteOrder.nativeOrder())
+            for (f in floatData) {
+                buffer.put((f.coerceIn(0f, 1f) * 255f + 0.5f).toInt().toByte())
+            }
         }
-        val buffer = ByteBuffer.allocateDirect(byteData.size)
-            .order(ByteOrder.nativeOrder())
-        buffer.put(byteData)
         buffer.position(0)
         return buffer
     }
@@ -65,8 +86,9 @@ data class LutConfig(
      * 验证 LUT 数据是否有效
      */
     fun isValid(): Boolean {
-        val expectedSize = size * size * size * 3
-        return size > 0 && (data?.size == expectedSize || byteBuffer?.capacity() == expectedSize)
+        val count = size * size * size * 3
+        val expectedCapacity = if (configDataType == CONFIG_DATA_TYPE_UINT16) count * 2 else count
+        return size > 0 && (data?.size == count || byteBuffer?.capacity() == expectedCapacity)
     }
 
     override fun equals(other: Any?): Boolean {
