@@ -10,7 +10,7 @@ def convert_cube_to_plut(cube_path, plut_path):
     - Magic: 'PLUT' (4 bytes)
     - Version: 1 (uint32)
     - Size: Dimension of the 3D LUT, e.g., 32 (uint32)
-    - Data Type: 0 for UINT8 RGB, 1 for FLOAT32 RGB (uint32)
+    - Data Type: 0 for UINT8 RGB, 1 for UINT16 RGB (uint32)
     - Payload: Raw RGB data
     """
     try:
@@ -45,8 +45,8 @@ def convert_cube_to_plut(cube_path, plut_path):
                     for i in range(3):
                         val = (rgb[i] - domain_min[i]) / (domain_max[i] - domain_min[i])
                         val = max(0.0, min(1.0, val))
-                        # Convert to uint8 for efficiency (GLES30.GL_RGB8)
-                        data.append(int(val * 255.0 + 0.5))
+                        # Convert to uint16 for higher precision
+                        data.append(int(val * 65535.0 + 0.5))
                 except ValueError:
                     continue
 
@@ -71,10 +71,10 @@ def convert_cube_to_plut(cube_path, plut_path):
         f.write(struct.pack('<I', 1))
         # Size
         f.write(struct.pack('<I', size))
-        # Data Type (0 = UINT8)
-        f.write(struct.pack('<I', 0))
+        # Data Type (1 = UINT16)
+        f.write(struct.pack('<I', 1))
         # Data
-        f.write(bytes(data))
+        f.write(struct.pack(f'<{len(data)}H', *data))
     
     return True
 

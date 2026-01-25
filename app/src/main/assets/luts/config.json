@@ -50,7 +50,7 @@
       "id": "pentax",
       "name": {
         "en": "Pentax",
-        "zh": "宾得鲜明"
+        "zh": "宾得明亮"
       },
       "path": "pentax.plut",
       "isVip": true
@@ -74,21 +74,21 @@
       "isVip": true
     },
     {
-      "id": "fl3",
+      "id": "ricoh_green",
       "name": {
-        "en": "Sony FL3",
-        "zh": "索尼FL3"
+        "en": "Green",
+        "zh": "电影绿"
       },
-      "path": "fl3.plut",
+      "path": "ricoh_green.plut",
       "isVip": true
     },
     {
-      "id": "vv2",
+      "id": "ricoh_yellow",
       "name": {
-        "en": "Sony VV2",
-        "zh": "索尼VV2"
+        "en": "Yellow",
+        "zh": "电影黄"
       },
-      "path": "vv2.plut",
+      "path": "ricoh_yellow.plut",
       "isVip": true
     }
   ]
