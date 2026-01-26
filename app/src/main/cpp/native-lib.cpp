@@ -192,12 +192,15 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
 
       int idx = y * finalWidth + x;
 
-      // --- 输出 A: FP16 (保存到本地) ---
+      // --- 输出 A: UINT16 (保存到本地) ---
       int idx16 = idx * 4;
-      fp16Pixels[idx16 + 0] = floatToHalf(R);
-      fp16Pixels[idx16 + 1] = floatToHalf(G);
-      fp16Pixels[idx16 + 2] = floatToHalf(B);
-      fp16Pixels[idx16 + 3] = floatToHalf(1.0f); // Alpha
+      fp16Pixels[idx16 + 0] =
+          static_cast<uint16_t>(std::max(0.0f, std::min(1.0f, R)) * 65535.0f);
+      fp16Pixels[idx16 + 1] =
+          static_cast<uint16_t>(std::max(0.0f, std::min(1.0f, G)) * 65535.0f);
+      fp16Pixels[idx16 + 2] =
+          static_cast<uint16_t>(std::max(0.0f, std::min(1.0f, B)) * 65535.0f);
+      fp16Pixels[idx16 + 3] = 65535; // Alpha
 
       // --- 输出 B: 8-bit (预览) ---
       uint32_t r8 =
@@ -216,7 +219,7 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
 
   // 保存为 JXL
   bool success = saveJxl(fp16Pixels.data(), finalWidth, finalHeight,
-                         JXL_TYPE_FLOAT16, path);
+                         JXL_TYPE_UINT16, path);
 
   env->ReleaseStringUTFChars(outputPath, path);
   return success ? JNI_TRUE : JNI_FALSE;
@@ -398,7 +401,7 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_loadCompressedArgb(
   std::vector<uint16_t> pixels;
   int32_t width, height;
 
-  // 使用 JXL_TYPE_FLOAT16 读取数据
+  // 使用 JXL_TYPE_FLOAT16 读取数据，以便于 OpenGL GLES 3.0 处理
   if (!loadJxl(path, pixels, width, height, JXL_TYPE_FLOAT16)) {
     env->ReleaseStringUTFChars(inputPath, path);
     return nullptr;

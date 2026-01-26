@@ -180,9 +180,9 @@ class LutImageProcessor {
     ): Bitmap = withContext(glDispatcher) {
         val width = argbData[0].toInt() and 0xFFFF
         val height = argbData[1].toInt() and 0xFFFF
-        
+
         PLog.d(TAG, "applyLut 16-bit: width=$width, height=$height, dataSize=${argbData.size}")
-        
+
         // 检查数据是否有实际像素值（采样第一个像素）
         if (argbData.size > 6) {
             val r = argbData[2].toInt() and 0xFFFF
@@ -191,7 +191,7 @@ class LutImageProcessor {
             val a = argbData[5].toInt() and 0xFFFF
             PLog.d(TAG, "First pixel RGBA: $r, $g, $b, $a")
         }
-        
+
         if (!isInitialized) {
             if (!initialize()) {
                 // 创建一个空白 Bitmap 返回
@@ -443,10 +443,10 @@ class LutImageProcessor {
             pixelSize,
             GLES30.GL_MAP_READ_BIT
         ) as? ByteBuffer
-        
+
         // 创建临时 Bitmap
         val tempBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        
+
         if (mappedBuffer != null) {
             val buffer = ByteBuffer.allocateDirect(pixelSize).order(ByteOrder.nativeOrder())
             buffer.put(mappedBuffer)
@@ -454,7 +454,7 @@ class LutImageProcessor {
             tempBitmap.copyPixelsFromBuffer(buffer)
             GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
         }
-        
+
         GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
 
         // 翻转 Y 轴（glReadPixels 从左下角开始读取，需要翻转）
@@ -532,28 +532,57 @@ class LutImageProcessor {
         }
 
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, imageTextureId)
-        // 使用 GL_RGBA16F (半精度浮点) 支持线性滤波
+        // 使用线性滤波
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
 
-        // argbData 格式: [width, height, r1, g1, b1, a1, r2, g2, b2, a2, ...]
-        // 像素数据从 index 2 开始，已经是 FP16 格式 (short bits)
-        val pixelCount = width * height
-        val pixelData = ShortArray(pixelCount * 4)
-        System.arraycopy(argbData, 2, pixelData, 0, pixelData.size)
-        
-        val shortBuffer = ShortBuffer.wrap(pixelData)
+        // 自动识别数据是 8-bit 整数还是 16-bit 整数
+        // argbData 格式: [width, height, r1, g1, b1, a1, ...]
+        var is8Bit = true
+        val checkCount = (argbData.size - 2).coerceAtMost(8000)
+        for (i in 2 until 2 + checkCount) {
+            val v = argbData[i].toInt() and 0xFFFF
+            if (v > 255) {
+                is8Bit = false
+                break
+            }
+        }
 
-        // GL_RGBA16F: 半精度浮点格式。
-        // 数据类型使用 GL_HALF_FLOAT，数据源是包含 half float bits 的 short buffer
-        GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F,
-            width, height, 0,
-            GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, shortBuffer
-        )
-        
+        if (is8Bit) {
+            // 8-bit 数据
+            val pixelCount = width * height
+            val byteBuffer = ByteBuffer.allocateDirect(pixelCount * 4)
+            for (i in 0 until pixelCount * 4) {
+                byteBuffer.put(argbData[i + 2].toByte())
+            }
+            byteBuffer.position(0)
+
+            GLES30.glTexImage2D(
+                GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA,
+                width, height, 0,
+                GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, byteBuffer
+            )
+            PLog.d(TAG, "uploadImageTextureFromArgb: detected 8-bit data")
+        } else {
+            // 16-bit (FP16) 数据
+            val pixelCount = width * height
+            val pixelData = ShortArray(pixelCount * 4)
+            System.arraycopy(argbData, 2, pixelData, 0, pixelData.size)
+
+            val shortBuffer = ShortBuffer.wrap(pixelData)
+
+            // GL_RGBA16F: 半精度浮点格式，支持线性滤波。
+            // 数据类型使用 GL_HALF_FLOAT，数据源是包含 half float bits 的 short buffer
+            GLES30.glTexImage2D(
+                GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F,
+                width, height, 0,
+                GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, shortBuffer
+            )
+            PLog.d(TAG, "uploadImageTextureFromArgb: detected FP16 data")
+        }
+
         val error = GLES30.glGetError()
         if (error != GLES30.GL_NO_ERROR) {
             PLog.e(TAG, "glTexImage2D error: $error")
