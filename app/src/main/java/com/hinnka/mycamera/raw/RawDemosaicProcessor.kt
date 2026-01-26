@@ -10,6 +10,7 @@ import android.util.Log
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
@@ -106,7 +107,7 @@ class RawDemosaicProcessor {
         val blackLevel = dngRawData.blackLevel
 
         // 白电平
-        val whiteLevel = dngRawData.whiteLevel.toFloat()
+        val whiteLevel = dngRawData.whiteLevel
 
         // 白平衡增益：DngRawData 提供的是 [R, Gr, Gb, B]
         val whiteBalanceGains = dngRawData.whiteBalance
@@ -581,7 +582,7 @@ class RawDemosaicProcessor {
      */
     suspend fun process(
         dngFilePath: String,
-        aspectRatio: AspectRatio,
+        aspectRatio: AspectRatio?,
         cropRegion: Rect?,
         lutConfig: LutConfig? = null,
         colorRecipeParams: ColorRecipeParams? = null,
@@ -702,7 +703,7 @@ class RawDemosaicProcessor {
         height: Int,
         rowStride: Int,
         metadata: RawMetadata,
-        aspectRatio: AspectRatio,
+        aspectRatio: AspectRatio?,
         cropRegion: Rect?,
         rotation: Int,
         lutConfig: LutConfig?,
@@ -733,27 +734,9 @@ class RawDemosaicProcessor {
         uploadRawTextureFromBuffer(rawData, width, height, rowStride)
         PLog.d(TAG, "Texture upload took: ${System.currentTimeMillis() - uploadStart}ms")
 
-        // 1. 根据 cropRegion 和 aspectRatio 计算裁切后的尺寸
-        val baseWidth = cropRegion?.width() ?: width
-        val baseHeight = cropRegion?.height() ?: height
-        val srcRatio = baseWidth.toFloat() / baseHeight.toFloat()
-        val targetRatio = aspectRatio.getValue(true)  // 使用横向比例，因为 RAW 纹理始终是横向的
-
-        var finalCropWidth = baseWidth.toFloat()
-        var finalCropHeight = baseHeight.toFloat()
-
-        if (srcRatio > targetRatio) {
-            // 基础区域更宽，水平方向裁切
-            finalCropWidth = baseHeight * targetRatio
-        } else {
-            // 基础区域更高，垂直方向裁切
-            finalCropHeight = baseWidth / targetRatio
-        }
-
-        // 旋转后的最终输出尺寸
-        val isSwapped = rotation == 90 || rotation == 270
-        val finalWidth = if (isSwapped) finalCropHeight.toInt() else finalCropWidth.toInt()
-        val finalHeight = if (isSwapped) finalCropWidth.toInt() else finalCropHeight.toInt()
+        val bounds = BitmapUtils.calculateProcessedRect(width, height, aspectRatio, cropRegion, rotation)
+        val finalWidth = bounds.width()
+        val finalHeight = bounds.height()
 
         // 3. 曝光增益计算
         var exposureGain = 0f
@@ -1582,7 +1565,7 @@ class RawDemosaicProcessor {
     private fun renderOutputPass(
         metadata: RawMetadata,
         rotation: Int,
-        aspectRatio: AspectRatio,
+        aspectRatio: AspectRatio?,
         cropRegion: Rect?,
         finalWidth: Int,
         finalHeight: Int,
@@ -1623,33 +1606,13 @@ class RawDemosaicProcessor {
         GlMatrix.rotateM(texMatrix, 0, -rotation.toFloat(), 0f, 0f, 1f)
         GlMatrix.translateM(texMatrix, 0, -0.5f, -0.5f, 0f)
 
-        // === 第二步：裁切变换（实际先于旋转执行）===
-        // 处理 cropRegion 和 aspectRatio 双重裁切
-        val baseLeft = cropRegion?.left ?: 0
-        val baseTop = cropRegion?.top ?: 0
-        val baseWidth = cropRegion?.width() ?: metadata.width
-        val baseHeight = cropRegion?.height() ?: metadata.height
-
-        val srcRatio = baseWidth.toFloat() / baseHeight.toFloat()
-        val targetRatio = aspectRatio.getValue(true)
-
-        var finalCropWidth = baseWidth.toFloat()
-        var finalCropHeight = baseHeight.toFloat()
-
-        if (srcRatio > targetRatio) {
-            finalCropWidth = baseHeight * targetRatio
-        } else {
-            finalCropHeight = baseWidth / targetRatio
-        }
-
-        val finalCropLeft = baseLeft + (baseWidth - finalCropWidth) / 2f
-        val finalCropTop = baseTop + (baseHeight - finalCropHeight) / 2f
+        val bounds = BitmapUtils.calculateProcessedRect(metadata.width, metadata.height, aspectRatio, cropRegion)
 
         // 计算归一化的中心点和缩放比例
-        val scaleX = finalCropWidth / metadata.width
-        val scaleY = finalCropHeight / metadata.height
-        val centerX = (finalCropLeft + finalCropWidth / 2f) / metadata.width
-        val centerY = (finalCropTop + finalCropHeight / 2f) / metadata.height
+        val scaleX = bounds.width() * 1f / metadata.width
+        val scaleY = bounds.height() * 1f / metadata.height
+        val centerX = (bounds.left + bounds.width() / 2f) / metadata.width
+        val centerY = (bounds.top + bounds.height() / 2f) / metadata.height
 
         // 应用变换矩阵
         // 注意：这里的平移是移动到裁切区域的中心

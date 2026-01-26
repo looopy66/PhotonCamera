@@ -23,10 +23,12 @@ import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.RawProcessor
 import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.*
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.abs
 
 /**
  * 照片管理器
@@ -132,7 +134,7 @@ object PhotoManager {
                     }
 
                     // 保存导出的 URI 到元数据
-                    val currentMetadata = loadMetadata(context,  id) ?: metadata
+                    val currentMetadata = loadMetadata(context, id) ?: metadata
                     val updatedMetadata = currentMetadata.copy(
                         exportedUris = currentMetadata.exportedUris + it.toString()
                     )
@@ -154,7 +156,7 @@ object PhotoManager {
         }
     }
 
-    suspend fun exportDng(context: Context, image: Image, metadata: PhotoMetadata, characteristics: CameraCharacteristics, finalCaptureResult: CaptureResult, rotation: Int) = withContext(Dispatchers.IO) {
+    suspend fun exportDng(context: Context, data: ByteArray, metadata: PhotoMetadata) = withContext(Dispatchers.IO) {
         try {
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
                 .format(Date())
@@ -175,13 +177,7 @@ object PhotoManager {
 
             dngUri?.let { uri ->
                 context.contentResolver.openOutputStream(uri)?.use { outputStream ->
-                    RawProcessor.saveToDng(
-                        image,
-                        characteristics,
-                        finalCaptureResult,
-                        outputStream,
-                        rotation
-                    )
+                    outputStream.write(data)
                 }
                 PLog.d(TAG, "DNG exported: $uri")
 
@@ -199,7 +195,6 @@ object PhotoManager {
             PLog.e(TAG, "Failed to export DNG", e)
         }
     }
-
 
 
     /**
@@ -237,116 +232,121 @@ object PhotoManager {
 
             val format = image.format
 
-            var width = image.width
-            var height = image.height
-
             if (thumbnail != null) {
                 generateThumbnail(thumbnail, thumbnailFile)
             }
 
             val cropRegion = captureResult.get(CaptureResult.SCALER_CROP_REGION)
 
-
             // 根据图像格式处理
             when (format) {
                 ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
-                    val dimensions = BitmapUtils.calculateProcessedDimensions(width, height, aspectRatio, null, rotation)
-                    val finalWidth = dimensions.first
-                    val finalHeight = dimensions.second
-                    processingScope.launch {
-                        withContext(Dispatchers.IO) {
-                            image.use { image ->
-                                photoFile.createNewFile()
-                                // 创建预览用的 Bitmap
-                                val previewBitmap = createBitmap(finalWidth, finalHeight)
+                    val dimensions =
+                        BitmapUtils.calculateProcessedRect(image.width, image.height, aspectRatio, null, rotation)
+                    val finalWidth = dimensions.width()
+                    val finalHeight = dimensions.height()
+                    processingScope.launch(Dispatchers.IO) {
+                        photoFile.createNewFile()
+                        // 创建预览用的 Bitmap
+                        val previewBitmap = createBitmap(finalWidth, finalHeight)
 
-                                // YUV 格式：使用 native 处理（包含旋转和裁切）并直接保存为 FP16 JXL
-                                val success = YuvProcessor.processAndSave(
-                                    image, aspectRatio, rotation,
-                                    yuvFile.absolutePath, previewBitmap
+                        // YUV 格式：使用 native 处理（包含旋转和裁切）并直接保存为 FP16 JXL
+                        val success = image.use {
+                            YuvProcessor.processAndSave(
+                                image, aspectRatio, rotation,
+                                yuvFile.absolutePath, previewBitmap
+                            )
+                        }
+                        if (success) {
+                            // 保存元数据
+                            val metadataWithInfo = metadata.copy(
+                                width = finalWidth,
+                                height = finalHeight,
+                                ratio = aspectRatio,
+                            )
+                            metadataFile.writeText(metadataWithInfo.toJson())
+                            if (thumbnail == null) {
+                                generateThumbnail(previewBitmap, thumbnailFile)
+                            }
+                            FileOutputStream(photoFile).use { outputStream ->
+                                // 直接从内存中的 Bitmap 生成 8-bit JPEG 副本
+                                previewBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                            }
+                            if (shouldAutoSave) {
+                                exportPhoto(
+                                    context,
+                                    photoId,
+                                    photoProcessor,
+                                    metadataWithInfo,
+                                    sharpeningValue,
+                                    noiseReductionValue,
+                                    chromaNoiseReductionValue
                                 )
-                                if (success) {
-                                    // 保存元数据
-                                    val metadataWithInfo = metadata.copy(
-                                        width = finalWidth,
-                                        height = finalHeight,
-                                        ratio = aspectRatio,
-                                    )
-                                    metadataFile.writeText(metadataWithInfo.toJson())
-                                    if (thumbnail == null) {
-                                        generateThumbnail(previewBitmap, thumbnailFile)
-                                    }
-                                    FileOutputStream(photoFile).use { outputStream ->
-                                        // 直接从内存中的 Bitmap 生成 8-bit JPEG 副本
-                                        previewBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
-                                    }
-                                    if (shouldAutoSave) {
-                                        exportPhoto(context, photoId, photoProcessor, metadataWithInfo, sharpeningValue, noiseReductionValue, chromaNoiseReductionValue)
-                                    }
-                                }
                             }
                         }
                     }
                 }
+
                 ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12 -> {
-                    val dimensions = BitmapUtils.calculateProcessedDimensions(width, height, aspectRatio, cropRegion, rotation)
-                    val finalWidth = dimensions.first
-                    val finalHeight = dimensions.second
-                    processingScope.launch {
-                        withContext(Dispatchers.IO) {
-                            image.use { image ->
-                                photoFile.createNewFile()
-                                val bitmap = RawProcessor.processAndToBitmap(
-                                    image,
-                                    characteristics,
-                                    captureResult,
-                                    aspectRatio,
-                                    rotation
-                                ) ?: return@withContext
-                                if (thumbnail == null) {
-                                    generateThumbnail(bitmap, thumbnailFile)
-                                }
-                                FileOutputStream(photoFile).use { outputStream ->
-                                    bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
-                                }
-                                bitmap.recycle()
-                                // 保存元数据
-                                val metadataWithInfo = metadata.copy(
-                                    width = finalWidth,
-                                    height = finalHeight,
-                                    ratio = aspectRatio,
-                                    cropRegion = cropRegion,
-                                    sharpening = 0.2f,
-                                    noiseReduction = 0f,
-                                    chromaNoiseReduction = 0.25f,
-                                )
-                                metadataFile.writeText(metadataWithInfo.toJson())
-                                FileOutputStream(dngFile).use {
-                                    RawProcessor.saveToDng(image, characteristics, captureResult, it, rotation)
-                                }
-                                if (shouldAutoSave) {
-                                    exportDng(
-                                        context,
-                                        image,
-                                        metadataWithInfo,
-                                        characteristics,
-                                        captureResult,
-                                        rotation
-                                    )
-                                    exportPhoto(
-                                        context,
-                                        photoId,
-                                        photoProcessor,
-                                        metadataWithInfo,
-                                        sharpeningValue,
-                                        noiseReductionValue,
-                                        chromaNoiseReductionValue
-                                    )
-                                }
+                    val dimensions =
+                        BitmapUtils.calculateProcessedRect(image.width, image.height, aspectRatio, cropRegion, rotation)
+                    processingScope.launch(Dispatchers.IO) {
+                        photoFile.createNewFile()
+                        // 保存元数据
+                        val metadataWithInfo = metadata.copy(
+                            width = dimensions.width(),
+                            height = dimensions.height(),
+                            ratio = aspectRatio,
+                            cropRegion = cropRegion,
+                            rotation = rotation,
+                            sharpening = 0.2f,
+                            noiseReduction = 0f,
+                            chromaNoiseReduction = 0.25f,
+                        )
+                        metadataFile.writeText(metadataWithInfo.toJson())
+                        val dngDataBytes = ByteArrayOutputStream().use { dngData ->
+                            image.use {
+                                RawProcessor.saveToDng(image, characteristics, captureResult, dngData, rotation)
                             }
+                            dngData.toByteArray()
+                        }
+                        launch(Dispatchers.IO) {
+                            FileOutputStream(dngFile).use { outputStream ->
+                                outputStream.write(dngDataBytes)
+                            }
+                        }
+                        val bitmap = RawProcessor.processAndToBitmap(
+                            dngDataBytes,
+                            aspectRatio,
+                            cropRegion,
+                            rotation
+                        ) ?: return@launch
+                        if (thumbnail == null) {
+                            generateThumbnail(bitmap, thumbnailFile)
+                        }
+                        FileOutputStream(photoFile).use { outputStream ->
+                            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                        }
+                        bitmap.recycle()
+                        if (shouldAutoSave) {
+                            exportDng(
+                                context,
+                                dngDataBytes,
+                                metadataWithInfo,
+                            )
+                            exportPhoto(
+                                context,
+                                photoId,
+                                photoProcessor,
+                                metadataWithInfo,
+                                sharpeningValue,
+                                noiseReductionValue,
+                                chromaNoiseReductionValue
+                            )
                         }
                     }
                 }
+
                 else -> {
                     PLog.e(TAG, "Unsupported image format: $format")
                 }
@@ -561,6 +561,21 @@ object PhotoManager {
     }
 
     /**
+     * 从 URI 获取文件名
+     */
+    private fun getFileName(context: Context, uri: Uri): String? {
+        return try {
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                cursor.moveToFirst()
+                cursor.getString(nameIndex)
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
      * 从系统相册导入照片
      */
     suspend fun importPhoto(context: Context, uri: Uri): String? {
@@ -569,77 +584,140 @@ object PhotoManager {
                 val photoId = UUID.randomUUID().toString()
                 val photoDir = getPhotoDir(context, photoId)
                 val photoFile = File(photoDir, PHOTO_FILE)
+                val dngFile = File(photoDir, DNG_FILE)
                 val metadataFile = File(photoDir, METADATA_FILE)
                 val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
 
-                // 1. 复制文件到临时位置
-                val tempFile = File(photoDir, "temp.jpg")
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    FileOutputStream(tempFile).use { output ->
-                        input.copyTo(output)
+                // 1. 检测是否为 RAW 文件
+                val mimeType = context.contentResolver.getType(uri)
+                val fileName = getFileName(context, uri) ?: ""
+                val isRaw = mimeType?.contains("raw", ignoreCase = true) == true ||
+                        mimeType?.contains("dng", ignoreCase = true) == true ||
+                        fileName.endsWith(".dng", ignoreCase = true)
+
+                if (isRaw) {
+                    // --- RAW 处理逻辑 ---
+                    // 1. 复制 RAW 文件
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        FileOutputStream(dngFile).use { output ->
+                            input.copyTo(output)
+                        }
                     }
-                }
 
-                // 2. 读取并处理 EXIF 方向信息
-                val exif = ExifInterface(tempFile)
-                val orientation = exif.getAttributeInt(
-                    ExifInterface.TAG_ORIENTATION,
-                    ExifInterface.ORIENTATION_NORMAL
-                )
+                    // 2. 读取元数据以获取旋转信息
+                    val metadata = PhotoMetadata.fromUri(context, uri)
+                    val exif = ExifInterface(dngFile.absolutePath)
+                    val orientation = exif.getAttributeInt(
+                        ExifInterface.TAG_ORIENTATION,
+                        ExifInterface.ORIENTATION_NORMAL
+                    )
+                    val rotation = when (orientation) {
+                        ExifInterface.ORIENTATION_ROTATE_90 -> 90
+                        ExifInterface.ORIENTATION_ROTATE_180 -> 180
+                        ExifInterface.ORIENTATION_ROTATE_270 -> 270
+                        else -> 0
+                    }
 
-                // 3. 根据 EXIF 方向旋转图片
-                if (orientation != ExifInterface.ORIENTATION_NORMAL &&
-                    orientation != ExifInterface.ORIENTATION_UNDEFINED
-                ) {
-                    // 需要旋转图片
-                    val bitmap = BitmapFactory.decodeFile(tempFile.absolutePath)
-                    if (bitmap != null) {
-                        val rotatedBitmap = rotateImageIfRequired(bitmap, orientation)
-                        // 保存已旋转的图片，并设置 EXIF 方向为 NORMAL
+                    // 3. 处理 RAW 以生成 JPEG 预览
+                    val processedBitmap = RawProcessor.process(
+                        dngFile.absolutePath,
+                        null,
+                        null,
+                        rotation
+                    )
+
+                    if (processedBitmap != null) {
+                        // 保存为 original.jpg
                         FileOutputStream(photoFile).use { out ->
-                            rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                            processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
                         }
 
-                        // 设置正确的 EXIF 方向
-                        val newExif = ExifInterface(photoFile)
-                        newExif.setAttribute(
-                            ExifInterface.TAG_ORIENTATION,
-                            ExifInterface.ORIENTATION_NORMAL.toString()
+                        // 生成缩略图
+                        generateThumbnail(processedBitmap, thumbnailFile)
+
+                        // 更新元数据
+                        val updatedMetadata = metadata.copy(
+                            width = processedBitmap.width,
+                            height = processedBitmap.height,
+                            rotation = rotation,
+                            isImported = true
                         )
-                        newExif.saveAttributes()
+                        metadataFile.writeText(updatedMetadata.toJson())
 
-                        if (rotatedBitmap != bitmap) {
-                            rotatedBitmap.recycle()
-                        }
-                        bitmap.recycle()
+                        processedBitmap.recycle()
                     } else {
-                        // 解码失败，直接复制原文件
-                        tempFile.copyTo(photoFile, overwrite = true)
+                        // 降级：如果 RAW 处理失败，尝试直接解码（某些 DNG 包含内置预览图）
+                        tempImportJpeg(uri, context, photoFile, metadataFile, thumbnailFile)
                     }
                 } else {
-                    // 不需要旋转，直接使用临时文件
-                    tempFile.renameTo(photoFile)
+                    // --- 常规 JPEG 处理逻辑 ---
+                    tempImportJpeg(uri, context, photoFile, metadataFile, thumbnailFile)
                 }
 
-                // 删除临时文件（如果还存在）
-                if (tempFile.exists()) {
-                    tempFile.delete()
-                }
-
-                // 4. 读取元数据 (此时 isImported 会被设置为 true)
-                val metadata = PhotoMetadata.fromUri(context, uri)
-                metadataFile.writeText(metadata.toJson())
-
-                // 5. 生成缩略图
-                generateThumbnail(photoFile, thumbnailFile)
-
-                PLog.d(TAG, "Photo imported: $photoId (orientation: $orientation)")
+                PLog.d(TAG, "Photo imported: $photoId (isRaw: $isRaw)")
                 photoId
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to import photo", e)
                 null
             }
         }
+    }
+
+    private suspend fun tempImportJpeg(
+        uri: Uri,
+        context: Context,
+        photoFile: File,
+        metadataFile: File,
+        thumbnailFile: File
+    ) {
+        val photoDir = photoFile.parentFile ?: return
+        val tempFile = File(photoDir, "temp.jpg")
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            FileOutputStream(tempFile).use { output ->
+                input.copyTo(output)
+            }
+        }
+
+        val exif = ExifInterface(tempFile)
+        val orientation = exif.getAttributeInt(
+            ExifInterface.TAG_ORIENTATION,
+            ExifInterface.ORIENTATION_NORMAL
+        )
+
+        if (orientation != ExifInterface.ORIENTATION_NORMAL &&
+            orientation != ExifInterface.ORIENTATION_UNDEFINED
+        ) {
+            val bitmap = BitmapFactory.decodeFile(tempFile.absolutePath)
+            if (bitmap != null) {
+                val rotatedBitmap = rotateImageIfRequired(bitmap, orientation)
+                FileOutputStream(photoFile).use { out ->
+                    rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                }
+                val newExif = ExifInterface(photoFile)
+                newExif.setAttribute(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL.toString()
+                )
+                newExif.saveAttributes()
+
+                if (rotatedBitmap != bitmap) {
+                    rotatedBitmap.recycle()
+                }
+                bitmap.recycle()
+            } else {
+                tempFile.copyTo(photoFile, overwrite = true)
+            }
+        } else {
+            tempFile.renameTo(photoFile)
+        }
+
+        if (tempFile.exists()) {
+            tempFile.delete()
+        }
+
+        val metadata = PhotoMetadata.fromUri(context, uri)
+        metadataFile.writeText(metadata.toJson())
+        generateThumbnail(photoFile, thumbnailFile)
     }
 
     /**

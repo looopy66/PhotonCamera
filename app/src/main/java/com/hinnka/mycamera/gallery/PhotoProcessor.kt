@@ -3,16 +3,17 @@ package com.hinnka.mycamera.gallery
 import android.content.Context
 import android.graphics.*
 import android.os.Build
+import android.util.Log
 import com.hinnka.mycamera.camera.AspectRatio
-import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.frame.FrameManager
 import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutManager
-import com.hinnka.mycamera.raw.RawDemosaicProcessor
+import com.hinnka.mycamera.utils.RawProcessor
 import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.nio.ShortBuffer
 
 /**
  * 照片处理器
@@ -36,7 +37,6 @@ class PhotoProcessor(
 
         if (dngFile.exists()) {
             return processDng(
-                context,
                 dngFile.absolutePath,
                 metadata,
                 sharpening,
@@ -67,7 +67,6 @@ class PhotoProcessor(
     }
 
     /**
-     * @param context 上下文
      * @param dngPath dng 文件路径
      * @param metadata 照片元数据（包含编辑配置和拍摄信息）
      * @param sharpening 锐化强度
@@ -76,7 +75,6 @@ class PhotoProcessor(
      * @return 处理后的 Bitmap
      */
     suspend fun processDng(
-        context: Context,
         dngPath: String,
         metadata: PhotoMetadata,
         sharpening: Float = 0f,
@@ -95,12 +93,22 @@ class PhotoProcessor(
         val lutConfig = metadata.lutId?.let { lutManager.loadLut(it) }
         val colorRecipeParams = metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
         val cropRegion = metadata.cropRegion
-        val lutResult = RawDemosaicProcessor.getInstance().process(
-            dngPath,
-            metadata.ratio ?: AspectRatio.RATIO_4_3, cropRegion,
-            lutConfig, colorRecipeParams,
-                    finalSharpening, finalNoiseReduction, finalChromaNoiseReduction)
-        result = lutResult
+//        val lutResult = RawDemosaicProcessor.getInstance().process(
+//            dngPath,
+//            metadata.ratio ?: AspectRatio.RATIO_4_3, cropRegion,
+//            lutConfig, colorRecipeParams,
+//                    finalSharpening, finalNoiseReduction, finalChromaNoiseReduction)
+        val bitmap16 = RawProcessor.process(dngPath, metadata.ratio, cropRegion, metadata.rotation)
+        result = bitmap16?.let {
+            lutImageProcessor.applyLut(
+                bitmap16,
+                lutConfig,
+                colorRecipeParams,
+                finalSharpening,
+                finalNoiseReduction,
+                finalChromaNoiseReduction
+            )
+        }
 
         result ?: return@withContext null
 
@@ -137,8 +145,17 @@ class PhotoProcessor(
             val lutConfig = lutManager.loadLut(metadata.lutId)
             val colorRecipeParams = lutManager.loadColorRecipeParams(metadata.lutId)
             if (lutConfig != null && colorRecipeParams.lutIntensity > 0f) {
+                val width = input[0].toInt() and 0xFFFF
+                val height = input[1].toInt() and 0xFFFF
+                val pixelCount = width * height
+                val pixelData = ShortArray(pixelCount * 4)
+                System.arraycopy(input, 2, pixelData, 0, pixelData.size)
+
+                val shortBuffer = ShortBuffer.wrap(pixelData)
                 val lutResult = lutImageProcessor.applyLut(
-                    input,
+                    shortBuffer,
+                    metadata.width,
+                    metadata.height,
                     lutConfig,
                     colorRecipeParams,
                     finalSharpening,

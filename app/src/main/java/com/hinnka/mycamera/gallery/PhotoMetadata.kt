@@ -18,7 +18,7 @@ import java.util.*
  * 保存 LUT、边框水印、编辑信息和拍摄参数，用于非破坏性编辑和边框水印渲染
  */
 data class PhotoMetadata(
-    val version: Int = 7,  // 升级版本以支持细节处理参数
+    val version: Int = 8,  // 升级版本以支持细节处理参数
     // 编辑配置
     val lutId: String? = null,
     // 色彩配方配置
@@ -34,6 +34,7 @@ data class PhotoMetadata(
     val height: Int = 0,
     val ratio: AspectRatio? = null,
     val cropRegion: Rect? = null,
+    val rotation: Int = 0,
     // 拍摄信息
     val deviceModel: String? = null,
     val brand: String? = null,
@@ -135,6 +136,7 @@ data class PhotoMetadata(
             } else {
                 JSONObject.NULL
             })
+            put("rotation", rotation)
             // 拍摄信息
             put("deviceModel", deviceModel ?: JSONObject.NULL)
             put("brand", brand ?: JSONObject.NULL)
@@ -215,6 +217,7 @@ data class PhotoMetadata(
                             cropObj.optInt("bottom", 0)
                         )
                     },
+                    rotation = obj.optInt("rotation", 0),
                     // 拍摄信息
                     deviceModel = if (obj.isNull("deviceModel")) null else obj.optString("deviceModel"),
                     brand = if (obj.isNull("brand")) null else obj.optString("brand"),

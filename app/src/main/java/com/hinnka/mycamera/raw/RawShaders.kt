@@ -712,7 +712,7 @@ object RawShaders {
             // 色彩转换 (CCM)
             rgb = uColorCorrectionMatrix * rgb;
             
-            rgb = applyDoubleEndedDesaturation(rgb);
+            //rgb = applyDoubleEndedDesaturation(rgb);
 
             // 应用曝光增益 (Linear HDR Space)
             rgb *= uExposureGain;
@@ -720,14 +720,14 @@ object RawShaders {
             rgb = applyTonemap(rgb);
             
             // 高级色彩校正 (肤色 -> 自然饱和度)
-            rgb = optimizeSkinTone(rgb);
+            //rgb = optimizeSkinTone(rgb);
             rgb = applyVibrance(rgb);
             
 
             // 步骤 7: sRGB gamma 编码 (Linear -> sRGB)
             rgb = linearToSRGB(rgb);
             
-            rgb = applyOutputSharpening(rgb, coord);
+            //rgb = applyOutputSharpening(rgb, coord);
 
             // 最终输出
             fragColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);

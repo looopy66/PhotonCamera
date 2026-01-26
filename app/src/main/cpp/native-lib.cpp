@@ -29,8 +29,8 @@ JNIEXPORT jboolean JNICALL
 Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
     JNIEnv *env, jobject /* this */, jobject yBuffer, jobject uBuffer,
     jobject vBuffer, jint width, jint height, jint yRowStride, jint uvRowStride,
-    jint uvPixelStride, jint rotation, jfloat targetRatio, jint format,
-    jstring outputPath, jobject outBitmap8) {
+    jint uvPixelStride, jint rotation, jint targetWR, jint targetHR,
+    jint format, jstring outputPath, jobject outBitmap8) {
   const char *path = env->GetStringUTFChars(outputPath, nullptr);
 
   // 1. 锁定 Bitmap 地址 (8-bit) 用于预览
@@ -134,28 +134,33 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
   free(yuv16Data);
 
   // === Step 3: 裁切计算 ===
-  int finalWidth, finalHeight;
-  if (rotatedWidth > rotatedHeight) {
-    float expectedWidth = (float)rotatedHeight * targetRatio;
-    if (expectedWidth <= (float)rotatedWidth) {
-      finalHeight = rotatedHeight;
-      finalWidth = (static_cast<int>(expectedWidth) / 2) * 2;
-    } else {
-      finalWidth = rotatedWidth;
-      finalHeight =
-          (static_cast<int>((float)rotatedWidth / targetRatio) / 2) * 2;
-    }
+  bool currentIsLandscape = (rotatedWidth >= rotatedHeight);
+  int tw, th;
+  // 根据当前图的方向，决定是用 4:3 还是 3:4
+  if (currentIsLandscape) {
+    tw = (targetWR >= targetHR) ? targetWR : targetHR;
+    th = (targetWR >= targetHR) ? targetHR : targetWR;
   } else {
-    float expectedHeight = (float)rotatedWidth * targetRatio;
-    if (expectedHeight <= (float)rotatedHeight) {
-      finalWidth = rotatedWidth;
-      finalHeight = (static_cast<int>(expectedHeight) / 2) * 2;
-    } else {
-      finalHeight = rotatedHeight;
-      finalWidth =
-          (static_cast<int>((float)rotatedHeight / targetRatio) / 2) * 2;
-    }
+    tw = (targetWR >= targetHR) ? targetHR : targetWR;
+    th = (targetWR >= targetHR) ? targetWR : targetHR;
   }
+
+  int finalWidth, finalHeight;
+  if ((long long)rotatedWidth * th > (long long)tw * rotatedHeight) {
+    // 现有区域太“扁” -> 缩减宽度，以高度为基准
+    finalHeight = (rotatedHeight / 2) * 2;
+    finalWidth = (int)(((long long)finalHeight * tw / th) / 2) * 2;
+  } else {
+    // 现有区域太“瘦” -> 缩减高度，以宽度为基准
+    finalWidth = (rotatedWidth / 2) * 2;
+    finalHeight = (int)(((long long)finalWidth * th / tw) / 2) * 2;
+  }
+
+  // 安全边界检查
+  if (finalWidth > rotatedWidth)
+    finalWidth = (rotatedWidth / 2) * 2;
+  if (finalHeight > rotatedHeight)
+    finalHeight = (rotatedHeight / 2) * 2;
 
   int cropX = ((rotatedWidth - finalWidth) / 4) * 2;
   int cropY = ((rotatedHeight - finalHeight) / 4) * 2;
@@ -232,8 +237,8 @@ JNIEXPORT void JNICALL
 Java_com_hinnka_mycamera_utils_YuvProcessor_processToBitmap(
     JNIEnv *env, jobject /* this */, jobject yBuffer, jobject uBuffer,
     jobject vBuffer, jint width, jint height, jint yRowStride, jint uvRowStride,
-    jint uvPixelStride, jint rotation, jfloat targetRatio, jint format,
-    jobject outBitmap8) {
+    jint uvPixelStride, jint rotation, jint targetWR, jint targetHR,
+    jint format, jobject outBitmap8) {
 
   // 锁定 Bitmap 地址 (8-bit)
   void *bitmapPixels;
@@ -319,28 +324,33 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processToBitmap(
 
   free(yuv16Data);
 
-  int finalWidth, finalHeight;
-  if (rotatedWidth > rotatedHeight) {
-    float expectedWidth = (float)rotatedHeight * targetRatio;
-    if (expectedWidth <= (float)rotatedWidth) {
-      finalHeight = rotatedHeight;
-      finalWidth = (static_cast<int>(expectedWidth) / 2) * 2;
-    } else {
-      finalWidth = rotatedWidth;
-      finalHeight =
-          (static_cast<int>((float)rotatedWidth / targetRatio) / 2) * 2;
-    }
+  // === Step 3: 裁切计算 ===
+  bool currentIsLandscape = (rotatedWidth >= rotatedHeight);
+  int tw, th;
+  if (currentIsLandscape) {
+    tw = (targetWR >= targetHR) ? targetWR : targetHR;
+    th = (targetWR >= targetHR) ? targetHR : targetWR;
   } else {
-    float expectedHeight = (float)rotatedWidth * targetRatio;
-    if (expectedHeight <= (float)rotatedHeight) {
-      finalWidth = rotatedWidth;
-      finalHeight = (static_cast<int>(expectedHeight) / 2) * 2;
-    } else {
-      finalHeight = rotatedHeight;
-      finalWidth =
-          (static_cast<int>((float)rotatedHeight / targetRatio) / 2) * 2;
-    }
+    tw = (targetWR >= targetHR) ? targetHR : targetWR;
+    th = (targetWR >= targetHR) ? targetWR : targetHR;
   }
+
+  int finalWidth, finalHeight;
+  if ((long long)rotatedWidth * th > (long long)tw * rotatedHeight) {
+    // 现有区域太“扁” -> 缩减宽度，以高度为基准
+    finalHeight = (rotatedHeight / 2) * 2;
+    finalWidth = (int)(((long long)finalHeight * tw / th) / 2) * 2;
+  } else {
+    // 现有区域太“瘦” -> 缩减高度，以宽度为基准
+    finalWidth = (rotatedWidth / 2) * 2;
+    finalHeight = (int)(((long long)finalWidth * th / tw) / 2) * 2;
+  }
+
+  // 安全边界检查
+  if (finalWidth > rotatedWidth)
+    finalWidth = (rotatedWidth / 2) * 2;
+  if (finalHeight > rotatedHeight)
+    finalHeight = (rotatedHeight / 2) * 2;
 
   int cropX = ((rotatedWidth - finalWidth) / 4) * 2;
   int cropY = ((rotatedHeight - finalHeight) / 4) * 2;

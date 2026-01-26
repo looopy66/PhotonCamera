@@ -27,7 +27,7 @@ object YuvProcessor {
     /**
      * 处理 YUV Image 并返回用于预览的 8-bit Bitmap
      */
-    fun processAndToBitmap(image: Image, aspectRatio: AspectRatio, rotation: Int): Bitmap {
+    fun processAndToBitmap(image: Image, aspectRatio: AspectRatio?, rotation: Int): Bitmap {
         val planes = image.planes
 
         val yBuffer = planes[0].buffer
@@ -45,18 +45,19 @@ object YuvProcessor {
         val uvPixelStride = planes[1].pixelStride
         val format = image.format
 
-        val targetRatio = aspectRatio.getValue(true)
-        val dimensions = BitmapUtils.calculateProcessedDimensions(width, height, aspectRatio, null, rotation)
-        val previewBitmap = createBitmap(dimensions.first, dimensions.second)
+        val dimensions = BitmapUtils.calculateProcessedRect(width, height, aspectRatio, null, rotation)
+        val previewBitmap = createBitmap(dimensions.width(), dimensions.height())
+
+        val tw = aspectRatio?.widthRatio ?: width
+        val th = aspectRatio?.heightRatio ?: height
 
         processToBitmap(
             yBuffer, uBuffer, vBuffer,
             width, height,
             yRowStride, uvRowStride, uvPixelStride,
-            rotation, targetRatio, format,
+            rotation, tw, th, format,
             previewBitmap
         )
-
         return previewBitmap
     }
 
@@ -87,13 +88,11 @@ object YuvProcessor {
         val uvPixelStride = planes[1].pixelStride
         val format = image.format
 
-        val targetRatio = aspectRatio.getValue(true)
-
         return processAndSaveYuv(
             yBuffer, uBuffer, vBuffer,
             width, height,
             yRowStride, uvRowStride, uvPixelStride,
-            rotation, targetRatio, format,
+            rotation, aspectRatio.widthRatio, aspectRatio.heightRatio, format,
             outputPath, previewBitmap
         )
     }
@@ -155,7 +154,8 @@ object YuvProcessor {
         uvRowStride: Int,
         uvPixelStride: Int,
         rotation: Int,
-        targetRatio: Float,
+        targetWR: Int,
+        targetHR: Int,
         format: Int,
         previewBitmap: Bitmap
     )
@@ -173,7 +173,8 @@ object YuvProcessor {
         uvRowStride: Int,
         uvPixelStride: Int,
         rotation: Int,
-        targetRatio: Float,
+        targetWR: Int,
+        targetHR: Int,
         format: Int,
         outputPath: String,
         previewBitmap: Bitmap

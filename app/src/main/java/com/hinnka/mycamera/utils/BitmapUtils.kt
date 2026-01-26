@@ -2,6 +2,7 @@ package com.hinnka.mycamera.utils
 
 import android.graphics.*
 import android.media.Image
+import android.util.Log
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
 import java.io.ByteArrayInputStream
@@ -55,11 +56,13 @@ object BitmapUtils {
                 matrix.postRotate(90f)
                 isSwapped = true
             }
+
             ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
             ExifInterface.ORIENTATION_ROTATE_270 -> {
                 matrix.postRotate(270f)
                 isSwapped = true
             }
+
             ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
             ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
             ExifInterface.ORIENTATION_TRANSPOSE -> {
@@ -67,6 +70,7 @@ object BitmapUtils {
                 matrix.postScale(-1f, 1f)
                 isSwapped = true
             }
+
             ExifInterface.ORIENTATION_TRANSVERSE -> {
                 matrix.postRotate(270f)
                 matrix.postScale(-1f, 1f)
@@ -78,32 +82,22 @@ object BitmapUtils {
         val visualWidth = if (isSwapped) height else width
         val visualHeight = if (isSwapped) width else height
 
-        // 4. 计算裁切逻辑 (核心算法：保证长短边比例)
-        val targetRatio = aspectRatio.getValue(true) // 总是返回 长边/短边
+        // 4. 计算裁切逻辑 (核心算法)
+        val visualIsLandscape = visualHeight <= visualWidth
+        val targetRatio = aspectRatio.getValue(visualIsLandscape)
+
         var finalVisualW: Int
         var finalVisualH: Int
 
-        // 判断视觉上是横图还是竖图
-        if (visualWidth > visualHeight) {
-            // --- 视觉横图 ---
-            val expectedWidth = visualHeight * targetRatio
-            if (expectedWidth <= visualWidth) {
-                finalVisualH = visualHeight
-                finalVisualW = floor(expectedWidth).toInt()
-            } else {
-                finalVisualW = visualWidth
-                finalVisualH = floor(visualWidth / targetRatio).toInt()
-            }
+        val currentRatio = visualWidth.toFloat() / visualHeight.toFloat()
+        if (currentRatio > targetRatio) {
+            // 视觉区域比目标更“扁”，裁切宽度
+            finalVisualH = visualHeight
+            finalVisualW = (visualHeight * targetRatio).toInt()
         } else {
-            // --- 视觉竖图 ---
-            val expectedHeight = visualWidth * targetRatio
-            if (expectedHeight <= visualHeight) {
-                finalVisualW = visualWidth
-                finalVisualH = floor(expectedHeight).toInt()
-            } else {
-                finalVisualH = visualHeight
-                finalVisualW = floor(visualHeight / targetRatio).toInt()
-            }
+            // 视觉区域比目标更“瘦”，裁切高度
+            finalVisualW = visualWidth
+            finalVisualH = (visualWidth / targetRatio).toInt()
         }
 
         // 5. 映射回“物理”裁切区域
@@ -166,42 +160,71 @@ object BitmapUtils {
      * @param width 原始宽度
      * @param height 原始高度
      * @param aspectRatio 目标宽高比
-     * @param cropRect 裁切区域 (可选)
-     * @param rotation 旋转角度 (0, 90, 180, 270)
-     * @return Pair<宽度, 高度> 处理后的尺寸
+     * @param cropRegion 裁切区域 (可选)
+     * @param rotation
      */
-    fun calculateProcessedDimensions(
+    fun calculateProcessedRect(
         width: Int,
         height: Int,
-        aspectRatio: AspectRatio,
-        cropRect: Rect?,
-        rotation: Int
-    ): Pair<Int, Int> {
-        // Step 1: 以 cropRect 或原始尺寸作为基础尺寸
-        val baseWidth = cropRect?.width() ?: width
-        val baseHeight = cropRect?.height() ?: height
+        aspectRatio: AspectRatio?,
+        cropRegion: Rect?,
+        rotation: Int = 0
+    ): Rect {
+        val bitmapBounds = Rect(0, 0, width, height)
 
-        // Step 2: 在原始空间（横向）计算裁切后的尺寸
-        // 逻辑与 RawDemosaicProcessor.processInternal 保持一致
-        val srcRatio = baseWidth.toFloat() / baseHeight.toFloat()
-        val targetRatio = aspectRatio.getValue(true) // 使用横向比例进行计算
-
-        var finalCropWidth = baseWidth.toFloat()
-        var finalCropHeight = baseHeight.toFloat()
-
-        if (srcRatio > targetRatio) {
-            // 基础区域更宽，水平方向裁切
-            finalCropWidth = baseHeight * targetRatio
-        } else if (srcRatio < targetRatio) {
-            // 基础区域更高，垂直方向裁切
-            finalCropHeight = baseWidth / targetRatio
+        // 1. 统一方向并取交集
+        val currentIsLandscape = width >= height
+        val safeRegion = if (cropRegion != null && !cropRegion.isEmpty) {
+            val regionIsLandscape = cropRegion.width() >= cropRegion.height()
+            val alignedRegion = if (regionIsLandscape != currentIsLandscape) {
+                // 轴方向不一致，进行坐标转置 (Transpose)
+                Rect(cropRegion.top, cropRegion.left, cropRegion.bottom, cropRegion.right)
+            } else {
+                Rect(cropRegion)
+            }
+            // 与原图边界取交集
+            if (!alignedRegion.intersect(bitmapBounds)) {
+                bitmapBounds
+            } else {
+                alignedRegion
+            }
+        } else {
+            bitmapBounds
         }
 
-        // Step 3: 根据旋转角度确定最终宽高
-        val isSwapped = rotation == 90 || rotation == 270
-        val finalWidth = if (isSwapped) finalCropHeight.toInt() else finalCropWidth.toInt()
-        val finalHeight = if (isSwapped) finalCropWidth.toInt() else finalCropHeight.toInt()
+        // 2. 确定目标比例
+        val targetRatio = aspectRatio?.getValue(currentIsLandscape) ?: (width.toFloat() / height.toFloat())
 
-        return Pair(finalWidth, finalHeight)
+        // 3. 在安全区域 (safeRegion) 内按照目标比例进行最终裁切
+        val baseWidth = safeRegion.width()
+        val baseHeight = safeRegion.height()
+        val srcRatio = baseWidth.toFloat() / baseHeight.toFloat()
+
+        var finalW: Float
+        var finalH: Float
+
+        if (srcRatio > targetRatio) {
+            // 安全区太宽 -> 缩减宽度
+            finalH = baseHeight.toFloat()
+            finalW = baseHeight * targetRatio
+        } else {
+            // 安全区太瘦 -> 缩减高度
+            finalW = baseWidth.toFloat()
+            finalH = baseWidth / targetRatio
+        }
+
+        // 4. 在安全区域内居中计算最终坐标
+        val x = (safeRegion.left + (baseWidth - finalW) / 2f).toInt().coerceAtLeast(0)
+        val y = (safeRegion.top + (baseHeight - finalH) / 2f).toInt().coerceAtLeast(0)
+        val finalWInt = finalW.toInt().coerceAtMost(width - x)
+        val finalHInt = finalH.toInt().coerceAtMost(height - y)
+
+        // 5. 适配旋转角度
+        val isSwapped = rotation == 90 || rotation == 270
+        return if (isSwapped) {
+            Rect(y, x, y + finalHInt, x + finalWInt)
+        } else {
+            Rect(x, y, x + finalWInt, y + finalHInt)
+        }
     }
 }

@@ -1,19 +1,18 @@
 package com.hinnka.mycamera.utils
 
-import android.graphics.Bitmap
-import android.graphics.ImageDecoder
-import android.graphics.ImageFormat
-import android.graphics.Matrix
+import android.graphics.*
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.DngCreator
-import android.media.Image
 import android.media.ExifInterface
+import android.media.Image
+import android.util.Log
 import com.hinnka.mycamera.camera.AspectRatio
-import com.hinnka.mycamera.raw.RawDemosaicProcessor
-import kotlinx.coroutines.runBlocking
-import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileInputStream
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.ShortBuffer
 
 /**
  * RAW 图像处理器
@@ -35,89 +34,36 @@ object RawProcessor {
                 image.format == ImageFormat.RAW12
     }
 
-    /**
-     * 将 RAW 图像转换为 Bitmap
-     * 
-     * 使用 GPU 加速的 OpenGL ES 解马赛克算法，包含：
-     * - 黑电平校正
-     * - Malvar-He-Cutler (MHC) Demosaic 算法
-     * - 白平衡增益
-     * - 色彩校正矩阵 (CCM)
-     * - Gamma 校正 (sRGB)
-     * 
-     * @param image RAW_SENSOR 格式的 Image
-     * @param characteristics 相机特性
-     * @param captureResult 拍摄结果（包含曝光、白平衡等元数据）
-     * @param aspectRatio 目标宽高比
-     * @param rotation 旋转角度 (0, 90, 180, 270)
-     * @return 处理后的 Bitmap，如果失败返回 null
-     */
-    fun processAndToBitmap(
-        image: Image,
-        characteristics: CameraCharacteristics,
-        captureResult: CaptureResult,
-        aspectRatio: AspectRatio,
+    fun process(
+        dngPath: String,
+        aspectRatio: AspectRatio?,
+        cropRegion: Rect?,
         rotation: Int
     ): Bitmap? {
-        if (!isRawImage(image)) {
-            PLog.e(TAG, "Image is not RAW format: ${image.format}")
-            return null
-        }
-
         return try {
-            // 使用 GPU 加速的 RAW 处理器
-            val processor = RawDemosaicProcessor.getInstance()
-            val result = runBlocking {
-                processor.process(image, characteristics, captureResult, aspectRatio, rotation)
+            FileInputStream(File(dngPath)).use {
+                processAndToBitmap(it.readBytes(), aspectRatio, cropRegion, rotation)
             }
-
-            if (result != null) {
-                PLog.d(TAG, "RAW processed with GPU demosaic: ${result.width}x${result.height}")
-            } else {
-                PLog.w(TAG, "GPU processing failed, falling back to ImageDecoder")
-                // 回退到原始方法
-                return processWithImageDecoder(image, characteristics, captureResult, aspectRatio, rotation)
-            }
-
-            result
-
         } catch (e: Exception) {
-            PLog.e(TAG, "GPU RAW processing failed, trying fallback", e)
-            // 回退到原始方法
-            processWithImageDecoder(image, characteristics, captureResult, aspectRatio, rotation)
+            PLog.e(TAG, "Fallback RAW processing also failed", e)
+            null
         }
     }
 
-    /**
-     * 使用 ImageDecoder 的回退方法（原始实现）
-     *
-     */
-    fun processWithImageDecoder(
-        image: Image,
-        characteristics: CameraCharacteristics,
-        captureResult: CaptureResult,
-        aspectRatio: AspectRatio,
+    fun processAndToBitmap(
+        byteArray: ByteArray,
+        aspectRatio: AspectRatio?,
+        cropRegion: Rect?,
         rotation: Int
     ): Bitmap? {
         return try {
-            // Step 1: 使用 DngCreator 将 RAW 转换为 DNG 格式
-            val dngCreator = DngCreator(characteristics, captureResult)
-            val outputStream = ByteArrayOutputStream()
-            dngCreator.writeImage(outputStream, image)
-            dngCreator.close()
-
-            val dngBytes = outputStream.toByteArray()
-            PLog.d(TAG, "DNG created (fallback): ${dngBytes.size} bytes")
-
-            // Step 2: 使用 ImageDecoder 解码 DNG
-            val source = ImageDecoder.createSource(ByteBuffer.wrap(dngBytes))
+            val source = ImageDecoder.createSource(ByteBuffer.wrap(byteArray))
             var decodedBitmap = ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
-                // 设置为 ARGB_8888 以获得最佳 quality
-                decoder.setTargetColorSpace(android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB))
+                decoder.setTargetColorSpace(ColorSpace.get(ColorSpace.Named.EXTENDED_SRGB))
                 decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
             }
 
-            PLog.d(TAG, "DNG decoded (fallback): ${decodedBitmap.width}x${decodedBitmap.height}")
+            PLog.d(TAG, "DNG decoded: ${decodedBitmap.width}x${decodedBitmap.height} ${decodedBitmap.config}")
 
             // Step 3: 处理旋转
             if (rotation != 0) {
@@ -135,53 +81,18 @@ object RawProcessor {
             }
 
             // Step 4: 裁切到目标宽高比
-            val croppedBitmap = cropToAspectRatio(decodedBitmap, aspectRatio)
+            val rect =
+                BitmapUtils.calculateProcessedRect(decodedBitmap.width, decodedBitmap.height, aspectRatio, cropRegion)
+            val croppedBitmap = Bitmap.createBitmap(decodedBitmap, rect.left, rect.top, rect.width(), rect.height())
             if (croppedBitmap != decodedBitmap) {
                 decodedBitmap.recycle()
             }
 
             croppedBitmap
-
         } catch (e: Exception) {
             PLog.e(TAG, "Fallback RAW processing also failed", e)
             null
         }
-    }
-
-    /**
-     * 裁切 Bitmap 到目标宽高比（居中裁切）
-     */
-    private fun cropToAspectRatio(bitmap: Bitmap, aspectRatio: AspectRatio): Bitmap {
-        val srcWidth = bitmap.width
-        val srcHeight = bitmap.height
-        val srcRatio = srcWidth.toFloat() / srcHeight.toFloat()
-        val targetRatio = aspectRatio.getValue(false) // width/height
-
-        // 如果宽高比已经匹配，直接返回
-        if (kotlin.math.abs(srcRatio - targetRatio) < 0.01f) {
-            return bitmap
-        }
-
-        val cropWidth: Int
-        val cropHeight: Int
-        val cropX: Int
-        val cropY: Int
-
-        if (srcRatio > targetRatio) {
-            // 原图更宽，裁切左右
-            cropHeight = srcHeight
-            cropWidth = (srcHeight * targetRatio).toInt()
-            cropX = (srcWidth - cropWidth) / 2
-            cropY = 0
-        } else {
-            // 原图更高，裁切上下
-            cropWidth = srcWidth
-            cropHeight = (srcWidth / targetRatio).toInt()
-            cropX = 0
-            cropY = (srcHeight - cropHeight) / 2
-        }
-
-        return Bitmap.createBitmap(bitmap, cropX, cropY, cropWidth, cropHeight)
     }
 
     /**
