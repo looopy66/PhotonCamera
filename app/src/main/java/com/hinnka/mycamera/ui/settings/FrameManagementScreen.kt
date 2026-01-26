@@ -32,6 +32,7 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.frame.TextType
 import com.hinnka.mycamera.ui.camera.autoRotate
+import com.hinnka.mycamera.ui.common.WatermarkEditSheet
 import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import kotlinx.coroutines.Dispatchers
@@ -388,12 +389,28 @@ fun FrameManagementScreen(
 
     // 自定义属性编辑底部弹窗
     if (showFrameEditSheet && editingFrameId != null) {
-        FrameEditBottomSheet(
-            viewModel = viewModel,
-            frameId = editingFrameId!!,
+        var properties by remember(editingFrameId) { mutableStateOf<Map<String, String>>(emptyMap()) }
+        LaunchedEffect(editingFrameId) {
+            properties = withContext(Dispatchers.IO) {
+                viewModel.getFrameCustomProperties(editingFrameId!!)
+            }
+        }
+        WatermarkEditSheet(
+            customProperties = properties,
+            onPropertiesChange = {
+                properties = it
+                scope.launch {
+                    withContext(Dispatchers.IO) {
+                        viewModel.saveFrameCustomProperties(editingFrameId!!, it)
+                    }
+                }
+            },
             onDismiss = {
                 showFrameEditSheet = false
                 editingFrameId = null
+            },
+            onImportFont = { uri ->
+                viewModel.getCustomImportManager().importFont(uri)
             }
         )
     }
@@ -542,136 +559,3 @@ private fun FrameManagementItem(
     }
 }
 
-/**
- * 边框自定义属性编辑底部弹窗
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun FrameEditBottomSheet(
-    viewModel: CameraViewModel,
-    frameId: String,
-    onDismiss: () -> Unit
-) {
-    val scope = rememberCoroutineScope()
-    val sheetState = rememberModalBottomSheetState()
-    val customProperties = remember(frameId) {
-        mutableStateMapOf<String, String>()
-    }
-
-    // 加载已保存的自定义属性
-    LaunchedEffect(frameId) {
-        val savedProperties = withContext(Dispatchers.IO) {
-            viewModel.getFrameCustomProperties(frameId)
-        }
-        customProperties.clear()
-        customProperties.putAll(savedProperties)
-    }
-
-    ModalBottomSheet(
-        onDismissRequest = {
-            // 关闭时保存属性
-            scope.launch {
-                withContext(Dispatchers.IO) {
-                    viewModel.saveFrameCustomProperties(frameId, customProperties.toMap())
-                }
-            }
-            onDismiss()
-        },
-        sheetState = sheetState,
-        containerColor = Color(0xFF1A1A1A),
-        contentColor = Color.White,
-        scrimColor = Color.Transparent
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-                .padding(bottom = 32.dp)
-        ) {
-            Text(
-                text = stringResource(R.string.watermark_adjustment),
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 16.dp)
-            )
-
-            // Logo 选择
-            Text(
-                text = stringResource(R.string.logo),
-                fontSize = 14.sp,
-                color = Color.White.copy(alpha = 0.6f),
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-
-            val logos = listOf(
-                "none" to stringResource(R.string.none),
-                "apple" to "Apple",
-                "leica" to "Leica",
-                "hasselblad" to "Hasselblad",
-                "sony" to "Sony",
-                "canon" to "Canon",
-                "nikon" to "Nikon",
-                "fujifilm" to "Fujifilm",
-                "xiaomi" to "Xiaomi",
-                "huawei" to "Huawei",
-                "oppo" to "OPPO",
-                "vivo" to "Vivo"
-            )
-
-            val effectiveLogo = customProperties["LOGO"] ?: "none"
-
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(bottom = 16.dp)
-            ) {
-                items(logos) { (id, name) ->
-                    val isSelected = effectiveLogo == id
-                    Surface(
-                        onClick = { customProperties["LOGO"] = id },
-                        color = if (isSelected) AccentOrange.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.1f),
-                        shape = RoundedCornerShape(8.dp),
-                        border = if (isSelected) BorderStroke(1.dp, AccentOrange) else null
-                    ) {
-                        Text(
-                            text = name,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                            fontSize = 13.sp,
-                            color = if (isSelected) AccentOrange else Color.White
-                        )
-                    }
-                }
-            }
-
-            // 文字默认值编辑
-            Text(
-                text = stringResource(R.string.text_content),
-                fontSize = 14.sp,
-                color = Color.White.copy(alpha = 0.6f),
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-
-            val textTypes = listOf(
-                TextType.DEVICE_MODEL to stringResource(R.string.device_model),
-                TextType.BRAND to stringResource(R.string.brand_name)
-            )
-
-            textTypes.forEach { (type, label) ->
-                OutlinedTextField(
-                    value = customProperties[type.name] ?: "",
-                    onValueChange = { customProperties[type.name] = it },
-                    label = { Text(label) },
-                    placeholder = { Text(stringResource(R.string.default_from_photo)) },
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = AccentOrange,
-                        unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
-                        focusedLabelColor = AccentOrange,
-                        unfocusedLabelColor = Color.White.copy(alpha = 0.5f),
-                        cursorColor = AccentOrange
-                    ),
-                    singleLine = true
-                )
-            }
-        }
-    }
-}

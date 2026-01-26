@@ -22,6 +22,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.hinnka.mycamera.ui.common.WatermarkEditSheet
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -253,7 +254,7 @@ fun PhotoEditScreen(
                                                 isMultiTouch = true
                                                 break
                                             }
-                                            
+
                                             val currentPosition = event.changes[0].position
                                             if ((currentPosition - initialPosition).getDistance() > touchSlop) {
                                                 isMoved = true
@@ -505,10 +506,30 @@ fun PhotoEditScreen(
     }
 
     if (viewModel.showWatermarkSheet) {
+        val currentPhoto = viewModel.getCurrentPhoto()
+        val originalValues = remember(currentPhoto) {
+            mutableMapOf<TextType, String>().apply {
+                currentPhoto?.metadata?.let { metadata ->
+                    put(TextType.DEVICE_MODEL, metadata.deviceModel ?: "")
+                    put(TextType.BRAND, metadata.brand ?: "")
+                    metadata.dateTaken?.let { date ->
+                        put(TextType.DATE, SimpleDateFormat("yyyy.MM.dd", Locale.getDefault()).format(Date(date)))
+                        put(TextType.TIME, SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(date)))
+                        put(
+                            TextType.DATETIME,
+                            SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.getDefault()).format(Date(date))
+                        )
+                    }
+                }
+            }
+        }
         WatermarkEditSheet(
-            viewModel = viewModel,
-            onDismiss = {
-                viewModel.showWatermarkSheet = false
+            customProperties = editFrameCustomProperties,
+            onPropertiesChange = { viewModel.saveEditCustomProperties(it) },
+            onDismiss = { viewModel.showWatermarkSheet = false },
+            originalValues = originalValues,
+            onImportFont = { uri ->
+                viewModel.getCustomImportManager().importFont(uri)
             }
         )
     }
@@ -695,159 +716,6 @@ private fun FrameOption(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun WatermarkEditSheet(
-    viewModel: GalleryViewModel,
-    onDismiss: () -> Unit
-) {
-    val sheetState = rememberModalBottomSheetState()
-    val customProperties = remember(viewModel.editFrameId) {
-        mutableStateMapOf<String, String>().apply {
-            putAll(viewModel.editFrameCustomProperties.value)
-        }
-    }
-
-    ModalBottomSheet(
-        onDismissRequest = {
-            onDismiss()
-        },
-        sheetState = sheetState,
-        containerColor = Color(0xFF1A1A1A),
-        contentColor = Color.White,
-        scrimColor = Color.Transparent
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-                .padding(bottom = 32.dp)
-        ) {
-            Text(
-                text = stringResource(R.string.watermark_adjustment),
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 16.dp)
-            )
-
-            // Logo 选择
-            Text(
-                text = stringResource(R.string.logo),
-                fontSize = 14.sp,
-                color = Color.White.copy(alpha = 0.6f),
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-
-            val logos = listOf(
-                "none" to stringResource(R.string.none),
-                "apple" to "Apple",
-                "samsung" to "Samsung",
-                "xiaomi" to "Xiaomi",
-                "huawei" to "Huawei",
-                "honor" to "Honor",
-                "oppo" to "OPPO",
-                "vivo" to "Vivo",
-                "sony" to "Sony",
-                "canon" to "Canon",
-                "nikon" to "Nikon",
-                "fujifilm" to "Fujifilm",
-                "leica" to "Leica",
-                "hasselblad" to "Hasselblad",
-                "dji" to "DJI",
-                "panasonic" to "Panasonic",
-                "olympus" to "Olympus",
-                "pentax" to "Pentax",
-                "ricoh" to "Ricoh"
-            )
-
-            val currentPhoto = viewModel.getCurrentPhoto()
-            val currentBrand = currentPhoto?.metadata?.brand?.lowercase() ?: ""
-            val effectiveActiveId =
-                customProperties["LOGO"] ?: logos.find { it.first != "none" && currentBrand.contains(it.first) }?.first
-                ?: "none"
-
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(bottom = 16.dp)
-            ) {
-                items(logos) { (id, name) ->
-                    val isSelected = effectiveActiveId == id
-                    Surface(
-                        onClick = {
-                            customProperties["LOGO"] = id
-                            viewModel.saveEditCustomProperties(customProperties)
-                        },
-                        color = if (isSelected) AccentOrange.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.1f),
-                        shape = RoundedCornerShape(8.dp),
-                        border = if (isSelected) BorderStroke(1.dp, AccentOrange) else null
-                    ) {
-                        Text(
-                            text = name,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                            fontSize = 13.sp,
-                            color = if (isSelected) AccentOrange else Color.White
-                        )
-                    }
-                }
-            }
-
-            // 文字编辑
-            Text(
-                text = stringResource(R.string.text_content),
-                fontSize = 14.sp,
-                color = Color.White.copy(alpha = 0.6f),
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-
-            val textTypes = listOf(
-                TextType.DEVICE_MODEL to stringResource(R.string.device_model),
-                TextType.BRAND to stringResource(R.string.brand_name),
-                TextType.DATE to stringResource(R.string.date_label),
-                TextType.TIME to stringResource(R.string.time_label),
-                TextType.DATETIME to stringResource(R.string.datetime_label)
-            )
-
-            textTypes.forEach { (type, label) ->
-                val currentPhoto = viewModel.getCurrentPhoto()
-                val originalValue = when (type) {
-                    TextType.DEVICE_MODEL -> currentPhoto?.metadata?.deviceModel
-                    TextType.BRAND -> currentPhoto?.metadata?.brand
-                    TextType.DATE -> currentPhoto?.metadata?.dateTaken?.let {
-                        SimpleDateFormat("yyyy.MM.dd", Locale.getDefault()).format(Date(it))
-                    }
-
-                    TextType.TIME -> currentPhoto?.metadata?.dateTaken?.let {
-                        SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(it))
-                    }
-
-                    TextType.DATETIME -> currentPhoto?.metadata?.dateTaken?.let {
-                        SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.getDefault()).format(Date(it))
-                    }
-
-                    else -> null
-                } ?: ""
-
-                OutlinedTextField(
-                    value = customProperties[type.name] ?: originalValue,
-                    onValueChange = {
-                        customProperties[type.name] = it
-                        viewModel.saveEditCustomProperties(customProperties)
-                    },
-                    label = { Text(label) },
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = AccentOrange,
-                        unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
-                        focusedLabelColor = AccentOrange,
-                        unfocusedLabelColor = Color.White.copy(alpha = 0.5f),
-                        cursorColor = AccentOrange
-                    ),
-                    singleLine = true
-                )
-            }
-        }
-    }
-}
 
 /**
  * 用于编辑界面的可缩放图片组件

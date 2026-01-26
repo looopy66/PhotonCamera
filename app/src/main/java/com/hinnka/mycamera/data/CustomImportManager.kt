@@ -33,6 +33,9 @@ class CustomImportManager(private val context: Context) {
         private const val CUSTOM_LUT_CONFIG = "custom_luts.json"
         private const val CUSTOM_FRAME_CONFIG = "custom_frames.json"
         private const val CATEGORY_OVERRIDES_CONFIG = "category_overrides.json"
+
+        // 自定义字体目录
+        private const val CUSTOM_FONT_DIR = "custom_fonts"
     }
 
     /**
@@ -59,6 +62,9 @@ class CustomImportManager(private val context: Context) {
 
     private val customFrameDir: File
         get() = File(context.filesDir, CUSTOM_FRAME_DIR).apply { mkdirs() }
+
+    private val customFontDir: File
+        get() = File(context.filesDir, CUSTOM_FONT_DIR).apply { mkdirs() }
 
     /**
      * 导入 LUT 文件 (.cube)
@@ -244,6 +250,27 @@ class CustomImportManager(private val context: Context) {
             frameId
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to import image frame", e)
+            null
+        }
+    }
+
+    /**
+     * 导入字体文件
+     */
+    fun importFont(uri: Uri): String? {
+        return try {
+            val fileName = getFileName(uri) ?: "font_${UUID.randomUUID()}.ttf"
+            val fontFile = File(customFontDir, fileName)
+
+            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                fontFile.outputStream().use { outputStream ->
+                    inputStream.copyTo(outputStream)
+                }
+            } ?: return null
+
+            fontFile.absolutePath
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to import font", e)
             null
         }
     }

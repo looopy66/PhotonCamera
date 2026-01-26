@@ -87,6 +87,9 @@
     <string name="time_label">Time (TIME)</string>
     <string name="datetime_label">Date/Time (DATETIME)</string>
     <string name="default_from_photo">Default from photo</string>
+    <string name="font_option">Font</string>
+    <string name="default_text">Default</string>
+    <string name="custom_import">Import...</string>
     
     <!-- Settings -->
     <string name="settings_title">Settings</string>
