@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.pow
@@ -116,6 +117,8 @@ class Camera2Controller(private val context: Context) {
     // 缓存 CaptureResult 和 Image 用于配对 (timestamp -> Data)
     private val pendingResults = ConcurrentHashMap<Long, TotalCaptureResult>()
     private val pendingImages = ConcurrentHashMap<Long, Image>()
+    private val pendingCloseReaders = mutableListOf<ImageReader>()
+    private val openImagesCount = AtomicInteger(0)
 
     // 保留最近的一个结果作为后备
     @Volatile
@@ -123,6 +126,13 @@ class Camera2Controller(private val context: Context) {
 
     // 图片拍摄回调（携带 CaptureInfo, CameraCharacteristics 和 CaptureResult 用于 RAW 处理）
     var onImageCaptured: ((Image, CaptureInfo, CameraCharacteristics?, CaptureResult?) -> Unit)? = null
+
+    private fun trackImage(image: Image?): Image? {
+        if (image != null) {
+            openImagesCount.getAndIncrement()
+        }
+        return image
+    }
 
     // 快门音效播放回调
     var onPlayShutterSound: (() -> Unit)? = null
@@ -137,6 +147,13 @@ class Camera2Controller(private val context: Context) {
     // errorCode: CameraDevice 的错误代码或自定义错误码
     // canRetry: 是否可以重试打开相机
     var onCameraError: ((errorCode: Int, message: String, canRetry: Boolean) -> Unit)? = null
+
+    fun releaseImage(image: Image) {
+        image.close()
+        if (openImagesCount.decrementAndGet() == 0) {
+            checkAndClosePendingReaders()
+        }
+    }
 
     private val previewCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(
@@ -543,7 +560,7 @@ class Camera2Controller(private val context: Context) {
                     try {
                         PLog.d(TAG, "ImageReader onImageAvailableListener triggered")
                         // 关键修复：使用 acquireNextImage() 而不是 acquireLatestImage()
-                        val image = reader.acquireNextImage()
+                        val image = trackImage(reader.acquireNextImage())
                         if (image != null) {
                             if (state.value.useRaw && isRawSupported) {
                                 val timestamp = image.timestamp
@@ -558,7 +575,7 @@ class Camera2Controller(private val context: Context) {
                                     if (pendingImages.size > 5) {
                                         val oldestKey = pendingImages.keys.minOrNull()
                                         if (oldestKey != null) {
-                                            pendingImages.remove(oldestKey)?.close()
+                                            pendingImages.remove(oldestKey)?.let { releaseImage(it) }
                                         }
                                     }
                                 }
@@ -579,7 +596,7 @@ class Camera2Controller(private val context: Context) {
             // 创建用于直方图计算/半自动测光/低分辨率预览的 ImageReader (低分辨率 YUV)
             previewImageReader = ImageReader.newInstance(320, 240, ImageFormat.YUV_420_888, 2).apply {
                 setOnImageAvailableListener({ reader ->
-                    val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
+                    val image = trackImage(reader.acquireLatestImage()) ?: return@setOnImageAvailableListener
                     try {
                         val planes = image.planes
                         val buffer = planes[0].buffer // Y plane
@@ -728,7 +745,7 @@ class Camera2Controller(private val context: Context) {
                     } catch (e: Exception) {
                         PLog.e(TAG, "Failed to calculate histogram", e)
                     } finally {
-                        image.close()
+                        releaseImage(image)
                     }
                 }, cameraHandler)
             }
@@ -2298,10 +2315,10 @@ class Camera2Controller(private val context: Context) {
             cameraDevice?.close()
             cameraDevice = null
 
-            imageReader?.close()
+            safeCloseImageReader(imageReader)
             imageReader = null
 
-            previewImageReader?.close()
+            safeCloseImageReader(previewImageReader)
             previewImageReader = null
 
             previewSurface = null
@@ -2321,6 +2338,36 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
+    private fun safeCloseImageReader(reader: ImageReader?) {
+        reader?.let {
+            if (openImagesCount.get() == 0) {
+                it.close()
+                PLog.d(TAG, "ImageReader closed immediately")
+            } else {
+                synchronized(pendingCloseReaders) {
+                    pendingCloseReaders.add(it)
+                }
+                PLog.d(TAG, "ImageReader added to pending close list, open images: ${openImagesCount.get()}")
+            }
+        }
+    }
+
+    private fun checkAndClosePendingReaders() {
+        synchronized(pendingCloseReaders) {
+            val iterator = pendingCloseReaders.iterator()
+            while (iterator.hasNext()) {
+                val reader = iterator.next()
+                try {
+                    reader.close()
+                    PLog.d(TAG, "Closed pending ImageReader")
+                } catch (e: Exception) {
+                    PLog.e(TAG, "Error closing pending ImageReader", e)
+                }
+                iterator.remove()
+            }
+        }
+    }
+
     private fun processAndTriggerCapture(image: Image, result: TotalCaptureResult?) {
         try {
             _state.value = _state.value.copy(isCapturing = false)
@@ -2332,10 +2379,15 @@ class Camera2Controller(private val context: Context) {
             val captureInfo = rebuildCaptureInfo(result, width, height)
 
             // 传递完整的 Image 对象、CaptureInfo、CameraCharacteristics 和 CaptureResult
-            onImageCaptured?.invoke(image, captureInfo, cachedCharacteristics, result)
+            val callback = onImageCaptured
+            if (callback != null) {
+                callback.invoke(image, captureInfo, cachedCharacteristics, result)
+            } else {
+                releaseImage(image)
+            }
         } catch (e: Exception) {
             PLog.e(TAG, "Error processing joined capture data", e)
-            image.close()
+            releaseImage(image)
         } finally {
             resetPreviewAfterCapture()
         }

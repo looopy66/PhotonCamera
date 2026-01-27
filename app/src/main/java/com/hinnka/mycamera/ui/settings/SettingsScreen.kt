@@ -353,6 +353,7 @@ fun SettingsScreen(
                             4 to "4",
                             8 to "8",
                             12 to "12",
+                            16 to "16",
                         ),
                         currentLevel = multiFrameCount,
                         onLevelSelected = { viewModel.setMultiFrameCount(it) }

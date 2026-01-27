@@ -218,6 +218,7 @@ object PhotoManager {
         sharpeningValue: Float,
         noiseReductionValue: Float,
         chromaNoiseReductionValue: Float,
+        onProcessingComplete: (() -> Unit)? = null
     ): String? {
         return try {
             val photoId = UUID.randomUUID().toString()
@@ -225,6 +226,7 @@ object PhotoManager {
 
             // 预先准备所有文件路径
             val photoFile = File(photoDir, PHOTO_FILE)
+            val tempFile = File(photoDir, "temp.jpg")
             val yuvFile = File(photoDir, YUV_FILE)
             val dngFile = File(photoDir, DNG_FILE)
             val metadataFile = File(photoDir, METADATA_FILE)
@@ -248,33 +250,100 @@ object PhotoManager {
                     val finalWidth = dimensions.width()
                     val finalHeight = dimensions.height()
                     processingScope.launch(Dispatchers.IO) {
-                        photoFile.createNewFile()
-                        // 创建预览用的 Bitmap
-                        val previewBitmap = createBitmap(finalWidth, finalHeight)
+                        try {
+                            photoFile.createNewFile()
+                            // 创建预览用的 Bitmap
+                            val previewBitmap = createBitmap(finalWidth, finalHeight)
 
-                        // YUV 格式：使用 native 处理（包含旋转和裁切）并直接保存为 FP16 JXL
-                        val success = image.use {
-                            YuvProcessor.processAndSave(
+                            // YUV 格式：使用 native 处理（包含旋转和裁切）并直接保存为 FP16 JXL
+                            val success = YuvProcessor.processAndSave(
                                 image, aspectRatio, rotation,
                                 yuvFile.absolutePath, previewBitmap
                             )
+                            if (success) {
+                                // 保存元数据
+                                val metadataWithInfo = metadata.copy(
+                                    width = finalWidth,
+                                    height = finalHeight,
+                                    ratio = aspectRatio,
+                                )
+                                metadataFile.writeText(metadataWithInfo.toJson())
+                                if (thumbnail == null) {
+                                    generateThumbnail(previewBitmap, thumbnailFile)
+                                }
+                                FileOutputStream(tempFile).use { outputStream ->
+                                    previewBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                                }
+                                tempFile.renameTo(photoFile)
+                                if (shouldAutoSave) {
+                                    exportPhoto(
+                                        context,
+                                        photoId,
+                                        photoProcessor,
+                                        metadataWithInfo,
+                                        sharpeningValue,
+                                        noiseReductionValue,
+                                        chromaNoiseReductionValue
+                                    )
+                                }
+                            }
+                        } finally {
+                            onProcessingComplete?.invoke()
                         }
-                        if (success) {
+                    }
+                }
+
+                ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12 -> {
+                    captureResult ?: run {
+                        onProcessingComplete?.invoke()
+                        return null
+                    }
+                    val dimensions =
+                        BitmapUtils.calculateProcessedRect(image.width, image.height, aspectRatio, cropRegion, rotation)
+                    processingScope.launch(Dispatchers.IO) {
+                        try {
+                            photoFile.createNewFile()
                             // 保存元数据
                             val metadataWithInfo = metadata.copy(
-                                width = finalWidth,
-                                height = finalHeight,
+                                width = dimensions.width(),
+                                height = dimensions.height(),
                                 ratio = aspectRatio,
+                                cropRegion = cropRegion,
+                                rotation = rotation,
+                                sharpening = 0.2f,
+                                noiseReduction = 0f,
+                                chromaNoiseReduction = 0.25f,
                             )
                             metadataFile.writeText(metadataWithInfo.toJson())
+                            val dngDataBytes = ByteArrayOutputStream().use { dngData ->
+                                RawProcessor.saveToDng(image, characteristics, captureResult, dngData, rotation)
+                                dngData.toByteArray()
+                            }
+                            launch(Dispatchers.IO) {
+                                FileOutputStream(dngFile).use { outputStream ->
+                                    outputStream.write(dngDataBytes)
+                                }
+                            }
+                            val bitmap = RawProcessor.processAndToBitmap(
+                                dngDataBytes,
+                                aspectRatio,
+                                cropRegion,
+                                rotation
+                            ) ?: return@launch
                             if (thumbnail == null) {
-                                generateThumbnail(previewBitmap, thumbnailFile)
+                                generateThumbnail(bitmap, thumbnailFile)
                             }
-                            FileOutputStream(photoFile).use { outputStream ->
-                                // 直接从内存中的 Bitmap 生成 8-bit JPEG 副本
-                                previewBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                            FileOutputStream(tempFile).use { outputStream ->
+                                bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
                             }
+                            tempFile.renameTo(photoFile)
+                            bitmap.recycle()
                             if (shouldAutoSave) {
+                                exportDng(
+                                    context,
+                                    dngDataBytes,
+                                    metadataWithInfo,
+                                )
                                 exportPhoto(
                                     context,
                                     photoId,
@@ -285,78 +354,21 @@ object PhotoManager {
                                     chromaNoiseReductionValue
                                 )
                             }
-                        }
-                    }
-                }
-
-                ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12 -> {
-                    captureResult ?: return null
-                    val dimensions =
-                        BitmapUtils.calculateProcessedRect(image.width, image.height, aspectRatio, cropRegion, rotation)
-                    processingScope.launch(Dispatchers.IO) {
-                        photoFile.createNewFile()
-                        // 保存元数据
-                        val metadataWithInfo = metadata.copy(
-                            width = dimensions.width(),
-                            height = dimensions.height(),
-                            ratio = aspectRatio,
-                            cropRegion = cropRegion,
-                            rotation = rotation,
-                            sharpening = 0.2f,
-                            noiseReduction = 0f,
-                            chromaNoiseReduction = 0.25f,
-                        )
-                        metadataFile.writeText(metadataWithInfo.toJson())
-                        val dngDataBytes = ByteArrayOutputStream().use { dngData ->
-                            image.use {
-                                RawProcessor.saveToDng(image, characteristics, captureResult, dngData, rotation)
-                            }
-                            dngData.toByteArray()
-                        }
-                        launch(Dispatchers.IO) {
-                            FileOutputStream(dngFile).use { outputStream ->
-                                outputStream.write(dngDataBytes)
-                            }
-                        }
-                        val bitmap = RawProcessor.processAndToBitmap(
-                            dngDataBytes,
-                            aspectRatio,
-                            cropRegion,
-                            rotation
-                        ) ?: return@launch
-                        if (thumbnail == null) {
-                            generateThumbnail(bitmap, thumbnailFile)
-                        }
-                        FileOutputStream(photoFile).use { outputStream ->
-                            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
-                        }
-                        bitmap.recycle()
-                        if (shouldAutoSave) {
-                            exportDng(
-                                context,
-                                dngDataBytes,
-                                metadataWithInfo,
-                            )
-                            exportPhoto(
-                                context,
-                                photoId,
-                                photoProcessor,
-                                metadataWithInfo,
-                                sharpeningValue,
-                                noiseReductionValue,
-                                chromaNoiseReductionValue
-                            )
+                        } finally {
+                            onProcessingComplete?.invoke()
                         }
                     }
                 }
 
                 else -> {
                     PLog.e(TAG, "Unsupported image format: $format")
+                    onProcessingComplete?.invoke()
                 }
             }
             photoId
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save photo", e)
+            onProcessingComplete?.invoke()
             null
         }
     }
@@ -377,6 +389,7 @@ suspend fun saveStackedPhoto(
     sharpeningValue: Float,
     noiseReductionValue: Float,
     chromaNoiseReductionValue: Float,
+    onProcessingComplete: (() -> Unit)? = null
 ): String? {
     return try {
         val photoId = UUID.randomUUID().toString()
@@ -384,6 +397,7 @@ suspend fun saveStackedPhoto(
 
         // 预先准备所有文件路径
         val photoFile = File(photoDir, PHOTO_FILE)
+        val tempFile = File(photoDir, "temp.jpg")
         val yuvFile = File(photoDir, YUV_FILE)
         val metadataFile = File(photoDir, METADATA_FILE)
         val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
@@ -423,12 +437,13 @@ suspend fun saveStackedPhoto(
                     generateThumbnail(result, thumbnailFile)
                 }
                 // Save Original (Stacked Result)
-                FileOutputStream(photoFile).use { outputStream ->
+                FileOutputStream(tempFile).use { outputStream ->
                     result.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
                 }
+                tempFile.renameTo(photoFile)
                 result.recycle()
                 // Auto Save
-                /*if (shouldAutoSave) {
+                if (shouldAutoSave) {
                     exportPhoto(
                         context,
                         photoId,
@@ -438,14 +453,15 @@ suspend fun saveStackedPhoto(
                         noiseReductionValue,
                         chromaNoiseReductionValue
                     )
-                }*/
+                }
             } finally {
-                images.forEach { it.close() }
+                onProcessingComplete?.invoke()
             }
         }
         photoId
     } catch (e: Exception) {
         PLog.e(TAG, "Failed to save stacked photo", e)
+        onProcessingComplete?.invoke()
         null
     }
 }

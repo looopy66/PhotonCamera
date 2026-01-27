@@ -925,7 +925,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val finalCNR: Float
 
                 val metadata = photo.metadata ?: PhotoManager.loadMetadata(getApplication(), photo.id) ?: PhotoMetadata()
-                Log.d(TAG, "getPreviewBitmap: ${metadata.customProperties}")
 
                 if (useGlobalEdit) {
                     finalMetadata = (currentPhotoMetadata ?: metadata).copy(

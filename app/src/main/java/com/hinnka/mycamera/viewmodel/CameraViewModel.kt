@@ -175,7 +175,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.initialize()
         cameraController.onImageCaptured = { image, captureInfo, characteristics, captureResult ->
             if (isBursting) {
-                val count = multiFrameCount.value
+                val count = state.value.multiFrameCount
                 PLog.d(TAG, "Burst frame received: ${burstImages.size + 1}/$count")
                 burstImages.add(image)
                 if (burstImages.size >= count) {
@@ -204,7 +204,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             isBursting = false
             burstImages.forEach {
                 try {
-                    it.close()
+                    cameraController.releaseImage(it)
                 } catch (e: Exception) {
                 }
             }
@@ -249,12 +249,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }.collect { sortedLuts ->
                 availableLutList = sortedLuts
                 PLog.d(TAG, "CameraViewModel: availableLutList updated to ${sortedLuts.size} items (sorted)")
-            }
-        }
-
-        viewModelScope.launch {
-            multiFrameCount.collect {
-
             }
         }
 
@@ -1272,7 +1266,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     photoProcessor,
                     sharpening.value,
                     noiseReduction.value,
-                    chromaNoiseReduction.value
+                    chromaNoiseReduction.value,
+                    onProcessingComplete = { cameraController.releaseImage(image) }
                 )
             }
             if (photoId != null) {
@@ -1354,7 +1349,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     photoProcessor,
                     sharpening.value,
                     noiseReduction.value,
-                    chromaNoiseReduction.value
+                    chromaNoiseReduction.value,
+                    onProcessingComplete = { images.forEach { cameraController.releaseImage(it) } }
                 )
             }
             if (photoId != null) {
@@ -1393,5 +1389,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         lutImageProcessor.release()
         contentRepository.frameManager.clearCache()
         shutterSoundPlayer.release()
+
+        // 清理未处理的连拍图片
+        burstImages.forEach {
+            try {
+                cameraController.releaseImage(it)
+            } catch (e: Exception) {
+            }
+        }
+        burstImages.clear()
     }
 }

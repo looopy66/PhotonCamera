@@ -45,8 +45,21 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_addToStackNative(
   auto *vData = static_cast<uint8_t *>(env->GetDirectBufferAddress(vBuffer));
 
   if (yData && uData && vData) {
+    jlong yCap = env->GetDirectBufferCapacity(yBuffer);
+    jlong uCap = env->GetDirectBufferCapacity(uBuffer);
+    jlong vCap = env->GetDirectBufferCapacity(vBuffer);
+
+    // Basic sanity check for capacity. Actual check depends on strides,
+    // but at least check it's not empty.
+    if (yCap <= 0 || uCap <= 0 || vCap <= 0) {
+      LOGE("addToStackNative: Buffer capacity is zero");
+      return;
+    }
+
     stacker->addFrame(yData, uData, vData, yRowStride, uvRowStride,
                       uvPixelStride, format);
+  } else {
+    LOGE("addToStackNative: Failed to get buffer addresses");
   }
 }
 
@@ -64,16 +77,18 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_processStackNative(
     path = env->GetStringUTFChars(outputPath, nullptr);
   }
 
+  AndroidBitmapInfo info;
   void *bitmapPixels = nullptr;
   if (outBitmap &&
-      AndroidBitmap_lockPixels(env, outBitmap, &bitmapPixels) < 0) {
+      (AndroidBitmap_getInfo(env, outBitmap, &info) < 0 ||
+       AndroidBitmap_lockPixels(env, outBitmap, &bitmapPixels) < 0)) {
     if (path)
       env->ReleaseStringUTFChars(outputPath, path);
     return;
   }
 
-  stacker->writeResult(static_cast<uint32_t *>(bitmapPixels), rotation,
-                       targetWR, targetHR, path);
+  stacker->writeResult(static_cast<uint32_t *>(bitmapPixels), info.width,
+                       info.height, rotation, targetWR, targetHR, path);
 
   if (outBitmap) {
     AndroidBitmap_unlockPixels(env, outBitmap);

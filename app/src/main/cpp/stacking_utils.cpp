@@ -142,7 +142,6 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
     currentDx = globalOffset.x;
     currentDy = globalOffset.y;
   }
-  LOGD("Frame global alignment: %d, %d", globalOffset.x, globalOffset.y);
 
   // 2. Refine per tile using the global offset as a starting point
   // We refine at level 1 (1/2 size) for better speed/robustness balance
@@ -218,8 +217,6 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
                             const uint8_t *vData, int yRowStride,
                             int uvRowStride, int uvPixelStride, int format) {
   frameCount++;
-  LOGD("ImageStacker::addFrame #%d starting (w=%d, h=%d, isP010=%d)",
-       frameCount, width, height, (format == 0x36));
 
   if (!yData || !uData || !vData) {
     LOGE("ImageStacker::addFrame: Received NULL buffer(s)");
@@ -299,7 +296,6 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
       buildPyramid(image8bit.data.data(), width, height, 4);
   TileAlignment alignment =
       computeTileAlignment(referencePyramid, currentPyramid, 64);
-  LOGD("ImageStacker::addFrame: Alignment completed, merging planes");
 
   // Merge with Robust Weighting
   // Y Plane
@@ -379,9 +375,10 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
 
 #include "jxl_utils.h"
 
-void ImageStacker::writeResult(uint32_t *outBitmap, int rotation, int targetWR,
-                               int targetHR, const char *outputPath,
-                               int *outFinalW, int *outFinalH) {
+void ImageStacker::writeResult(uint32_t *outBitmap, int outWidth, int outHeight,
+                               int rotation, int targetWR, int targetHR,
+                               const char *outputPath, int *outFinalW,
+                               int *outFinalH) {
   int ySize = width * height;
   int uvWidth = width / 2;
   int uvHeight = height / 2;
@@ -456,8 +453,12 @@ void ImageStacker::writeResult(uint32_t *outBitmap, int rotation, int targetWR,
     fp16Pixels.resize(finalWidth * finalHeight * 4);
   }
 
-  for (int y = 0; y < finalHeight; y++) {
-    for (int x = 0; x < finalWidth; x++) {
+  // Ensure we don't write out of the provided bitmap bounds
+  int drawWidth = std::min(finalWidth, outWidth);
+  int drawHeight = std::min(finalHeight, outHeight);
+
+  for (int y = 0; y < drawHeight; y++) {
+    for (int x = 0; x < drawWidth; x++) {
       int srcY = (cropY + y) * rotatedWidth + (cropX + x);
       int srcUV = ((cropY + y) / 2) * (rotatedWidth / 2) + ((cropX + x) / 2);
 
@@ -478,7 +479,7 @@ void ImageStacker::writeResult(uint32_t *outBitmap, int rotation, int targetWR,
             static_cast<uint32_t>(std::max(0.0f, std::min(1.0f, G)) * 255.0f);
         uint32_t b8 =
             static_cast<uint32_t>(std::max(0.0f, std::min(1.0f, B)) * 255.0f);
-        outBitmap[y * finalWidth + x] =
+        outBitmap[y * outWidth + x] =
             (0xFF << 24) | (b8 << 16) | (g8 << 8) | r8;
       }
 

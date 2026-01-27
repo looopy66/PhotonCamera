@@ -55,9 +55,10 @@ public:
                 int uvPixelStride, int format);
 
   // Write the result to an ARGB8888 bitmap buffer with rotation and cropping
-  void writeResult(uint32_t *outBitmap, int rotation, int targetWR,
-                   int targetHR, const char *outputPath = nullptr,
-                   int *outFinalW = nullptr, int *outFinalH = nullptr);
+  void writeResult(uint32_t *outBitmap, int outWidth, int outHeight,
+                   int rotation, int targetWR, int targetHR,
+                   const char *outputPath = nullptr, int *outFinalW = nullptr,
+                   int *outFinalH = nullptr);
 
 private:
   int width;

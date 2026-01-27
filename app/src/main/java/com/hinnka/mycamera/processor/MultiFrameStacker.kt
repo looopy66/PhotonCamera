@@ -53,29 +53,27 @@ object MultiFrameStacker {
 
         try {
             for ((index, image) in images.withIndex()) {
-                image.use {
-                    // Validate dimensions
-                    if (image.width != width || image.height != height) {
-                        PLog.w(TAG, "Skipping frame $index due to dimension mismatch")
-                        continue
-                    }
-
-                    val planes = image.planes
-                    val yBuffer = planes[0].buffer
-                    val uBuffer = planes[1].buffer
-                    val vBuffer = planes[2].buffer
-
-                    val yRowStride = planes[0].rowStride
-                    val uvRowStride = planes[1].rowStride
-                    val uvPixelStride = planes[1].pixelStride
-
-                    addToStackNative(
-                        stackerPtr,
-                        yBuffer, uBuffer, vBuffer,
-                        yRowStride, uvRowStride, uvPixelStride,
-                        image.format
-                    )
+                // Validate dimensions
+                if (image.width != width || image.height != height) {
+                    PLog.w(TAG, "Skipping frame $index due to dimension mismatch")
+                    continue
                 }
+
+                val planes = image.planes
+                val yBuffer = planes[0].buffer
+                val uBuffer = planes[1].buffer
+                val vBuffer = planes[2].buffer
+
+                val yRowStride = planes[0].rowStride
+                val uvRowStride = planes[1].rowStride
+                val uvPixelStride = planes[1].pixelStride
+
+                addToStackNative(
+                    stackerPtr,
+                    yBuffer, uBuffer, vBuffer,
+                    yRowStride, uvRowStride, uvPixelStride,
+                    image.format
+                )
             }
 
             val dimensions = BitmapUtils.calculateProcessedRect(width, height, aspectRatio, null, rotation)
@@ -84,7 +82,11 @@ object MultiFrameStacker {
             val tw = aspectRatio?.widthRatio ?: width
             val th = aspectRatio?.heightRatio ?: height
 
-            processStackNative(stackerPtr, previewBitmap, rotation, tw, th, outputPath)
+            synchronized(previewBitmap) {
+                if (!previewBitmap.isRecycled) {
+                    processStackNative(stackerPtr, previewBitmap, rotation, tw, th, outputPath)
+                }
+            }
 
             PLog.i(TAG, "Stacking completed in ${System.currentTimeMillis() - startTime}ms")
             return previewBitmap
