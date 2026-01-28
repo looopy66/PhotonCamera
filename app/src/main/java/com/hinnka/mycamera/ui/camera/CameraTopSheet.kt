@@ -95,11 +95,11 @@ fun CameraTopSheet(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // Level Indicator Toggle
+                // Multi-Frame Stacking Toggle
                 QuickSettingToggle(
-                    title = stringResource(R.string.settings_level_indicator),
-                    checked = showLevel,
-                    onCheckedChange = onLevelToggle,
+                    title = stringResource(R.string.settings_use_multi_frame),
+                    checked = useMultiFrame,
+                    onCheckedChange = onMultiFrameToggle,
                     modifier = Modifier.weight(1f)
                 )
 
@@ -122,11 +122,11 @@ fun CameraTopSheet(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // Multi-Frame Stacking Toggle
+                // Level Indicator Toggle
                 QuickSettingToggle(
-                    title = stringResource(R.string.settings_use_multi_frame),
-                    checked = useMultiFrame,
-                    onCheckedChange = onMultiFrameToggle,
+                    title = stringResource(R.string.settings_level_indicator),
+                    checked = showLevel,
+                    onCheckedChange = onLevelToggle,
                     modifier = Modifier.weight(1f)
                 )
 
