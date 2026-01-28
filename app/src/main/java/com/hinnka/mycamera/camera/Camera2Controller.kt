@@ -1037,7 +1037,7 @@ class Camera2Controller(private val context: Context) {
         val currentState = _state.value
 
         builder.set(CaptureRequest.CONTROL_ENABLE_ZSL, currentState.useMultiFrame)
-        builder.set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_STILL_CAPTURE)
+//        builder.set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_STILL_CAPTURE)
 
         // 1. 曝光设置
         applyExposureSettings(builder, currentState, isCapture)
