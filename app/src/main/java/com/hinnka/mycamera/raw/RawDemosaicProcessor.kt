@@ -12,6 +12,7 @@ import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.utils.RawProcessor
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -264,6 +265,7 @@ class RawDemosaicProcessor {
         dngFilePath: String,
         aspectRatio: AspectRatio?,
         cropRegion: Rect?,
+        rotation: Int,
         lutConfig: LutConfig? = null,
         colorRecipeParams: ColorRecipeParams? = null,
         sharpeningValue: Float = 0f,
@@ -280,8 +282,8 @@ class RawDemosaicProcessor {
             // 从 DNG 文件提取 RAW 数据和元数据
             val dngData = extractDngData(dngFile)
             if (dngData == null) {
-                PLog.e(TAG, "Failed to extract DNG data from: $dngFilePath")
-                return@withContext null
+                PLog.e(TAG, "Failed to extract DNG data from: $dngFilePath, fallback to native raw processor")
+                return@withContext RawProcessor.process(dngFilePath, aspectRatio, cropRegion, rotation)
             }
 
             // 使用 .use 确保 native 内存在处理后被释放

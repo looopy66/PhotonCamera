@@ -330,7 +330,8 @@ object PhotoManager {
                                 RawDemosaicProcessor.getInstance().process(
                                     dngFile.absolutePath,
                                     aspectRatio,
-                                    cropRegion
+                                    cropRegion,
+                                    rotation
                                 )
                             } else {
                                 RawProcessor.processAndToBitmap(
@@ -488,7 +489,8 @@ suspend fun saveStackedPhoto(
                             RawDemosaicProcessor.getInstance().process(
                                 dngFile.absolutePath,
                                 aspectRatio,
-                                cropRegion
+                                cropRegion,
+                                rotation
                             )
                         } else {
                             RawProcessor.process(dngFile.absolutePath, aspectRatio, cropRegion, rotation)

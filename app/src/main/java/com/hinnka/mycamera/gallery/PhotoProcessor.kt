@@ -99,7 +99,7 @@ class PhotoProcessor(
         if (metadata.rawEngine == RawEngine.SELF_DEVELOPED) {
             result = RawDemosaicProcessor.getInstance().process(
                 dngPath,
-                metadata.ratio ?: AspectRatio.RATIO_4_3, cropRegion,
+                metadata.ratio ?: AspectRatio.RATIO_4_3, cropRegion, metadata.rotation,
                 lutConfig, colorRecipeParams,
                 finalSharpening, finalNoiseReduction, finalChromaNoiseReduction
             )
