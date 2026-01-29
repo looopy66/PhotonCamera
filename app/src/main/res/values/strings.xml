@@ -105,6 +105,8 @@
     <string name="settings_use_multi_frame_description">Capture multiple frames and stack them for better quality and less noise.</string>
     <string name="settings_multi_frame_count">Multi-frame Count</string>
     <string name="settings_multi_frame_count_description">Number of frames for multi-frame stacking (more frames = better quality but slower).</string>
+    <string name="settings_use_super_resolution">Super Resolution</string>
+    <string name="settings_use_super_resolution_description">Use 2x multi-frame super resolution for more detail. (Requires Multi-Frame Stacking)</string>
     <string name="settings_raw_engine">RAW Processing Engine</string>
     <string name="settings_raw_engine_description">Choose the engine for RAW data processing</string>
     <string name="settings_raw_engine_native">Native</string>

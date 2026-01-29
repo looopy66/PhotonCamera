@@ -183,5 +183,7 @@ object YuvProcessor {
     /**
      * 从文件中读取并解压缩 ARGB 数据 (16-bit)
      */
-    external fun loadCompressedArgb(inputPath: String): ShortArray?
+    external fun loadCompressedArgb(inputPath: String): ByteBuffer?
+
+    external fun free(buffer: ByteBuffer)
 }

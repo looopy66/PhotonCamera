@@ -123,8 +123,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val showLevelIndicator: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.showLevelIndicator }
     val shutterSoundEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.shutterSoundEnabled }
     val vibrationEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.vibrationEnabled }
-    val volumeKeyAction: StateFlow<VolumeKeyAction> = userPreferencesRepository.userPreferences.map { it.volumeKeyAction }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, initialValue = VolumeKeyAction.NONE)
+    val volumeKeyAction: StateFlow<VolumeKeyAction> =
+        userPreferencesRepository.userPreferences.map { it.volumeKeyAction }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, initialValue = VolumeKeyAction.NONE)
     val autoSaveAfterCapture: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.autoSaveAfterCapture }
     val nrLevel: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.nrLevel }
@@ -143,6 +144,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val multiFrameCount: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.multiFrameCount }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 8)
+    val useSuperResolution: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.useSuperResolution }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
     val rawEngine: Flow<RawEngine> = userPreferencesRepository.userPreferences
         .map { it.rawEngine }
 
@@ -819,6 +823,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * 设置是否使用超分辨率
+     */
+    fun setUseSuperResolution(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveUseSuperResolution(enabled)
+        }
+    }
+
+    /**
      * 设置 RAW 处理引擎
      */
     fun setRawEngine(engine: RawEngine) {
@@ -1360,6 +1373,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     sharpeningValue,
                     noiseReductionValue,
                     chromaNoiseReductionValue,
+                    useSuperResolution = useSuperResolution.value,
                     onProcessingComplete = { images.forEach { cameraController.releaseImage(it) } }
                 )
             }

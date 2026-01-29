@@ -283,7 +283,7 @@ class RawDemosaicProcessor {
             val dngData = extractDngData(dngFile)
             if (dngData == null) {
                 PLog.e(TAG, "Failed to extract DNG data from: $dngFilePath, fallback to native raw processor")
-                return@withContext RawProcessor.process(dngFilePath, aspectRatio, cropRegion, rotation)
+                return@withContext RawProcessor.processAndToBitmap(File(dngFilePath), aspectRatio, cropRegion, rotation)
             }
 
             // 使用 .use 确保 native 内存在处理后被释放
@@ -1385,10 +1385,7 @@ class RawDemosaicProcessor {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
 
         if (mappedBuffer != null) {
-            val buffer = ByteBuffer.allocateDirect(pixelSize).order(ByteOrder.nativeOrder())
-            buffer.put(mappedBuffer)
-            buffer.position(0)
-            bitmap.copyPixelsFromBuffer(buffer)
+            bitmap.copyPixelsFromBuffer(mappedBuffer)
             GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
         }
 

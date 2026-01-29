@@ -40,6 +40,8 @@ fun CameraTopSheet(
     onMoreSettingsClick: () -> Unit,
     useMultiFrame: Boolean,
     onMultiFrameToggle: (Boolean) -> Unit,
+    useSuperResolution: Boolean,
+    onSuperResolutionToggle: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(
@@ -112,6 +114,23 @@ fun CameraTopSheet(
                         modifier = Modifier.weight(1f)
                     )
                 } else {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+
+            if (useMultiFrame) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    // Super Resolution Toggle
+                    QuickSettingToggle(
+                        title = stringResource(R.string.settings_use_super_resolution),
+                        checked = useSuperResolution,
+                        onCheckedChange = onSuperResolutionToggle,
+                        modifier = Modifier.weight(1f)
+                    )
                     Spacer(modifier = Modifier.weight(1f))
                 }
             }

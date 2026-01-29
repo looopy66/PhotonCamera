@@ -25,8 +25,9 @@ extern "C" {
  */
 JNIEXPORT jlong JNICALL
 Java_com_hinnka_mycamera_processor_MultiFrameStacker_createStackerNative(
-    JNIEnv *env, jobject /* this */, jint width, jint height) {
-  auto *stacker = new ImageStacker(width, height);
+    JNIEnv *env, jobject /* this */, jint width, jint height,
+    jboolean enableSuperRes) {
+  auto *stacker = new ImageStacker(width, height, enableSuperRes);
   return reinterpret_cast<jlong>(stacker);
 }
 
@@ -110,9 +111,17 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_releaseStackerNative(
  */
 JNIEXPORT jlong JNICALL
 Java_com_hinnka_mycamera_processor_MultiFrameStacker_createRawStackerNative(
-    JNIEnv *env, jobject /* this */, jint width, jint height) {
-  auto *stacker = new RawStacker(width, height);
+    JNIEnv *env, jobject /* this */, jint width, jint height,
+    jboolean useSuperRes) {
+  auto *stacker = new RawStacker(width, height, (bool)useSuperRes);
   return reinterpret_cast<jlong>(stacker);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_getRawStackerScaleNative(
+    JNIEnv *env, jobject /* this */, jlong stackerPtr) {
+  auto *stacker = reinterpret_cast<RawStacker *>(stackerPtr);
+  return stacker ? stacker->getScale() : 1;
 }
 
 JNIEXPORT void JNICALL
@@ -547,7 +556,7 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processToBitmap(
 /**
  * 从文件中读取并解压缩 RGBA 数据 (FP16)
  */
-JNIEXPORT jshortArray JNICALL
+JNIEXPORT jobject JNICALL
 Java_com_hinnka_mycamera_utils_YuvProcessor_loadCompressedArgb(
     JNIEnv *env, jobject /* this */, jstring inputPath) {
 
@@ -568,13 +577,25 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_loadCompressedArgb(
     return nullptr;
   }
 
-  jshort resHeader[2] = {static_cast<jshort>(width),
-                         static_cast<jshort>(height)};
-  env->SetShortArrayRegion(result, 0, 2, resHeader);
-  env->SetShortArrayRegion(result, 2, (jsize)pixels.size(),
-                           reinterpret_cast<jshort *>(pixels.data()));
+  size_t dataSize = pixels.size() * sizeof(uint16_t);
+  void *nativeBuffer = malloc(dataSize);
+  memcpy(nativeBuffer, pixels.data(), dataSize);
 
-  return result;
+  return env->NewDirectByteBuffer(nativeBuffer, dataSize);
+}
+
+/**
+ * 释放内存
+ */
+JNIEXPORT void JNICALL Java_com_hinnka_mycamera_utils_YuvProcessor_free(
+    JNIEnv *env, jobject /* this */, jobject rawDataBuffer) {
+  if (rawDataBuffer == nullptr)
+    return;
+  void *nativePtr = env->GetDirectBufferAddress(rawDataBuffer);
+  if (nativePtr != nullptr) {
+    LOGI("Freeing native buffer: %p", nativePtr);
+    free(nativePtr);
+  }
 }
 
 /**

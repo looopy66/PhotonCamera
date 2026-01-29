@@ -5,8 +5,10 @@ import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
 import android.graphics.ImageFormat
 import android.graphics.Matrix
+import android.graphics.Rect
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.media.Image
@@ -15,6 +17,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.util.Log
+import android.util.Size
 import androidx.core.graphics.createBitmap
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
@@ -122,8 +126,7 @@ object PhotoManager {
 
                 uri?.let {
                     context.contentResolver.openOutputStream(it)?.use { outputStream ->
-                        // 使用 95 质量以获得更高的图像清晰度
-                        processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                        processedBitmap.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
                     }
 
                     // 写入 EXIF 信息
@@ -385,584 +388,616 @@ object PhotoManager {
     }
 
 
-/**
- * 保存堆栈合成后的照片
- */
-suspend fun saveStackedPhoto(
-    context: Context,
-    images: List<Image>,
-    thumbnail: Bitmap?,
-    metadata: PhotoMetadata,
-    rotation: Int,
-    aspectRatio: AspectRatio,
-    characteristics: CameraCharacteristics?,
-    captureResult: CaptureResult?,
-    shouldAutoSave: Boolean = true,
-    photoProcessor: PhotoProcessor,
-    sharpeningValue: Float,
-    noiseReductionValue: Float,
-    chromaNoiseReductionValue: Float,
-    onProcessingComplete: (() -> Unit)? = null
-): String? {
-    return try {
-        val photoId = UUID.randomUUID().toString()
-        val photoDir = getPhotoDir(context, photoId)
-
-        // 预先准备所有文件路径
-        val photoFile = File(photoDir, PHOTO_FILE)
-        val tempFile = File(photoDir, "temp.jpg")
-        val yuvFile = File(photoDir, YUV_FILE)
-        val dngFile = File(photoDir, DNG_FILE)
-        val metadataFile = File(photoDir, METADATA_FILE)
-        val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
-
-        if (thumbnail != null && !thumbnail.isRecycled) {
-            generateThumbnail(thumbnail, thumbnailFile)
-        } else {
-            PLog.d(TAG, "Thumbnail unavailable: $thumbnail")
-        }
-
-        processingScope.launch(Dispatchers.IO) {
-            try {
-                photoFile.createNewFile()
-                val dimensions =
-                    BitmapUtils.calculateProcessedRect(images[0].width, images[0].height, aspectRatio, null, rotation)
-                val finalWidth = dimensions.width()
-                val finalHeight = dimensions.height()
-
-                val format = images[0].format
-                var result: Bitmap? = null
-
-                val metadataWithInfo: PhotoMetadata
-                when (format) {
-                    ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
-                        // 保存元数据
-                        metadataWithInfo = metadata.copy(
-                            width = finalWidth,
-                            height = finalHeight,
-                            ratio = aspectRatio,
-                            sharpening = if (sharpeningValue == 0f) 0.4f else sharpeningValue,
-                            noiseReduction = noiseReductionValue,
-                            chromaNoiseReduction = chromaNoiseReductionValue,
-                        )
-                        metadataFile.writeText(metadataWithInfo.toJson())
-                        result = MultiFrameStacker.processBurst(
-                            images,
-                            rotation,
-                            aspectRatio,
-                            yuvFile.absolutePath
-                        )
-                    }
-                    ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12 -> {
-                        characteristics ?: return@launch
-                        captureResult ?: return@launch
-                        val byteBuffer = MultiFrameStacker.processBurstRaw(images, characteristics)
-                        byteBuffer ?: return@launch
-                        // 保存元数据
-                        metadataWithInfo = metadata.copy(
-                            width = finalWidth,
-                            height = finalHeight,
-                            ratio = aspectRatio,
-                            rotation = rotation,
-                            sharpening = if (sharpeningValue == 0f) 0.8f else sharpeningValue,
-                            noiseReduction = noiseReductionValue,
-                            chromaNoiseReduction = if (chromaNoiseReductionValue == 0f) 0.25f else chromaNoiseReductionValue,
-                        )
-                        metadataFile.writeText(metadataWithInfo.toJson())
-                        val cropRegion = captureResult.get(CaptureResult.SCALER_CROP_REGION)
-                        val width = images[0].width
-                        val height = images[0].height
-                        val byteOutstream = ByteArrayOutputStream()
-                        byteOutstream.use { outputStream ->
-                            RawProcessor.saveToDng(byteBuffer.asReadOnlyBuffer(), characteristics,
-                                captureResult, outputStream, width, height, rotation)
-                        }
-                        val array = byteOutstream.toByteArray()
-                        FileOutputStream(dngFile).use {
-                            it.write(array)
-                        }
-                        if (shouldAutoSave) {
-                            exportDng(context, array, metadataWithInfo)
-                        }
-
-                        result = if (metadataWithInfo.rawEngine == RawEngine.SELF_DEVELOPED) {
-                            RawDemosaicProcessor.getInstance().process(
-                                dngFile.absolutePath,
-                                aspectRatio,
-                                cropRegion,
-                                rotation
-                            )
-                        } else {
-                            RawProcessor.process(dngFile.absolutePath, aspectRatio, cropRegion, rotation)
-                        }
-                    }
-                    else -> {
-                        PLog.e(TAG, "Unsupported image format: $format")
-                        return@launch
-                    }
-                }
-
-                result ?: return@launch
-
-                // Generate Thumbnail
-                if (thumbnail == null) {
-                    generateThumbnail(result, thumbnailFile)
-                }
-                // Save Original (Stacked Result)
-                FileOutputStream(tempFile).use { outputStream ->
-                    result.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
-                }
-                tempFile.renameTo(photoFile)
-                result.recycle()
-                // Auto Save
-                if (shouldAutoSave) {
-                    exportPhoto(
-                        context,
-                        photoId,
-                        photoProcessor,
-                        metadataWithInfo,
-                        sharpeningValue,
-                        noiseReductionValue,
-                        chromaNoiseReductionValue
-                    )
-                }
-            } finally {
-                onProcessingComplete?.invoke()
-            }
-        }
-        photoId
-    } catch (e: Exception) {
-        PLog.e(TAG, "Failed to save stacked photo", e)
-        onProcessingComplete?.invoke()
-        null
-    }
-}
-
-/**
- * 生成 512x512 缩略图
- */
-private suspend fun generateThumbnail(bitmap: Bitmap, targetFile: File) {
-    withContext(Dispatchers.IO) {
-        try {
-            // 生成 512x512 缩略图
-            val thumbnail = ThumbnailUtils.extractThumbnail(bitmap, 512, 512)
-            FileOutputStream(targetFile).use { out ->
-                thumbnail.compress(Bitmap.CompressFormat.JPEG, 80, out)
-            }
-            thumbnail.recycle()
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to generate thumbnail", e)
-        }
-    }
-}
-
-/**
- * 生成缩略图
- */
-private fun generateThumbnail(sourceFile: File, targetFile: File) {
-    try {
-        val options = BitmapFactory.Options().apply {
-            inJustDecodeBounds = true
-        }
-        BitmapFactory.decodeFile(sourceFile.absolutePath, options)
-
-        // 计算缩放比例，缩略图大小 512x512
-        val targetSize = 512
-        options.inSampleSize = calculateInSampleSize(options, targetSize, targetSize)
-        options.inJustDecodeBounds = false
-
-        val bitmap = BitmapFactory.decodeFile(sourceFile.absolutePath, options)
-
-        if (bitmap != null) {
-            val thumbnail = ThumbnailUtils.extractThumbnail(bitmap, targetSize, targetSize)
-            FileOutputStream(targetFile).use { out ->
-                thumbnail.compress(Bitmap.CompressFormat.JPEG, 80, out)
-            }
-            bitmap.recycle()
-            thumbnail.recycle()
-        }
-    } catch (e: Exception) {
-        PLog.e(TAG, "Failed to generate thumbnail", e)
-    }
-}
-
-private fun calculateInSampleSize(options: BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int {
-    val (height: Int, width: Int) = options.outHeight to options.outWidth
-    var inSampleSize = 1
-
-    if (height > reqHeight || width > reqWidth) {
-        val halfHeight: Int = height / 2
-        val halfWidth: Int = width / 2
-        while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
-            inSampleSize *= 2
-        }
-    }
-    return inSampleSize
-}
-
-/**
- * 获取所有照片 ID 列表（按时间降序）
- */
-fun getPhotoIds(context: Context): List<String> {
-    val baseDir = getPhotosBaseDir(context)
-    return baseDir.listFiles()
-        ?.filter { it.isDirectory }
-        ?.sortedByDescending { it.lastModified() }
-        ?.map { it.name }
-        ?: emptyList()
-}
-
-/**
- * 创建删除系统相册照片的请求（弹出确认对话框）
- *
- * 仅适用于 Android 11+ (API 30+)
- * 返回 PendingIntent，需要在 Activity 中通过 startIntentSenderForResult 启动
- */
-fun createDeleteRequest(context: Context, photoId: String): PendingIntent? {
-    return try {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            PLog.w(TAG, "createDeleteRequest requires Android 11+")
-            return null
-        }
-
-        // 加载元数据，获取导出的 URI 列表（使用 runBlocking 同步调用）
-        val metadata = runBlocking {
-            loadMetadata(context, photoId)
-        }
-        val exportedUris = metadata?.exportedUris ?: emptyList()
-
-        if (exportedUris.isEmpty()) {
-            PLog.d(TAG, "No exported URIs to delete for photo: $photoId")
-            return null
-        }
-
-        // 将字符串 URI 转换为 Uri 对象列表
-        val uriList = exportedUris.mapNotNull { uriString ->
-            try {
-                Uri.parse(uriString)
-            } catch (e: Exception) {
-                PLog.e(TAG, "Invalid URI: $uriString", e)
-                null
-            }
-        }
-
-        if (uriList.isEmpty()) {
-            return null
-        }
-
-        // 创建删除请求（会弹出系统确认对话框）
-        MediaStore.createDeleteRequest(context.contentResolver, uriList)
-    } catch (e: Exception) {
-        PLog.e(TAG, "Failed to create delete request for photo: $photoId", e)
-        null
-    }
-}
-
-/**
- * 删除照片及其所有相关文件
- */
-suspend fun deletePhoto(
-    context: Context,
-    photoId: String
-): Boolean {
-    return withContext(Dispatchers.IO) {
-        try {
-            val photoDir = getPhotoDir(context, photoId)
-            if (photoDir.exists()) {
-                photoDir.deleteRecursively()
-            }
-
-            PLog.d(TAG, "Photo deleted: $photoId")
-            true
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to delete photo: $photoId", e)
-            false
-        }
-    }
-}
-
-/**
- * 仅删除应用内部的照片，不删除系统相册中的导出照片
- */
-suspend fun deletePhotoOnly(context: Context, photoId: String): Boolean {
-    return deletePhoto(context, photoId)
-}
-
-/**
- * 加载元数据
- */
-suspend fun loadMetadata(context: Context, photoId: String): PhotoMetadata? {
-    return withContext(Dispatchers.IO) {
-        try {
-            val file = getMetadataFile(context, photoId)
-            if (file.exists()) {
-                PhotoMetadata.fromJson(file.readText())
-            } else {
-                null
-            }
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to load metadata for photo: $photoId", e)
-            null
-        }
-    }
-}
-
-/**
- * 更新元数据
- */
-suspend fun saveMetadata(context: Context, photoId: String, metadata: PhotoMetadata): Boolean {
-    return withContext(Dispatchers.IO) {
-        try {
-            val file = getMetadataFile(context, photoId)
-            file.writeText(metadata.toJson())
-            true
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to save metadata for photo: $photoId", e)
-            false
-        }
-    }
-}
-
-fun loadYuvData(context: Context, photoId: String): ShortArray? {
-    val yuvFile = getYuvFile(context, photoId)
-    if (!yuvFile.exists()) {
-        return null
-    }
-    val yuv = YuvProcessor.loadCompressedArgb(yuvFile.absolutePath)
-    return yuv
-}
-
-fun loadBitmap(context: Context, photoId: String): Bitmap? {
-    val photoFile = getPhotoFile(context, photoId)
-    if (!photoFile.exists()) {
-        return null
-    }
-    return BitmapFactory.decodeFile(photoFile.absolutePath)
-}
-
-/**
- * 从 URI 获取文件名
- */
-private fun getFileName(context: Context, uri: Uri): String? {
-    return try {
-        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-            cursor.moveToFirst()
-            cursor.getString(nameIndex)
-        }
-    } catch (e: Exception) {
-        null
-    }
-}
-
-/**
- * 从系统相册导入照片
- */
-suspend fun importPhoto(context: Context, uri: Uri): String? {
-    return withContext(Dispatchers.IO) {
-        try {
+    /**
+     * 保存堆栈合成后的照片
+     */
+    suspend fun saveStackedPhoto(
+        context: Context,
+        images: List<Image>,
+        thumbnail: Bitmap?,
+        metadata: PhotoMetadata,
+        rotation: Int,
+        aspectRatio: AspectRatio,
+        characteristics: CameraCharacteristics?,
+        captureResult: CaptureResult?,
+        shouldAutoSave: Boolean = true,
+        photoProcessor: PhotoProcessor,
+        sharpeningValue: Float,
+        noiseReductionValue: Float,
+        chromaNoiseReductionValue: Float,
+        useSuperResolution: Boolean = false,
+        onProcessingComplete: (() -> Unit)? = null
+    ): String? {
+        return try {
             val photoId = UUID.randomUUID().toString()
             val photoDir = getPhotoDir(context, photoId)
+
+            // 预先准备所有文件路径
             val photoFile = File(photoDir, PHOTO_FILE)
+            val tempFile = File(photoDir, "temp.jpg")
+            val yuvFile = File(photoDir, YUV_FILE)
             val dngFile = File(photoDir, DNG_FILE)
             val metadataFile = File(photoDir, METADATA_FILE)
             val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
 
-            // 1. 检测是否为 RAW 文件
-            val mimeType = context.contentResolver.getType(uri)
-            val fileName = getFileName(context, uri) ?: ""
-            val isRaw = mimeType?.contains("raw", ignoreCase = true) == true ||
-                    mimeType?.contains("dng", ignoreCase = true) == true ||
-                    fileName.endsWith(".dng", ignoreCase = true)
-
-            if (isRaw) {
-                // --- RAW 处理逻辑 ---
-                // 1. 复制 RAW 文件
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    FileOutputStream(dngFile).use { output ->
-                        input.copyTo(output)
-                    }
-                }
-
-                // 2. 读取元数据以获取旋转信息
-                val metadata = PhotoMetadata.fromUri(context, uri)
-                val exif = ExifInterface(dngFile.absolutePath)
-                val orientation = exif.getAttributeInt(
-                    ExifInterface.TAG_ORIENTATION,
-                    ExifInterface.ORIENTATION_NORMAL
-                )
-                val rotation = when (orientation) {
-                    ExifInterface.ORIENTATION_ROTATE_90 -> 90
-                    ExifInterface.ORIENTATION_ROTATE_180 -> 180
-                    ExifInterface.ORIENTATION_ROTATE_270 -> 270
-                    else -> 0
-                }
-
-                // 3. 处理 RAW 以生成 JPEG 预览
-                val processedBitmap = RawProcessor.process(
-                    dngFile.absolutePath,
-                    null,
-                    null,
-                    rotation
-                )
-
-                if (processedBitmap != null) {
-                    // 保存为 original.jpg
-                    FileOutputStream(photoFile).use { out ->
-                        processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
-                    }
-
-                    // 生成缩略图
-                    generateThumbnail(processedBitmap, thumbnailFile)
-
-                    // 更新元数据
-                    val updatedMetadata = metadata.copy(
-                        width = processedBitmap.width,
-                        height = processedBitmap.height,
-                        rotation = rotation,
-                        isImported = true
-                    )
-                    metadataFile.writeText(updatedMetadata.toJson())
-
-                    processedBitmap.recycle()
-                } else {
-                    // 降级：如果 RAW 处理失败，尝试直接解码（某些 DNG 包含内置预览图）
-                    tempImportJpeg(uri, context, photoFile, metadataFile, thumbnailFile)
-                }
+            if (thumbnail != null && !thumbnail.isRecycled) {
+                generateThumbnail(thumbnail, thumbnailFile)
             } else {
-                // --- 常规 JPEG 处理逻辑 ---
-                tempImportJpeg(uri, context, photoFile, metadataFile, thumbnailFile)
+                PLog.d(TAG, "Thumbnail unavailable: $thumbnail")
             }
 
-            PLog.d(TAG, "Photo imported: $photoId (isRaw: $isRaw)")
+            processingScope.launch(Dispatchers.IO) {
+                try {
+                    photoFile.createNewFile()
+                    val dimensions =
+                        BitmapUtils.calculateProcessedRect(
+                            images[0].width,
+                            images[0].height,
+                            aspectRatio,
+                            null,
+                            rotation
+                        )
+                    val finalWidth = dimensions.width()
+                    val finalHeight = dimensions.height()
+
+                    val format = images[0].format
+                    var result: Bitmap? = null
+
+                    val metadataWithInfo: PhotoMetadata
+                    when (format) {
+                        ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
+                            // 保存元数据
+                            metadataWithInfo = metadata.copy(
+                                width = finalWidth * if (useSuperResolution) 2 else 1,
+                                height = finalHeight * if (useSuperResolution) 2 else 1,
+                                ratio = aspectRatio,
+                                sharpening = if (sharpeningValue == 0f) (if (useSuperResolution) 0.8f else 0.4f) else sharpeningValue,
+                                noiseReduction = noiseReductionValue,
+                                chromaNoiseReduction = chromaNoiseReductionValue,
+                            )
+                            metadataFile.writeText(metadataWithInfo.toJson())
+                            result = MultiFrameStacker.processBurst(
+                                images,
+                                rotation,
+                                aspectRatio,
+                                yuvFile.absolutePath,
+                                useSuperResolution
+                            )
+                        }
+
+                        ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12 -> {
+                            characteristics ?: return@launch
+                            captureResult ?: return@launch
+                            val byteBuffer =
+                                MultiFrameStacker.processBurstRaw(images, characteristics, useSuperResolution)
+                            byteBuffer ?: return@launch
+                            val scale = if (useSuperResolution) 2 else 1
+                            val scaledWidth = images[0].width * scale
+                            val scaledHeight = images[0].height * scale
+                            var cropRegion = captureResult.get(CaptureResult.SCALER_CROP_REGION)
+                            if (useSuperResolution && cropRegion != null) {
+                                cropRegion = Rect(cropRegion.left * 2, cropRegion.top * 2, cropRegion.right * 2, cropRegion.bottom * 2)
+                            }
+
+                            // 保存元数据
+                            metadataWithInfo = metadata.copy(
+                                width = finalWidth * scale,
+                                height = finalHeight * scale,
+                                ratio = aspectRatio,
+                                cropRegion = cropRegion,
+                                rotation = rotation,
+                                sharpening = if (sharpeningValue == 0f) 0.8f else sharpeningValue,
+                                noiseReduction = noiseReductionValue,
+                                chromaNoiseReduction = if (chromaNoiseReductionValue == 0f) 0.25f else chromaNoiseReductionValue,
+                            )
+                            metadataFile.writeText(metadataWithInfo.toJson())
+                            val byteOutstream = ByteArrayOutputStream()
+                            byteOutstream.use { outputStream ->
+                                RawProcessor.saveToDng(
+                                    byteBuffer.asReadOnlyBuffer(), characteristics,
+                                    captureResult, outputStream, scaledWidth, scaledHeight, rotation
+                                )
+                            }
+                            val array = byteOutstream.toByteArray()
+                            FileOutputStream(dngFile).use {
+                                it.write(array)
+                            }
+                            if (shouldAutoSave) {
+                                exportDng(context, array, metadataWithInfo)
+                            }
+
+                            result = if (metadataWithInfo.rawEngine == RawEngine.SELF_DEVELOPED) {
+                                RawDemosaicProcessor.getInstance().process(
+                                    dngFile.absolutePath,
+                                    aspectRatio,
+                                    cropRegion,
+                                    rotation
+                                )
+                            } else {
+                                RawProcessor.processAndToBitmap(dngFile, aspectRatio, cropRegion, rotation)
+                            }
+                        }
+
+                        else -> {
+                            PLog.e(TAG, "Unsupported image format: $format")
+                            return@launch
+                        }
+                    }
+
+                    result ?: return@launch
+
+                    // Generate Thumbnail
+                    if (thumbnail == null) {
+                        generateThumbnail(result, thumbnailFile)
+                    }
+                    // Save Original (Stacked Result)
+                    FileOutputStream(tempFile).use { outputStream ->
+                        result.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                    }
+                    tempFile.renameTo(photoFile)
+                    result.recycle()
+                    // Auto Save
+                    if (shouldAutoSave) {
+                        exportPhoto(
+                            context,
+                            photoId,
+                            photoProcessor,
+                            metadataWithInfo,
+                            sharpeningValue,
+                            noiseReductionValue,
+                            chromaNoiseReductionValue
+                        )
+                    }
+                } finally {
+                    onProcessingComplete?.invoke()
+                }
+            }
             photoId
         } catch (e: Exception) {
-            PLog.e(TAG, "Failed to import photo", e)
+            PLog.e(TAG, "Failed to save stacked photo", e)
+            onProcessingComplete?.invoke()
             null
         }
     }
-}
 
-private suspend fun tempImportJpeg(
-    uri: Uri,
-    context: Context,
-    photoFile: File,
-    metadataFile: File,
-    thumbnailFile: File
-) {
-    val photoDir = photoFile.parentFile ?: return
-    val tempFile = File(photoDir, "temp.jpg")
-    context.contentResolver.openInputStream(uri)?.use { input ->
-        FileOutputStream(tempFile).use { output ->
-            input.copyTo(output)
+    /**
+     * 生成 512x512 缩略图
+     */
+    private suspend fun generateThumbnail(bitmap: Bitmap, targetFile: File) {
+        withContext(Dispatchers.IO) {
+            try {
+                // 生成 512x512 缩略图
+                val thumbnail = ThumbnailUtils.extractThumbnail(bitmap, 512, 512)
+                FileOutputStream(targetFile).use { out ->
+                    thumbnail.compress(Bitmap.CompressFormat.JPEG, 80, out)
+                }
+                thumbnail.recycle()
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to generate thumbnail", e)
+            }
         }
     }
 
-    val exif = ExifInterface(tempFile)
-    val orientation = exif.getAttributeInt(
-        ExifInterface.TAG_ORIENTATION,
-        ExifInterface.ORIENTATION_NORMAL
-    )
+    /**
+     * 生成缩略图
+     */
+    private fun generateThumbnail(sourceFile: File, targetFile: File) {
+        try {
+            val options = BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+            }
+            BitmapFactory.decodeFile(sourceFile.absolutePath, options)
 
-    if (orientation != ExifInterface.ORIENTATION_NORMAL &&
-        orientation != ExifInterface.ORIENTATION_UNDEFINED
+            // 计算缩放比例，缩略图大小 512x512
+            val targetSize = 512
+            options.inSampleSize = calculateInSampleSize(options, targetSize, targetSize)
+            options.inJustDecodeBounds = false
+
+            val bitmap = BitmapFactory.decodeFile(sourceFile.absolutePath, options)
+
+            if (bitmap != null) {
+                val thumbnail = ThumbnailUtils.extractThumbnail(bitmap, targetSize, targetSize)
+                FileOutputStream(targetFile).use { out ->
+                    thumbnail.compress(Bitmap.CompressFormat.JPEG, 80, out)
+                }
+                bitmap.recycle()
+                thumbnail.recycle()
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to generate thumbnail", e)
+        }
+    }
+
+    private fun calculateInSampleSize(options: BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int {
+        val (height: Int, width: Int) = options.outHeight to options.outWidth
+        var inSampleSize = 1
+
+        if (height > reqHeight || width > reqWidth) {
+            val halfHeight: Int = height / 2
+            val halfWidth: Int = width / 2
+            while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
+                inSampleSize *= 2
+            }
+        }
+        return inSampleSize
+    }
+
+    /**
+     * 获取所有照片 ID 列表（按时间降序）
+     */
+    fun getPhotoIds(context: Context): List<String> {
+        val baseDir = getPhotosBaseDir(context)
+        return baseDir.listFiles()
+            ?.filter { it.isDirectory }
+            ?.sortedByDescending { it.lastModified() }
+            ?.map { it.name }
+            ?: emptyList()
+    }
+
+    /**
+     * 创建删除系统相册照片的请求（弹出确认对话框）
+     *
+     * 仅适用于 Android 11+ (API 30+)
+     * 返回 PendingIntent，需要在 Activity 中通过 startIntentSenderForResult 启动
+     */
+    fun createDeleteRequest(context: Context, photoId: String): PendingIntent? {
+        return try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                PLog.w(TAG, "createDeleteRequest requires Android 11+")
+                return null
+            }
+
+            // 加载元数据，获取导出的 URI 列表（使用 runBlocking 同步调用）
+            val metadata = runBlocking {
+                loadMetadata(context, photoId)
+            }
+            val exportedUris = metadata?.exportedUris ?: emptyList()
+
+            if (exportedUris.isEmpty()) {
+                PLog.d(TAG, "No exported URIs to delete for photo: $photoId")
+                return null
+            }
+
+            // 将字符串 URI 转换为 Uri 对象列表
+            val uriList = exportedUris.mapNotNull { uriString ->
+                try {
+                    Uri.parse(uriString)
+                } catch (e: Exception) {
+                    PLog.e(TAG, "Invalid URI: $uriString", e)
+                    null
+                }
+            }
+
+            if (uriList.isEmpty()) {
+                return null
+            }
+
+            // 创建删除请求（会弹出系统确认对话框）
+            MediaStore.createDeleteRequest(context.contentResolver, uriList)
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to create delete request for photo: $photoId", e)
+            null
+        }
+    }
+
+    /**
+     * 删除照片及其所有相关文件
+     */
+    suspend fun deletePhoto(
+        context: Context,
+        photoId: String
+    ): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                val photoDir = getPhotoDir(context, photoId)
+                if (photoDir.exists()) {
+                    photoDir.deleteRecursively()
+                }
+
+                PLog.d(TAG, "Photo deleted: $photoId")
+                true
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to delete photo: $photoId", e)
+                false
+            }
+        }
+    }
+
+    /**
+     * 仅删除应用内部的照片，不删除系统相册中的导出照片
+     */
+    suspend fun deletePhotoOnly(context: Context, photoId: String): Boolean {
+        return deletePhoto(context, photoId)
+    }
+
+    /**
+     * 加载元数据
+     */
+    suspend fun loadMetadata(context: Context, photoId: String): PhotoMetadata? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val file = getMetadataFile(context, photoId)
+                if (file.exists()) {
+                    PhotoMetadata.fromJson(file.readText())
+                } else {
+                    null
+                }
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to load metadata for photo: $photoId", e)
+                null
+            }
+        }
+    }
+
+    /**
+     * 更新元数据
+     */
+    suspend fun saveMetadata(context: Context, photoId: String, metadata: PhotoMetadata): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                val file = getMetadataFile(context, photoId)
+                file.writeText(metadata.toJson())
+                true
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to save metadata for photo: $photoId", e)
+                false
+            }
+        }
+    }
+
+    fun loadYuvData(context: Context, photoId: String): ByteBuffer? {
+        val yuvFile = getYuvFile(context, photoId)
+        if (!yuvFile.exists()) {
+            return null
+        }
+        return YuvProcessor.loadCompressedArgb(yuvFile.absolutePath)
+    }
+
+    fun loadBitmap(context: Context, photoId: String, maxEdge: Int? = null): Bitmap? {
+        val photoFile = getPhotoFile(context, photoId)
+        if (!photoFile.exists()) {
+            return null
+        }
+        val source = ImageDecoder.createSource(photoFile)
+        return runCatching {
+            ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                if (maxEdge != null) {
+                    val width = info.size.width
+                    val height = info.size.height
+
+                    if (width > maxEdge || height > maxEdge) {
+                        val scale = maxEdge.toFloat() / maxOf(width, height)
+                        decoder.setTargetSize((width * scale).toInt(), (height * scale).toInt())
+                    }
+                }
+            }
+        }.getOrNull()
+    }
+
+    /**
+     * 从 URI 获取文件名
+     */
+    private fun getFileName(context: Context, uri: Uri): String? {
+        return try {
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                cursor.moveToFirst()
+                cursor.getString(nameIndex)
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * 从系统相册导入照片
+     */
+    suspend fun importPhoto(context: Context, uri: Uri): String? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val photoId = UUID.randomUUID().toString()
+                val photoDir = getPhotoDir(context, photoId)
+                val photoFile = File(photoDir, PHOTO_FILE)
+                val dngFile = File(photoDir, DNG_FILE)
+                val metadataFile = File(photoDir, METADATA_FILE)
+                val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
+
+                // 1. 检测是否为 RAW 文件
+                val mimeType = context.contentResolver.getType(uri)
+                val fileName = getFileName(context, uri) ?: ""
+                val isRaw = mimeType?.contains("raw", ignoreCase = true) == true ||
+                        mimeType?.contains("dng", ignoreCase = true) == true ||
+                        fileName.endsWith(".dng", ignoreCase = true)
+
+                if (isRaw) {
+                    // --- RAW 处理逻辑 ---
+                    // 1. 复制 RAW 文件
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        FileOutputStream(dngFile).use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+
+                    // 2. 读取元数据以获取旋转信息
+                    val metadata = PhotoMetadata.fromUri(context, uri)
+                    val exif = ExifInterface(dngFile.absolutePath)
+                    val orientation = exif.getAttributeInt(
+                        ExifInterface.TAG_ORIENTATION,
+                        ExifInterface.ORIENTATION_NORMAL
+                    )
+                    val rotation = when (orientation) {
+                        ExifInterface.ORIENTATION_ROTATE_90 -> 90
+                        ExifInterface.ORIENTATION_ROTATE_180 -> 180
+                        ExifInterface.ORIENTATION_ROTATE_270 -> 270
+                        else -> 0
+                    }
+
+                    // 3. 处理 RAW 以生成 JPEG 预览
+                    val processedBitmap = RawProcessor.processAndToBitmap(
+                        dngFile,
+                        null,
+                        null,
+                        rotation
+                    )
+
+                    if (processedBitmap != null) {
+                        // 保存为 original.jpg
+                        FileOutputStream(photoFile).use { out ->
+                            processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                        }
+
+                        // 生成缩略图
+                        generateThumbnail(processedBitmap, thumbnailFile)
+
+                        // 更新元数据
+                        val updatedMetadata = metadata.copy(
+                            width = processedBitmap.width,
+                            height = processedBitmap.height,
+                            rotation = rotation,
+                            isImported = true
+                        )
+                        metadataFile.writeText(updatedMetadata.toJson())
+
+                        processedBitmap.recycle()
+                    } else {
+                        // 降级：如果 RAW 处理失败，尝试直接解码（某些 DNG 包含内置预览图）
+                        tempImportJpeg(uri, context, photoFile, metadataFile, thumbnailFile)
+                    }
+                } else {
+                    // --- 常规 JPEG 处理逻辑 ---
+                    tempImportJpeg(uri, context, photoFile, metadataFile, thumbnailFile)
+                }
+
+                PLog.d(TAG, "Photo imported: $photoId (isRaw: $isRaw)")
+                photoId
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to import photo", e)
+                null
+            }
+        }
+    }
+
+    private suspend fun tempImportJpeg(
+        uri: Uri,
+        context: Context,
+        photoFile: File,
+        metadataFile: File,
+        thumbnailFile: File
     ) {
-        val bitmap = BitmapFactory.decodeFile(tempFile.absolutePath)
-        if (bitmap != null) {
-            val rotatedBitmap = rotateImageIfRequired(bitmap, orientation)
-            FileOutputStream(photoFile).use { out ->
-                rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+        val photoDir = photoFile.parentFile ?: return
+        val tempFile = File(photoDir, "temp.jpg")
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            FileOutputStream(tempFile).use { output ->
+                input.copyTo(output)
             }
-            val newExif = ExifInterface(photoFile)
-            newExif.setAttribute(
-                ExifInterface.TAG_ORIENTATION,
-                ExifInterface.ORIENTATION_NORMAL.toString()
-            )
-            newExif.saveAttributes()
+        }
 
-            if (rotatedBitmap != bitmap) {
-                rotatedBitmap.recycle()
+        val exif = ExifInterface(tempFile)
+        val orientation = exif.getAttributeInt(
+            ExifInterface.TAG_ORIENTATION,
+            ExifInterface.ORIENTATION_NORMAL
+        )
+
+        if (orientation != ExifInterface.ORIENTATION_NORMAL &&
+            orientation != ExifInterface.ORIENTATION_UNDEFINED
+        ) {
+            val bitmap = BitmapFactory.decodeFile(tempFile.absolutePath)
+            if (bitmap != null) {
+                val rotatedBitmap = rotateImageIfRequired(bitmap, orientation)
+                FileOutputStream(photoFile).use { out ->
+                    rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                }
+                val newExif = ExifInterface(photoFile)
+                newExif.setAttribute(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL.toString()
+                )
+                newExif.saveAttributes()
+
+                if (rotatedBitmap != bitmap) {
+                    rotatedBitmap.recycle()
+                }
+                bitmap.recycle()
+            } else {
+                tempFile.copyTo(photoFile, overwrite = true)
             }
-            bitmap.recycle()
         } else {
-            tempFile.copyTo(photoFile, overwrite = true)
+            tempFile.renameTo(photoFile)
         }
-    } else {
-        tempFile.renameTo(photoFile)
+
+        if (tempFile.exists()) {
+            tempFile.delete()
+        }
+
+        val metadata = PhotoMetadata.fromUri(context, uri)
+        metadataFile.writeText(metadata.toJson())
+        generateThumbnail(photoFile, thumbnailFile)
     }
 
-    if (tempFile.exists()) {
-        tempFile.delete()
+    /**
+     * 根据 EXIF 方向信息旋转图片
+     */
+    private fun rotateImageIfRequired(img: Bitmap, orientation: Int): Bitmap {
+        return when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> {
+                rotateImage(img, 90f)
+            }
+
+            ExifInterface.ORIENTATION_ROTATE_180 -> {
+                rotateImage(img, 180f)
+            }
+
+            ExifInterface.ORIENTATION_ROTATE_270 -> {
+                rotateImage(img, 270f)
+            }
+
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> {
+                flipImage(img, horizontal = true, vertical = false)
+            }
+
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> {
+                flipImage(img, horizontal = false, vertical = true)
+            }
+
+            ExifInterface.ORIENTATION_TRANSPOSE -> {
+                // 先水平翻转，再旋转 270 度
+                val flipped = flipImage(img, horizontal = true, vertical = false)
+                val rotated = rotateImage(flipped, 270f)
+                if (flipped != img) flipped.recycle()
+                rotated
+            }
+
+            ExifInterface.ORIENTATION_TRANSVERSE -> {
+                // 先垂直翻转，再旋转 270 度
+                val flipped = flipImage(img, horizontal = false, vertical = true)
+                val rotated = rotateImage(flipped, 270f)
+                if (flipped != img) flipped.recycle()
+                rotated
+            }
+
+            else -> img
+        }
     }
 
-    val metadata = PhotoMetadata.fromUri(context, uri)
-    metadataFile.writeText(metadata.toJson())
-    generateThumbnail(photoFile, thumbnailFile)
-}
-
-/**
- * 根据 EXIF 方向信息旋转图片
- */
-private fun rotateImageIfRequired(img: Bitmap, orientation: Int): Bitmap {
-    return when (orientation) {
-        ExifInterface.ORIENTATION_ROTATE_90 -> {
-            rotateImage(img, 90f)
-        }
-
-        ExifInterface.ORIENTATION_ROTATE_180 -> {
-            rotateImage(img, 180f)
-        }
-
-        ExifInterface.ORIENTATION_ROTATE_270 -> {
-            rotateImage(img, 270f)
-        }
-
-        ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> {
-            flipImage(img, horizontal = true, vertical = false)
-        }
-
-        ExifInterface.ORIENTATION_FLIP_VERTICAL -> {
-            flipImage(img, horizontal = false, vertical = true)
-        }
-
-        ExifInterface.ORIENTATION_TRANSPOSE -> {
-            // 先水平翻转，再旋转 270 度
-            val flipped = flipImage(img, horizontal = true, vertical = false)
-            val rotated = rotateImage(flipped, 270f)
-            if (flipped != img) flipped.recycle()
-            rotated
-        }
-
-        ExifInterface.ORIENTATION_TRANSVERSE -> {
-            // 先垂直翻转，再旋转 270 度
-            val flipped = flipImage(img, horizontal = false, vertical = true)
-            val rotated = rotateImage(flipped, 270f)
-            if (flipped != img) flipped.recycle()
-            rotated
-        }
-
-        else -> img
+    /**
+     * 旋转图片
+     */
+    private fun rotateImage(img: Bitmap, degree: Float): Bitmap {
+        val matrix = Matrix()
+        matrix.postRotate(degree)
+        return Bitmap.createBitmap(img, 0, 0, img.width, img.height, matrix, true)
     }
-}
 
-/**
- * 旋转图片
- */
-private fun rotateImage(img: Bitmap, degree: Float): Bitmap {
-    val matrix = Matrix()
-    matrix.postRotate(degree)
-    return Bitmap.createBitmap(img, 0, 0, img.width, img.height, matrix, true)
-}
-
-/**
- * 翻转图片
- */
-private fun flipImage(img: Bitmap, horizontal: Boolean, vertical: Boolean): Bitmap {
-    val matrix = Matrix()
-    matrix.postScale(
-        if (horizontal) -1f else 1f,
-        if (vertical) -1f else 1f
-    )
-    return Bitmap.createBitmap(img, 0, 0, img.width, img.height, matrix, true)
-}
+    /**
+     * 翻转图片
+     */
+    private fun flipImage(img: Bitmap, horizontal: Boolean, vertical: Boolean): Bitmap {
+        val matrix = Matrix()
+        matrix.postScale(
+            if (horizontal) -1f else 1f,
+            if (vertical) -1f else 1f
+        )
+        return Bitmap.createBitmap(img, 0, 0, img.width, img.height, matrix, true)
+    }
 }

@@ -37,17 +37,21 @@ object MultiFrameStacker {
         images: List<Image>,
         rotation: Int,
         aspectRatio: AspectRatio?,
-        outputPath: String? = null
+        outputPath: String? = null,
+        enableSuperResolution: Boolean = false
     ): Bitmap? {
         if (images.isEmpty()) return null
 
         val width = images[0].width
         val height = images[0].height
 
-        PLog.i(TAG, "Starting stacking process for ${images.size} frames ($width x $height)")
+        // If SR is enabled, the output will be 2x size
+        val scale = if (enableSuperResolution) 2 else 1
+
+        PLog.i(TAG, "Starting stacking process for ${images.size} frames ($width x $height). SR=$enableSuperResolution")
         val startTime = System.currentTimeMillis()
 
-        val stackerPtr = createStackerNative(width, height)
+        val stackerPtr = createStackerNative(width, height, enableSuperResolution)
         if (stackerPtr == 0L) {
             PLog.e(TAG, "Failed to create native stacker")
             return null
@@ -79,7 +83,12 @@ object MultiFrameStacker {
             }
 
             val dimensions = BitmapUtils.calculateProcessedRect(width, height, aspectRatio, null, rotation)
-            val previewBitmap = createBitmap(dimensions.width(), dimensions.height())
+
+            // Apply scale to output dimensions
+            val targetW = dimensions.width() * scale
+            val targetH = dimensions.height() * scale
+
+            val previewBitmap = createBitmap(targetW, targetH)
 
             val tw = aspectRatio?.widthRatio ?: width
             val th = aspectRatio?.heightRatio ?: height
@@ -103,7 +112,8 @@ object MultiFrameStacker {
 
     fun processBurstRaw(
         images: List<Image>,
-        characteristics: CameraCharacteristics
+        characteristics: CameraCharacteristics,
+        enableSuperResolution: Boolean = false
     ): ByteBuffer? {
         var stackerPtr = 0L
 
@@ -111,9 +121,12 @@ object MultiFrameStacker {
         val height = images[0].height
 
         val sensorCfa = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT) ?: 0
-        PLog.d(TAG, "Starting multi-frame stacking for ${images.size} frames. Pattern=$sensorCfa")
+        PLog.d(
+            TAG,
+            "Starting multi-frame stacking for ${images.size} frames. Pattern=$sensorCfa SR=$enableSuperResolution"
+        )
 
-        stackerPtr = createRawStackerNative(width, height)
+        stackerPtr = createRawStackerNative(width, height, enableSuperResolution)
         if (stackerPtr == 0L) {
             PLog.e(TAG, "Failed to create raw stacker")
             return null
@@ -128,7 +141,8 @@ object MultiFrameStacker {
         }
 
         // 3. Process Stack
-        val stackedBuffer = ByteBuffer.allocateDirect(width * height * 2).order(ByteOrder.nativeOrder())
+        val scale = getRawStackerScaleNative(stackerPtr)
+        val stackedBuffer = ByteBuffer.allocateDirect(width * height * scale * scale * 2).order(ByteOrder.nativeOrder())
         processRawStackWithBufferNative(stackerPtr, stackedBuffer)
 
         releaseRawStackerNative(stackerPtr)
@@ -138,7 +152,7 @@ object MultiFrameStacker {
 
     // --- Native Methods ---
 
-    private external fun createStackerNative(width: Int, height: Int): Long
+    private external fun createStackerNative(width: Int, height: Int, enableSuperRes: Boolean): Long
 
     private external fun addToStackNative(
         stackerPtr: Long,
@@ -158,7 +172,8 @@ object MultiFrameStacker {
 
     private external fun releaseStackerNative(stackerPtr: Long)
 
-    private external fun createRawStackerNative(width: Int, height: Int): Long
+    private external fun createRawStackerNative(width: Int, height: Int, useSuperRes: Boolean): Long
+    private external fun getRawStackerScaleNative(stackerPtr: Long): Int
     private external fun addToRawStackNative(stackerPtr: Long, rawData: ByteBuffer, rowStride: Int, cfaPattern: Int)
     private external fun processRawStackWithBufferNative(stackerPtr: Long, outputBuffer: ByteBuffer)
     private external fun releaseRawStackerNative(stackerPtr: Long)

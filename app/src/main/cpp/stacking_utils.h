@@ -74,7 +74,7 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
 
 class ImageStacker {
 public:
-  ImageStacker(int width, int height);
+  ImageStacker(int width, int height, bool enableSuperRes = false);
   ~ImageStacker() = default;
 
   // Add a frame to the stack. The first frame becomes the reference.
@@ -88,26 +88,30 @@ public:
                    const char *outputPath = nullptr, int *outFinalW = nullptr,
                    int *outFinalH = nullptr);
 
+  // Getter for the current scale
+  int getScale() const { return scale; }
+
 private:
   int width;
   int height;
+  int scale; // Scaling factor (1 for normal, 2 for Super Res)
   bool isFirstFrame;
   int frameCount = 0;
 
   // Reference frame data for de-ghosting and alignment
+  // Reference is always kept at original resolution (scale=1)
   std::vector<GrayImage> referencePyramid;
-  std::vector<uint16_t> referenceY; // Store in 16-bit to match accum logic
+  std::vector<uint16_t> referenceY;
   std::vector<uint16_t> referenceU;
   std::vector<uint16_t> referenceV;
 
   // Accumulation buffers (32-bit for sum)
+  // Scaled size: (width*scale) * (height*scale)
   std::vector<int32_t> accumY;
   std::vector<int32_t> accumU;
   std::vector<int32_t> accumV;
 
-  // Weight buffers (instead of simple counts)
-  // We'll use 8-bit or 16-bit weights. Let's use 32-bit for accumulated weights
-  // to avoid overflow.
+  // Weight buffers
   std::vector<int32_t> weightY;
   std::vector<int32_t> weightU;
   std::vector<int32_t> weightV;
@@ -115,7 +119,7 @@ private:
 
 class RawStacker {
 public:
-  RawStacker(int width, int height);
+  RawStacker(int width, int height, bool enableSuperRes = false);
   ~RawStacker() = default;
 
   // Add a raw frame to the stack
@@ -127,12 +131,15 @@ public:
   // Returns a vector containing the stacked 16-bit Bayer data
   std::vector<uint16_t> process();
 
+  int getScale() const { return scale; }
+
 private:
   int width;
   int height;
+  int scale;
   bool isFirstFrame;
   int frameCount = 0;
-  float mScale = 1.0f;
+  float byteScale = 1.0f;
 
   // Reference pyramid for alignment (built from a downscaled grayscale version
   // of the raw data)

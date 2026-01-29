@@ -79,6 +79,7 @@ fun CameraScreen(
     val categoryOrder by viewModel.categoryOrder.collectAsState(emptyList())
     val useRaw by viewModel.useRaw.collectAsState()
     val useMultiFrame by viewModel.useMultiFrame.collectAsState()
+    val useSuperResolution by viewModel.useSuperResolution.collectAsState()
 
     val backgroundColor = Color(0xFF434A5D)
 
@@ -403,7 +404,9 @@ fun CameraScreen(
                 onSettingsClick()
             },
             useMultiFrame = useMultiFrame,
-            onMultiFrameToggle = { viewModel.setUseMultiFrame(it) }
+            onMultiFrameToggle = { viewModel.setUseMultiFrame(it) },
+            useSuperResolution = useSuperResolution,
+            onSuperResolutionToggle = { viewModel.setUseSuperResolution(it) }
         )
 
         // LutControlPanel 显示在遮罩层之上，确保能接收点击事件

@@ -36,22 +36,6 @@ object RawProcessor {
                 image.format == ImageFormat.RAW12
     }
 
-    fun process(
-        dngPath: String,
-        aspectRatio: AspectRatio?,
-        cropRegion: Rect?,
-        rotation: Int
-    ): Bitmap? {
-        return try {
-            FileInputStream(File(dngPath)).use {
-                processAndToBitmap(it.readBytes(), aspectRatio, cropRegion, rotation)
-            }
-        } catch (e: Exception) {
-            PLog.e(TAG, "Fallback RAW processing also failed", e)
-            null
-        }
-    }
-
     fun processAndToBitmap(
         byteArray: ByteArray,
         aspectRatio: AspectRatio?,
@@ -67,8 +51,27 @@ object RawProcessor {
         cropRegion: Rect?,
         rotation: Int
     ): Bitmap? {
+        val source = ImageDecoder.createSource(byteBuffer)
+        return processAndToBitmap(source, aspectRatio, cropRegion, rotation)
+    }
+
+    fun processAndToBitmap(
+        file: File,
+        aspectRatio: AspectRatio?,
+        cropRegion: Rect?,
+        rotation: Int
+    ): Bitmap? {
+        val source = ImageDecoder.createSource(file)
+        return processAndToBitmap(source, aspectRatio, cropRegion, rotation)
+    }
+
+    fun processAndToBitmap(
+        source: ImageDecoder.Source,
+        aspectRatio: AspectRatio?,
+        cropRegion: Rect?,
+        rotation: Int
+    ): Bitmap? {
         return try {
-            val source = ImageDecoder.createSource(byteBuffer)
             var decodedBitmap = ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
                 decoder.setTargetColorSpace(ColorSpace.get(ColorSpace.Named.EXTENDED_SRGB))
                 decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
@@ -94,6 +97,7 @@ object RawProcessor {
             // Step 4: 裁切到目标宽高比
             val rect =
                 BitmapUtils.calculateProcessedRect(decodedBitmap.width, decodedBitmap.height, aspectRatio, cropRegion)
+            Log.d(TAG, "processAndToBitmap: $rect")
             val croppedBitmap = Bitmap.createBitmap(decodedBitmap, rect.left, rect.top, rect.width(), rect.height())
             if (croppedBitmap != decodedBitmap) {
                 decodedBitmap.recycle()

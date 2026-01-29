@@ -15,6 +15,8 @@ import com.hinnka.mycamera.utils.RawProcessor
 import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.nio.ByteBuffer
 import java.nio.ShortBuffer
 
 /**
@@ -104,7 +106,7 @@ class PhotoProcessor(
                 finalSharpening, finalNoiseReduction, finalChromaNoiseReduction
             )
         } else {
-            val bitmap16 = RawProcessor.process(dngPath, metadata.ratio, cropRegion, metadata.rotation)
+            val bitmap16 = RawProcessor.processAndToBitmap(File(dngPath), metadata.ratio, cropRegion, metadata.rotation)
             result = bitmap16?.let {
                 lutImageProcessor.applyLut(
                     bitmap16,
@@ -133,7 +135,7 @@ class PhotoProcessor(
      * @return 处理后的 Bitmap
      */
     suspend fun processYuv(
-        input: ShortArray,
+        input: ByteBuffer,
         metadata: PhotoMetadata,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
@@ -151,15 +153,8 @@ class PhotoProcessor(
         val colorRecipeParams = metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
 
         // 1. 应用 LUT
-        val width = input[0].toInt() and 0xFFFF
-        val height = input[1].toInt() and 0xFFFF
-        val pixelCount = width * height
-        val pixelData = ShortArray(pixelCount * 4)
-        System.arraycopy(input, 2, pixelData, 0, pixelData.size)
-        val shortBuffer = ShortBuffer.wrap(pixelData)
-
         result = lutImageProcessor.applyLut(
-            shortBuffer,
+            input.asShortBuffer(),
             metadata.width,
             metadata.height,
             lutConfig,
@@ -168,6 +163,7 @@ class PhotoProcessor(
             finalNoiseReduction,
             finalChromaNoiseReduction
         )
+        YuvProcessor.free(input)
 
         result = applyFrame(result, metadata)
 

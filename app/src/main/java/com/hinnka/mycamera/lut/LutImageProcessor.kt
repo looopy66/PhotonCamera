@@ -436,25 +436,23 @@ class LutImageProcessor {
         val tempBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
 
         if (mappedBuffer != null) {
-            val buffer = ByteBuffer.allocateDirect(pixelSize).order(ByteOrder.nativeOrder())
-            buffer.put(mappedBuffer)
-            buffer.position(0)
-            tempBitmap.copyPixelsFromBuffer(buffer)
+            // 直接使用映射的内存，不需要 allocateDirect，不需要 put 拷贝
+            tempBitmap.copyPixelsFromBuffer(mappedBuffer)
             GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
         }
 
         GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
 
         // 翻转 Y 轴（glReadPixels 从左下角开始读取，需要翻转）
-        val matrix = android.graphics.Matrix()
-        matrix.preScale(1f, -1f)
-        val outputBitmap = Bitmap.createBitmap(tempBitmap, 0, 0, width, height, matrix, true)
-        tempBitmap.recycle()
+//        val matrix = android.graphics.Matrix()
+//        matrix.preScale(1f, -1f)
+//        val outputBitmap = Bitmap.createBitmap(tempBitmap, 0, 0, width, height, matrix, true)
+//        tempBitmap.recycle()
 
         // 解绑帧缓冲
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
 
-        return outputBitmap
+        return tempBitmap
     }
 
     private fun setupFramebuffer(width: Int, height: Int) {
@@ -642,15 +640,12 @@ class LutImageProcessor {
             .put(Shaders.FULL_QUAD_VERTICES)
         vertexBuffer?.position(0)
 
-        // 纹理坐标缓冲（Y 轴翻转）
-        // Android Bitmap 坐标系从左上角开始，OpenGL 纹理坐标从左下角开始
-        // 需要翻转 Y 坐标来补偿这个差异
+
         val flippedTexCoords = floatArrayOf(
-            // U, V (Y 轴翻转：原来的 V 变成 1.0 - V)
-            0.0f, 1.0f,  // 左下 -> 对应 Bitmap 左上
-            1.0f, 1.0f,  // 右下 -> 对应 Bitmap 右上
-            0.0f, 0.0f,  // 左上 -> 对应 Bitmap 左下
-            1.0f, 0.0f   // 右上 -> 对应 Bitmap 右下
+            0.0f, 0.0f,
+            1.0f, 0.0f,
+            0.0f, 1.0f,
+            1.0f, 1.0f
         )
         texCoordBuffer = ByteBuffer.allocateDirect(flippedTexCoords.size * 4)
             .order(ByteOrder.nativeOrder())

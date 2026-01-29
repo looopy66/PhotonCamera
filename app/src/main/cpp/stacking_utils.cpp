@@ -23,49 +23,52 @@ inline float interpolateSubpixel(long long s0, long long s_minus,
 
 // 辅助函数：计算 Bicubic 权重 (Catmull-Rom)
 inline float cubicWeight(float t) {
-    // a = -0.5
-    float a = -0.5f;
-    float absT = std::abs(t);
-    if (absT <= 1.0f) {
-        return (a + 2.0f) * absT * absT * absT - (a + 3.0f) * absT * absT + 1.0f;
-    } else if (absT < 2.0f) {
-        return a * absT * absT * absT - 5.0f * a * absT * absT + 8.0f * a * absT - 4.0f * a;
-    }
-    return 0.0f;
+  // a = -0.5
+  float a = -0.5f;
+  float absT = std::abs(t);
+  if (absT <= 1.0f) {
+    return (a + 2.0f) * absT * absT * absT - (a + 3.0f) * absT * absT + 1.0f;
+  } else if (absT < 2.0f) {
+    return a * absT * absT * absT - 5.0f * a * absT * absT + 8.0f * a * absT -
+           4.0f * a;
+  }
+  return 0.0f;
 }
 
 // 替换原来的 sampleBilinear
 // 注意：这会比双线性慢一点，但画质提升巨大
 inline float sampleBicubic(const std::vector<uint16_t> &data, int width,
-                            int height, float x, float y) {
-    int xInt = (int)std::floor(x);
-    int yInt = (int)std::floor(y);
-    float dx = x - xInt;
-    float dy = y - yInt;
+                           int height, float x, float y) {
+  int xInt = (int)std::floor(x);
+  int yInt = (int)std::floor(y);
+  float dx = x - xInt;
+  float dy = y - yInt;
 
-    float sum = 0.0f;
-    float weightSum = 0.0f;
+  float sum = 0.0f;
+  float weightSum = 0.0f;
 
-    // 4x4 邻域采样
-    for (int j = -1; j <= 2; ++j) {
-        int sy = std::max(0, std::min(height - 1, yInt + j));
-        float wy = cubicWeight((float)j - dy);
+  // 4x4 邻域采样
+  for (int j = -1; j <= 2; ++j) {
+    int sy = std::max(0, std::min(height - 1, yInt + j));
+    float wy = cubicWeight((float)j - dy);
 
-        for (int i = -1; i <= 2; ++i) {
-            int sx = std::max(0, std::min(width - 1, xInt + i));
-            float wx = cubicWeight((float)i - dx);
+    for (int i = -1; i <= 2; ++i) {
+      int sx = std::max(0, std::min(width - 1, xInt + i));
+      float wx = cubicWeight((float)i - dx);
 
-            float weight = wx * wy;
-            sum += (float)data[sy * width + sx] * weight;
-            // Bicubic 权重之和理论为 1，但为了浮点稳定性可以除以 weightSum
-            // weightSum += weight;
-        }
+      float weight = wx * wy;
+      sum += (float)data[sy * width + sx] * weight;
+      // Bicubic 权重之和理论为 1，但为了浮点稳定性可以除以 weightSum
+      // weightSum += weight;
     }
+  }
 
-    float val = sum;
-    if (val < 0.0f) val = 0.0f;
-    if (val > 65535.0f) val = 65535.0f; // 针对 16-bit RAW 必须限制上限
-    return val;
+  float val = sum;
+  if (val < 0.0f)
+    val = 0.0f;
+  if (val > 65535.0f)
+    val = 65535.0f; // 针对 16-bit RAW 必须限制上限
+  return val;
 }
 
 // Compute local variance in a 3x3 window
@@ -328,59 +331,69 @@ namespace { // 匿名命名空间，放置内部辅助函数
 // --- 核心升级 1: Catmull-Rom 双三次插值权重 ---
 // 这种曲线在保留锐度和抑制振铃之间取得了很好的平衡
 inline float cubicWeight(float t) {
-    float a = -0.5f; // Catmull-Rom spline
-    float absT = std::abs(t);
-    if (absT <= 1.0f) {
-        return (a + 2.0f) * absT * absT * absT - (a + 3.0f) * absT * absT + 1.0f;
-    } else if (absT < 2.0f) {
-        return a * absT * absT * absT - 5.0f * a * absT * absT + 8.0f * a * absT - 4.0f * a;
-    }
-    return 0.0f;
+  float a = -0.5f; // Catmull-Rom spline
+  float absT = std::abs(t);
+  if (absT <= 1.0f) {
+    return (a + 2.0f) * absT * absT * absT - (a + 3.0f) * absT * absT + 1.0f;
+  } else if (absT < 2.0f) {
+    return a * absT * absT * absT - 5.0f * a * absT * absT + 8.0f * a * absT -
+           4.0f * a;
+  }
+  return 0.0f;
 }
 
 // --- 核心升级 1: Bicubic 采样函数 ---
 // 用于替代原本的双线性插值。能显著提升亚像素对齐后的清晰度。
 // data: 单通道数据 (Plane)
-inline float sampleBicubicPlane(const std::vector<uint16_t>& data, int width, int height, float x, float y) {
-    int xInt = (int)std::floor(x);
-    int yInt = (int)std::floor(y);
-    float dx = x - xInt;
-    float dy = y - yInt;
+inline float sampleBicubicPlane(const std::vector<uint16_t> &data, int width,
+                                int height, float x, float y) {
+  int xInt = (int)std::floor(x);
+  int yInt = (int)std::floor(y);
+  float dx = x - xInt;
+  float dy = y - yInt;
 
-    float sum = 0.0f;
-    // float weightSum = 0.0f; // Catmull-Rom 理论权重和为 1，通常不需要归一化，省点计算量
+  float sum = 0.0f;
+  // float weightSum = 0.0f; // Catmull-Rom 理论权重和为
+  // 1，通常不需要归一化，省点计算量
 
-    // 4x4 邻域采样
-    // 边界检查放到循环内虽然稍微慢点，但写起来最安全
-    for (int j = -1; j <= 2; ++j) {
-        int sy = std::max(0, std::min(height - 1, yInt + j));
-        float wy = cubicWeight((float)j - dy);
+  // 4x4 邻域采样
+  // 边界检查放到循环内虽然稍微慢点，但写起来最安全
+  for (int j = -1; j <= 2; ++j) {
+    int sy = std::max(0, std::min(height - 1, yInt + j));
+    float wy = cubicWeight((float)j - dy);
 
-        // 优化：如果 Y 权重为 0 (极少见)，跳过整行
-        if (std::abs(wy) < 1e-5f) continue;
+    // 优化：如果 Y 权重为 0 (极少见)，跳过整行
+    if (std::abs(wy) < 1e-5f)
+      continue;
 
-        for (int i = -1; i <= 2; ++i) {
-            int sx = std::max(0, std::min(width - 1, xInt + i));
-            float wx = cubicWeight((float)i - dx);
+    for (int i = -1; i <= 2; ++i) {
+      int sx = std::max(0, std::min(width - 1, xInt + i));
+      float wx = cubicWeight((float)i - dx);
 
-            // 累加
-            sum += (float)data[sy * width + sx] * wx * wy;
-        }
+      // 累加
+      sum += (float)data[sy * width + sx] * wx * wy;
     }
+  }
 
-    // Bicubic 可能会产生负值（下冲），必须 Clamp 住
-    return std::max(0.0f, sum);
+  // Bicubic 可能会产生负值（下冲），必须 Clamp 住
+  return std::max(0.0f, std::min(65535.0f, sum));
 }
 
 } // end namespace
 
 // --- ImageStacker Implementation ---
 
-ImageStacker::ImageStacker(int width, int height)
+ImageStacker::ImageStacker(int width, int height, bool enableSuperRes)
     : width(width), height(height), isFirstFrame(true) {
-  int size = width * height;
-  int uvWidth = width / 2;
-  int uvHeight = height / 2;
+  scale = enableSuperRes ? 2 : 1;
+  // Accumulator buffers are scaled
+  int scaledW = width * scale;
+  int scaledH = height * scale;
+  int size = scaledW * scaledH;
+
+  // UV is subsampled 2x relative to Y
+  int uvWidth = scaledW / 2;
+  int uvHeight = scaledH / 2;
   int uvSize = uvWidth * uvHeight;
 
   accumY.assign(size, 0);
@@ -391,9 +404,12 @@ ImageStacker::ImageStacker(int width, int height)
   weightU.assign(uvSize, 0);
   weightV.assign(uvSize, 0);
 
-  referenceY.resize(size);
-  referenceU.resize(uvSize);
-  referenceV.resize(uvSize);
+  // Reference is kept at original resolution for alignment
+  int refYSize = width * height;
+  int refUVSize = (width / 2) * (height / 2);
+  referenceY.resize(refYSize);
+  referenceU.resize(refUVSize);
+  referenceV.resize(refUVSize);
 }
 
 inline int calculateWeight(int diff, float variance) {
@@ -447,23 +463,22 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
   if (isFirstFrame) {
     referenceY = currentY;
     // Store U, V for reference as well
-    int uvWidth = width / 2;
-    int uvHeight = height / 2;
-    referenceU.resize(uvWidth * uvHeight);
-    referenceV.resize(uvWidth * uvHeight);
+    int uvRefWidth = width / 2;
+    int uvRefHeight = height / 2;
 
-    for (int r = 0; r < uvHeight; ++r) {
-      for (int c = 0; c < uvWidth; ++c) {
+    // Store reference UV same as before
+    for (int r = 0; r < uvRefHeight; ++r) {
+      for (int c = 0; c < uvRefWidth; ++c) {
         if (isP010) {
-          referenceU[r * uvWidth + c] = readValue<uint16_t>(
+          referenceU[r * uvRefWidth + c] = readValue<uint16_t>(
               uData + r * uvRowStride + c * uvPixelStride, false);
-          referenceV[r * uvWidth + c] = readValue<uint16_t>(
+          referenceV[r * uvRefWidth + c] = readValue<uint16_t>(
               vData + r * uvRowStride + c * uvPixelStride, false);
         } else {
-          referenceU[r * uvWidth + c] =
+          referenceU[r * uvRefWidth + c] =
               static_cast<uint16_t>(uData[r * uvRowStride + c * uvPixelStride])
               << 8;
-          referenceV[r * uvWidth + c] =
+          referenceV[r * uvRefWidth + c] =
               static_cast<uint16_t>(vData[r * uvRowStride + c * uvPixelStride])
               << 8;
         }
@@ -472,44 +487,99 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
 
     referencePyramid = buildPyramid(image8bit.data.data(), width, height, 4);
 
-    // First frame has full weight (exactly copying to accum/weight)
-    for (int i = 0; i < (int)accumY.size(); ++i) {
-      accumY[i] = (int32_t)referenceY[i] * 256;
-      weightY[i] = 256;
+    // Initialize accumulators by upscaling the first frame
+    int scaledW = width * scale;
+    int scaledH = height * scale;
+
+    for (int y = 0; y < scaledH; ++y) {
+      for (int x = 0; x < scaledW; ++x) {
+        // Map scaled coordinates back to input coordinates
+        float srcX = (float)x / scale;
+        float srcY = (float)y / scale;
+
+        // Initial frame: strict bicubic upscale
+        uint16_t val =
+            (uint16_t)sampleBicubic(currentY, width, height, srcX, srcY);
+        accumY[y * scaledW + x] = (int32_t)val * 256;
+        weightY[y * scaledW + x] = 256;
+      }
     }
-    for (int i = 0; i < (int)accumU.size(); ++i) {
-      accumU[i] = (int32_t)referenceU[i] * 256;
-      weightU[i] = 256;
-      accumV[i] = (int32_t)referenceV[i] * 256;
-      weightV[i] = 256;
+
+    // UV
+    int scaledUVWidth = scaledW / 2;
+    int scaledUVHeight = scaledH / 2;
+
+    for (int y = 0; y < scaledUVHeight; ++y) {
+      for (int x = 0; x < scaledUVWidth; ++x) {
+        // Need to sample original UV.
+        // Original UV size is (width/2) x (height/2).
+        // Current scaled UV index (x, y) corresponds to (x/scale, y/scale) in
+        // original UV grid.
+        float srcX = (float)x / scale;
+        float srcY = (float)y / scale;
+
+        // We need a helper to sample UV from raw pointer again, or use
+        // referenceU/V since it's first frame Actually, referenceU/V are
+        // already populated above. using basic bilinear/bicubic on them.
+        uint16_t uVal = (uint16_t)sampleBicubic(referenceU, uvRefWidth,
+                                                uvRefHeight, srcX, srcY);
+        uint16_t vVal = (uint16_t)sampleBicubic(referenceV, uvRefWidth,
+                                                uvRefHeight, srcX, srcY);
+
+        accumU[y * scaledUVWidth + x] = (int32_t)uVal * 256;
+        weightU[y * scaledUVWidth + x] = 256;
+
+        accumV[y * scaledUVWidth + x] = (int32_t)vVal * 256;
+        weightV[y * scaledUVWidth + x] = 256;
+      }
     }
+
     isFirstFrame = false;
-    LOGD("ImageStacker::addFrame: First frame initialized");
     return;
   }
 
-  // Align current frame against reference
+  // Align current frame against reference (Always at 1x scale)
   std::vector<GrayImage> currentPyramid =
       buildPyramid(image8bit.data.data(), width, height, 4);
   TileAlignment alignment =
       computeTileAlignment(referencePyramid, currentPyramid, 64);
 
-  // Merge with Robust Weighting
-  // Y Plane
-  for (int y = 0; y < height; ++y) {
-    for (int x = 0; x < width; ++x) {
-      Point offset = alignment.getOffset(x, y);
-      float tx = (float)x + offset.x;
-      float ty = (float)y + offset.y;
+  int scaledW = width * scale;
+  int scaledH = height * scale;
 
-      int destIdx = y * width + x;
-      if (tx >= 0 && tx < (float)width && ty >= 0 && ty < (float)height &&
-          destIdx < (int)accumY.size()) {
+  // Merge with Robust Weighting
+  // Y Plane - Iterate over Output Grid (Scaled)
+  for (int y = 0; y < scaledH; ++y) {
+    for (int x = 0; x < scaledW; ++x) {
+      // 1. Map output pixel to input reference space
+      //    (x, y) in scaled grid -> (x/s, y/s) in 1x reference grid
+      float refX = (float)x / scale;
+      float refY = (float)y / scale;
+
+      // 2. Get alignment offset at this location (from 1x grid)
+      Point offset = alignment.getOffset((int)refX, (int)refY);
+
+      // 3. Apply offset to find sampling point in CURRENT frame
+      float tx = refX + offset.x;
+      float ty = refY + offset.y;
+
+      int destIdx = y * scaledW + x;
+
+      if (tx >= 0 && tx < (float)width && ty >= 0 && ty < (float)height) {
+        // Sample from current frame (1x) at aligned position
         uint16_t targetVal =
             (uint16_t)sampleBicubic(currentY, width, height, tx, ty);
+
+        // Look up accumulated value for comparison (De-ghosting)
+        // We compare against the current accumulated average
         uint16_t refVal = (uint16_t)(accumY[destIdx] / weightY[destIdx]);
 
-        float variance = computeLocalVariance(referenceY, width, height, x, y);
+        // Compute local variance on REFERENCE frame (1x)
+        // We use nearest neighbor or bilinear mapping to finding variance at
+        // refX, refY
+        float variance = computeLocalVariance(referenceY, width, height,
+                                              (int)refX, (int)refY);
+
         int diff = std::abs((int)targetVal - (int)refVal);
         int weight = calculateWeight(diff, variance);
 
@@ -517,11 +587,16 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
         weightY[destIdx] += weight;
 
         // Progressive reference update (recursive filter)
-        // Only update if weight is high (no motion) to avoid ghosting in
-        // reference
-        if (weight > 128) {
-          referenceY[destIdx] =
-              (uint16_t)((referenceY[destIdx] * 7 + targetVal) / 8);
+        // Update 1x reference mainly using values that map to integer
+        // coordinates? Or just don't update reference for now in SuperRes mode
+        // to simplify. Actually, updating reference is good for long bursts.
+        // But referenceY is 1x. We only have 2x data here.
+        // Simple strategy: Update reference only if we are at a "center" pixel
+        // (modulo scale == 0)
+        if (x % scale == 0 && y % scale == 0 && weight > 128) {
+          int refIdx = (y / scale) * width + (x / scale);
+          referenceY[refIdx] =
+              (uint16_t)((referenceY[refIdx] * 7 + targetVal) / 8);
         }
       }
     }
@@ -538,31 +613,35 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
   referencePyramid = buildPyramid(ref8bit.data.data(), width, height, 4);
 
   // UV Planes (subsampled)
-  int uvWidth = width / 2;
-  int uvHeight = height / 2;
-  int uvSize = uvWidth * uvHeight;
+  int scaledUVWidth = scaledW / 2;
+  int scaledUVHeight = scaledH / 2;
+  int uvRefWidth = width / 2;
+  int uvRefHeight = height / 2;
 
-  for (int y = 0; y < uvHeight; ++y) {
-    for (int x = 0; x < uvWidth; ++x) {
-      Point offset = alignment.getOffset(x * 2, y * 2);
-      float tx = (float)x + offset.x / 2.0f;
-      float ty = (float)y + offset.y / 2.0f;
+  for (int y = 0; y < scaledUVHeight; ++y) {
+    for (int x = 0; x < scaledUVWidth; ++x) {
+      // Map to 1x UV grid
+      float refUVX = (float)x / scale;
+      float refUVY = (float)y / scale;
 
-      int destIdx = y * uvWidth + x;
-      if (tx >= 0 && tx < (float)uvWidth && ty >= 0 && ty < (float)uvHeight &&
-          destIdx < uvSize) {
+      // Get offset. Note: alignment offset matches Y plane (full res 1x).
+      // UV is half res 1x. So need to scale coordinates to Y plane for offset
+      // lookup. Y-coord = refUVX * 2.
+      Point offset = alignment.getOffset(refUVX * 2, refUVY * 2);
 
-        // Use a temporary vector or similar for sampling U/V
-        // For efficiency, compute integer indices and weights if bilinearly
-        // sampling U/V But let's reuse sampleBilinear logic if we had
-        // currentU/V. Currently we don't have currentU/V in a vector, we read
-        // from raw. Let's create them for easier sampling.
+      // Target in current frame UV
+      float tx = refUVX + offset.x / 2.0f;
+      float ty = refUVY + offset.y / 2.0f;
+
+      int destIdx = y * scaledUVWidth + x;
+      if (tx >= 0 && tx < (float)uvRefWidth && ty >= 0 &&
+          ty < (float)uvRefHeight) {
 
         auto sampleRawUV = [&](const uint8_t *data, float sx, float sy) {
           int x0 = (int)std::floor(sx);
           int y0 = (int)std::floor(sy);
-          int x1 = std::min(x0 + 1, uvWidth - 1);
-          int y1 = std::min(y0 + 1, uvHeight - 1);
+          int x1 = std::min(x0 + 1, uvRefWidth - 1);
+          int y1 = std::min(y0 + 1, uvRefHeight - 1);
           float dx = sx - (float)x0;
           float dy = sy - (float)y0;
 
@@ -593,8 +672,6 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
         int diffU = std::abs((int)targetU - (int)refU);
         int diffV = std::abs((int)targetV - (int)refV);
 
-        // Variance for UV is usually linked to Y. Let's use simplified
-        // variance.
         int weight = calculateWeight(std::max(diffU, diffV),
                                      40000.0f); // Higher base for UV
 
@@ -603,11 +680,12 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
         accumV[destIdx] += (int32_t)targetV * weight;
         weightV[destIdx] += weight;
 
-        if (weight > 128) {
-          referenceU[destIdx] =
-              (uint16_t)((referenceU[destIdx] * 7 + targetU) / 8);
-          referenceV[destIdx] =
-              (uint16_t)((referenceV[destIdx] * 7 + targetV) / 8);
+        if (x % scale == 0 && y % scale == 0 && weight > 128) {
+          int refIdx = (y / scale) * uvRefWidth + (x / scale);
+          referenceU[refIdx] =
+              (uint16_t)((referenceU[refIdx] * 7 + targetU) / 8);
+          referenceV[refIdx] =
+              (uint16_t)((referenceV[refIdx] * 7 + targetV) / 8);
         }
       }
     }
@@ -622,9 +700,13 @@ void ImageStacker::writeResult(uint32_t *outBitmap, int outWidth, int outHeight,
                                int rotation, int targetWR, int targetHR,
                                const char *outputPath, int *outFinalW,
                                int *outFinalH) {
-  int ySize = width * height;
-  int uvWidth = width / 2;
-  int uvHeight = height / 2;
+  // Use current scaled dimensions
+  int currentW = width * scale;
+  int currentH = height * scale;
+
+  int ySize = currentW * currentH;
+  int uvWidth = currentW / 2;
+  int uvHeight = currentH / 2;
   int uvSize = uvWidth * uvHeight;
 
   // 1. Calculate averaged unrotated 16-bit YUV
@@ -644,8 +726,8 @@ void ImageStacker::writeResult(uint32_t *outBitmap, int outWidth, int outHeight,
   }
 
   // 2. Rotate
-  int rotatedWidth = (rotation == 90 || rotation == 270) ? height : width;
-  int rotatedHeight = (rotation == 90 || rotation == 270) ? width : height;
+  int rotatedWidth = (rotation == 90 || rotation == 270) ? currentH : currentW;
+  int rotatedHeight = (rotation == 90 || rotation == 270) ? currentW : currentH;
   int rotatedUvWidth = rotatedWidth / 2;
   int rotatedUvHeight = rotatedHeight / 2;
 
@@ -653,7 +735,7 @@ void ImageStacker::writeResult(uint32_t *outBitmap, int outWidth, int outHeight,
   std::vector<uint16_t> rU(rotatedUvWidth * rotatedUvHeight);
   std::vector<uint16_t> rV(rotatedUvWidth * rotatedUvHeight);
 
-  RotatePlane16(iY.data(), rY.data(), width, height, rotation);
+  RotatePlane16(iY.data(), rY.data(), currentW, currentH, rotation);
   RotatePlane16(iU.data(), rU.data(), uvWidth, uvHeight, rotation);
   RotatePlane16(iV.data(), rV.data(), uvWidth, uvHeight, rotation);
 
@@ -746,9 +828,10 @@ void ImageStacker::writeResult(uint32_t *outBitmap, int outWidth, int outHeight,
   }
 }
 
-RawStacker::RawStacker(int width, int height)
-    : width(width), height(height), isFirstFrame(true) {
-  int planeSize = (width / 2) * (height / 2);
+RawStacker::RawStacker(int width, int height, bool enableSuperRes)
+    : width(width), height(height), scale(enableSuperRes ? 2 : 1),
+      isFirstFrame(true) {
+  int planeSize = (width / 2 * scale) * (height / 2 * scale);
   for (int i = 0; i < 4; ++i) {
     accum[i].assign(planeSize, 0);
     weight[i].assign(planeSize, 0);
@@ -774,62 +857,66 @@ int RawStacker::getPlaneIndex(int x, int y, int cfaPattern) const {
   return map[cfaPattern][offset];
 }
 
-
 // 辅助函数：安全地计算 RAW 的自动曝光缩放因子
 // 使用 stride (bytes) 进行指针移动
-inline float computeRawScaleSafe(const uint8_t* rawDataBytes, int width, int height, int rowStride) {
-    int startY = height / 4;
-    int endY = startY * 3;
-    int startX = width / 4;
-    int endX = startX * 3;
+inline float computeRawScaleSafe(const uint8_t *rawDataBytes, int width,
+                                 int height, int rowStride) {
+  int startY = height / 4;
+  int endY = startY * 3;
+  int startX = width / 4;
+  int endX = startX * 3;
 
-    uint16_t maxVal = 1;
+  uint16_t maxVal = 1;
 
-    for (int y = startY; y < endY; y += 8) { // 步长加大，性能优先
-        const uint16_t* row = (const uint16_t*)(rawDataBytes + y * rowStride);
-        for (int x = startX; x < endX; x += 8) {
-            if (row[x] > maxVal) maxVal = row[x];
-        }
+  for (int y = startY; y < endY; y += 8) { // 步长加大，性能优先
+    const uint16_t *row = (const uint16_t *)(rawDataBytes + y * rowStride);
+    for (int x = startX; x < endX; x += 8) {
+      if (row[x] > maxVal)
+        maxVal = row[x];
     }
-    maxVal = std::max(maxVal, (uint16_t)255);
-    return 255.0f / (float)maxVal;
+  }
+  maxVal = std::max(maxVal, (uint16_t)255);
+  return 255.0f / (float)maxVal;
 }
 
 // 辅助函数：简单的 3x3 均值模糊，去除 RAW 噪点以利于对齐
-void smoothImage(GrayImage& img) {
-    std::vector<uint8_t> temp = img.data;
-    int w = img.width;
-    int h = img.height;
+void smoothImage(GrayImage &img) {
+  std::vector<uint8_t> temp = img.data;
+  int w = img.width;
+  int h = img.height;
 
-    for (int y = 1; y < h - 1; ++y) {
-        for (int x = 1; x < w - 1; ++x) {
-            int sum = 0;
-            // 3x3 Box Blur
-            sum += temp[(y - 1) * w + (x - 1)];
-            sum += temp[(y - 1) * w + x];
-            sum += temp[(y - 1) * w + (x + 1)];
-            sum += temp[y * w + (x - 1)];
-            sum += temp[y * w + x];       // Center
-            sum += temp[y * w + (x + 1)];
-            sum += temp[(y + 1) * w + (x - 1)];
-            sum += temp[(y + 1) * w + x];
-            sum += temp[(y + 1) * w + (x + 1)];
+  for (int y = 1; y < h - 1; ++y) {
+    for (int x = 1; x < w - 1; ++x) {
+      int sum = 0;
+      // 3x3 Box Blur
+      sum += temp[(y - 1) * w + (x - 1)];
+      sum += temp[(y - 1) * w + x];
+      sum += temp[(y - 1) * w + (x + 1)];
+      sum += temp[y * w + (x - 1)];
+      sum += temp[y * w + x]; // Center
+      sum += temp[y * w + (x + 1)];
+      sum += temp[(y + 1) * w + (x - 1)];
+      sum += temp[(y + 1) * w + x];
+      sum += temp[(y + 1) * w + (x + 1)];
 
-            img.data[y * w + x] = (uint8_t)(sum / 9);
-        }
+      img.data[y * w + x] = (uint8_t)(sum / 9);
     }
+  }
 }
 
-void RawStacker::addFrame(const uint16_t *rawData, int rowStride, int cfaPattern) {
+void RawStacker::addFrame(const uint16_t *rawData, int rowStride,
+                          int cfaPattern) {
   frameCount++;
-  const uint8_t* rawBytes = (const uint8_t*)rawData;
+  const uint8_t *rawBytes = (const uint8_t *)rawData;
 
-  // 1. 自动曝光计算 (每帧独立计算或只算第一帧，这里为了安全每帧检查，第一帧锁定)
+  // 1. 自动曝光计算
+  // (每帧独立计算或只算第一帧，这里为了安全每帧检查，第一帧锁定)
   if (isFirstFrame) {
-      mScale = computeRawScaleSafe(rawBytes, width, height, rowStride);
-      // 限制缩放倍数，防止纯黑图片导致数值爆炸
-      if (mScale > 100.0f) mScale = 100.0f;
-      LOGD("RawStacker: Scale factor: %f", mScale);
+    byteScale = computeRawScaleSafe(rawBytes, width, height, rowStride);
+    // 限制缩放倍数，防止纯黑图片导致数值爆炸
+    if (byteScale > 100.0f)
+      byteScale = 100.0f;
+    LOGD("RawStacker: Scale factor: %f", byteScale);
   }
 
   // 2. 准备 Proxy 和 Planes
@@ -842,7 +929,8 @@ void RawStacker::addFrame(const uint16_t *rawData, int rowStride, int cfaPattern
 
   // 初始化 Planes
   std::vector<uint16_t> planes[4];
-  for (int i = 0; i < 4; ++i) planes[i].resize(proxyW * proxyH);
+  for (int i = 0; i < 4; ++i)
+    planes[i].resize(proxyW * proxyH);
 
   // CFA 偏移量逻辑 (保持之前的修正)
   int g1_dx = 0, g1_dy = 0;
@@ -851,70 +939,88 @@ void RawStacker::addFrame(const uint16_t *rawData, int rowStride, int cfaPattern
   // RGGB(0), BGGR(3) -> G at (1,0), (0,1) relative to 2x2 block
   // GRBG(1), GBRG(2) -> G at (0,0), (1,1) relative to 2x2 block
   if (cfaPattern == 1 || cfaPattern == 2) {
-      g1_dx=0; g1_dy=0; g2_dx=1; g2_dy=1;
+    g1_dx = 0;
+    g1_dy = 0;
+    g2_dx = 1;
+    g2_dy = 1;
   } else {
-      g1_dx=1; g1_dy=0; g2_dx=0; g2_dy=1;
+    g1_dx = 1;
+    g1_dy = 0;
+    g2_dx = 0;
+    g2_dy = 1;
   }
 
   // 3. 提取数据 (使用 Byte Stride 指针运算)
   for (int y = 0; y < proxyH; ++y) {
-      // 预先计算当前行的指针，减少循环内乘法
-      const uint8_t* row0 = rawBytes + (y * 2) * rowStride;
-      const uint8_t* row1 = rawBytes + (y * 2 + 1) * rowStride;
-      const uint16_t* pRow0 = (const uint16_t*)row0;
-      const uint16_t* pRow1 = (const uint16_t*)row1;
+    // 预先计算当前行的指针，减少循环内乘法
+    const uint8_t *row0 = rawBytes + (y * 2) * rowStride;
+    const uint8_t *row1 = rawBytes + (y * 2 + 1) * rowStride;
+    const uint16_t *pRow0 = (const uint16_t *)row0;
+    const uint16_t *pRow1 = (const uint16_t *)row1;
 
-      for (int x = 0; x < proxyW; ++x) {
-          int ox = x * 2;
+    for (int x = 0; x < proxyW; ++x) {
+      int ox = x * 2;
 
-          // 读取 2x2 块
-          uint16_t p00 = pRow0[ox];
-          uint16_t p10 = pRow0[ox + 1];
-          uint16_t p01 = pRow1[ox];
-          uint16_t p11 = pRow1[ox + 1];
+      // 读取 2x2 块
+      uint16_t p00 = pRow0[ox];
+      uint16_t p10 = pRow0[ox + 1];
+      uint16_t p01 = pRow1[ox];
+      uint16_t p11 = pRow1[ox + 1];
 
-          // 提取绿色通道用于 Proxy
-          // 根据 CFA 模式选择哪两个像素是绿色
-          uint16_t g1, g2;
+      // 提取绿色通道用于 Proxy
+      // 根据 CFA 模式选择哪两个像素是绿色
+      uint16_t g1, g2;
 
-          // 简化逻辑：利用预读的像素值，避免重复指针计算
-          if (cfaPattern == 1 || cfaPattern == 2) {
-              // G at (0,0) and (1,1)
-              g1 = p00; g2 = p11;
-          } else {
-              // G at (1,0) and (0,1)
-              g1 = p10; g2 = p01;
-          }
-
-          // 生成对齐用 Proxy 像素 (均值 + 缩放)
-          float avgG = (float)(g1 + g2) * 0.5f;
-          proxy.data[y * proxyW + x] = (uint8_t)std::max(0.0f, std::min(255.0f, avgG * mScale));
-
-          // 分发到 Planes
-          planes[getPlaneIndex(ox, 0, cfaPattern)][y * proxyW + x] = p00;
-          planes[getPlaneIndex(ox + 1, 0, cfaPattern)][y * proxyW + x] = p10;
-          planes[getPlaneIndex(ox, 1, cfaPattern)][y * proxyW + x] = p01;
-          planes[getPlaneIndex(ox + 1, 1, cfaPattern)][y * proxyW + x] = p11;
+      // 简化逻辑：利用预读的像素值，避免重复指针计算
+      if (cfaPattern == 1 || cfaPattern == 2) {
+        // G at (0,0) and (1,1)
+        g1 = p00;
+        g2 = p11;
+      } else {
+        // G at (1,0) and (0,1)
+        g1 = p10;
+        g2 = p01;
       }
+
+      // 生成对齐用 Proxy 像素 (均值 + 缩放)
+      float avgG = (float)(g1 + g2) * 0.5f;
+      proxy.data[y * proxyW + x] =
+          (uint8_t)std::max(0.0f, std::min(255.0f, avgG * byteScale));
+
+      // 分发到 Planes
+      planes[getPlaneIndex(ox, 0, cfaPattern)][y * proxyW + x] = p00;
+      planes[getPlaneIndex(ox + 1, 0, cfaPattern)][y * proxyW + x] = p10;
+      planes[getPlaneIndex(ox, 1, cfaPattern)][y * proxyW + x] = p01;
+      planes[getPlaneIndex(ox + 1, 1, cfaPattern)][y * proxyW + x] = p11;
+    }
   }
 
   // --- 关键修正 2: Proxy 降噪 ---
   // RAW 的单像素噪声极强，会导致 SAD 误判。对齐前进行轻微模糊是必须的。
   if (!isFirstFrame) {
-      smoothImage(proxy);
+    smoothImage(proxy);
   }
-
   if (isFirstFrame) {
     mCfaPattern = cfaPattern;
     // 第一帧也要平滑，作为干净的参考基准
     smoothImage(proxy);
     referencePyramid = buildPyramid(proxy.data.data(), proxyW, proxyH, 4);
 
+    int scaledW = proxyW * scale;
+    int scaledH = proxyH * scale;
+
     for (int i = 0; i < 4; ++i) {
       referencePlanes[i] = planes[i];
-      for (size_t j = 0; j < planes[i].size(); ++j) {
-        accum[i][j] = (int32_t)planes[i][j] * 256;
-        weight[i][j] = 256;
+      for (int sy = 0; sy < scaledH; sy++) {
+        for (int sx = 0; sx < scaledW; sx++) {
+          float refX = (float)sx / scale;
+          float refY = (float)sy / scale;
+
+          float val = sampleBicubicPlane(planes[i], proxyW, proxyH, refX, refY);
+          int destIdx = sy * scaledW + sx;
+          accum[i][destIdx] = (int32_t)val * 256;
+          weight[i][destIdx] = 256;
+        }
       }
     }
     isFirstFrame = false;
@@ -930,21 +1036,26 @@ void RawStacker::addFrame(const uint16_t *rawData, int rowStride, int cfaPattern
       computeTileAlignment(referencePyramid, currentPyramid, 48);
 
   // 5. 堆栈融合 (Accumulate)
+  int scaledW = proxyW * scale;
+  int scaledH = proxyH * scale;
+
   for (int i = 0; i < 4; ++i) {
     const auto &srcPlane = planes[i];
-    const auto &refPlane = referencePlanes[i]; // 用于方差计算的参考平面
 
-    for (int y = 0; y < proxyH; ++y) {
-      for (int x = 0; x < proxyW; ++x) {
-        Point offset = alignment.getOffset(x, y);
-        float tx = (float)x + offset.x;
-        float ty = (float)y + offset.y;
+    for (int y = 0; y < scaledH; ++y) {
+      for (int x = 0; x < scaledW; ++x) {
+        float refX = (float)x / scale;
+        float refY = (float)y / scale;
 
-        int destIdx = y * proxyW + x;
+        Point offset = alignment.getOffset(refX, refY);
+        float tx = refX + offset.x;
+        float ty = refY + offset.y;
+
+        int destIdx = y * scaledW + x;
 
         // 边界保护
-        if (tx >= 2.0f && tx < (float)proxyW - 3.0f &&
-            ty >= 2.0f && ty < (float)proxyH - 3.0f) {
+        if (tx >= 2.0f && tx < (float)proxyW - 3.0f && ty >= 2.0f &&
+            ty < (float)proxyH - 3.0f) {
 
           // --- 核心升级 1: 调用 Bicubic 采样 ---
           float val = sampleBicubicPlane(srcPlane, proxyW, proxyH, tx, ty);
@@ -955,17 +1066,21 @@ void RawStacker::addFrame(const uint16_t *rawData, int rowStride, int cfaPattern
           int diff = std::abs(sampleVal - currentAvg);
 
           float noiseModel = 32.0f + std::sqrt((float)currentAvg) * 2.5f;
-          float thresholdHigh = noiseModel * 4.0f; // 差异大到这个程度，认为是鬼影，权重归零
-          float thresholdLow  = noiseModel * 1.5f; // 差异在这个范围内，认为是完全安全的
+          float thresholdHigh =
+              noiseModel * 4.0f; // 差异大到这个程度，认为是鬼影，权重归零
+          float thresholdLow =
+              noiseModel * 1.5f; // 差异在这个范围内，认为是完全安全的
 
           int w = 256;
           if (diff > thresholdHigh) {
-             w = 0;
+            w = 0;
           } else if (diff > thresholdLow) {
-             float t = ((float)diff - thresholdLow) / (thresholdHigh - thresholdLow);
-             float factor = 1.0f - (t * t * (3.0f - 2.0f * t)); // smoothstep flip
-             w = (int)(256.0f * factor);
-         }
+            float t =
+                ((float)diff - thresholdLow) / (thresholdHigh - thresholdLow);
+            float factor =
+                1.0f - (t * t * (3.0f - 2.0f * t)); // smoothstep flip
+            w = (int)(256.0f * factor);
+          }
 
           if (w > 0) {
             accum[i][destIdx] += sampleVal * w;
@@ -978,20 +1093,22 @@ void RawStacker::addFrame(const uint16_t *rawData, int rowStride, int cfaPattern
 }
 
 std::vector<uint16_t> RawStacker::process() {
-  std::vector<uint16_t> result(width * height);
+  int outW = width * scale;
+  int outH = height * scale;
+  std::vector<uint16_t> result(outW * outH);
 
-  int proxyW = width / 2;
-  int proxyH = height / 2;
+  int planeW = width / 2 * scale;
+  int planeH = height / 2 * scale;
 
-  for (int y = 0; y < proxyH; ++y) {
-    for (int x = 0; x < proxyW; ++x) {
+  for (int y = 0; y < planeH; ++y) {
+    for (int x = 0; x < planeW; ++x) {
       int ox = x * 2;
       int oy = y * 2;
 
-      // Helper to retrieve value for a specific original pixel coordinate
+      // Helper to retrieve value for a specific output Bayer pixel coordinate
       auto getVal = [&](int px, int py) {
         int planeIdx = getPlaneIndex(px, py, mCfaPattern);
-        int destIdx = y * proxyW + x;
+        int destIdx = y * planeW + x;
         if (weight[planeIdx][destIdx] > 0) {
           return (uint16_t)(accum[planeIdx][destIdx] /
                             weight[planeIdx][destIdx]);
@@ -999,10 +1116,10 @@ std::vector<uint16_t> RawStacker::process() {
         return (uint16_t)0;
       };
 
-      result[oy * width + ox] = getVal(ox, oy);
-      result[oy * width + ox + 1] = getVal(ox + 1, oy);
-      result[(oy + 1) * width + ox] = getVal(ox, oy + 1);
-      result[(oy + 1) * width + ox + 1] = getVal(ox + 1, oy + 1);
+      result[oy * outW + ox] = getVal(ox, oy);
+      result[oy * outW + ox + 1] = getVal(ox + 1, oy);
+      result[(oy + 1) * outW + ox] = getVal(ox, oy + 1);
+      result[(oy + 1) * outW + ox + 1] = getVal(ox + 1, oy + 1);
     }
   }
   return result;

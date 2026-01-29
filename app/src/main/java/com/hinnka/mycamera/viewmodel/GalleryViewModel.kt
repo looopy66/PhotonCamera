@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.*
 import java.io.File
 import java.io.FileOutputStream
 import java.util.*
+import kotlin.math.max
 
 /**
  * 相册 ViewModel
@@ -947,7 +948,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         ?: (if (finalMetadata.isImported) 0f else chromaNoiseReduction.value)
                 }
 
-                val bitmap = PhotoManager.loadBitmap(context, photo.id) ?: return@withContext null
+                val bitmap = PhotoManager.loadBitmap(context, photo.id, 4096) ?: return@withContext null
 
                 if (showOrigin) {
                     bitmap
