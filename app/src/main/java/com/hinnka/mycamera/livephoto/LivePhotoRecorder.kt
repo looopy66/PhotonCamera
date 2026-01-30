@@ -132,19 +132,8 @@ class LivePhotoRecorder(
         sharedContext: EGLContext
     ) {
         try {
-            // 限制分辨率
-            val maxDim = 1280
             var w = width
             var h = height
-            if (w > maxDim || h > maxDim) {
-                if (w > h) {
-                    h = (h * maxDim.toFloat() / w).toInt()
-                    w = maxDim
-                } else {
-                    w = (w * maxDim.toFloat() / h).toInt()
-                    h = maxDim
-                }
-            }
 
             // Ensure even dimensions
             if (w % 2 != 0) w--

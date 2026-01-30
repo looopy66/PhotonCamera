@@ -113,9 +113,8 @@ object PhotoManager {
                 processedBitmap ?: return@withContext
 
                 // 保存到指定目录
-                // Use MVIMG naming convention (classic Google Camera) as suggested by reference implementation
                 val filename =
-                    "MVIMG_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.jpg"
+                    "PhotonCamera_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.jpg"
                 val contentValues = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
                     put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
@@ -335,7 +334,6 @@ object PhotoManager {
 
                                 // 处理 Live Photo 合成
                                 livePhotoVideoDeferred?.await()?.let { videoFile ->
-                                    Log.d(TAG, "savePhoto: livePhotoVideoDeferred")
                                     val presentationTimestampUs = 1_500_000L // 假设 1.5s 缓冲
                                     val motionPhotoFile = File(photoDir, "motion_photo.jpg")
                                     if (MotionPhotoWriter.write(

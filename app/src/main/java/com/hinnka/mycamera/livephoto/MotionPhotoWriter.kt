@@ -26,20 +26,8 @@ import java.nio.charset.StandardCharsets
 object MotionPhotoWriter {
     private const val TAG = "MotionPhotoWriter"
 
-    // JPEG 标记
-    private const val JPEG_SOI = 0xFFD8     // Start of Image
-    private const val JPEG_EOI = 0xFFD9     // End of Image
     private const val JPEG_APP1 = 0xFFE1    // APP1 (EXIF/XMP)
     private const val JPEG_SOS = 0xFFDA     // Start of Scan
-
-    // XMP 命名空间
-    private const val XMP_NS_X = "adobe:ns:meta/"
-    private const val XMP_NS_RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-    private const val XMP_NS_CAMERA = "http://ns.google.com/photos/1.0/camera/"
-    private const val XMP_NS_CAMERA_XIAOMI = "http://ns.xiaomi.com/photos/1.0/camera/"
-    private const val XMP_NS_CAMERA_OP = "http://ns.oplus.com/photos/1.0/camera/"
-    private const val XMP_NS_CONTAINER = "http://ns.google.com/photos/1.0/container/"
-    private const val XMP_NS_ITEM = "http://ns.google.com/photos/1.0/container/item/"
 
     /**
      * 合成 Motion Photo 文件
@@ -245,64 +233,49 @@ object MotionPhotoWriter {
      */
     private fun buildMotionPhotoXmp(videoLength: Long, presentationTimestampUs: Long): ByteArray {
         val xmp = buildString {
-            // "Dual-Metadata" Strategy:
-            // Reverting to Attribute-based syntax for Container Items which is standard for Google Photos.
-
-            append("<?xpacket begin=\"\uFEFF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>")
-            append("<x:xmpmeta xmlns:x=\"$XMP_NS_X\" x:xmptk=\"Adobe XMP Core 5.1.0-jc003\">")
-            append("<rdf:RDF xmlns:rdf=\"$XMP_NS_RDF\">")
-            append("<rdf:Description rdf:about=\"\"")
-            append(" xmlns:GCamera=\"$XMP_NS_CAMERA\"")
-            append(" xmlns:MiCamera=\"$XMP_NS_CAMERA_XIAOMI\"")
-            append(" xmlns:OpCamera=\"$XMP_NS_CAMERA_OP\"")
-            append(" xmlns:Container=\"$XMP_NS_CONTAINER\"")
-            append(" xmlns:Item=\"$XMP_NS_ITEM\"")
-
-            // Old Standard Tags (Attributes)
-            append(" GCamera:MicroVideo=\"1\"")
-            append(" GCamera:MicroVideoVersion=\"1\"")
-            append(" GCamera:MicroVideoOffset=\"$videoLength\"")
-            append(" GCamera:MicroVideoPresentationTimestampUs=\"$presentationTimestampUs\"")
-
-            // New Standard Tags (Attributes)
-            append(" GCamera:MotionPhoto=\"1\"")
-            append(" GCamera:MotionPhotoVersion=\"1\"")
-            append(" GCamera:MotionPhotoPresentationTimestampUs=\"$presentationTimestampUs\"")
-
-            append(" OpCamera:MotionPhotoPresentationTimestampUs=\"0\"")
-            append(" OpCamera:MotionPhotoOwner=\"oplus\"")
-            append(" OpCamera:OLivePhotoVersion=\"2\"")
-            append(" OpCamera:VideoLength=\"$videoLength\"")
-
-            append(" MiCamera:XMPMeta=\"&lt;?xml version='1.0' encoding='UTF-8' standalone='yes' ?&gt;\">")
-
-            // Container Directory
-            append("<Container:Directory>")
-            append("<rdf:Seq>")
-
-            // Item 1: Primary Image
-            append("<rdf:li rdf:parseType=\"Resource\">")
-            append("<Container:Item Item:Semantic=\"Primary\" Item:Mime=\"image/jpeg\"/>")
-            append("</rdf:li>")
-
-            // Item 2: Motion Photo Video
-            append("<rdf:li rdf:parseType=\"Resource\">")
-            append("<Container:Item Item:Semantic=\"MotionPhoto\" Item:Mime=\"video/mp4\" Item:Length=\"$videoLength\"/>")
-            append("</rdf:li>")
-
-            append("</rdf:Seq>")
-            append("</Container:Directory>")
-
-            append("</rdf:Description>")
-            append("</rdf:RDF>")
-            append("</x:xmpmeta>")
-
-            // Add padding (Standard is usually whitespace in the packet wrapper)
-            for (i in 0..2000) {
-                append(" ")
-            }
-
-            append("<?xpacket end=\"w\"?>")
+            append("""<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkcK"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 5.6-c015 79.160557, 2020/01/01-00:00:00">
+    <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+        <rdf:Description
+                xmlns:GCamera="http://ns.google.com/photos/1.0/camera/"
+                xmlns:MiCamera="http://ns.xiaomi.com/photos/1.0/camera/"
+                xmlns:OpCamera="http://ns.oplus.com/photos/1.0/camera/"
+                xmlns:Container="http://ns.google.com/photos/1.0/container/"
+                xmlns:Item="http://ns.google.com/photos/1.0/container/item/"
+                GCamera:MicroVideo="1"
+                GCamera:MicroVideoVersion="1"
+                GCamera:MicroVideoOffset="$videoLength"
+                GCamera:MicroVideoPresentationTimestampUs="0"
+                OpCamera:MotionPhotoPresentationTimestampUs="0"
+                OpCamera:MotionPhotoOwner="oplus"
+                OpCamera:OLivePhotoVersion="2"
+                OpCamera:VideoLength="$videoLength"
+                GCamera:MotionPhoto="1"
+                GCamera:MotionPhotoVersion="1"
+                GCamera:MotionPhotoPresentationTimestampUs="0"
+                MiCamera:XMPMeta="&lt;?xml version='1.0' encoding='UTF-8' standalone='yes' ?&gt;">
+            <Container:Directory>
+                <rdf:Seq>
+                    <rdf:li rdf:parseType="Resource">
+                        <Container:Item
+                                Item:Mime="image/jpeg"
+                                Item:Semantic="Primary"
+                                Item:Length="0"
+                                Item:Padding="0"/>
+                    </rdf:li>
+                    <rdf:li rdf:parseType="Resource">
+                        <Container:Item
+                                Item:Mime="video/mp4"
+                                Item:Semantic="MotionPhoto"
+                                Item:Padding="0"
+                                Item:Length="$$videoLength"/>
+                    </rdf:li>
+                </rdf:Seq>
+            </Container:Directory>
+        </rdf:Description>
+    </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>""")
         }
 
         return xmp.toByteArray(StandardCharsets.UTF_8)
