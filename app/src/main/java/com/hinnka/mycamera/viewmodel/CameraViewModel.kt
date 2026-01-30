@@ -300,6 +300,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setShowGrid(prefs.showGrid)
 
                 cameraController.setUseMultiFrame(prefs.useMultiFrame, prefs.multiFrameCount)
+                cameraController.setUseSuperResolution(prefs.useSuperResolution)
             } else {
                 // 如果没有任何偏好设置，使用配置文件中的默认 LUT（第一个）
                 val defaultLut = availableLutList.firstOrNull { it.isDefault }
@@ -826,9 +827,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 设置是否使用超分辨率
      */
     fun setUseSuperResolution(enabled: Boolean) {
+        cameraController.setUseSuperResolution(enabled)
         viewModelScope.launch {
             userPreferencesRepository.saveUseSuperResolution(enabled)
         }
+        reopenCamera()
     }
 
     /**

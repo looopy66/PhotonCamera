@@ -173,6 +173,7 @@ data class CameraState(
     val isRawSupported: Boolean = false,
     val useMultiFrame: Boolean = false,
     val multiFrameCount: Int = 0,
+    val useSuperResolution: Boolean = false,
     val useRaw: Boolean = false,
 ) {
     /**

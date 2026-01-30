@@ -404,9 +404,19 @@ fun CameraScreen(
                 onSettingsClick()
             },
             useMultiFrame = useMultiFrame,
-            onMultiFrameToggle = { viewModel.setUseMultiFrame(it) },
+            onMultiFrameToggle = {
+                if (!it) {
+                    viewModel.setUseSuperResolution(false)
+                }
+                viewModel.setUseMultiFrame(it)
+            },
             useSuperResolution = useSuperResolution,
-            onSuperResolutionToggle = { viewModel.setUseSuperResolution(it) }
+            onSuperResolutionToggle = {
+                if (it) {
+                    viewModel.setUseMultiFrame(true)
+                }
+                viewModel.setUseSuperResolution(it)
+            }
         )
 
         // LutControlPanel 显示在遮罩层之上，确保能接收点击事件

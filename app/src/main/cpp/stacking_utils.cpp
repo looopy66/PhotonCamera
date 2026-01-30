@@ -426,12 +426,20 @@ inline int calculateWeight(int diff, float variance) {
   float sigma = std::sqrt(variance + 1600.0f); // Base noise ~40 in 16-bit
   float threshold = 3.0f * sigma;
 
+  // Relax thresholdHigh in high frequency regions (large variance)
+  // to preserve more details where misalignment might cause larger differences.
+  float factorHigh = 4.0f + std::min(8.0f, variance / 5000.0f);
+  float thresholdHigh = threshold * factorHigh;
+
   if (diff < (int)threshold)
     return 256;
-  if (diff > (int)(threshold * 4.0f))
+  if (diff > (int)thresholdHigh)
     return 0;
 
-  return 256 * (int)(threshold * 4.0f - (float)diff) / (int)(threshold * 3.0f);
+  // Interpolate linearly between threshold (weight=256) and thresholdHigh
+  // (weight=0)
+  return (int)(256.0f * (thresholdHigh - (float)diff) /
+               (thresholdHigh - threshold));
 }
 
 void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
@@ -1091,15 +1099,21 @@ void RawStacker::addFrame(const uint16_t *rawData, int rowStride,
           float val = sampleBicubicPlane(srcPlane, proxyW, proxyH, tx, ty);
           int32_t sampleVal = (int32_t)val;
 
-          // De-ghosting
+          // De-ghosting with adaptive threshold based on variance
           int32_t currentAvg = accum[i][destIdx] / weight[i][destIdx];
           int diff = std::abs(sampleVal - currentAvg);
 
+          // Compute local variance on reference plane to detect high frequency
+          // regions
+          float variance = computeLocalVariance(referencePlanes[i], proxyW,
+                                                proxyH, (int)refX, (int)refY);
+
           float noiseModel = 32.0f + std::sqrt((float)currentAvg) * 2.5f;
-          float thresholdHigh =
-              noiseModel * 4.0f; // 差异大到这个程度，认为是鬼影，权重归零
-          float thresholdLow =
-              noiseModel * 1.5f; // 差异在这个范围内，认为是完全安全的
+          float thresholdLow = noiseModel * 1.5f;
+
+          // Relax thresholdHigh in high variance areas to preserve details
+          float factorHigh = 4.0f + std::min(8.0f, variance / 5000.0f);
+          float thresholdHigh = noiseModel * factorHigh;
 
           int w = 256;
           if (diff > thresholdHigh) {

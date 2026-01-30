@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import coil.request.ImageRequest
 import com.hinnka.mycamera.R
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.unit.min
 import me.saket.telephoto.zoomable.coil.ZoomableAsyncImage
 import me.saket.telephoto.zoomable.rememberZoomableImageState
 import me.saket.telephoto.zoomable.rememberZoomableState
@@ -42,6 +43,7 @@ import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.delay
 import me.saket.telephoto.zoomable.ZoomSpec
+import kotlin.math.min
 
 /**
  * 照片详情界面
@@ -432,8 +434,9 @@ private fun ZoomableImage(
 
     key(photo.id) {
         var isLoading by remember { mutableStateOf(true) }
+        val maxZoom = min(photo.width, photo.height) / 300f
         val zoomableState = rememberZoomableImageState(
-            zoomableState = rememberZoomableState(zoomSpec = ZoomSpec(maxZoomFactor = 10f))
+            zoomableState = rememberZoomableState(zoomSpec = ZoomSpec(maxZoomFactor = maxZoom))
         )
         var showOrigin by remember { mutableStateOf(false) }
 

@@ -105,34 +105,12 @@ fun CameraTopSheet(
                     modifier = Modifier.weight(1f)
                 )
 
-                // RAW Toggle (if supported)
-                if (isRawSupported) {
-                    QuickSettingToggle(
-                        title = stringResource(R.string.settings_use_raw),
-                        checked = useRaw,
-                        onCheckedChange = onRawToggle,
-                        modifier = Modifier.weight(1f)
-                    )
-                } else {
-                    Spacer(modifier = Modifier.weight(1f))
-                }
-            }
-
-            if (useMultiFrame) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    // Super Resolution Toggle
-                    QuickSettingToggle(
-                        title = stringResource(R.string.settings_use_super_resolution),
-                        checked = useSuperResolution,
-                        onCheckedChange = onSuperResolutionToggle,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Spacer(modifier = Modifier.weight(1f))
-                }
+                QuickSettingToggle(
+                    title = stringResource(R.string.settings_use_super_resolution),
+                    checked = useSuperResolution,
+                    onCheckedChange = onSuperResolutionToggle,
+                    modifier = Modifier.weight(1f)
+                )
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -149,6 +127,25 @@ fun CameraTopSheet(
                     modifier = Modifier.weight(1f)
                 )
 
+                // RAW Toggle (if supported)
+                if (isRawSupported) {
+                    QuickSettingToggle(
+                        title = stringResource(R.string.settings_use_raw),
+                        checked = useRaw,
+                        onCheckedChange = onRawToggle,
+                        modifier = Modifier.weight(1f)
+                    )
+                } else {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 // NR Level Cycle
                 val nrLevelNames = availableNrLevels.map {
                     when (it) {
@@ -170,14 +167,6 @@ fun CameraTopSheet(
                     },
                     modifier = Modifier.weight(1f)
                 )
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
                 // Filter Management Button
                 QuickSettingButton(
                     title = stringResource(R.string.settings_filter_management),
@@ -185,19 +174,12 @@ fun CameraTopSheet(
                     onClick = onFilterManageClick,
                     modifier = Modifier.weight(1f)
                 )
-//                Spacer(modifier = Modifier.weight(1f))
-                QuickSettingButton(
-                    title = stringResource(R.string.settings_title),
-                    icon = Icons.Default.ChevronRight,
-                    onClick = onMoreSettingsClick,
-                    modifier = Modifier.weight(1f)
-                )
             }
 
-//            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
             // More Settings Button
-            /*Surface(
+            Surface(
                 onClick = onMoreSettingsClick,
                 color = Color.White.copy(alpha = 0.05f),
                 shape = RoundedCornerShape(12.dp),
@@ -237,7 +219,7 @@ fun CameraTopSheet(
                         modifier = Modifier.size(20.dp)
                     )
                 }
-            }*/
+            }
         }
     }
 }
