@@ -26,6 +26,7 @@ import com.hinnka.mycamera.gallery.PhotoProcessor
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.ui.camera.CameraGLSurfaceView
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.ShutterSoundPlayer
@@ -157,6 +158,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private var isShutterSoundEnabled = true
     private var isVibrationEnabled = true
+
+    var glSurfaceView: CameraGLSurfaceView? = null
 
     // 保存当前的 SurfaceTexture 以便切换摄像头时重用
     private var currentSurfaceTexture: SurfaceTexture? = null
@@ -694,16 +697,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         isGeneratingPreviews = true
 
-        // 设置回调接收原始 YUV 预览帧
-        cameraController.onPreviewFrameCaptured = { bitmap ->
-            viewModelScope.launch(Dispatchers.Default) {
+        val glView = glSurfaceView
+        if (glView != null) {
+            glView.capturePreviewFrame { bitmap ->
                 previewThumbnail = bitmap
                 isGeneratingPreviews = false
             }
+        } else {
+            isGeneratingPreviews = false
         }
+    }
 
-        // 触发捕获
-        cameraController.capturePreviewFrame()
+    fun handleHistogramUpdate(histogram: IntArray) {
+        cameraController.updateHistogram(histogram)
+    }
+
+    fun handleMeteringUpdate(totalWeight: Double, weightedSumLuminance: Double) {
+        cameraController.calculateAutoMetering(totalWeight, weightedSumLuminance)
     }
 
     /**
@@ -1278,7 +1288,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 PhotoManager.savePhoto(
                     context,
                     image,
-                    cameraController.rawPreviewFrame,
+                    previewThumbnail,
                     metadata,
                     rotation,
                     aspectRatio,
@@ -1365,7 +1375,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 PhotoManager.saveStackedPhoto(
                     context,
                     images,
-                    cameraController.rawPreviewFrame,
+                    previewThumbnail,
                     metadata,
                     rotation,
                     aspectRatio,

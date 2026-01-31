@@ -2,6 +2,7 @@ package com.hinnka.mycamera.ui.camera
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.PointF
 import android.graphics.SurfaceTexture
 import android.opengl.GLSurfaceView
 import android.util.AttributeSet
@@ -27,6 +28,9 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     }
 
     private val renderer: LutRenderer = LutRenderer()
+
+    var onHistogramUpdated: ((IntArray) -> Unit)? = null
+    var onMeteringUpdated: ((Double, Double) -> Unit)? = null
 
     var onSurfaceReady: ((Surface) -> Unit)? = null
     var onSurfaceDestroyed: (() -> Unit)? = null
@@ -58,6 +62,14 @@ class CameraGLSurfaceView @JvmOverloads constructor(
             requestRender()
         }
 
+        renderer.onHistogramUpdated = { histogram ->
+            onHistogramUpdated?.invoke(histogram)
+        }
+
+        renderer.onMeteringUpdated = { totalWeight, weightedSumLuminance ->
+            onMeteringUpdated?.invoke(totalWeight, weightedSumLuminance)
+        }
+
         // 保持 EGL 上下文
         preserveEGLContextOnPause = true
 
@@ -83,6 +95,14 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         queueEvent {
             renderer.setCalibrationOffset(offset)
         }
+    }
+
+    fun setFocusPoint(point: PointF?) {
+        renderer.focusPoint = point
+    }
+
+    fun setMeteringEnabled(enabled: Boolean) {
+        renderer.meteringEnabled = enabled
     }
 
     /**

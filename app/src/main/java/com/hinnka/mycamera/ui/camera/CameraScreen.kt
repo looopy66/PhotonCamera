@@ -210,6 +210,11 @@ fun CameraScreen(
                                 viewModel.focusOnPoint(x, y, w, h)
                             }
                         },
+                        onHistogramUpdated = { viewModel.handleHistogramUpdate(it) },
+                        onMeteringUpdated = { w, l -> viewModel.handleMeteringUpdate(w, l) },
+                        onGLSurfaceViewReady = {
+                            viewModel.glSurfaceView = it 
+                        },
                         modifier = Modifier.fillMaxSize()
                     )
 

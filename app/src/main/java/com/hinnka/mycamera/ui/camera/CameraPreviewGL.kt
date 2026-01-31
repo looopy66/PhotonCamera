@@ -38,6 +38,8 @@ fun CameraPreviewGL(
     onSurfaceTextureReady: (SurfaceTexture) -> Unit,
     onSurfaceDestroyed: () -> Unit,
     onTap: (Float, Float, Int, Int) -> Unit,
+    onHistogramUpdated: ((IntArray) -> Unit)? = null,
+    onMeteringUpdated: ((Double, Double) -> Unit)? = null,
     onGLSurfaceViewReady: ((CameraGLSurfaceView) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -110,6 +112,9 @@ fun CameraPreviewGL(
                             onSurfaceDestroyed()
                         }
 
+                        this.onHistogramUpdated = { onHistogramUpdated?.invoke(it) }
+                        this.onMeteringUpdated = { w, l -> onMeteringUpdated?.invoke(w, l) }
+
                         // 通知 GLSurfaceView 已准备好
                         onGLSurfaceViewReady?.invoke(this)
                     }
@@ -154,6 +159,8 @@ fun CameraPreviewGL(
                         glSurfaceView.setLutEnabled(false)
                         glSurfaceView.setColorRecipeEnabled(false)
                     }
+
+                    glSurfaceView.setFocusPoint(focusPoint?.let { android.graphics.PointF(it.first / viewWidth, it.second / viewHeight) })
                 },
                 modifier = Modifier.fillMaxSize()
             )

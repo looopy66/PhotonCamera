@@ -14,6 +14,7 @@ import android.media.ImageReader
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
+import android.util.Log
 import android.view.Surface
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
@@ -80,9 +81,6 @@ class Camera2Controller(private val context: Context) {
 
     private var previewSurface: Surface? = null
     private var imageReader: ImageReader? = null
-    private var previewImageReader: ImageReader? = null
-
-    private var meteringSkipFrames = 0 // Frame skip counter for software metering stabilization
 
     // 降噪等级 (0=Off, 1=Fast, 2=High Quality, 3=Real-time)
     private var nrLevel = 1
@@ -107,8 +105,11 @@ class Camera2Controller(private val context: Context) {
     private var availableTonemapModes: IntArray = intArrayOf()
     private var availableVideoStabilizationModes: IntArray = intArrayOf()
     private var availableOpticalStabilizationModes: IntArray = intArrayOf()
-    var isRawSupported = false
+    private var isRawSupported = false
     private var isP010Supported = false
+    private var availableAeModes: IntArray = intArrayOf()
+    private var availableAwbModes: IntArray = intArrayOf()
+    private var isZslSupported = false
 
     private val _state = MutableStateFlow(CameraState())
     val state: StateFlow<CameraState> = _state.asStateFlow()
@@ -135,12 +136,6 @@ class Camera2Controller(private val context: Context) {
 
     // 快门音效播放回调
     var onPlayShutterSound: (() -> Unit)? = null
-
-    // 预览帧捕获回调（用于 LUT 预览生成）
-    var onPreviewFrameCaptured: ((Bitmap) -> Unit)? = null
-    private var shouldCapturePreviewFrame = false
-
-    var rawPreviewFrame: Bitmap? = null
 
     // 相机错误回调（供上层处理错误恢复）
     // errorCode: CameraDevice 的错误代码或自定义错误码
@@ -292,6 +287,13 @@ class Camera2Controller(private val context: Context) {
                 )
                 internalCaptureState = STATE_WAITING_PRECAPTURE
                 captureSession?.capture(builder.build(), null, cameraHandler)
+                cameraHandler?.postDelayed({
+                    if (internalCaptureState != STATE_PICTURE_TAKEN) {
+                        PLog.w(TAG, "Precapture timeout, proceeding to capture")
+                        internalCaptureState = STATE_PICTURE_TAKEN
+                        runCaptureSequence()
+                    }
+                }, 3000)
             }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to run precapture sequence", e)
@@ -430,6 +432,15 @@ class Camera2Controller(private val context: Context) {
                     cachedCharacteristics?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
                         ?: intArrayOf()
                 isRawSupported = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)
+                isZslSupported =
+                    capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_PRIVATE_REPROCESSING) ||
+                            capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_YUV_REPROCESSING)
+
+                availableAeModes =
+                    cachedCharacteristics?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES) ?: intArrayOf()
+                availableAwbModes =
+                    cachedCharacteristics?.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES) ?: intArrayOf()
+
                 val outputFormats =
                     cachedCharacteristics?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)?.outputFormats
                         ?: intArrayOf()
@@ -532,163 +543,6 @@ class Camera2Controller(private val context: Context) {
                 }, cameraHandler)
             }
 
-            // 创建用于直方图计算/半自动测光/低分辨率预览的 ImageReader (低分辨率 YUV)
-            previewImageReader = ImageReader.newInstance(320, 240, ImageFormat.YUV_420_888, 2).apply {
-                setOnImageAvailableListener({ reader ->
-                    val image = trackImage(reader.acquireLatestImage()) ?: return@setOnImageAvailableListener
-                    try {
-                        val planes = image.planes
-                        val buffer = planes[0].buffer // Y plane
-                        val pixelStride = planes[0].pixelStride
-                        val rowStride = planes[0].rowStride
-                        val width = image.width
-                        val height = image.height
-
-                        val histogram = IntArray(256)
-                        val rowBuffer = ByteArray(rowStride)
-
-                        var weightedSumLuminance = 0.0
-                        var totalWeight = 0.0
-
-                        // Default center (image center)
-                        var cx = width / 2
-                        var cy = height / 2
-
-                        _state.value.focusPoint?.let { (nx, ny) ->
-                            val sensorOrientation = getSensorOrientation()
-                            val deviceRotation = OrientationObserver.rotationDegrees.toInt()
-                            val lensFacing = getLensFacing()
-
-                            // 修正旋转角度计算
-                            val rotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
-                                (sensorOrientation + deviceRotation) % 360
-                            } else {
-                                (sensorOrientation - deviceRotation + 360) % 360
-                            }
-
-                            // 坐标映射 (UI 坐标 -> Buffer 坐标)
-                            // 注意：这里假设 nx, ny 已经处理了 Aspect Ratio (Crop) 问题。
-                            // 如果 nx, ny 是纯 View 坐标，这里其实需要一个 Matrix 变换来抵消 CenterCrop 的影响。
-                            var (tx, ty) = when (rotation) {
-                                90 -> Pair(ny, 1f - nx)      // 常见：竖屏后摄
-                                270 -> Pair(1f - ny, nx)     // 常见：反向横屏
-                                180 -> Pair(1f - nx, 1f - ny)
-                                else -> Pair(nx, ny)         // 0 度
-                            }
-
-                            // 修正前置摄像头的镜像问题 (通常 X 轴需要翻转)
-                            if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
-                                // 根据传感器安装方向，镜像轴可能不同，通常是 X 轴镜像
-                                tx = 1f - tx
-                            }
-
-                            cx = (tx * width).toInt().coerceIn(0, width - 1)
-                            cy = (ty * height).toInt().coerceIn(0, height - 1)
-                        }
-
-                        // --- 2. 准备高性能测光循环 ---
-
-                        // 测光区域大小：画面的 1/4 宽，1/4 高 (即面积是全图的 1/16)
-                        // 如果是点测光，可以把这个除数改大，比如 / 8
-                        val regionHalfWidth = width / 8
-                        val regionHalfHeight = height / 8
-
-                        // 计算区域边界 (Safe clamping)
-                        val startX = (cx - regionHalfWidth).coerceIn(0, width)
-                        val endX = (cx + regionHalfWidth).coerceIn(0, width)
-                        val startY = (cy - regionHalfHeight).coerceIn(0, height)
-                        val endY = (cy + regionHalfHeight).coerceIn(0, height)
-
-                        val sampleStep = 4
-
-                        val weightCenter = 4.0 // 中心区域权重 (加重)
-                        val weightEdge = 1.0   // 边缘区域权重
-
-                        // --- 3. 执行极速测光循环 (拆分优化版) ---
-                        for (y in 0 until height step sampleStep) {
-                            buffer.position(y * rowStride)
-                            buffer.get(rowBuffer, 0, rowStride)
-
-                            // 判断当前行 y 是否命中高亮区域的 Y 轴范围
-                            val isRowInFocus = y in startY until endY
-
-                            if (isRowInFocus) {
-                                // --- A. 这一行包含“高亮区域” ---
-                                // 我们把这一行拆成三段处理：左边(普通)、中间(高亮)、右边(普通)
-                                // 这样循环内部就没有任何 if 判断了，CPU 分支预测效率最高
-
-                                // 1. 左边 (Edge)
-                                // 确保循环边界对齐 sampleStep，防止越界
-                                val safeStartX = (startX / sampleStep) * sampleStep
-                                for (x in 0 until safeStartX step sampleStep) {
-                                    val value = rowBuffer[x * pixelStride].toInt() and 0xFF
-                                    weightedSumLuminance += value * weightEdge
-                                    totalWeight += weightEdge
-                                    histogram[value]++
-                                }
-
-                                // 2. 中间 (Center/Focus) - 重点测光区
-                                val safeEndX = (endX / sampleStep) * sampleStep
-                                for (x in safeStartX until safeEndX step sampleStep) {
-                                    val value = rowBuffer[x * pixelStride].toInt() and 0xFF
-                                    weightedSumLuminance += value * weightCenter
-                                    totalWeight += weightCenter
-                                    histogram[value]++
-                                }
-
-                                // 3. 右边 (Edge)
-                                for (x in safeEndX until width step sampleStep) {
-                                    val value = rowBuffer[x * pixelStride].toInt() and 0xFF
-                                    weightedSumLuminance += value * weightEdge
-                                    totalWeight += weightEdge
-                                    histogram[value]++
-                                }
-
-                            } else {
-                                // --- B. 这一行完全是普通区域 ---
-                                for (x in 0 until width step sampleStep) {
-                                    val value = rowBuffer[x * pixelStride].toInt() and 0xFF
-                                    weightedSumLuminance += value * weightEdge
-                                    totalWeight += weightEdge
-                                    histogram[value]++
-                                }
-                            }
-                        }
-
-//                        PLog.d(TAG, "avgLum: ${weightedSumLuminance / totalWeight}")
-
-                        // Calculate Software Auto Metering
-                        calculateAutoMetering(totalWeight, weightedSumLuminance)
-
-                        _state.value = _state.value.copy(histogram = histogram)
-
-                        if (shouldCapturePreviewFrame) {
-                            shouldCapturePreviewFrame = false
-
-                            // 计算旋转角度
-                            val sensorOrientation = getSensorOrientation()
-                            val lensFacing = getLensFacing()
-                            val deviceRotation = OrientationObserver.rotationDegrees.toInt()
-
-                            val rotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
-                                (sensorOrientation - deviceRotation + 360) % 360
-                            } else {
-                                (sensorOrientation + deviceRotation) % 360
-                            }
-
-                            val bitmap = YuvProcessor.processAndToBitmap(image, AspectRatio.RATIO_1_1, rotation)
-                            rawPreviewFrame = bitmap
-                            onPreviewFrameCaptured?.invoke(bitmap)
-                            return@setOnImageAvailableListener
-                        }
-                    } catch (e: Exception) {
-                        PLog.e(TAG, "Failed to calculate histogram", e)
-                    } finally {
-                        releaseImage(image)
-                    }
-                }, cameraHandler)
-            }
-
             PLog.d(TAG, "Opening camera: $cameraId")
 
             cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
@@ -759,11 +613,11 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    private fun calculateAutoMetering(totalWeight: Double, weightedSumLuminance: Double) {
-        if (meteringSkipFrames > 0) {
-            meteringSkipFrames--
-            return
-        }
+    fun updateHistogram(histogram: IntArray) {
+        _state.value = _state.value.copy(histogram = histogram)
+    }
+
+    fun calculateAutoMetering(totalWeight: Double, weightedSumLuminance: Double) {
         val currentState = _state.value
         if (!currentState.isAutoExposure && (currentState.isIsoAuto || currentState.isShutterSpeedAuto)) {
 
@@ -856,7 +710,6 @@ class Camera2Controller(private val context: Context) {
                         previewCallback,
                         cameraHandler
                     )
-                    meteringSkipFrames = 5
                 } catch (e: CameraAccessException) {
                     PLog.e(TAG, "Failed to update exposure: ${e.message}")
                 } catch (e: IllegalStateException) {
@@ -879,7 +732,6 @@ class Camera2Controller(private val context: Context) {
         try {
             previewRequestBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                 addTarget(surface)
-                previewImageReader?.surface?.let { addTarget(it) }
                 // 设置连续自动对焦
                 val initialAfMode = CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
                 set(CaptureRequest.CONTROL_AF_MODE, initialAfMode)
@@ -891,7 +743,6 @@ class Camera2Controller(private val context: Context) {
             }
 
             val surfaces = mutableListOf(surface, reader.surface)
-            previewImageReader?.surface?.let { surfaces.add(it) }
 
             // Android 9+ 使用 SessionConfiguration
             val outputConfigs = surfaces.map { OutputConfiguration(it) }
@@ -951,7 +802,9 @@ class Camera2Controller(private val context: Context) {
     private fun applyBaseCameraSettings(builder: CaptureRequest.Builder, isCapture: Boolean = false) {
         val currentState = _state.value
 
-        builder.set(CaptureRequest.CONTROL_ENABLE_ZSL, currentState.useMultiFrame)
+        if (isZslSupported) {
+            builder.set(CaptureRequest.CONTROL_ENABLE_ZSL, currentState.useMultiFrame)
+        }
 
         // 1. 曝光设置
         applyExposureSettings(builder, currentState, isCapture)
@@ -995,8 +848,14 @@ class Camera2Controller(private val context: Context) {
                     else -> CaptureRequest.CONTROL_AE_MODE_ON
                 }
             }
-            // 2. 手动曝光或半自动曝光：使用 OFF 模式，手动控制所有参数
-            else -> CaptureRequest.CONTROL_AE_MODE_OFF
+            // 2. 手动曝光或半自动曝光：尝试使用 OFF 模式，如果设备不支持则退而求其次使用 ON
+            else -> {
+                if (availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_OFF)) {
+                    CaptureRequest.CONTROL_AE_MODE_OFF
+                } else {
+                    CaptureRequest.CONTROL_AE_MODE_ON
+                }
+            }
         }
 
         builder.set(CaptureRequest.CONTROL_AE_MODE, aeMode)
@@ -2005,7 +1864,6 @@ class Camera2Controller(private val context: Context) {
                         request: CaptureRequest,
                         result: TotalCaptureResult
                     ) {
-                        _state.value = _state.value.copy(isCapturing = false)
                         val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
                         if (timestamp != null && state.value.useRaw && isRawSupported) {
                             val pendingImage = pendingImages.remove(timestamp)
@@ -2020,7 +1878,6 @@ class Camera2Controller(private val context: Context) {
                             TAG,
                             "Capture completed, result buffered (timestamp: $timestamp). Pending images: ${pendingImages.size}, Pending results: ${pendingResults.size}"
                         )
-                        resetPreviewAfterCapture()
                     }
 
                     override fun onCaptureSequenceCompleted(
@@ -2227,14 +2084,6 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    /**
-     * 请求捕获下一帧预览帧（原始 YUV）
-     * 捕获的帧将通过 onPreviewFrameCaptured 回调传递
-     */
-    fun capturePreviewFrame() {
-        shouldCapturePreviewFrame = true
-    }
-
 // ==================== 生命周期 ====================
 
     /**
@@ -2250,9 +2099,6 @@ class Camera2Controller(private val context: Context) {
 
             safeCloseImageReader(imageReader)
             imageReader = null
-
-            safeCloseImageReader(previewImageReader)
-            previewImageReader = null
 
             previewSurface = null
             previewRequestBuilder = null
@@ -2303,7 +2149,6 @@ class Camera2Controller(private val context: Context) {
 
     private fun processAndTriggerCapture(image: Image, result: TotalCaptureResult?) {
         try {
-            _state.value = _state.value.copy(isCapturing = false)
             val width = image.width
             val height = image.height
             PLog.d(TAG, "Matching Image and CaptureResult found for timestamp ${image.timestamp}")
@@ -2321,8 +2166,6 @@ class Camera2Controller(private val context: Context) {
         } catch (e: Exception) {
             PLog.e(TAG, "Error processing joined capture data", e)
             releaseImage(image)
-        } finally {
-            resetPreviewAfterCapture()
         }
     }
 

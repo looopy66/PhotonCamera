@@ -225,8 +225,8 @@ object PhotoManager {
         noiseReductionValue: Float,
         chromaNoiseReductionValue: Float,
         onProcessingComplete: (() -> Unit)? = null
-    ): String? {
-        return try {
+    ): String? = withContext(Dispatchers.IO) {
+        try {
             val photoId = UUID.randomUUID().toString()
             val photoDir = getPhotoDir(context, photoId)
 
@@ -255,9 +255,16 @@ object PhotoManager {
                         BitmapUtils.calculateProcessedRect(image.width, image.height, aspectRatio, null, rotation)
                     val finalWidth = dimensions.width()
                     val finalHeight = dimensions.height()
+                    // 保存元数据
+                    val metadataWithInfo = metadata.copy(
+                        width = finalWidth,
+                        height = finalHeight,
+                        ratio = aspectRatio,
+                    )
+                    metadataFile.writeText(metadataWithInfo.toJson())
+                    photoFile.createNewFile()
                     processingScope.launch(Dispatchers.IO) {
                         try {
-                            photoFile.createNewFile()
                             // 创建预览用的 Bitmap
                             val previewBitmap = createBitmap(finalWidth, finalHeight)
 
@@ -267,13 +274,6 @@ object PhotoManager {
                                 yuvFile.absolutePath, previewBitmap
                             )
                             if (success) {
-                                // 保存元数据
-                                val metadataWithInfo = metadata.copy(
-                                    width = finalWidth,
-                                    height = finalHeight,
-                                    ratio = aspectRatio,
-                                )
-                                metadataFile.writeText(metadataWithInfo.toJson())
                                 if (thumbnail == null) {
                                     generateThumbnail(previewBitmap, thumbnailFile)
                                 }
@@ -300,27 +300,24 @@ object PhotoManager {
                 }
 
                 ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12 -> {
-                    captureResult ?: run {
-                        onProcessingComplete?.invoke()
-                        return null
-                    }
                     val dimensions =
                         BitmapUtils.calculateProcessedRect(image.width, image.height, aspectRatio, cropRegion, rotation)
+                    // 保存元数据
+                    val metadataWithInfo = metadata.copy(
+                        width = dimensions.width(),
+                        height = dimensions.height(),
+                        ratio = aspectRatio,
+                        cropRegion = cropRegion,
+                        rotation = rotation,
+                        sharpening = if (sharpeningValue == 0f) 0.4f else sharpeningValue,
+                        noiseReduction = noiseReductionValue,
+                        chromaNoiseReduction = if (chromaNoiseReductionValue == 0f) 0.25f else chromaNoiseReductionValue,
+                    )
+                    metadataFile.writeText(metadataWithInfo.toJson())
+                    photoFile.createNewFile()
                     processingScope.launch(Dispatchers.IO) {
                         try {
-                            photoFile.createNewFile()
-                            // 保存元数据
-                            val metadataWithInfo = metadata.copy(
-                                width = dimensions.width(),
-                                height = dimensions.height(),
-                                ratio = aspectRatio,
-                                cropRegion = cropRegion,
-                                rotation = rotation,
-                                sharpening = if (sharpeningValue == 0f) 0.4f else sharpeningValue,
-                                noiseReduction = noiseReductionValue,
-                                chromaNoiseReduction = if (chromaNoiseReductionValue == 0f) 0.25f else chromaNoiseReductionValue,
-                            )
-                            metadataFile.writeText(metadataWithInfo.toJson())
+                            captureResult ?: return@launch
                             val dngDataBytes = ByteArrayOutputStream().use { dngData ->
                                 RawProcessor.saveToDng(image, characteristics, captureResult, dngData, rotation)
                                 dngData.toByteArray()
@@ -407,8 +404,8 @@ object PhotoManager {
         chromaNoiseReductionValue: Float,
         useSuperResolution: Boolean = false,
         onProcessingComplete: (() -> Unit)? = null
-    ): String? {
-        return try {
+    ): String? = withContext(Dispatchers.IO) {
+        try {
             val photoId = UUID.randomUUID().toString()
             val photoDir = getPhotoDir(context, photoId)
 
@@ -426,71 +423,96 @@ object PhotoManager {
                 PLog.d(TAG, "Thumbnail unavailable: $thumbnail")
             }
 
-            processingScope.launch(Dispatchers.IO) {
-                try {
+            val dimensions =
+                BitmapUtils.calculateProcessedRect(
+                    images[0].width,
+                    images[0].height,
+                    aspectRatio,
+                    null,
+                    rotation
+                )
+            val finalWidth = dimensions.width()
+            val finalHeight = dimensions.height()
+
+            val format = images[0].format
+            when (format) {
+                ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
+                    // 保存元数据
+                    val metadataWithInfo = metadata.copy(
+                        width = finalWidth * if (useSuperResolution) 2 else 1,
+                        height = finalHeight * if (useSuperResolution) 2 else 1,
+                        ratio = aspectRatio,
+                        sharpening = if (sharpeningValue == 0f) (if (useSuperResolution) 0.8f else 0.4f) else sharpeningValue,
+                        noiseReduction = noiseReductionValue,
+                        chromaNoiseReduction = chromaNoiseReductionValue,
+                    )
+                    metadataFile.writeText(metadataWithInfo.toJson())
                     photoFile.createNewFile()
-                    val dimensions =
-                        BitmapUtils.calculateProcessedRect(
-                            images[0].width,
-                            images[0].height,
-                            aspectRatio,
-                            null,
-                            rotation
-                        )
-                    val finalWidth = dimensions.width()
-                    val finalHeight = dimensions.height()
-
-                    val format = images[0].format
-                    var result: Bitmap? = null
-
-                    val metadataWithInfo: PhotoMetadata
-                    when (format) {
-                        ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
-                            // 保存元数据
-                            metadataWithInfo = metadata.copy(
-                                width = finalWidth * if (useSuperResolution) 2 else 1,
-                                height = finalHeight * if (useSuperResolution) 2 else 1,
-                                ratio = aspectRatio,
-                                sharpening = if (sharpeningValue == 0f) (if (useSuperResolution) 0.8f else 0.4f) else sharpeningValue,
-                                noiseReduction = noiseReductionValue,
-                                chromaNoiseReduction = chromaNoiseReductionValue,
-                            )
-                            metadataFile.writeText(metadataWithInfo.toJson())
-                            result = MultiFrameStacker.processBurst(
+                    processingScope.launch(Dispatchers.IO) {
+                        try {
+                            val result = MultiFrameStacker.processBurst(
                                 images,
                                 rotation,
                                 aspectRatio,
                                 yuvFile.absolutePath,
                                 useSuperResolution
-                            )
-                        }
+                            ) ?: return@launch
 
-                        ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12 -> {
+                            // Generate Thumbnail
+                            if (thumbnail == null) {
+                                generateThumbnail(result, thumbnailFile)
+                            }
+                            // Save Original (Stacked Result)
+                            FileOutputStream(tempFile).use { outputStream ->
+                                result.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                            }
+                            tempFile.renameTo(photoFile)
+                            result.recycle()
+                            // Auto Save
+                            if (shouldAutoSave) {
+                                exportPhoto(
+                                    context,
+                                    photoId,
+                                    photoProcessor,
+                                    metadataWithInfo,
+                                    sharpeningValue,
+                                    noiseReductionValue,
+                                    chromaNoiseReductionValue
+                                )
+                            }
+                        } finally {
+                            onProcessingComplete?.invoke()
+                        }
+                    }
+                }
+                ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12 -> {
+                    photoFile.createNewFile()
+                    val scale = if (useSuperResolution) 2 else 1
+                    var cropRegion = captureResult?.get(CaptureResult.SCALER_CROP_REGION)
+                    if (useSuperResolution && cropRegion != null) {
+                        cropRegion = Rect(cropRegion.left * 2, cropRegion.top * 2, cropRegion.right * 2, cropRegion.bottom * 2)
+                    }
+                    // 保存元数据
+                    val metadataWithInfo = metadata.copy(
+                        width = finalWidth * scale,
+                        height = finalHeight * scale,
+                        ratio = aspectRatio,
+                        cropRegion = cropRegion,
+                        rotation = rotation,
+                        sharpening = if (sharpeningValue == 0f) 0.8f else sharpeningValue,
+                        noiseReduction = noiseReductionValue,
+                        chromaNoiseReduction = if (chromaNoiseReductionValue == 0f) 0.25f else chromaNoiseReductionValue,
+                    )
+                    metadataFile.writeText(metadataWithInfo.toJson())
+                    processingScope.launch(Dispatchers.IO) {
+                        try {
                             characteristics ?: return@launch
                             captureResult ?: return@launch
-                            val byteBuffer =
-                                MultiFrameStacker.processBurstRaw(images, characteristics, useSuperResolution)
+                            val byteBuffer = MultiFrameStacker.processBurstRaw(images, characteristics,
+                                useSuperResolution)
                             byteBuffer ?: return@launch
-                            val scale = if (useSuperResolution) 2 else 1
                             val scaledWidth = images[0].width * scale
                             val scaledHeight = images[0].height * scale
-                            var cropRegion = captureResult.get(CaptureResult.SCALER_CROP_REGION)
-                            if (useSuperResolution && cropRegion != null) {
-                                cropRegion = Rect(cropRegion.left * 2, cropRegion.top * 2, cropRegion.right * 2, cropRegion.bottom * 2)
-                            }
-
-                            // 保存元数据
-                            metadataWithInfo = metadata.copy(
-                                width = finalWidth * scale,
-                                height = finalHeight * scale,
-                                ratio = aspectRatio,
-                                cropRegion = cropRegion,
-                                rotation = rotation,
-                                sharpening = if (sharpeningValue == 0f) 0.8f else sharpeningValue,
-                                noiseReduction = noiseReductionValue,
-                                chromaNoiseReduction = if (chromaNoiseReductionValue == 0f) 0.25f else chromaNoiseReductionValue,
-                            )
-                            metadataFile.writeText(metadataWithInfo.toJson())
                             val byteOutstream = ByteArrayOutputStream()
                             byteOutstream.use { outputStream ->
                                 RawProcessor.saveToDng(
@@ -506,7 +528,7 @@ object PhotoManager {
                                 exportDng(context, array, metadataWithInfo)
                             }
 
-                            result = if (metadataWithInfo.rawEngine == RawEngine.SELF_DEVELOPED) {
+                            val result = if (metadataWithInfo.rawEngine == RawEngine.SELF_DEVELOPED) {
                                 RawDemosaicProcessor.getInstance().process(
                                     dngFile.absolutePath,
                                     aspectRatio,
@@ -515,41 +537,38 @@ object PhotoManager {
                                 )
                             } else {
                                 RawProcessor.processAndToBitmap(dngFile, aspectRatio, cropRegion, rotation)
+                            } ?: return@launch
+                            // Generate Thumbnail
+                            if (thumbnail == null) {
+                                generateThumbnail(result, thumbnailFile)
                             }
+                            // Save Original (Stacked Result)
+                            FileOutputStream(tempFile).use { outputStream ->
+                                result.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                            }
+                            tempFile.renameTo(photoFile)
+                            result.recycle()
+                            // Auto Save
+                            if (shouldAutoSave) {
+                                exportPhoto(
+                                    context,
+                                    photoId,
+                                    photoProcessor,
+                                    metadataWithInfo,
+                                    sharpeningValue,
+                                    noiseReductionValue,
+                                    chromaNoiseReductionValue
+                                )
+                            }
+                        } finally {
+                            onProcessingComplete?.invoke()
                         }
-
-                        else -> {
-                            PLog.e(TAG, "Unsupported image format: $format")
-                            return@launch
-                        }
                     }
-
-                    result ?: return@launch
-
-                    // Generate Thumbnail
-                    if (thumbnail == null) {
-                        generateThumbnail(result, thumbnailFile)
-                    }
-                    // Save Original (Stacked Result)
-                    FileOutputStream(tempFile).use { outputStream ->
-                        result.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
-                    }
-                    tempFile.renameTo(photoFile)
-                    result.recycle()
-                    // Auto Save
-                    if (shouldAutoSave) {
-                        exportPhoto(
-                            context,
-                            photoId,
-                            photoProcessor,
-                            metadataWithInfo,
-                            sharpeningValue,
-                            noiseReductionValue,
-                            chromaNoiseReductionValue
-                        )
-                    }
-                } finally {
+                }
+                else -> {
+                    PLog.e(TAG, "Unsupported image format: $format")
                     onProcessingComplete?.invoke()
+                    return@withContext null
                 }
             }
             photoId

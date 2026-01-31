@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.lut
 
 import android.graphics.Bitmap
+import android.graphics.PointF
 import android.graphics.SurfaceTexture
 import android.opengl.GLES11Ext
 import android.opengl.GLES30
@@ -13,6 +14,7 @@ import java.nio.ByteOrder
 import java.nio.ShortBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
+import kotlin.math.hypot
 
 /**
  * LUT 渲染器
@@ -47,6 +49,19 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var indexBufferId: Int = 0
     private var pboId: Int = 0
 
+    // 测光相关纹理和 FBO
+    private var meteringFboId: Int = 0
+    private var meteringTextureId: Int = 0
+    private val METERING_SIZE = 32
+    private var captureFboId: Int = 0
+    private var captureTextureId: Int = 0
+    private var passthroughProgramId: Int = 0
+    private var uPassMVPMatrixLocation: Int = 0
+    private var uPassSTMatrixLocation: Int = 0
+    private var uPassCameraTextureLocation: Int = 0
+    private var aPassPositionLocation: Int = 0
+    private var aPassTexCoordLocation: Int = 0
+
     // Uniform 位置
     private var uMVPMatrixLocation: Int = 0
     private var uSTMatrixLocation: Int = 0
@@ -76,7 +91,7 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var aTexCoordLocation: Int = 0
 
     // SurfaceTexture 变换矩阵
-    private val stMatrix = FloatArray(16)
+    private val stMatrix = FloatArray(16).apply { Matrix.setIdentityM(this, 0) }
 
     // MVP 变换矩阵（用于 center crop）
     private val mvpMatrix = FloatArray(16)
@@ -107,6 +122,12 @@ class LutRenderer : GLSurfaceView.Renderer {
     // 色彩配方参数
     @Volatile
     var colorRecipeEnabled: Boolean = false
+
+    @Volatile
+    var focusPoint: PointF? = null
+
+    @Volatile
+    var meteringEnabled: Boolean = true
 
     @Volatile
     var exposure: Float = 0f // -2.0 ~ +2.0
@@ -158,6 +179,8 @@ class LutRenderer : GLSurfaceView.Renderer {
     var onSurfaceTextureAvailable: ((SurfaceTexture) -> Unit)? = null
     var onRequestRender: (() -> Unit)? = null
     var onPreviewFrameCaptured: ((Bitmap) -> Unit)? = null
+    var onHistogramUpdated: ((IntArray) -> Unit)? = null
+    var onMeteringUpdated: ((Double, Double) -> Unit)? = null
 
     // 预览帧捕获标志
     private var shouldCapturePreview = false
@@ -194,8 +217,14 @@ class LutRenderer : GLSurfaceView.Renderer {
             }
         }
 
-        // 初始化变换矩阵
-        Matrix.setIdentityM(stMatrix, 0)
+        // 初始化直通着色器（用于测光和无效果渲染）
+        initPassthroughProgram()
+
+        // 初始化测光 FBO
+        initMeteringFbo()
+
+        // 初始化截图 FBO
+        initCaptureFbo()
 
         // 标记 Surface 已创建
         surfaceReady = true
@@ -337,6 +366,11 @@ class LutRenderer : GLSurfaceView.Renderer {
             capturePreviewFrameInternal()
         }
 
+        // 测光和直方图（按需）
+        if (meteringEnabled) {
+            runMeteringInternal()
+        }
+
         GlUtils.checkGlError("onDrawFrame")
     }
 
@@ -392,6 +426,89 @@ class LutRenderer : GLSurfaceView.Renderer {
         aTexCoordLocation = GLES30.glGetAttribLocation(programId, "aTexCoord")
 
 //        PLog.d(TAG, "Shader program created: $programId")
+    }
+
+    private fun initPassthroughProgram() {
+        val vertexShader = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, Shaders.VERTEX_SHADER)
+        val fragmentShader = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.FRAGMENT_SHADER_PASSTHROUGH)
+
+        if (vertexShader == 0 || fragmentShader == 0) {
+            PLog.e(TAG, "Failed to compile passthrough shaders")
+            return
+        }
+
+        passthroughProgramId = GlUtils.linkProgram(vertexShader, fragmentShader)
+        GLES30.glDeleteShader(vertexShader)
+        GLES30.glDeleteShader(fragmentShader)
+
+        if (passthroughProgramId != 0) {
+            uPassMVPMatrixLocation = GLES30.glGetUniformLocation(passthroughProgramId, "uMVPMatrix")
+            uPassSTMatrixLocation = GLES30.glGetUniformLocation(passthroughProgramId, "uSTMatrix")
+            uPassCameraTextureLocation = GLES30.glGetUniformLocation(passthroughProgramId, "uCameraTexture")
+            aPassPositionLocation = GLES30.glGetAttribLocation(passthroughProgramId, "aPosition")
+            aPassTexCoordLocation = GLES30.glGetAttribLocation(passthroughProgramId, "aTexCoord")
+        }
+    }
+
+    private fun initMeteringFbo() {
+        val fbos = IntArray(1)
+        GLES30.glGenFramebuffers(1, fbos, 0)
+        meteringFboId = fbos[0]
+
+        val textures = IntArray(1)
+        GLES30.glGenTextures(1, textures, 0)
+        meteringTextureId = textures[0]
+
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, meteringTextureId)
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA,
+            METERING_SIZE, METERING_SIZE, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null
+        )
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, meteringFboId)
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D, meteringTextureId, 0
+        )
+
+        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
+            PLog.e(TAG, "Failed to create metering FBO: $status")
+        }
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+    }
+
+    private fun initCaptureFbo() {
+        val fbos = IntArray(1)
+        GLES30.glGenFramebuffers(1, fbos, 0)
+        captureFboId = fbos[0]
+
+        val textures = IntArray(1)
+        GLES30.glGenTextures(1, textures, 0)
+        captureTextureId = textures[0]
+
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, captureTextureId)
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA,
+            captureSize, captureSize, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null
+        )
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, captureFboId)
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D, captureTextureId, 0
+        )
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
 
     /**
@@ -583,67 +700,172 @@ class LutRenderer : GLSurfaceView.Renderer {
      */
     private fun capturePreviewFrameInternal() {
         try {
-            // 计算缩放比例以保持宽高比
-            val scale = captureSize.toFloat() / maxOf(viewportWidth, viewportHeight)
-            val scaledWidth = (viewportWidth * scale).toInt()
-            val scaledHeight = (viewportHeight * scale).toInt()
+            // 1. 渲染无効果的原图到 capture FBO
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, captureFboId)
+            GLES30.glViewport(0, 0, captureSize, captureSize)
+            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
 
-            // 使用 PBO 优化 glReadPixels
+            GLES30.glUseProgram(passthroughProgramId)
+            GLES30.glUniformMatrix4fv(uPassMVPMatrixLocation, 1, false, mvpMatrix, 0)
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+            GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, cameraTextureId)
+            GLES30.glUniform1i(uPassCameraTextureLocation, 0)
+            GLES30.glUniformMatrix4fv(uPassSTMatrixLocation, 1, false, stMatrix, 0)
+
+            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)
+            GLES30.glEnableVertexAttribArray(aPassPositionLocation)
+            GLES30.glVertexAttribPointer(aPassPositionLocation, POSITION_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
+
+            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, texCoordBufferId)
+            GLES30.glEnableVertexAttribArray(aPassTexCoordLocation)
+            GLES30.glVertexAttribPointer(aPassTexCoordLocation, TEXTURE_COORD_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
+
+            GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, indexBufferId)
+            GLES30.glDrawElements(GLES30.GL_TRIANGLES, Shaders.DRAW_ORDER.size, GLES30.GL_UNSIGNED_SHORT, 0)
+
+            // 2. 读取像素
+            val pixelSize = captureSize * captureSize * 4
             if (pboId == 0) {
                 val pbos = IntArray(1)
                 GLES30.glGenBuffers(1, pbos, 0)
                 pboId = pbos[0]
             }
 
-            val pixelSize = viewportWidth * viewportHeight * 4
             GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pboId)
             GLES30.glBufferData(GLES30.GL_PIXEL_PACK_BUFFER, pixelSize, null, GLES30.GL_STREAM_READ)
+            GLES30.glReadPixels(0, 0, captureSize, captureSize, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, 0)
 
-            GLES30.glReadPixels(
-                0, 0, viewportWidth, viewportHeight,
-                GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, 0
-            )
-
-            // 映射内存并读取
             val mappedBuffer = GLES30.glMapBufferRange(
-                GLES30.GL_PIXEL_PACK_BUFFER,
-                0,
-                pixelSize,
-                GLES30.GL_MAP_READ_BIT
+                GLES30.GL_PIXEL_PACK_BUFFER, 0, pixelSize, GLES30.GL_MAP_READ_BIT
             ) as? ByteBuffer
-            
-            if (mappedBuffer == null) {
-                GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
-                return
+
+            if (mappedBuffer != null) {
+                val bitmap = Bitmap.createBitmap(captureSize, captureSize, Bitmap.Config.ARGB_8888)
+                bitmap.copyPixelsFromBuffer(mappedBuffer)
+                GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
+
+                // 翻转 Y 轴并返回
+                val matrix = android.graphics.Matrix()
+                matrix.preScale(1f, -1f)
+                val finalBitmap = Bitmap.createBitmap(bitmap, 0, 0, captureSize, captureSize, matrix, false)
+                bitmap.recycle()
+                onPreviewFrameCaptured?.invoke(finalBitmap)
             }
 
-            val fullBuffer = ByteBuffer.allocateDirect(pixelSize).order(ByteOrder.nativeOrder())
-            fullBuffer.put(mappedBuffer)
-            fullBuffer.position(0)
-
-            GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
+            // 3. 恢复环境
+            GLES30.glDisableVertexAttribArray(aPassPositionLocation)
+            GLES30.glDisableVertexAttribArray(aPassTexCoordLocation)
+            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
+            GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
             GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
-
-            // 创建原始大小的 Bitmap
-            val fullBitmap = Bitmap.createBitmap(viewportWidth, viewportHeight, Bitmap.Config.ARGB_8888)
-            fullBitmap.copyPixelsFromBuffer(fullBuffer)
-
-            // 翻转 Y 轴（OpenGL 坐标系与 Android 不同）
-            val matrix = android.graphics.Matrix()
-            matrix.preScale(1f, -1f)
-            val flippedBitmap = Bitmap.createBitmap(fullBitmap, 0, 0, viewportWidth, viewportHeight, matrix, false)
-            fullBitmap.recycle()
-
-            // 缩小到目标尺寸
-            val scaledBitmap = Bitmap.createScaledBitmap(flippedBitmap, scaledWidth, scaledHeight, true)
-            flippedBitmap.recycle()
-
-            // 通过回调返回
-            onPreviewFrameCaptured?.invoke(scaledBitmap)
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+            GLES30.glViewport(0, 0, viewportWidth, viewportHeight)
 
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to capture preview frame", e)
         }
+    }
+
+    private val meteringBuffer = ByteBuffer.allocateDirect(METERING_SIZE * METERING_SIZE * 4).order(ByteOrder.nativeOrder())
+    private var lastRunMeteringTime = 0L
+
+    private fun runMeteringInternal() {
+        val now = System.currentTimeMillis()
+        if (now - lastRunMeteringTime < 100) return // 限制频率，每秒约 10 次
+        lastRunMeteringTime = now
+
+        // 1. 渲染 OES 纹理到小 FBO
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, meteringFboId)
+        GLES30.glViewport(0, 0, METERING_SIZE, METERING_SIZE)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+
+        GLES30.glUseProgram(passthroughProgramId)
+        // 使用与主渲染相同的 MVP 矩阵，确保测光区域和预览区域（带 Crop）一致
+        GLES30.glUniformMatrix4fv(uPassMVPMatrixLocation, 1, false, mvpMatrix, 0)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, cameraTextureId)
+        GLES30.glUniform1i(uPassCameraTextureLocation, 0)
+        GLES30.glUniformMatrix4fv(uPassSTMatrixLocation, 1, false, stMatrix, 0)
+
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)
+        GLES30.glEnableVertexAttribArray(aPassPositionLocation)
+        GLES30.glVertexAttribPointer(aPassPositionLocation, POSITION_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
+
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, texCoordBufferId)
+        GLES30.glEnableVertexAttribArray(aPassTexCoordLocation)
+        GLES30.glVertexAttribPointer(aPassTexCoordLocation, TEXTURE_COORD_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
+
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, indexBufferId)
+        GLES30.glDrawElements(GLES30.GL_TRIANGLES, Shaders.DRAW_ORDER.size, GLES30.GL_UNSIGNED_SHORT, 0)
+        
+        GLES30.glDisableVertexAttribArray(aPassPositionLocation)
+        GLES30.glDisableVertexAttribArray(aPassTexCoordLocation)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
+
+        // 2. 读取像素
+        meteringBuffer.rewind()
+        GLES30.glReadPixels(0, 0, METERING_SIZE, METERING_SIZE, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, meteringBuffer)
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        GLES30.glViewport(0, 0, viewportWidth, viewportHeight)
+
+        // 3. 计算直方图和测光 (CPU)
+        calculateMeteringResults()
+    }
+
+    private fun calculateMeteringResults() {
+        val bytes = ByteArray(METERING_SIZE * METERING_SIZE * 4)
+        meteringBuffer.rewind()
+        meteringBuffer.get(bytes)
+
+        // 调试日志：检查中间像素值
+        val midIdx = (METERING_SIZE / 2 * METERING_SIZE + METERING_SIZE / 2) * 4
+        val sampleR = bytes[midIdx].toInt() and 0xFF
+        val sampleG = bytes[midIdx + 1].toInt() and 0xFF
+        val sampleB = bytes[midIdx + 2].toInt() and 0xFF
+        if (System.currentTimeMillis() % 1000 < 200) { // 降低日志频率
+            PLog.v(TAG, "Metering sample pixel (mid): R=$sampleR, G=$sampleG, B=$sampleB")
+        }
+
+        val histogram = IntArray(256)
+        var weightedSumLuminance = 0.0
+        var totalWeight = 0.0
+
+        val focus = focusPoint
+        val weightCenter = 4.0
+        val weightEdge = 1.0
+
+        for (y in 0 until METERING_SIZE) {
+            for (x in 0 until METERING_SIZE) {
+                val idx = (y * METERING_SIZE + x) * 4
+                val r = bytes[idx].toInt() and 0xFF
+                val g = bytes[idx + 1].toInt() and 0xFF
+                val b = bytes[idx + 2].toInt() and 0xFF
+
+                // 计算亮度 (Rec.601)
+                val luma = (0.299 * r + 0.587 * g + 0.114 * b).toInt().coerceIn(0, 255)
+                histogram[luma]++
+
+                // 权重计算
+                var weight = weightEdge
+                if (focus != null) {
+                    val fx = focus.x * METERING_SIZE
+                    val fy = (1.0f - focus.y) * METERING_SIZE 
+                    
+                    val dist = hypot(x.toDouble() - fx.toDouble(), y.toDouble() - fy.toDouble())
+                    if (dist < METERING_SIZE / 4.0) {
+                        weight = weightCenter
+                    }
+                }
+
+                weightedSumLuminance += luma * weight
+                totalWeight += weight
+            }
+        }
+
+        onHistogramUpdated?.invoke(histogram)
+        onMeteringUpdated?.invoke(totalWeight, weightedSumLuminance)
     }
 
     /**
@@ -683,9 +905,28 @@ class LutRenderer : GLSurfaceView.Renderer {
             pboId = 0
         }
 
+        if (meteringFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(meteringFboId), 0)
+            meteringFboId = 0
+        }
+        if (meteringTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(meteringTextureId), 0)
+            meteringTextureId = 0
+        }
+        if (captureFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(captureFboId), 0)
+            captureFboId = 0
+        }
+        if (captureTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(captureTextureId), 0)
+            captureTextureId = 0
+        }
+
         // 删除程序
         GlUtils.deleteProgram(programId)
         programId = 0
+        GlUtils.deleteProgram(passthroughProgramId)
+        passthroughProgramId = 0
 
         // 释放 SurfaceTexture
         surfaceTexture?.release()
