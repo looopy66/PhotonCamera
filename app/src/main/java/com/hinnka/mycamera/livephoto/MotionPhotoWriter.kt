@@ -39,7 +39,8 @@ object MotionPhotoWriter {
     fun write(
         jpegPath: String,
         videoPath: String,
-        outputPath: String
+        outputPath: String,
+        presentationTimestampUs: Long = 0
     ): Boolean {
         try {
             val jpegFile = File(jpegPath)
@@ -57,7 +58,7 @@ object MotionPhotoWriter {
             val videoLength = videoFile.length()
 
             // 生成 Motion Photo XMP 元数据
-            val xmpData = buildMotionPhotoXmp(videoLength)
+            val xmpData = buildMotionPhotoXmp(videoLength, presentationTimestampUs)
 
             // 使用流式处理，避免大文件 OOM
             FileOutputStream(outputPath).use { output ->
@@ -79,7 +80,7 @@ object MotionPhotoWriter {
                 }
             }
 
-            PLog.d(TAG, "Motion Photo created: $outputPath (Video: $videoLength)")
+            PLog.d(TAG, "Motion Photo created: $outputPath (Video: $videoLength, TS: $presentationTimestampUs)")
             return true
 
         } catch (e: Exception) {
@@ -91,13 +92,11 @@ object MotionPhotoWriter {
     /**
      * 将 XMP 元数据注入到 JPEG 流 (Robust Byte-level Scanner)
      *
-     * 精确处理 JPEG 标记结构，
-     * 策略：将 XMP 插入到 Exif (APP1) 之后，或者如果不存在 Exif，则在 SOI 之后。
-     * 尽量靠前插入，以兼容部分只扫描文件头部的解析器。
+     * 策略：根据 Motion Photo 1.0 规范，将 XMP 插入为第一个 APP1 段。
+     * 即紧随 SOI (FF D8) 之后插入。
      */
     private fun injectXmpToStream(input: FileInputStream, output: FileOutputStream, xmpData: ByteArray): Boolean {
         try {
-            // 使用 BufferedInputStream 以提高逐字节读取性能
             val bis = java.io.BufferedInputStream(input)
 
             // 1. 验证 SOI (FF D8)
@@ -110,115 +109,30 @@ object MotionPhotoWriter {
             output.write(b1)
             output.write(b2)
 
-            // 准备 XMP APP1 段数据
+            // 2. 立即注入 XMP APP1 段
             val xmpNamespace = "http://ns.adobe.com/xap/1.0/\u0000"
-            val namespaceBytes = xmpNamespace.toByteArray(StandardCharsets.US_ASCII)
+            val namespaceBytes = xmpNamespace.toByteArray(StandardCharsets.UTF_8)
             val segmentLength = 2 + namespaceBytes.size + xmpData.size
-            var xmpInserted = false
-
-            while (true) {
-                // 查找下一个标记开始 (0xFF)
-                var markerByte = bis.read()
-                while (markerByte != 0xFF && markerByte != -1) {
-                    output.write(markerByte)
-                    markerByte = bis.read()
-                }
-                if (markerByte == -1) break // EOF
-
-                // 读取标记类型字节
-                var typeByte = bis.read()
-                if (typeByte == -1) {
-                    output.write(markerByte) // 写入最后的 FF
-                    break
-                }
-
-                // 处理填充字节 (FF FF ... FF XX)
-                while (typeByte == 0xFF) {
-                    output.write(markerByte) // 写入前一个 FF
-                    markerByte = typeByte
-                    typeByte = bis.read()
-                }
-
-                val marker = typeByte
-
-                // 决策：在哪里插入 XMP？
-                // 如果还未插入，且当前标记 不是 APP0 (JFIF) 且 不是 APP1 (Exif)，则在此插入
-                // 注意：Exif 也是 APP1，通常以 "Exif\0\0" 开头。这里简化处理，假设第一个 APP1 是 Exif。
-                // 如果遇到 APP0 或 APP1，先写入它们，推迟插入。
-                // 如果遇到其他任何标记（APP2-15, DQT, SOF, SOS等），立即插入 XMP。
-
-                val isApp0 = marker == 0xE0
-                val isApp1 = marker == 0xE1
-
-                if (!xmpInserted && !isApp0 && !isApp1) {
-                    // --- 在此插入 XMP ---
-                    output.write(0xFF)
-                    output.write(0xE1)
-                    output.write((segmentLength shr 8) and 0xFF)
-                    output.write(segmentLength and 0xFF)
-                    output.write(namespaceBytes)
-                    output.write(xmpData)
-                    xmpInserted = true
-                }
-
-                if (marker == 0xDA) { // SOS (Start of Scan) - 0xDA
-                    // 如果到 SOS 还没插入（例如只有 APP0/APP1），强制插入
-                    if (!xmpInserted) {
-                        output.write(0xFF)
-                        output.write(0xE1)
-                        output.write((segmentLength shr 8) and 0xFF)
-                        output.write(segmentLength and 0xFF)
-                        output.write(namespaceBytes)
-                        output.write(xmpData)
-                        xmpInserted = true
-                    }
-
-                    // 写入原本的 SOS 标记
-                    output.write(markerByte) // FF
-                    output.write(typeByte)   // DA
-
-                    // 复制剩余所有数据
-                    val buffer = ByteArray(8192)
-                    var len: Int
-                    while (bis.read(buffer).also { len = it } != -1) {
-                        output.write(buffer, 0, len)
-                    }
-                    return true
-                }
-
-                // 写入当前标记
-                output.write(markerByte)
-                output.write(typeByte)
-
-                // 处理标记负载
-                val isStandalone = marker == 0x01 || (marker in 0xD0..0xD9)
-                if (!isStandalone) {
-                    val lenHi = bis.read()
-                    val lenLo = bis.read()
-                    if (lenHi == -1 || lenLo == -1) return false
-
-                    output.write(lenHi)
-                    output.write(lenLo)
-
-                    val length = ((lenHi and 0xFF) shl 8) or (lenLo and 0xFF)
-                    val bodyLen = length - 2
-
-                    if (bodyLen > 0) {
-                        var remaining = bodyLen
-                        val buffer = ByteArray(minOf(4096, remaining))
-                        while (remaining > 0) {
-                            val toRead = minOf(buffer.size, remaining)
-                            val read = bis.read(buffer, 0, toRead)
-                            if (read == -1) return false
-                            output.write(buffer, 0, read)
-                            remaining -= read
-                        }
-                    }
-                }
+            
+            if (segmentLength > 65535) {
+                PLog.e(TAG, "XMP data too large")
+                return false
             }
 
-            PLog.e(TAG, "SOS marker not found in JPEG stream")
-            return false
+            output.write(0xFF)
+            output.write(0xE1)
+            output.write((segmentLength shr 8) and 0xFF)
+            output.write(segmentLength and 0xFF)
+            output.write(namespaceBytes)
+            output.write(xmpData)
+
+            // 3. 复制剩余所有 JPEG 数据
+            val buffer = ByteArray(8192)
+            var len: Int
+            while (bis.read(buffer).also { len = it } != -1) {
+                output.write(buffer, 0, len)
+            }
+            return true
         } catch (e: Exception) {
             PLog.e(TAG, "Error injecting XMP", e)
             return false
@@ -228,129 +142,55 @@ object MotionPhotoWriter {
     /**
      * 构建 Motion Photo XMP 元数据
      */
-    private fun buildMotionPhotoXmp(videoLength: Long): ByteArray {
-        val xmp = buildString {
-            append("""<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkcK"?>
-<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 5.6-c015 79.160557, 2020/01/01-00:00:00">
-    <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-        <rdf:Description
-                xmlns:GCamera="http://ns.google.com/photos/1.0/camera/"
-                xmlns:MiCamera="http://ns.xiaomi.com/photos/1.0/camera/"
-                xmlns:OpCamera="http://ns.oplus.com/photos/1.0/camera/"
-                xmlns:Container="http://ns.google.com/photos/1.0/container/"
-                xmlns:Item="http://ns.google.com/photos/1.0/container/item/"
-                GCamera:MicroVideo="1"
-                GCamera:MicroVideoVersion="1"
-                GCamera:MicroVideoOffset="$videoLength"
-                GCamera:MicroVideoPresentationTimestampUs="0"
-                OpCamera:MotionPhotoPresentationTimestampUs="0"
-                OpCamera:MotionPhotoOwner="oplus"
-                OpCamera:OLivePhotoVersion="2"
-                OpCamera:VideoLength="$videoLength"
-                GCamera:MotionPhoto="1"
-                GCamera:MotionPhotoVersion="1"
-                GCamera:MotionPhotoPresentationTimestampUs="0"
-                MiCamera:XMPMeta="&lt;?xml version='1.0' encoding='UTF-8' standalone='yes' ?&gt;">
-            <Container:Directory>
-                <rdf:Seq>
-                    <rdf:li rdf:parseType="Resource">
-                        <Container:Item
-                                Item:Mime="image/jpeg"
-                                Item:Semantic="Primary"
-                                Item:Length="0"
-                                Item:Padding="0"/>
-                    </rdf:li>
-                    <rdf:li rdf:parseType="Resource">
-                        <Container:Item
-                                Item:Mime="video/mp4"
-                                Item:Semantic="MotionPhoto"
-                                Item:Padding="0"
-                                Item:Length="$$videoLength"/>
-                    </rdf:li>
-                </rdf:Seq>
-            </Container:Directory>
-        </rdf:Description>
-    </rdf:RDF>
-</x:xmpmeta>
-<?xpacket end="w"?>""")
-        }
+    private fun buildMotionPhotoXmp(videoLength: Long, presentationTimestampUs: Long): ByteArray {
+        val xmp = """
+            <x:xmpmeta xmlns:x="adobe:ns:meta/">
+                <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                    <rdf:Description
+                        xmlns:Camera="http://ns.google.com/photos/1.0/camera/"
+                        xmlns:GCamera="http://ns.google.com/photos/1.0/camera/"
+                        xmlns:OpCamera="http://ns.oppo.com/photo/1.0/camera/"
+                        Camera:MotionPhoto="1"
+                        Camera:MotionPhotoVersion="1"
+                        Camera:MotionPhotoPresentationTimestampUs="$presentationTimestampUs"
+                        GCamera:MotionPhoto="1"
+                        GCamera:MotionPhotoVersion="1"
+                        GCamera:MotionPhotoPresentationTimestampUs="$presentationTimestampUs"
+                        GCamera:MicroVideo="1"
+                        GCamera:MicroVideoVersion="1"
+                        GCamera:MicroVideoOffset="$videoLength"
+                        OpCamera:MotionPhotoPrimaryPresentationTimestampUs="$presentationTimestampUs"
+                        OpCamera:MotionPhotoOwner="PhotonCamera"
+                        OpCamera:OLivePhotoVersion="1"
+                        OpCamera:VideoLength="$videoLength"/>
+                    <rdf:Description
+                        xmlns:Container="http://ns.google.com/photos/1.0/container/"
+                        xmlns:Item="http://ns.google.com/photos/1.0/container/item/">
+                        <Container:Directory>
+                            <rdf:Seq>
+                                <rdf:li rdf:parseType="Resource">
+                                    <Container:Item
+                                        Item:Mime="image/jpeg"
+                                        Item:Semantic="Primary"
+                                        Item:Length="0"
+                                        Item:Padding="0"/>
+                                </rdf:li>
+                                <rdf:li rdf:parseType="Resource">
+                                    <Container:Item
+                                        Item:Mime="video/mp4"
+                                        Item:Semantic="MotionPhoto"
+                                        Item:Length="$videoLength"/>
+                                </rdf:li>
+                            </rdf:Seq>
+                        </Container:Directory>
+                    </rdf:Description>
+                </rdf:RDF>
+            </x:xmpmeta>
+        """.trimIndent()
 
         return xmp.toByteArray(StandardCharsets.UTF_8)
     }
 
-    /**
-     * 将 XMP 元数据注入到 JPEG 文件
-     *
-     * 在 JPEG 的 APP1 段后插入新的 APP1 段包含 Motion Photo XMP
-     */
-    private fun injectXmpToJpeg(jpegData: ByteArray, xmpData: ByteArray): ByteArray? {
-        if (jpegData.size < 4) return null
-
-        // 验证 JPEG SOI
-        if ((jpegData[0].toInt() and 0xFF) != 0xFF || (jpegData[1].toInt() and 0xFF) != 0xD8) {
-            PLog.e(TAG, "Invalid JPEG: missing SOI marker")
-            return null
-        }
-
-        // 构建 APP1 段
-        // 格式: FF E1 [length 2 bytes] "http://ns.adobe.com/xap/1.0/\0" [xmp data]
-        val xmpNamespace = "http://ns.adobe.com/xap/1.0/\u0000"
-        val namespaceBytes = xmpNamespace.toByteArray(StandardCharsets.US_ASCII)
-        val segmentLength = 2 + namespaceBytes.size + xmpData.size
-
-        if (segmentLength > 65535) {
-            PLog.e(TAG, "XMP data too large for APP1 segment")
-            return null
-        }
-
-        val app1Segment = ByteArray(2 + 2 + namespaceBytes.size + xmpData.size)
-        app1Segment[0] = 0xFF.toByte()
-        app1Segment[1] = 0xE1.toByte()
-        app1Segment[2] = ((segmentLength shr 8) and 0xFF).toByte()
-        app1Segment[3] = (segmentLength and 0xFF).toByte()
-        System.arraycopy(namespaceBytes, 0, app1Segment, 4, namespaceBytes.size)
-        System.arraycopy(xmpData, 0, app1Segment, 4 + namespaceBytes.size, xmpData.size)
-
-        // 找到插入位置 (SOI 之后)
-        var insertPos = 2  // 跳过 SOI
-
-        // 跳过已存在的 APP0-APP15 和其他段，直到找到合适的插入点
-        while (insertPos < jpegData.size - 1) {
-            val marker1 = jpegData[insertPos].toInt() and 0xFF
-            val marker2 = jpegData[insertPos + 1].toInt() and 0xFF
-
-            if (marker1 != 0xFF) {
-                // 不是标记，可能已经进入图像数据
-                break
-            }
-
-            val marker = (marker1 shl 8) or marker2
-
-            // 如果遇到 SOS (Start of Scan)，在它之前插入
-            if (marker == JPEG_SOS) {
-                break
-            }
-
-            // 跳过这个段
-            if (marker in 0xFFE0..0xFFEF || marker in 0xFFC0..0xFFCF || marker == 0xFFFE) {
-                if (insertPos + 3 >= jpegData.size) break
-                val length = ((jpegData[insertPos + 2].toInt() and 0xFF) shl 8) or
-                        (jpegData[insertPos + 3].toInt() and 0xFF)
-                insertPos += 2 + length
-            } else {
-                // 其他标记，停止
-                break
-            }
-        }
-
-        // 构建输出
-        val result = ByteArray(jpegData.size + app1Segment.size)
-        System.arraycopy(jpegData, 0, result, 0, insertPos)
-        System.arraycopy(app1Segment, 0, result, insertPos, app1Segment.size)
-        System.arraycopy(jpegData, insertPos, result, insertPos + app1Segment.size, jpegData.size - insertPos)
-
-        return result
-    }
 
     /**
      * 从 Motion Photo 文件的 XMP 中获取视频长度

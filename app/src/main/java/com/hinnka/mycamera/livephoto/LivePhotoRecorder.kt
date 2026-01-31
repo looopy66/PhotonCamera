@@ -13,8 +13,6 @@ import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.*
 import java.io.File
 import java.nio.ByteBuffer
-import java.util.*
-import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.Executors
 
 /**
@@ -39,8 +37,8 @@ class LivePhotoRecorder(
     }
 
     // 核心组件
-    // 缓冲区大小需要覆盖 预录制(bufferDuration) + 后录制(postCaptureDuration)
-    private val circularRecorder = CircularVideoRecorder(bufferDurationMs + postCaptureDurationMs)
+    // 缓冲区大小增加一部分裕量 (如增加 2000ms)，以确保在裁剪时能找到前置关键帧
+    private val circularRecorder = CircularVideoRecorder(bufferDurationMs + postCaptureDurationMs + 2000L)
 
     @Volatile
     private var encoder: MediaCodec? = null
@@ -184,53 +182,59 @@ class LivePhotoRecorder(
      * 完成并生成视频 (拍照后延迟调用)
      */
     fun recordVideo(
-        lutConfig: LutConfig?,
-        params: ColorRecipeParams?,
         onCaptured: (File, Long) -> Unit
     ) {
-        // 由于是持续编码，lutConfig 和 params 已经在预览渲染时应用了
         scope.launch {
             try {
-                // 等待后半段录制
-                delay(postCaptureDurationMs)
+                // 等待后半段录制 + 额外 500ms 缓冲时间确保编码器完成工作
+                delay(postCaptureDurationMs + 500L)
 
                 val currentSamples = circularRecorder.snapshot()
 
-                // 筛选时间范围：[拍照前 bufferDurationMs, 拍照后 postCaptureDurationMs]
+                // 目标时间范围：[拍照前 1.5s, 拍照后 1.5s]
                 val startTimeUs = snapshotTimestampUs - bufferDurationMs * 1000
                 val endTimeUs = snapshotTimestampUs + postCaptureDurationMs * 1000
 
                 PLog.d(TAG, "Filtering samples: snapshot=$snapshotTimestampUs, range=[$startTimeUs, $endTimeUs]")
 
-                val targetSamples = currentSamples.filter {
-                    it.info.presentationTimeUs in startTimeUs..endTimeUs
+                // 策略：寻找 startTimeUs 之前的最后一个关键帧作为视频起点
+                // 这样能保证视频时长至少有 3s 且播放时立即有画面
+                var startIndex = -1
+                for (i in currentSamples.indices.reversed()) {
+                    val sample = currentSamples[i]
+                    if (sample.info.presentationTimeUs <= startTimeUs && 
+                        (sample.info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0) {
+                        startIndex = i
+                        break
+                    }
                 }
 
-                PLog.d(TAG, "Found ${targetSamples.size} samples out of ${currentSamples.size} total")
-                if (currentSamples.isNotEmpty()) {
-                    val first = currentSamples.first().info.presentationTimeUs
-                    val last = currentSamples.last().info.presentationTimeUs
-                    PLog.d(TAG, "Available range: [$first, $last]")
+                // 如果没找到 startTimeUs 之前的关键帧，则寻找整个缓冲区中的第一个关键帧
+                if (startIndex == -1) {
+                    startIndex = currentSamples.indexOfFirst { 
+                        (it.info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0 
+                    }
                 }
 
-                if (targetSamples.isEmpty() || encoderFormat == null) {
-                    PLog.e(TAG, "No samples or format to mux")
+                if (startIndex == -1 || encoderFormat == null) {
+                    PLog.e(TAG, "No keyframe or format to mux")
                     isCapturing = false
                     return@launch
                 }
 
-                // 寻找第一个关键帧作为起点
-                val firstSyncIdx = targetSamples.indexOfFirst {
-                    (it.info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
+                // 构件最终样本列表，直到 endTimeUs
+                val muxSamples = mutableListOf<CircularVideoRecorder.Sample>()
+                for (i in startIndex until currentSamples.size) {
+                    val sample = currentSamples[i]
+                    muxSamples.add(sample)
+                    if (sample.info.presentationTimeUs >= endTimeUs) break
                 }
 
-                if (firstSyncIdx == -1) {
-                    PLog.e(TAG, "No keyframe found in samples")
-                    isCapturing = false
-                    return@launch
-                }
+                PLog.d(TAG, "Selected ${muxSamples.size} samples (was ${currentSamples.size} total)")
+                val first = muxSamples.first().info.presentationTimeUs
+                val last = muxSamples.last().info.presentationTimeUs
+                PLog.d(TAG, "Selected range: [$first, $last], duration: ${(last-first)/1000}ms")
 
-                val muxSamples = targetSamples.subList(firstSyncIdx, targetSamples.size)
                 val videoFile = File(context.cacheDir, "livephoto_${System.currentTimeMillis()}.mp4")
 
                 // 封装 MP4

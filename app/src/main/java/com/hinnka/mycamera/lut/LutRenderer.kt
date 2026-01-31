@@ -3,19 +3,11 @@ package com.hinnka.mycamera.lut
 import android.graphics.Bitmap
 import android.graphics.PointF
 import android.graphics.SurfaceTexture
-import android.opengl.EGL14
-import android.opengl.GLES11Ext
-import android.opengl.GLES30
-import android.opengl.GLSurfaceView
-import android.opengl.Matrix
-import android.util.Log
-import android.view.Surface
+import android.opengl.*
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
-import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.nio.ShortBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 import kotlin.math.hypot
@@ -909,18 +901,16 @@ class LutRenderer : GLSurfaceView.Renderer {
                 return
             }
 
-            if (mappedBuffer != null) {
-                val bitmap = Bitmap.createBitmap(captureSize, captureSize, Bitmap.Config.ARGB_8888)
-                bitmap.copyPixelsFromBuffer(mappedBuffer)
-                GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
+            val bitmap = Bitmap.createBitmap(captureSize, captureSize, Bitmap.Config.ARGB_8888)
+            bitmap.copyPixelsFromBuffer(mappedBuffer)
+            GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
 
-                // 翻转 Y 轴并返回
-                val matrix = android.graphics.Matrix()
-                matrix.preScale(1f, -1f)
-                val finalBitmap = Bitmap.createBitmap(bitmap, 0, 0, captureSize, captureSize, matrix, false)
-                bitmap.recycle()
-                onPreviewFrameCaptured?.invoke(finalBitmap)
-            }
+            // 翻转 Y 轴并返回
+            val matrix = android.graphics.Matrix()
+            matrix.preScale(1f, -1f)
+            val finalBitmap = Bitmap.createBitmap(bitmap, 0, 0, captureSize, captureSize, matrix, false)
+            bitmap.recycle()
+            onPreviewFrameCaptured?.invoke(finalBitmap)
 
             // 3. 恢复环境
             GLES30.glDisableVertexAttribArray(aPassPositionLocation)
@@ -988,15 +978,6 @@ class LutRenderer : GLSurfaceView.Renderer {
         val bytes = ByteArray(METERING_SIZE * METERING_SIZE * 4)
         meteringBuffer.rewind()
         meteringBuffer.get(bytes)
-
-        // 调试日志：检查中间像素值
-        val midIdx = (METERING_SIZE / 2 * METERING_SIZE + METERING_SIZE / 2) * 4
-        val sampleR = bytes[midIdx].toInt() and 0xFF
-        val sampleG = bytes[midIdx + 1].toInt() and 0xFF
-        val sampleB = bytes[midIdx + 2].toInt() and 0xFF
-        if (System.currentTimeMillis() % 1000 < 200) { // 降低日志频率
-            PLog.v(TAG, "Metering sample pixel (mid): R=$sampleR, G=$sampleG, B=$sampleB")
-        }
 
         val histogram = IntArray(256)
         var weightedSumLuminance = 0.0

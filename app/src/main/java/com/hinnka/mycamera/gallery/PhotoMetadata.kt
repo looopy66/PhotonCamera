@@ -52,7 +52,9 @@ data class PhotoMetadata(
     // 导出到系统相册的 URI 列表
     val exportedUris: List<String> = emptyList(),
     // RAW 处理引擎
-    val rawEngine: RawEngine? = null
+    val rawEngine: RawEngine? = null,
+    // Live Photo 演示时间戳 (us)
+    val presentationTimestampUs: Long? = null
 ) {
     /**
      * 将元数据转换为 CaptureInfo，用于写入 EXIF
@@ -159,6 +161,8 @@ data class PhotoMetadata(
             put("exportedUris", org.json.JSONArray(exportedUris))
             // RAW 处理引擎
             put("rawEngine", rawEngine?.name ?: JSONObject.NULL)
+            // Live Photo 时间戳
+            put("presentationTimestampUs", presentationTimestampUs ?: JSONObject.NULL)
         }.toString(2)
     }
 
@@ -245,7 +249,8 @@ data class PhotoMetadata(
                         RawEngine.valueOf(obj.getString("rawEngine"))
                     } catch (e: Exception) {
                         null
-                    }
+                    },
+                    presentationTimestampUs = if (obj.isNull("presentationTimestampUs")) null else obj.optLong("presentationTimestampUs")
                 )
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to parse JSON", e)

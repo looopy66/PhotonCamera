@@ -6,7 +6,6 @@ import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.media.Image
-import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -179,7 +178,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     // Burst State
     private var isBursting = false
     private val burstImages = mutableListOf<Image>()
-    private val livePhotoVideoQueue = mutableListOf<CompletableDeferred<File?>>()
+    private val livePhotoVideoQueue = mutableListOf<CompletableDeferred<Pair<File, Long>?>>()
 
     init {
         cameraController.initialize()
@@ -241,7 +240,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val deferred = synchronized(livePhotoVideoQueue) {
                 if (livePhotoVideoQueue.isNotEmpty()) livePhotoVideoQueue.removeAt(0) else null
             }
-            deferred?.complete(file)
+            deferred?.complete(Pair(file, timestamp))
         }
 
         // 设置快门音效和震动回调
@@ -405,21 +404,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             if (useMultiFrame.value) {
                 isBursting = true
                 if (useLivePhoto.value) {
-                    val deferred = CompletableDeferred<File?>()
+                    val deferred = CompletableDeferred<Pair<File, Long>?>()
                     synchronized(livePhotoVideoQueue) {
                         livePhotoVideoQueue.add(deferred)
                     }
-                    cameraController.captureLivePhoto(currentLutConfig, currentRecipeParams.value)
+                    cameraController.captureLivePhoto()
                 }
                 cameraController.capture()
             } else {
                 isBursting = false
                 if (useLivePhoto.value) {
-                    val deferred = CompletableDeferred<File?>()
+                    val deferred = CompletableDeferred<Pair<File, Long>?>()
                     synchronized(livePhotoVideoQueue) {
                         livePhotoVideoQueue.add(deferred)
                     }
-                    cameraController.captureLivePhoto(currentLutConfig, currentRecipeParams.value)
+                    cameraController.captureLivePhoto()
                 }
                 // 普通拍摄：直接拍照
                 cameraController.capture()

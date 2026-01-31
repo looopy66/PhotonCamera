@@ -2,7 +2,6 @@ package com.hinnka.mycamera.camera
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.graphics.Bitmap
 import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
@@ -14,20 +13,14 @@ import android.media.ImageReader
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
-import android.util.Log
 import android.view.Surface
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
-import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.utils.PLog
-import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
-import com.hinnka.mycamera.lut.LutConfig
-import com.hinnka.mycamera.model.ColorRecipeParams
-import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -2203,9 +2196,9 @@ class Camera2Controller(private val context: Context) {
     /**
      * 执行 Live Photo 快照并开始后台录制
      */
-    fun captureLivePhoto(lutConfig: LutConfig?, colorRecipeParams: ColorRecipeParams?) {
+    fun captureLivePhoto() {
         livePhotoRecorder.snapshot()
-        livePhotoRecorder.recordVideo(lutConfig, colorRecipeParams) { file, timestamp ->
+        livePhotoRecorder.recordVideo { file, timestamp ->
             onLivePhotoVideoCaptured?.invoke(file, timestamp)
         }
     }

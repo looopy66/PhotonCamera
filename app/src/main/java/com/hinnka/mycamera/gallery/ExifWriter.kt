@@ -70,6 +70,10 @@ object ExifWriter {
      */
     private fun writeExifInternal(exif: ExifInterface, captureInfo: CaptureInfo) {
         try {
+            if (captureInfo.make.lowercase() == "oppo" || captureInfo.make.lowercase() == "oneplus" || captureInfo.model.lowercase().contains("realme")) {
+                exif.setAttribute(ExifInterface.TAG_USER_COMMENT, "oppo_10485792")
+            }
+
             // ========== 设备信息 ==========
             exif.setAttribute(ExifInterface.TAG_MAKE, captureInfo.make)
             exif.setAttribute(ExifInterface.TAG_MODEL, captureInfo.model)
