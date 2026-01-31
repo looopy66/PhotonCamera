@@ -10,6 +10,7 @@ import com.hinnka.mycamera.R
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -22,8 +23,8 @@ fun CameraTopBar(
     onTimerToggle: () -> Unit,
     showHistogram: Boolean,
     onHistogramToggle: () -> Unit,
-    showGrid: Boolean,
-    onGridToggle: () -> Unit,
+    useLivePhoto: Boolean,
+    onLivePhotoToggle: () -> Unit,
     onSettingsClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -70,6 +71,16 @@ fun CameraTopBar(
             }
         }
 
+        // Live Photo Toggle
+        IconButton(onClick = onLivePhotoToggle) {
+            Icon(
+                painterResource(R.drawable.ic_live_photo),
+                contentDescription = stringResource(R.string.settings_use_live_photo),
+                modifier = Modifier.size(20.dp).autoRotate(),
+                tint = if (useLivePhoto) Color.Yellow else Color.White
+            )
+        }
+
         // Histogram Toggle
         IconButton(onClick = onHistogramToggle) {
             Icon(
@@ -77,16 +88,6 @@ fun CameraTopBar(
                 contentDescription = stringResource(R.string.histogram),
                 modifier = Modifier.size(20.dp).autoRotate(),
                 tint = if (showHistogram) Color.Yellow else Color.White
-            )
-        }
-
-        // Grid Toggle
-        IconButton(onClick = onGridToggle) {
-            Icon(
-                imageVector = Icons.Default.GridOn,
-                contentDescription = stringResource(R.string.grid),
-                modifier = Modifier.size(20.dp).autoRotate(),
-                tint = if (showGrid) Color.Yellow else Color.White
             )
         }
 

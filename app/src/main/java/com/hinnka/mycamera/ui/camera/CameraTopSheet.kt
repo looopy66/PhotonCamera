@@ -8,7 +8,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -42,8 +41,8 @@ fun CameraTopSheet(
     onMultiFrameToggle: (Boolean) -> Unit,
     useSuperResolution: Boolean,
     onSuperResolutionToggle: (Boolean) -> Unit,
-    useLivePhoto: Boolean,
-    onLivePhotoToggle: (Boolean) -> Unit,
+    showGrid: Boolean,
+    onShowGridToggle: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(
@@ -78,7 +77,7 @@ fun CameraTopSheet(
                             .weight(1f)
                             .height(48.dp)
                             .clip(RoundedCornerShape(12.dp))
-                            .background(if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.08f))
+                            .background(if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.15f))
                             .clickable { onAspectRatioChange(ratio) },
                         contentAlignment = Alignment.Center
                     ) {
@@ -113,6 +112,16 @@ fun CameraTopSheet(
                     onCheckedChange = onSuperResolutionToggle,
                     modifier = Modifier.weight(1f)
                 )
+
+                // RAW Toggle (if supported)
+                if (isRawSupported) {
+                    QuickSettingToggle(
+                        title = stringResource(R.string.settings_use_raw),
+                        checked = useRaw,
+                        onCheckedChange = onRawToggle,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -129,42 +138,14 @@ fun CameraTopSheet(
                     modifier = Modifier.weight(1f)
                 )
 
-                // RAW Toggle (if supported)
-                if (isRawSupported) {
-                    QuickSettingToggle(
-                        title = stringResource(R.string.settings_use_raw),
-                        checked = useRaw,
-                        onCheckedChange = onRawToggle,
-                        modifier = Modifier.weight(1f)
-                    )
-                } else {
-                    Spacer(modifier = Modifier.weight(1f))
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                // Live Photo Toggle
+                // Grid Toggle
                 QuickSettingToggle(
-                    title = stringResource(R.string.settings_use_live_photo),
-                    checked = useLivePhoto,
-                    onCheckedChange = onLivePhotoToggle,
+                    title = stringResource(R.string.grid),
+                    checked = showGrid,
+                    onCheckedChange = onShowGridToggle,
                     modifier = Modifier.weight(1f)
                 )
 
-                Spacer(modifier = Modifier.weight(1f))
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
                 // NR Level Cycle
                 val nrLevelNames = availableNrLevels.map {
                     when (it) {
@@ -186,6 +167,15 @@ fun CameraTopSheet(
                     },
                     modifier = Modifier.weight(1f)
                 )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+
                 // Filter Management Button
                 QuickSettingButton(
                     title = stringResource(R.string.settings_filter_management),
@@ -193,12 +183,19 @@ fun CameraTopSheet(
                     onClick = onFilterManageClick,
                     modifier = Modifier.weight(1f)
                 )
+
+                QuickSettingButton(
+                    title = stringResource(R.string.settings_title),
+                    icon = Icons.Default.Settings,
+                    onClick = onMoreSettingsClick,
+                    modifier = Modifier.weight(1f)
+                )
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+//            Spacer(modifier = Modifier.height(24.dp))
 
             // More Settings Button
-            Surface(
+            /*Surface(
                 onClick = onMoreSettingsClick,
                 color = Color.White.copy(alpha = 0.05f),
                 shape = RoundedCornerShape(12.dp),
@@ -238,7 +235,7 @@ fun CameraTopSheet(
                         modifier = Modifier.size(20.dp)
                     )
                 }
-            }
+            }*/
         }
     }
 }
@@ -252,24 +249,26 @@ fun QuickSettingValue(
 ) {
     Box(
         modifier = modifier
-            .height(56.dp)
+            .height(48.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(Color.White.copy(alpha = 0.05f))
+            .background(Color.White.copy(alpha = 0.15f))
             .clickable { onClick() }
             .padding(horizontal = 16.dp),
         contentAlignment = Alignment.CenterStart
     ) {
-        Column {
+        Column(modifier = Modifier.fillMaxHeight(), verticalArrangement = Arrangement.SpaceEvenly) {
             Text(
                 text = title,
                 color = Color.White.copy(alpha = 0.6f),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Normal
+                fontSize = 8.sp,
+                lineHeight = 8.sp,
+                fontWeight = FontWeight.Normal,
             )
             Text(
                 text = value,
                 color = Color.White,
-                fontSize = 14.sp,
+                fontSize = 10.sp,
+                lineHeight = 10.sp,
                 fontWeight = FontWeight.Medium
             )
         }
@@ -322,9 +321,9 @@ fun QuickSettingToggle(
 ) {
     Box(
         modifier = modifier
-            .height(56.dp)
+            .height(48.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(if (checked) Color(0xFFFF6B35).copy(alpha = 0.15f) else Color.White.copy(alpha = 0.05f))
+            .background(if (checked) Color(0xFFFF6B35).copy(alpha = 0.15f) else Color.White.copy(alpha = 0.15f))
             .clickable { onCheckedChange(!checked) }
             .padding(horizontal = 16.dp),
         contentAlignment = Alignment.CenterStart
@@ -337,7 +336,7 @@ fun QuickSettingToggle(
             Text(
                 text = title,
                 color = if (checked) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.9f),
-                fontSize = 14.sp,
+                fontSize = 10.sp,
                 fontWeight = if (checked) FontWeight.Bold else FontWeight.Normal
             )
 
