@@ -447,8 +447,14 @@ class Camera2Controller(private val context: Context) {
                 val outputFormats =
                     cachedCharacteristics?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)?.outputFormats
                         ?: intArrayOf()
+
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     isP010Supported = outputFormats.contains(ImageFormat.YCBCR_P010)
+                }
+
+                // 在相机开启后，如果启用了实况照片，启动录制器（因为 closeCamera 刚才停止了它）
+                if (_state.value.useLivePhoto) {
+                    livePhotoRecorder.startRecording()
                 }
 
                 PLog.i(
@@ -2113,6 +2119,9 @@ class Camera2Controller(private val context: Context) {
             cachedHardwareLevel = CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED
 
             _state.value = _state.value.copy(isPreviewActive = false)
+            
+            // 停止 Live Photo 录制，释放旧环境下的 EGL 资源
+            livePhotoRecorder.stopRecording()
 
             PLog.d(TAG, "Camera closed")
         } catch (e: Exception) {
@@ -2194,12 +2203,28 @@ class Camera2Controller(private val context: Context) {
     }
 
     /**
-     * 执行 Live Photo 快照并开始后台录制
+     * 执行 Live Photo 快照（在按下快门时尽早调用，以确定“之前”的时间范围）
      */
-    fun captureLivePhoto() {
+    fun snapshotLivePhoto() {
         livePhotoRecorder.snapshot()
-        livePhotoRecorder.recordVideo { file, timestamp ->
+    }
+
+    /**
+     * 开始后台录制导出视频（在获得照片精确时间戳后调用）
+     * @param timestampUs 精确的拍照瞬间时间戳（纳秒/1000）
+     */
+    fun recordLivePhotoVideo(timestampUs: Long? = null, onCaptured: ((java.io.File, Long) -> Unit)? = null) {
+        livePhotoRecorder.recordVideo(timestampUs) { file, timestamp ->
+            onCaptured?.invoke(file, timestamp)
             onLivePhotoVideoCaptured?.invoke(file, timestamp)
         }
+    }
+
+    /**
+     * 兼容性方法：执行 Live Photo 快照并立即开始后台录制
+     */
+    fun captureLivePhoto() {
+        snapshotLivePhoto()
+        recordLivePhotoVideo()
     }
 }

@@ -59,11 +59,23 @@ class HardwareLutVideoRenderer(
 
     /**
      * 初始化 EGL 环境并绑定到输出 Surface
-     * @param sharedContext 共享上下文
+     * @param surface 目标 Surface (MediaCodec Input Surface)
+     * @param sharedContext 共享上下文 (主渲染线程的 Context)
+     * @param sharedDisplay 共享显示 (主渲染线程使用的 Display)
      */
-    fun initialize(surface: Surface, sharedContext: EGLContext = EGL14.EGL_NO_CONTEXT) {
-        eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
-        EGL14.eglInitialize(eglDisplay, IntArray(2), 0, IntArray(2), 1)
+    fun initialize(surface: Surface, sharedContext: EGLContext, sharedDisplay: EGLDisplay) {
+        PLog.d(TAG, "Initializing with sharedContext: $sharedContext, sharedDisplay: $sharedDisplay")
+        
+        // 必须使用相同的 EGLDisplay，否则 context sharing 可能失败
+        eglDisplay = if (sharedDisplay != EGL14.EGL_NO_DISPLAY) sharedDisplay else EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
+        
+        // 检查 display 是否已初始化 (如果使用 sharedDisplay 通常已经初始化)
+        val major = IntArray(1)
+        val minor = IntArray(1)
+        if (!EGL14.eglInitialize(eglDisplay, major, 0, minor, 0)) {
+            PLog.e(TAG, "eglInitialize failed: 0x${Integer.toHexString(EGL14.eglGetError())}")
+            return
+        }
 
         val configAttribs = intArrayOf(
             EGL14.EGL_RED_SIZE, 8,
@@ -85,19 +97,39 @@ class HardwareLutVideoRenderer(
             eglDisplay, configs[0], sharedContext,
             intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE), 0
         )
+        if (eglContext == EGL14.EGL_NO_CONTEXT) {
+            val error = EGL14.eglGetError()
+            PLog.e(TAG, "eglCreateContext failed: 0x${Integer.toHexString(error)}. Context sharing failed.")
+            return
+        }
 
         eglSurface = EGL14.eglCreateWindowSurface(
             eglDisplay, configs[0], surface,
             intArrayOf(EGL14.EGL_NONE), 0
         )
+        if (eglSurface == EGL14.EGL_NO_SURFACE) {
+            PLog.e(TAG, "eglCreateWindowSurface failed: 0x${Integer.toHexString(EGL14.eglGetError())}")
+            return
+        }
 
-        makeCurrent()
+        if (!makeCurrent()) {
+            PLog.e(TAG, "Initial eglMakeCurrent failed")
+            return
+        }
+        
         initGL()
-        PLog.d(TAG, "EGL initialized for Texture Copy")
+        PLog.d(TAG, "EGL initialized successfully. Using Shared Display: ${sharedDisplay != EGL14.EGL_NO_DISPLAY}")
     }
 
-    private fun makeCurrent() {
-        EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+    private fun makeCurrent(): Boolean {
+        if (eglDisplay != EGL14.EGL_NO_DISPLAY && eglSurface != EGL14.EGL_NO_SURFACE && eglContext != EGL14.EGL_NO_CONTEXT) {
+            if (!EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
+                PLog.e(TAG, "eglMakeCurrent failed: 0x${Integer.toHexString(EGL14.eglGetError())}")
+                return false
+            }
+            return true
+        }
+        return false
     }
 
     private fun initGL() {
@@ -117,7 +149,7 @@ class HardwareLutVideoRenderer(
         aPositionLoc = GLES30.glGetAttribLocation(shaderProgram, "aPosition")
         aTexCoordLoc = GLES30.glGetAttribLocation(shaderProgram, "aTexCoord")
 
-        // 准备定点数据
+        // 准备顶点数据
         vertexBuffer = ByteBuffer.allocateDirect(Shaders.FULL_QUAD_VERTICES.size * 4).run {
             order(ByteOrder.nativeOrder()).asFloatBuffer().put(Shaders.FULL_QUAD_VERTICES).apply { position(0) }
         }
@@ -139,7 +171,17 @@ class HardwareLutVideoRenderer(
         val oldReadSurface = EGL14.eglGetCurrentSurface(EGL14.EGL_READ)
         val oldContext = EGL14.eglGetCurrentContext()
 
-        makeCurrent()
+        if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
+            val currentContext = EGL14.eglGetCurrentContext()
+            if (currentContext != eglContext) {
+                if (!EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
+                    // Fail silently but log periodically or once
+                    return
+                }
+            }
+        } else {
+            return
+        }
 
         GLES30.glViewport(0, 0, width, height)
         GLES30.glClearColor(0.0f, 0.0f, 0.0f, 1.0f)
@@ -147,9 +189,6 @@ class HardwareLutVideoRenderer(
         GLES30.glUseProgram(shaderProgram)
 
         // 传入矩阵
-        // 因为我们直接拷贝 FBO，stMatrix 可能需要重置为 Identity，或者根据 FBO 坐标系调整
-        // FBO 纹理通常是标准坐标 (0,0)-(1,1) 上下可能翻转
-        // 这里暂时传递 stMatrix，如果 FBO 自带变换则可能需要 Identity
         if (uSTMatrixLoc != -1) GLES30.glUniformMatrix4fv(uSTMatrixLoc, 1, false, stMatrix, 0)
 
         val mvp = FloatArray(16)
@@ -160,6 +199,12 @@ class HardwareLutVideoRenderer(
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
         if (uCameraTextureLoc != -1) GLES30.glUniform1i(uCameraTextureLoc, 0)
+        
+        // 即使出错也打印一次，避免日志爆炸
+        val err = GLES30.glGetError()
+        if (err != GLES30.GL_NO_ERROR) {
+            PLog.e(TAG, "GL Error during bind: 0x${Integer.toHexString(err)} for texture $textureId")
+        }
 
         // 绘制
         if (aPositionLoc != -1) {
@@ -177,7 +222,12 @@ class HardwareLutVideoRenderer(
         if (aTexCoordLoc != -1) GLES30.glDisableVertexAttribArray(aTexCoordLoc)
 
         EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, timestampUs * 1000)
-        EGL14.eglSwapBuffers(eglDisplay, eglSurface)
+        if (!EGL14.eglSwapBuffers(eglDisplay, eglSurface)) {
+            val error = EGL14.eglGetError()
+            if (error != EGL14.EGL_SUCCESS) {
+                PLog.e(TAG, "eglSwapBuffers failed: 0x${Integer.toHexString(error)}")
+            }
+        }
 
         EGL14.eglMakeCurrent(oldDisplay, oldDrawSurface, oldReadSurface, oldContext)
     }
@@ -187,8 +237,10 @@ class HardwareLutVideoRenderer(
             EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
             EGL14.eglDestroySurface(eglDisplay, eglSurface)
             EGL14.eglDestroyContext(eglDisplay, eglContext)
-            EGL14.eglTerminate(eglDisplay)
         }
+        eglDisplay = EGL14.EGL_NO_DISPLAY
+        eglContext = EGL14.EGL_NO_CONTEXT
+        eglSurface = EGL14.EGL_NO_SURFACE
         shaderProgram = 0
     }
 }

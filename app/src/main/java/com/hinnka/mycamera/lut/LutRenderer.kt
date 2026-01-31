@@ -338,6 +338,9 @@ class LutRenderer : GLSurfaceView.Renderer {
             val identity = FloatArray(16)
             Matrix.setIdentityM(identity, 0)
 
+            // 确保 FBO 内容已刷入显存 (对于多上下文共享纹理非常重要)
+            GLES30.glFlush()
+
             // 2. 为 Live Photo 提供预览帧 (使用 FBO 纹理, GL_TEXTURE_2D)
             livePhotoRecorder?.onPreviewFrame(
                 textureId = fboTextureId,
@@ -347,7 +350,8 @@ class LutRenderer : GLSurfaceView.Renderer {
                 timestampNs = surfaceTexture?.timestamp ?: 0L,
                 lutConfig = currentLutConfig,
                 params = getCurrentRecipeParams(),
-                sharedContext = EGL14.eglGetCurrentContext()
+                sharedContext = EGL14.eglGetCurrentContext(),
+                sharedDisplay = EGL14.eglGetCurrentDisplay()
             )
 
             // 3. 将 FBO 绘制到屏幕

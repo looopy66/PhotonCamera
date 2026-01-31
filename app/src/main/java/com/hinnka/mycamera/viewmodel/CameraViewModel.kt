@@ -178,7 +178,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     // Burst State
     private var isBursting = false
     private val burstImages = mutableListOf<Image>()
-    private val livePhotoVideoQueue = mutableListOf<CompletableDeferred<Pair<File, Long>?>>()
 
     init {
         cameraController.initialize()
@@ -237,10 +236,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         cameraController.onLivePhotoVideoCaptured = { file, timestamp ->
-            val deferred = synchronized(livePhotoVideoQueue) {
-                if (livePhotoVideoQueue.isNotEmpty()) livePhotoVideoQueue.removeAt(0) else null
-            }
-            deferred?.complete(Pair(file, timestamp))
+            // Global listener still available for other UI needs if any
         }
 
         // 设置快门音效和震动回调
@@ -404,21 +400,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             if (useMultiFrame.value) {
                 isBursting = true
                 if (useLivePhoto.value) {
-                    val deferred = CompletableDeferred<Pair<File, Long>?>()
-                    synchronized(livePhotoVideoQueue) {
-                        livePhotoVideoQueue.add(deferred)
-                    }
-                    cameraController.captureLivePhoto()
+                    cameraController.snapshotLivePhoto()
                 }
                 cameraController.capture()
             } else {
                 isBursting = false
                 if (useLivePhoto.value) {
-                    val deferred = CompletableDeferred<Pair<File, Long>?>()
-                    synchronized(livePhotoVideoQueue) {
-                        livePhotoVideoQueue.add(deferred)
-                    }
-                    cameraController.captureLivePhoto()
+                    cameraController.snapshotLivePhoto()
                 }
                 // 普通拍摄：直接拍照
                 cameraController.capture()
@@ -1335,9 +1323,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             )
 
             val livePhotoVideoDeferred = if (useLivePhoto.value) {
-                synchronized(livePhotoVideoQueue) {
-                    if (livePhotoVideoQueue.isNotEmpty()) livePhotoVideoQueue.last() else null
+                val deferred = CompletableDeferred<Pair<File, Long>?>()
+                cameraController.recordLivePhotoVideo(image.timestamp / 1000) { file, ts ->
+                    deferred.complete(if (file.name == "error") null else Pair(file, ts))
                 }
+                deferred
             } else null
 
             val photoId = characteristics?.let {
@@ -1431,9 +1421,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             )
 
             val livePhotoVideoDeferred = if (useLivePhoto.value) {
-                synchronized(livePhotoVideoQueue) {
-                    if (livePhotoVideoQueue.isNotEmpty()) livePhotoVideoQueue.last() else null
-                }
+                val deferred = CompletableDeferred<Pair<File, Long>?>()
+                images.firstOrNull()?.let {
+                    cameraController.recordLivePhotoVideo(it.timestamp / 1000) { file, ts ->
+                        deferred.complete(if (file.name == "error") null else Pair(file, ts))
+                    }
+                } ?: deferred.complete(null)
+                deferred
             } else null
 
             val photoId = characteristics?.let {

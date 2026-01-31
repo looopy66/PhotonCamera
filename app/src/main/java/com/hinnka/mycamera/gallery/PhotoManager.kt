@@ -148,11 +148,13 @@ object PhotoManager {
                                 "Attempting to create Motion Photo for export: JPEG=${tempExportFile.length()}, Video=${videoFile.length()}"
                             )
 
+                            // 重新从磁盘加载最新元数据，以获取可能刚写回的 presentationTimestampUs
+                            val latestMetadata = loadMetadata(context, id) ?: metadata
                             val success = MotionPhotoWriter.write(
                                 tempExportFile.absolutePath,
                                 videoFile.absolutePath,
                                 tempMotionPhotoFile.absolutePath,
-                                metadata.presentationTimestampUs ?: 0L
+                                latestMetadata.presentationTimestampUs ?: 0L
                             )
 
                             PLog.d(TAG, "MotionPhotoWriter result: $success")
@@ -276,6 +278,7 @@ object PhotoManager {
 
             // 预先准备所有文件路径
             val photoFile = File(photoDir, PHOTO_FILE)
+            val videoFile = File(photoDir, VIDEO_FILE)
             val tempFile = File(photoDir, "temp.jpg")
             val yuvFile = File(photoDir, YUV_FILE)
             val dngFile = File(photoDir, DNG_FILE)
@@ -307,6 +310,9 @@ object PhotoManager {
                     )
                     metadataFile.writeText(metadataWithInfo.toJson())
                     photoFile.createNewFile()
+                    if (livePhotoVideoDeferred != null) {
+                        videoFile.createNewFile()
+                    }
                     processingScope.launch(Dispatchers.IO) {
                         try {
                             // 创建预览用的 Bitmap
@@ -315,7 +321,6 @@ object PhotoManager {
                             val livePhotoResult = livePhotoVideoDeferred?.await()
                             livePhotoResult?.first?.let { cacheVideoFile ->
                                 if (cacheVideoFile.exists()) {
-                                    val videoFile = File(photoDir, VIDEO_FILE)
                                     try {
                                         cacheVideoFile.copyTo(videoFile, overwrite = true)
                                         cacheVideoFile.delete()
@@ -378,6 +383,9 @@ object PhotoManager {
                     )
                     metadataFile.writeText(metadataWithInfo.toJson())
                     photoFile.createNewFile()
+                    if (livePhotoVideoDeferred != null) {
+                        videoFile.createNewFile()
+                    }
                     processingScope.launch(Dispatchers.IO) {
                         try {
                             captureResult ?: return@launch
@@ -385,7 +393,6 @@ object PhotoManager {
                             val livePhotoResult = livePhotoVideoDeferred?.await()
                             livePhotoResult?.first?.let { cacheVideoFile ->
                                 if (cacheVideoFile.exists()) {
-                                    val videoFile = File(photoDir, VIDEO_FILE)
                                     try {
                                         cacheVideoFile.copyTo(videoFile, overwrite = true)
                                         cacheVideoFile.delete()
@@ -496,6 +503,7 @@ object PhotoManager {
 
             // 预先准备所有文件路径
             val photoFile = File(photoDir, PHOTO_FILE)
+            val videoFile = File(photoDir, VIDEO_FILE)
             val tempFile = File(photoDir, "temp.jpg")
             val yuvFile = File(photoDir, YUV_FILE)
             val dngFile = File(photoDir, DNG_FILE)
@@ -533,12 +541,14 @@ object PhotoManager {
                     )
                     metadataFile.writeText(metadataWithInfo.toJson())
                     photoFile.createNewFile()
+                    if (livePhotoVideoDeferred != null) {
+                        videoFile.createNewFile()
+                    }
                     processingScope.launch(Dispatchers.IO) {
 
                         val livePhotoResult = livePhotoVideoDeferred?.await()
                         livePhotoResult?.first?.let { cacheVideoFile ->
                             if (cacheVideoFile.exists()) {
-                                val videoFile = File(photoDir, VIDEO_FILE)
                                 try {
                                     cacheVideoFile.copyTo(videoFile, overwrite = true)
                                     cacheVideoFile.delete()
@@ -593,6 +603,9 @@ object PhotoManager {
 
                 ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12 -> {
                     photoFile.createNewFile()
+                    if (livePhotoVideoDeferred != null) {
+                        videoFile.createNewFile()
+                    }
                     val scale = if (useSuperResolution) 2 else 1
                     var cropRegion = captureResult?.get(CaptureResult.SCALER_CROP_REGION)
                     if (useSuperResolution && cropRegion != null) {
@@ -619,7 +632,6 @@ object PhotoManager {
                             val livePhotoResult = livePhotoVideoDeferred?.await()
                             livePhotoResult?.first?.let { cacheVideoFile ->
                                 if (cacheVideoFile.exists()) {
-                                    val videoFile = File(photoDir, VIDEO_FILE)
                                     try {
                                         cacheVideoFile.copyTo(videoFile, overwrite = true)
                                         cacheVideoFile.delete()

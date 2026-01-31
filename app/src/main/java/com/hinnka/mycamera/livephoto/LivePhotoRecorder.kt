@@ -61,6 +61,8 @@ class LivePhotoRecorder(
     private val renderDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
 
     private var lastFrameTimestampUs: Long = 0
+    private var lastSharedContext: EGLContext = EGL14.EGL_NO_CONTEXT
+    private var pendingRelease = false
 
     /**
      * 更新实时编码器的配置（如 LUT 或色彩配方）
@@ -81,13 +83,18 @@ class LivePhotoRecorder(
     }
 
     /**
-     * 停止录制
+     * 停止录制 (当实况照片模式关闭或相机关闭时调用)
      */
     fun stopRecording() {
         isRunning = false
-        drainJob?.cancel()
-        release()
-        PLog.d(TAG, "Live Photo background encoder stopped")
+        circularRecorder.stopRecording()
+        if (isCapturing) {
+            PLog.d(TAG, "Stop requested while capture in progress, delaying encoder release")
+            pendingRelease = true
+        } else {
+            release()
+        }
+        PLog.d(TAG, "Live Photo recording stopped")
     }
 
     /**
@@ -101,7 +108,8 @@ class LivePhotoRecorder(
         timestampNs: Long,
         lutConfig: LutConfig?,
         params: ColorRecipeParams?,
-        sharedContext: EGLContext
+        sharedContext: EGLContext,
+        sharedDisplay: EGLDisplay
     ) {
         if (!isRunning) return
 
@@ -109,14 +117,22 @@ class LivePhotoRecorder(
 
         val matrix = transformMatrix.clone()
         scope.launch(renderDispatcher) {
-            // 延迟初始化编码器 (当收到第一帧时)
-            if (encoder == null) {
-                initEncoder(width, height, lutConfig, params, sharedContext)
+            // 如果上下文发生了变化（比如 App 重入），必须释放旧编码器并重新创建
+            if (encoder != null && lastSharedContext != EGL14.EGL_NO_CONTEXT && lastSharedContext != sharedContext) {
+                PLog.w(TAG, "Shared EGL Context changed, forcing encoder re-init.")
+                internalRelease()
             }
 
+            // 延迟初始化编码器
+            if (encoder == null && sharedContext != EGL14.EGL_NO_CONTEXT) {
+                initEncoder(width, height, lutConfig, params, sharedContext, sharedDisplay)
+                lastSharedContext = sharedContext
+                pendingRelease = false
+            }
+            
+            if (!isRunning) return@launch
+
             lutRenderer?.let { renderer ->
-                //PLog.v(TAG, "Rendering frame at ${timestampNs / 1000}")
-                // renderer.updateConfig(lutConfig, params) // No longer needed
                 renderer.renderFrame(textureId, matrix, timestampNs / 1000)
             }
         }
@@ -127,7 +143,8 @@ class LivePhotoRecorder(
         height: Int,
         lutConfig: LutConfig?,
         params: ColorRecipeParams?,
-        sharedContext: EGLContext
+        sharedContext: EGLContext,
+        sharedDisplay: EGLDisplay
     ) {
         try {
             var w = width
@@ -151,7 +168,7 @@ class LivePhotoRecorder(
             }
 
             lutRenderer = HardwareLutVideoRenderer(w, h, lutConfig, params).apply {
-                initialize(inputSurface!!, sharedContext)
+                initialize(inputSurface!!, sharedContext, sharedDisplay)
             }
 
             startDraining()
@@ -180,8 +197,10 @@ class LivePhotoRecorder(
 
     /**
      * 完成并生成视频 (拍照后延迟调用)
+     * @param imageTimestampUs 可选的图像精确时间戳（纳秒/1000），若不传则使用 snapshot 时的预览时间戳
      */
     fun recordVideo(
+        imageTimestampUs: Long? = null,
         onCaptured: (File, Long) -> Unit
     ) {
         scope.launch {
@@ -190,15 +209,33 @@ class LivePhotoRecorder(
                 delay(postCaptureDurationMs + 500L)
 
                 val currentSamples = circularRecorder.snapshot()
+                if (currentSamples.isEmpty()) {
+                    PLog.e(TAG, "No samples in buffer")
+                    isCapturing = false
+                    return@launch
+                }
 
-                // 目标时间范围：[拍照前 1.5s, 拍照后 1.5s]
-                val startTimeUs = snapshotTimestampUs - bufferDurationMs * 1000
-                val endTimeUs = snapshotTimestampUs + postCaptureDurationMs * 1000
+                // 中心时间点
+                val centerTs = imageTimestampUs ?: snapshotTimestampUs
+                
+                // 目标时间范围：[中心前 1.5s, 中心后 1.5s]
+                var startTimeUs = centerTs - bufferDurationMs * 1000
+                val endTimeUs = centerTs + postCaptureDurationMs * 1000
 
-                PLog.d(TAG, "Filtering samples: snapshot=$snapshotTimestampUs, range=[$startTimeUs, $endTimeUs]")
+                // 安全检查：如果中心点完全超出了缓冲区（可能由于长曝光导致延迟太久被裁掉了）
+                // 则取缓冲区中最新的部分
+                val firstSampleTs = currentSamples.first().info.presentationTimeUs
+                val lastSampleTs = currentSamples.last().info.presentationTimeUs
+                
+                if (centerTs < firstSampleTs || centerTs > lastSampleTs) {
+                    PLog.w(TAG, "Center timestamp $centerTs out of buffer range [$firstSampleTs, $lastSampleTs]. Fallback to latest available.")
+                    // 如果落后太多，取最后 3s
+                    startTimeUs = lastSampleTs - (bufferDurationMs + postCaptureDurationMs) * 1000
+                }
+
+                PLog.d(TAG, "Filtering samples: center=$centerTs, range=[$startTimeUs, $endTimeUs]")
 
                 // 策略：寻找 startTimeUs 之前的最后一个关键帧作为视频起点
-                // 这样能保证视频时长至少有 3s 且播放时立即有画面
                 var startIndex = -1
                 for (i in currentSamples.indices.reversed()) {
                     val sample = currentSamples[i]
@@ -217,17 +254,24 @@ class LivePhotoRecorder(
                 }
 
                 if (startIndex == -1 || encoderFormat == null) {
-                    PLog.e(TAG, "No keyframe or format to mux")
-                    isCapturing = false
+                    PLog.e(TAG, "No keyframe or format to mux (format=${encoderFormat != null})")
+                    onCaptured(File("error"), 0L) // Notify failure to prevent hang
                     return@launch
                 }
 
-                // 构件最终样本列表，直到 endTimeUs
+                // 构建最终样本列表，直到 endTimeUs
                 val muxSamples = mutableListOf<CircularVideoRecorder.Sample>()
                 for (i in startIndex until currentSamples.size) {
                     val sample = currentSamples[i]
                     muxSamples.add(sample)
-                    if (sample.info.presentationTimeUs >= endTimeUs) break
+                    // 核心修复：确保至少收集了一些帧再根据 endTime 停止，避免 1 帧问题
+                    if (sample.info.presentationTimeUs >= endTimeUs && muxSamples.size > 5) break
+                }
+
+                if (muxSamples.size < 2) {
+                    PLog.e(TAG, "Too few samples for video: ${muxSamples.size}")
+                    onCaptured(File("error"), 0L) // Notify failure
+                    return@launch
                 }
 
                 PLog.d(TAG, "Selected ${muxSamples.size} samples (was ${currentSamples.size} total)")
@@ -242,14 +286,20 @@ class LivePhotoRecorder(
 
                 // 计算拍照时刻在视频中的相对时间戳
                 val startTs = muxSamples.first().info.presentationTimeUs
-                val presentationTimestampUs = snapshotTimestampUs - startTs
+                val presentationTimestampUs = centerTs - startTs
 
                 onCaptured(videoFile, presentationTimestampUs)
 
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to finish Live Photo capture", e)
+                onCaptured(File("error"), 0L)
             } finally {
                 isCapturing = false
+                if (pendingRelease) {
+                    PLog.d(TAG, "Executing delayed encoder release")
+                    release()
+                    pendingRelease = false
+                }
             }
         }
     }
@@ -263,12 +313,15 @@ class LivePhotoRecorder(
                     val outputBufferIndex = try {
                         encoderRef.dequeueOutputBuffer(bufferInfo, 10_000L)
                     } catch (e: IllegalStateException) {
-                        PLog.e(TAG, "Error closing camera", e)
+                        // 编码器可能在 dequeue 时被 stop 了
+                        PLog.d(TAG, "Encoder dequeue cancelled (encoder stopped)")
                         break
                     }
 
                     if (outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                        encoderFormat = encoderRef.outputFormat
+                        synchronized(this@LivePhotoRecorder) {
+                            encoderFormat = encoderRef.outputFormat
+                        }
                         PLog.d(TAG, "Encoder format changed: $encoderFormat")
                     } else if (outputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
                         //PLog.v(TAG, "Encoder dequeue timeout")
@@ -288,8 +341,13 @@ class LivePhotoRecorder(
     }
 
     private fun muxVideo(outputFile: File, samples: List<CircularVideoRecorder.Sample>) {
+        val format = synchronized(this) { encoderFormat }
+        if (format == null) {
+            PLog.e(TAG, "Cannot mux video: encoderFormat is null")
+            return
+        }
         val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-        val trackIndex = muxer.addTrack(encoderFormat!!)
+        val trackIndex = muxer.addTrack(format)
         muxer.start()
 
         val baseTimeUs = samples.first().info.presentationTimeUs
@@ -307,24 +365,36 @@ class LivePhotoRecorder(
 
     fun release() {
         isRunning = false
-        isCapturing = false
         drainJob?.cancel()
-
+        // 不要在这里立刻置空 encoderFormat，因为异步的 recordVideo 还需要它进行 mux
         scope.launch(renderDispatcher) {
-            encoder?.let {
-                try {
-                    it.stop(); it.release()
-                } catch (e: Exception) {
-                }
-            }
-            encoder = null
-            inputSurface = null
-
-            lutRenderer?.release()
-            lutRenderer = null
-
-            circularRecorder.release()
+            internalRelease()
         }
+    }
+
+    private fun internalRelease() {
+        val encoderRef = encoder
+        encoder = null
+        encoderRef?.let {
+            try {
+                it.stop()
+                it.release()
+            } catch (e: Exception) {
+                PLog.w(TAG, "Error releasing encoder: ${e.message}")
+            }
+        }
+        inputSurface = null
+
+        lutRenderer?.release()
+        lutRenderer = null
+
+        // 核心修复：不要在这里调用 circularRecorder.release()。
+        // 因为 release() 是异步执行的，如果此时用户已经重新打开了相机（Session B），
+        // 调用 circularRecorder.release() 会把已经开始的 Session B 也关掉（isRecording=false）。
+        // 样本缓冲区的生命周期应由 startRecording / stopRecording 同步控制。
+
+        lastSharedContext = EGL14.EGL_NO_CONTEXT
+        PLog.d(TAG, "Live Photo hardware resources released")
     }
 
     // 简单透出状态

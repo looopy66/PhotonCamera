@@ -608,7 +608,7 @@ fun MotionPhotoPlayer(
     val context = LocalContext.current
     
     // Create player and keep it for the duration of the page
-    val exoPlayer = remember(photo.id) {
+    val exoPlayer = remember(photo.id, isPlaying) {
         val videoFile = viewModel.getMotionPhotoVideo(photo)
         if (videoFile == null || !videoFile.exists()) {
             PLog.e("MotionPhotoPlayer", "Video file not found or empty for photo ${photo.id}")

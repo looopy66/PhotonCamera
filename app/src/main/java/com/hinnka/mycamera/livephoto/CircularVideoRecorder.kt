@@ -116,6 +116,7 @@ class CircularVideoRecorder(
      */
     fun release() {
         isRecording = false
-        samples.clear()
+        // 不在这里立刻 clear，允许异步的 recordVideo 任务完成快照获取
+        // samples.clear()
     }
 }
