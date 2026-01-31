@@ -15,7 +15,9 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.viewinterop.AndroidView
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.lut.LutConfig
+import com.hinnka.mycamera.lut.LutRenderer
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.ui.components.FocusIndicator
 
@@ -40,6 +42,7 @@ fun CameraPreviewGL(
     onTap: (Float, Float, Int, Int) -> Unit,
     onHistogramUpdated: ((IntArray) -> Unit)? = null,
     onMeteringUpdated: ((Double, Double) -> Unit)? = null,
+    livePhotoRecorder: LivePhotoRecorder? = null,
     onGLSurfaceViewReady: ((CameraGLSurfaceView) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -114,6 +117,7 @@ fun CameraPreviewGL(
 
                         this.onHistogramUpdated = { onHistogramUpdated?.invoke(it) }
                         this.onMeteringUpdated = { w, l -> onMeteringUpdated?.invoke(w, l) }
+                        this.setLivePhotoRecorder(livePhotoRecorder)
 
                         // 通知 GLSurfaceView 已准备好
                         onGLSurfaceViewReady?.invoke(this)
@@ -161,6 +165,7 @@ fun CameraPreviewGL(
                     }
 
                     glSurfaceView.setFocusPoint(focusPoint?.let { android.graphics.PointF(it.first / viewWidth, it.second / viewHeight) })
+                    glSurfaceView.setLivePhotoRecorder(livePhotoRecorder)
                 },
                 modifier = Modifier.fillMaxSize()
             )

@@ -34,6 +34,7 @@ import com.hinnka.mycamera.utils.VibrationHelper
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.flow.first
+import java.io.File
 import kotlin.math.abs
 
 /**
@@ -75,6 +76,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val vibrationHelper = VibrationHelper(application)
 
     val state: StateFlow<CameraState> = cameraController.state
+    val livePhotoRecorder get() = cameraController.livePhotoRecorder
 
     // 照片保存完成事件
     private val _imageSavedEvent = MutableSharedFlow<Unit>()
@@ -151,6 +153,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val rawEngine: Flow<RawEngine> = userPreferencesRepository.userPreferences
         .map { it.rawEngine }
+    val useLivePhoto: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.useLivePhoto }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     // 软件处理参数 Flow
     val sharpening: Flow<Float> = userPreferencesRepository.userPreferences.map { it.sharpening }
@@ -174,6 +179,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     // Burst State
     private var isBursting = false
     private val burstImages = mutableListOf<Image>()
+    private val livePhotoVideoQueue = mutableListOf<CompletableDeferred<File?>>()
 
     init {
         cameraController.initialize()
@@ -226,7 +232,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setEdgeLevel(it.edgeLevel)
                 // 同步 RAW 设置到相机控制器
                 cameraController.setUseRaw(it.useRaw)
+                // 同步 Live Photo 设置到相机控制器
+                cameraController.setUseLivePhoto(it.useLivePhoto)
             }
+        }
+
+        cameraController.onLivePhotoVideoCaptured = { file, timestamp ->
+            val deferred = synchronized(livePhotoVideoQueue) {
+                if (livePhotoVideoQueue.isNotEmpty()) livePhotoVideoQueue.removeAt(0) else null
+            }
+            deferred?.complete(file)
         }
 
         // 设置快门音效和震动回调
@@ -305,6 +320,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
                 cameraController.setUseMultiFrame(prefs.useMultiFrame, prefs.multiFrameCount)
                 cameraController.setUseSuperResolution(prefs.useSuperResolution)
+                cameraController.setUseLivePhoto(prefs.useLivePhoto)
             } else {
                 // 如果没有任何偏好设置，使用配置文件中的默认 LUT（第一个）
                 val defaultLut = availableLutList.firstOrNull { it.isDefault }
@@ -388,9 +404,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             burstImages.clear()
             if (useMultiFrame.value) {
                 isBursting = true
+                if (useLivePhoto.value) {
+                    val deferred = CompletableDeferred<File?>()
+                    synchronized(livePhotoVideoQueue) {
+                        livePhotoVideoQueue.add(deferred)
+                    }
+                    cameraController.captureLivePhoto(currentLutConfig, currentRecipeParams.value)
+                }
                 cameraController.capture()
             } else {
                 isBursting = false
+                if (useLivePhoto.value) {
+                    val deferred = CompletableDeferred<File?>()
+                    synchronized(livePhotoVideoQueue) {
+                        livePhotoVideoQueue.add(deferred)
+                    }
+                    cameraController.captureLivePhoto(currentLutConfig, currentRecipeParams.value)
+                }
                 // 普通拍摄：直接拍照
                 cameraController.capture()
             }
@@ -855,6 +885,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * 设置是否启用 Live Photo
+     */
+    fun setUseLivePhoto(enabled: Boolean) {
+        cameraController.setUseLivePhoto(enabled)
+        viewModelScope.launch {
+            userPreferencesRepository.saveUseLivePhoto(enabled)
+        }
+    }
+
+    /**
      * 切换延时拍摄档位（0s → 3s → 5s → 10s → 0s）
      */
     fun toggleTimer() {
@@ -1295,6 +1335,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawEngine = rawEngine.firstOrNull()
             )
 
+            val livePhotoVideoDeferred = if (useLivePhoto.value) {
+                synchronized(livePhotoVideoQueue) {
+                    if (livePhotoVideoQueue.isNotEmpty()) livePhotoVideoQueue.last() else null
+                }
+            } else null
+
             val photoId = characteristics?.let {
                 PhotoManager.savePhoto(
                     context,
@@ -1311,6 +1357,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     noiseReductionValue,
                     chromaNoiseReductionValue,
                     photoQualityValue,
+                    livePhotoVideoDeferred = livePhotoVideoDeferred,
                     onProcessingComplete = { cameraController.releaseImage(image) }
                 )
             }
@@ -1384,6 +1431,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawEngine = rawEngine.firstOrNull()
             )
 
+            val livePhotoVideoDeferred = if (useLivePhoto.value) {
+                synchronized(livePhotoVideoQueue) {
+                    if (livePhotoVideoQueue.isNotEmpty()) livePhotoVideoQueue.last() else null
+                }
+            } else null
+
             val photoId = characteristics?.let {
                 PhotoManager.saveStackedPhoto(
                     context,
@@ -1401,6 +1454,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     chromaNoiseReductionValue,
                     photoQualityValue,
                     useSuperResolution = useSuperResolution.value,
+                    livePhotoVideoDeferred = livePhotoVideoDeferred,
                     onProcessingComplete = { images.forEach { cameraController.releaseImage(it) } }
                 )
             }

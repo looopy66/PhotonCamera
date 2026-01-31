@@ -8,6 +8,7 @@ import android.opengl.GLSurfaceView
 import android.util.AttributeSet
 import android.util.Log
 import android.view.Surface
+import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutRenderer
 import com.hinnka.mycamera.utils.PLog
@@ -204,6 +205,13 @@ class CameraGLSurfaceView @JvmOverloads constructor(
             renderer.capturePreviewFrame()
             requestRender()
         }
+    }
+
+    /**
+     * 设置 Live Photo 录制器
+     */
+    fun setLivePhotoRecorder(recorder: LivePhotoRecorder?) {
+        renderer.livePhotoRecorder = recorder
     }
 
     override fun onPause() {
