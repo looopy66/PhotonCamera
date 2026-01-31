@@ -194,10 +194,12 @@ object Shaders {
     uniform float uVignette;      // -1.0 ~ +1.0 (晕影，负值暗角，正值亮角)
     uniform float uBleachBypass;  // 0.0 ~ 1.0 (留银冲洗强度)
 
+    const vec3 W = vec3(0.299, 0.587, 0.114);
+
     void main()
     {
         // 从相机纹理采样原始颜色
-        vec4 color = texture (uCameraTexture, vTexCoord);
+        vec4 color = texture(uCameraTexture, vTexCoord);
 
         // Early exit 优化：无任何调整时直接输出
         if (!uColorRecipeEnabled && !uLutEnabled) {
@@ -207,153 +209,120 @@ object Shaders {
 
         // === 色彩配方处理（按专业后期流程顺序） ===
         if (uColorRecipeEnabled) {
-            // 1. 曝光调整（线性空间，最先执行避免 clipping）
-            color.rgb *= pow(2.0, uExposure);
+            // 1. 曝光调整（使用预计算的 pow(2, exp) 可能更优，但先保持原样或在此优化）
+            if (abs(uExposure) > 0.001) {
+                color.rgb *= pow(2.0, uExposure);
+            }
+
+            // 计算基础亮度，后续复用
+            float luma = dot(color.rgb, W);
 
             // 2. 高光/阴影调整（分区调整，基于亮度 mask）
-            float luma = dot (color.rgb, vec3(0.299, 0.587, 0.114));
-            float highlightMask = smoothstep (0.5, 1.0, luma);
-            float shadowMask = smoothstep (0.5, 0.0, luma);
-            float highlightFactor;
-            if (uHighlights > 0.0) {
-                highlightFactor = 1.0 + uHighlights * 0.7;
-            } else {
-                highlightFactor = 1.0 + uHighlights * 0.3;
+            if (abs(uHighlights) > 0.001 || abs(uShadows) > 0.001) {
+                float highlightMask = smoothstep(0.5, 1.0, luma);
+                float shadowMask = 1.0 - smoothstep(0.0, 0.5, luma);
+                
+                if (abs(uHighlights) > 0.001) {
+                    float highlightFactor = 1.0 + uHighlights * (uHighlights > 0.0 ? 0.7 : 0.3);
+                    color.rgb = mix(color.rgb, color.rgb * highlightFactor, highlightMask);
+                }
+                
+                if (abs(uShadows) > 0.001) {
+                    vec3 shadowTarget = (uShadows > 0.0) 
+                        ? (mix(color.rgb, vec3(luma), uShadows * 0.2) + (color.rgb * uShadows * 0.5))
+                        : (color.rgb * (1.0 + uShadows * 0.5));
+                    color.rgb = mix(color.rgb, shadowTarget, shadowMask);
+                }
+                // 更新亮度
+                luma = dot(color.rgb, W);
             }
-            color.rgb = mix(color.rgb, color.rgb * highlightFactor, highlightMask);
-            vec3 shadowTarget;
-            if (uShadows > 0.0) {
-                shadowTarget = mix(color.rgb, vec3(1.0) * luma, uShadows * 0.2) + (color.rgb * uShadows * 0.5);
-            } else {
-                shadowTarget = color.rgb * (1.0 + uShadows * 0.5);
-            }
-            color.rgb = mix(color.rgb, shadowTarget, shadowMask);
 
             // 3. 对比度（围绕中灰点调整）
-            color.rgb = (color.rgb - 0.5) * uContrast + 0.5;
+            if (abs(uContrast - 1.0) > 0.001) {
+                color.rgb = (color.rgb - 0.5) * uContrast + 0.5;
+            }
 
             // 4. 白平衡调整（色温 + 色调）
-            // 色温：增加暖色调（偏红）或冷色调（偏蓝）
             color.r += uTemperature * 0.1;
             color.b -= uTemperature * 0.1;
-            // 色调：绿-品红偏移
             color.g += uTint * 0.05;
 
-            // 5. 饱和度（基于 Luma 的快速算法，避免 HSL 转换）
-            float gray = dot (color.rgb, vec3(0.299, 0.587, 0.114));
-            color.rgb = mix(vec3(gray), color.rgb, uSaturation);
-
-            // 6. 色彩增强（Vibrance - 选择性增强蓝色/红橙色）
-            float strength = uVibrance * 0.5;
-            // --- 6.1 蓝色增强 (深邃天空/水面) ---
-            float baseBlue = color . b -(color.r + color.g) * 0.5;
-            float blueMask = smoothstep (0.0, 0.2, baseBlue);
-            if (blueMask > 0.0) {
-                // 增加蓝色的纯度 (使用比例混合，避免绝对值减法产生噪点)
-                color.r = mix(color.r, color.r * 0.7, blueMask * strength);
-                color.g = mix(color.g, color.g * 0.7, blueMask * strength);
-                // 稍微压暗蓝色，制造胶片重感 (同样使用比例混合)
-                color.b = mix(color.b, color.b * 0.95, blueMask * strength);
-                // 使用 S 曲线增加蓝色区域的对比度/通透感
-                vec3 sCurve = color . rgb * color . rgb *(3.0 - 2.0 * color.rgb);
-                color.rgb = mix(color.rgb, sCurve, blueMask * strength * 0.2);
-            }
-            // --- 6.2 暖色增强 (新增逻辑：红润肤色/日落) ---
-            // 去除浑浊的蓝色杂质，呈现奶油般质感的红/橙色
-            // 算法：检测红色分量是否显著高于蓝色 (捕捉皮肤、夕阳、木头等)
-            float baseWarm = color . r -(color.g * 0.3 + color.b * 0.7);
-            float warmMask = smoothstep (0.05, 0.25, baseWarm);
-            if (warmMask > 0.0) {
-                // 6.2.1 "去脏"：只在一定范围内应用，避免把鲜艳的红色变黑
-                color.b = mix(color.b, color.b * 0.85, warmMask * strength);
-                // 6.2.2 密度调整
-                color.g = mix(color.g, color.g * 0.95, warmMask * strength);
-                // 6.2.3 胶片感增强：使用非线性缩放而不是简单的乘法，保护亮度
-                vec3 sCurve = color . rgb * color . rgb *(3.0 - 2.0 * color.rgb);
-                color.rgb = mix(color.rgb, sCurve, warmMask * strength * 0.25);
+            // 5. 饱和度
+            if (abs(uSaturation - 1.0) > 0.001) {
+                luma = dot(color.rgb, W);
+                color.rgb = mix(vec3(luma), color.rgb, uSaturation);
             }
 
-            // 7. 褪色效果（降低对比度 + 提升黑电平）
-            if (uFade > 0.0) {
+            // 6. 色彩增强（Vibrance）
+            if (uVibrance > 0.001) {
+                float strength = uVibrance * 0.5;
+                // 蓝色增强
+                float baseBlue = color.b - (color.r + color.g) * 0.5;
+                float blueMask = smoothstep(0.0, 0.2, baseBlue);
+                if (blueMask > 0.0) {
+                    color.r = mix(color.r, color.r * 0.7, blueMask * strength);
+                    color.g = mix(color.g, color.g * 0.7, blueMask * strength);
+                    color.b = mix(color.b, color.b * 0.95, blueMask * strength);
+                    vec3 sCurve = color.rgb * color.rgb * (3.0 - 2.0 * color.rgb);
+                    color.rgb = mix(color.rgb, sCurve, blueMask * strength * 0.2);
+                }
+                // 暖色增强
+                float baseWarm = color.r - (color.g * 0.3 + color.b * 0.7);
+                float warmMask = smoothstep(0.05, 0.25, baseWarm);
+                if (warmMask > 0.0) {
+                    color.b = mix(color.b, color.b * 0.85, warmMask * strength);
+                    color.g = mix(color.g, color.g * 0.95, warmMask * strength);
+                    vec3 sCurve = color.rgb * color.rgb * (3.0 - 2.0 * color.rgb);
+                    color.rgb = mix(color.rgb, sCurve, warmMask * strength * 0.25);
+                }
+            }
+
+            // 7. 褪色效果
+            if (uFade > 0.001) {
                 float fadeAmount = uFade * 0.3;
-                color.rgb = mix(color.rgb, vec3(0.5), fadeAmount);
-                color.rgb += fadeAmount * 0.1;
+                color.rgb = mix(color.rgb, vec3(0.5), fadeAmount) + fadeAmount * 0.1;
             }
 
-            // 8. 留银冲洗（Bleach Bypass - 胶片银盐保留效果）
-            if (uBleachBypass > 0.0) {
-                // 保留部分银盐：降低饱和度
-                float luma = dot (color.rgb, vec3(0.299, 0.587, 0.114));
-                vec3 desaturated = mix (color.rgb, vec3(luma), 0.6);
-
-                // 增强对比度
+            // 8. 留银冲洗
+            if (uBleachBypass > 0.001) {
+                luma = dot(color.rgb, W);
+                vec3 desaturated = mix(color.rgb, vec3(luma), 0.6);
                 desaturated = (desaturated - 0.5) * 1.3 + 0.5;
-
-                // 色调偏移到冷色调（青绿色）
                 desaturated.r *= 0.95;
                 desaturated.g *= 1.02;
                 desaturated.b *= 1.05;
-
-                // 根据强度混合
                 color.rgb = mix(color.rgb, desaturated, uBleachBypass);
             }
 
-            // 9. 晕影（Vignette - 边缘光线衰减/增强）
-            if (abs(uVignette) > 0.0) {
-                // 计算从中心到边缘的距离
-                vec2 center = vec2 (0.5, 0.5);
-                float dist = distance (vTexCoord, center);
-
-                // 使用 smoothstep 创建平滑过渡
-                // 调整衰减曲线：从0.3到0.8的范围
-                float vignetteMask = smoothstep (0.8, 0.3, dist);
-
-                // 根据 uVignette 符号决定是暗角还是亮角
+            // 9. 晕影
+            if (abs(uVignette) > 0.001) {
+                float dist = distance(vTexCoord, vec2(0.5));
+                float vignetteMask = smoothstep(0.8, 0.3, dist);
                 if (uVignette < 0.0) {
-                    // 暗角：边缘变暗（更强的效果：从0.01到1.0）
                     color.rgb *= mix(0.01, 1.0, vignetteMask) * abs(uVignette) + (1.0 + uVignette);
                 } else {
-                    // 亮角：边缘变亮（增强效果）
                     color.rgb = mix(color.rgb, vec3(1.0), (1.0 - vignetteMask) * uVignette);
                 }
             }
 
-            // 10. 颗粒（Film Grain - 胶片颗粒感）
-            if (uFilmGrain > 0.0) {
-                // 使用纹理坐标生成伪随机噪声
-                // 基于片段位置的简单哈希函数
-                float noise = fract (sin(dot(vTexCoord * 1000.0, vec2(12.9898, 78.233))) * 43758.5453);
-
-                // 将噪声从 [0,1] 映射到 [-1,1]
+            // 10. 颗粒
+            if (uFilmGrain > 0.001) {
+                float noise = fract(sin(dot(vTexCoord * 1000.0, vec2(12.9898, 78.233))) * 43758.5453);
                 noise = (noise - 0.5) * 2.0;
-
-                // 根据亮度自适应调整颗粒强度（高光和阴影更明显）
-                float luma = dot (color.rgb, vec3(0.299, 0.587, 0.114));
-                float grainMask = 1.0-abs(luma-0.5) * 2.0; // 中间调弱，高光阴影强
-                grainMask = grainMask * 0.5 + 0.5; // 调整到 [0.5, 1.0] 范围
-
-                // 应用颗粒（增强强度）
-                float grainStrength = uFilmGrain * 0.1 * grainMask;
-                color.rgb += noise * grainStrength;
+                luma = dot(color.rgb, W);
+                float grainMask = (1.0 - abs(luma - 0.5) * 2.0) * 0.5 + 0.5;
+                color.rgb += noise * uFilmGrain * 0.1 * grainMask;
             }
 
-            // Clamp 到合法范围
             color.rgb = clamp(color.rgb, 0.0, 1.0);
         }
 
-        // === LUT 处理（在色彩配方之后，保持 LUT 创作意图） ===
+        // === LUT 处理 ===
         if (uLutEnabled && uLutIntensity > 0.0) {
-            // 3D LUT 查找
-            float scale =(uLutSize - 1.0) / uLutSize;
+            float scale = (uLutSize - 1.0) / uLutSize;
             float offset = 1.0 / (2.0 * uLutSize);
-
-            // 将 RGB 值映射到 LUT 纹理坐标
-            vec3 lutCoord = color . rgb * scale +offset;
-
-            // 从 3D LUT 纹理采样
-            vec4 lutColor = texture (uLutTexture, lutCoord);
-
-            // 根据强度混合色彩配方处理后的颜色和 LUT 颜色
+            vec3 lutCoord = color.rgb * scale + offset;
+            vec4 lutColor = texture(uLutTexture, lutCoord);
             color.rgb = mix(color.rgb, lutColor.rgb, uLutIntensity);
         }
 

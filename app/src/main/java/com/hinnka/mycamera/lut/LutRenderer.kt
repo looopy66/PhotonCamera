@@ -44,6 +44,7 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var texCoordBufferId: Int = 0
     private var indexBufferId: Int = 0
     private var pboId: Int = 0
+    private var meteringPboId: Int = 0
 
     // 测光相关纹理和 FBO
     private var meteringFboId: Int = 0
@@ -253,9 +254,6 @@ class LutRenderer : GLSurfaceView.Renderer {
         // 通知调用者 SurfaceTexture 已准备好
         surfaceTexture?.let { onSurfaceTextureAvailable?.invoke(it) }
 
-        // 通知调用者 SurfaceTexture 已准备好
-        surfaceTexture?.let { onSurfaceTextureAvailable?.invoke(it) }
-
         GlUtils.checkGlError("onSurfaceCreated")
     }
 
@@ -334,7 +332,9 @@ class LutRenderer : GLSurfaceView.Renderer {
             }
         }
 
-        if (fboId != 0 && fboTextureId != 0) {
+        val recorder = livePhotoRecorder
+        // 只有在录制 Live Photo 时才走 FBO 流程，为了获取处理后的 2D 纹理
+        if (recorder != null && fboId != 0 && fboTextureId != 0) {
             // 1. 渲染到 FBO (OES -> FBO, 应用 LUT)
             drawInternal(fboId, viewportWidth, viewportHeight)
 
@@ -346,7 +346,7 @@ class LutRenderer : GLSurfaceView.Renderer {
             GLES30.glFlush()
 
             // 2. 为 Live Photo 提供预览帧 (使用 FBO 纹理, GL_TEXTURE_2D)
-            livePhotoRecorder?.onPreviewFrame(
+            recorder.onPreviewFrame(
                 textureId = fboTextureId,
                 transformMatrix = identity,
                 width = viewportWidth,
@@ -361,7 +361,7 @@ class LutRenderer : GLSurfaceView.Renderer {
             // 3. 将 FBO 绘制到屏幕
             drawFboToScreen(0, viewportWidth, viewportHeight)
         } else {
-            // FBO 未就绪，直接渲染到屏幕 (Fallback)
+            // 直接渲染到屏幕，省去一次 FBO 绘制和一次 Copy 绘制，大幅提升预览帧率并降低功耗
             drawInternal(0, viewportWidth, viewportHeight)
         }
     }
@@ -455,6 +455,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         // 设置色彩配方 Uniforms
         GLES30.glUniform1i(uColorRecipeEnabledLocation, if (colorRecipeEnabled) 1 else 0)
         if (colorRecipeEnabled) {
+            // 优化：仅在有显著变化时更新，或者简单地减少 CPU 消耗
             GLES30.glUniform1f(uExposureLocation, exposure)
             GLES30.glUniform1f(uContrastLocation, contrast)
             GLES30.glUniform1f(uSaturationLocation, saturation)
@@ -1012,10 +1013,31 @@ class LutRenderer : GLSurfaceView.Renderer {
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
         GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
 
-        // 2. 读取像素
-        meteringBuffer.rewind()
-        GLES30.glReadPixels(0, 0, METERING_SIZE, METERING_SIZE, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, meteringBuffer)
+        // 2. 使用 PBO 读取像素 (减少 CPU 阻塞)
+        val pixelSize = METERING_SIZE * METERING_SIZE * 4
+        if (meteringPboId == 0) {
+            val pbos = IntArray(1)
+            GLES30.glGenBuffers(1, pbos, 0)
+            meteringPboId = pbos[0]
+            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, meteringPboId)
+            GLES30.glBufferData(GLES30.GL_PIXEL_PACK_BUFFER, pixelSize, null, GLES30.GL_STREAM_READ)
+        } else {
+            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, meteringPboId)
+        }
 
+        GLES30.glReadPixels(0, 0, METERING_SIZE, METERING_SIZE, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, 0)
+
+        val mappedBuffer = GLES30.glMapBufferRange(
+            GLES30.GL_PIXEL_PACK_BUFFER, 0, pixelSize, GLES30.GL_MAP_READ_BIT
+        ) as? ByteBuffer
+
+        if (mappedBuffer != null) {
+            meteringBuffer.rewind()
+            meteringBuffer.put(mappedBuffer)
+            GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
+        }
+
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         GLES30.glViewport(0, 0, viewportWidth, viewportHeight)
 
@@ -1023,10 +1045,11 @@ class LutRenderer : GLSurfaceView.Renderer {
         calculateMeteringResults()
     }
 
+    private val meteringBytes = ByteArray(METERING_SIZE * METERING_SIZE * 4)
+
     private fun calculateMeteringResults() {
-        val bytes = ByteArray(METERING_SIZE * METERING_SIZE * 4)
         meteringBuffer.rewind()
-        meteringBuffer.get(bytes)
+        meteringBuffer.get(meteringBytes)
 
         val histogram = IntArray(256)
         var weightedSumLuminance = 0.0
@@ -1039,9 +1062,9 @@ class LutRenderer : GLSurfaceView.Renderer {
         for (y in 0 until METERING_SIZE) {
             for (x in 0 until METERING_SIZE) {
                 val idx = (y * METERING_SIZE + x) * 4
-                val r = bytes[idx].toInt() and 0xFF
-                val g = bytes[idx + 1].toInt() and 0xFF
-                val b = bytes[idx + 2].toInt() and 0xFF
+                val r = meteringBytes[idx].toInt() and 0xFF
+                val g = meteringBytes[idx + 1].toInt() and 0xFF
+                val b = meteringBytes[idx + 2].toInt() and 0xFF
 
                 // 计算亮度 (Rec.601)
                 val luma = (0.299 * r + 0.587 * g + 0.114 * b).toInt().coerceIn(0, 255)
@@ -1053,8 +1076,9 @@ class LutRenderer : GLSurfaceView.Renderer {
                     val fx = focus.x * METERING_SIZE
                     val fy = (1.0f - focus.y) * METERING_SIZE
 
-                    val dist = hypot(x.toDouble() - fx.toDouble(), y.toDouble() - fy.toDouble())
-                    if (dist < METERING_SIZE / 4.0) {
+                    val dx = x.toDouble() - fx.toDouble()
+                    val dy = y.toDouble() - fy.toDouble()
+                    if (dx * dx + dy * dy < (METERING_SIZE * METERING_SIZE) / 16.0) {
                         weight = weightCenter
                     }
                 }
@@ -1103,6 +1127,10 @@ class LutRenderer : GLSurfaceView.Renderer {
         if (pboId != 0) {
             GLES30.glDeleteBuffers(1, intArrayOf(pboId), 0)
             pboId = 0
+        }
+        if (meteringPboId != 0) {
+            GLES30.glDeleteBuffers(1, intArrayOf(meteringPboId), 0)
+            meteringPboId = 0
         }
 
         if (meteringFboId != 0) {
