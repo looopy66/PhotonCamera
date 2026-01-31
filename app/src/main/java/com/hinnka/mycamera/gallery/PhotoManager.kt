@@ -154,7 +154,8 @@ object PhotoManager {
                                 tempExportFile.absolutePath,
                                 videoFile.absolutePath,
                                 tempMotionPhotoFile.absolutePath,
-                                latestMetadata.presentationTimestampUs ?: 0L
+                                latestMetadata.presentationTimestampUs ?: 0L,
+                                context
                             )
 
                             PLog.d(TAG, "MotionPhotoWriter result: $success")
@@ -170,6 +171,28 @@ object PhotoManager {
                                     // Fallback to normal JPEG (with EXIF)
                                     PLog.w(TAG, "Motion Photo synthesis failed, falling back to JPEG")
                                     tempExportFile.inputStream().use { input -> input.copyTo(outputStream) }
+                                }
+                            }
+
+                            if (Build.MANUFACTURER.lowercase().contains("vivo")) {
+                                val filename =
+                                    "PhotonCamera_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.mp4"
+                                val contentValues = ContentValues().apply {
+                                    put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                                    put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
+                                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/PhotonCamera")
+                                }
+
+                                val uri = context.contentResolver.insert(
+                                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                                    contentValues
+                                )
+                                uri?.let { uri -> context.contentResolver.openOutputStream(uri) }?.use { outputStream ->
+                                    val tempMotionVideoFile = File(tempMotionPhotoFile.absolutePath.replace(".jpg", ".mp4"))
+                                    if (tempMotionVideoFile.exists()) {
+                                        tempMotionVideoFile.inputStream().use { input -> input.copyTo(outputStream) }
+                                    }
+                                    tempMotionVideoFile.delete()
                                 }
                             }
                         } finally {
