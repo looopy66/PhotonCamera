@@ -280,4 +280,33 @@ object MotionPhotoWriter {
         }
         return -1L
     }
+
+    /**
+     * 从 Motion Photo 中提取视频文件
+     */
+    fun extractVideo(motionPhotoPath: String, outputVideoPath: String): Boolean {
+        try {
+            val videoLength = getVideoLength(motionPhotoPath)
+            if (videoLength <= 0) return false
+
+            val file = File(motionPhotoPath)
+            val fileLength = file.length()
+            val offset = fileLength - videoLength
+
+            FileInputStream(file).use { input ->
+                input.skip(offset)
+                FileOutputStream(outputVideoPath).use { output ->
+                    val buffer = ByteArray(8192)
+                    var len: Int
+                    while (input.read(buffer).also { len = it } != -1) {
+                        output.write(buffer, 0, len)
+                    }
+                }
+            }
+            return true
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to extract video", e)
+            return false
+        }
+    }
 }

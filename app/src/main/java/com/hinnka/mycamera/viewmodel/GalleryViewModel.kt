@@ -282,7 +282,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private suspend fun loadSpecificPhotoMetadata(context: Context, photo: PhotoData): PhotoData {
         var metadata = PhotoManager.loadMetadata(context, photo.id)
         var updatedPhoto = if (metadata != null) {
-            photo.copy(metadata = metadata)
+            photo.copy(
+                metadata = metadata,
+                isMotionPhoto = photo.isMotionPhoto || metadata.presentationTimestampUs != null
+            )
         } else {
             photo
         }
@@ -711,6 +714,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             onComplete(deletedCount)
             PLog.d(TAG, "Batch deleted $deletedCount photos after confirmation")
         }
+    }
+
+    /**
+     * 获取 Motion Photo 视频文件
+     */
+    fun getMotionPhotoVideo(photo: PhotoData): File? {
+        val context = getApplication<Application>()
+        val videoFile = PhotoManager.getVideoFile(context, photo.id)
+        return if (videoFile.exists()) videoFile else null
     }
 
     /**

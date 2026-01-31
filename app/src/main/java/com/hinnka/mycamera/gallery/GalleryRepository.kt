@@ -71,6 +71,7 @@ class GalleryRepository(private val context: Context) {
             val photoFile = PhotoManager.getPhotoFile(context, id)
 
             if (photoFile.exists()) {
+                val videoFile = PhotoManager.getVideoFile(context, id)
                 photos.add(
                     PhotoData(
                         id = id,
@@ -78,7 +79,8 @@ class GalleryRepository(private val context: Context) {
                         thumbnailUri = Uri.fromFile(PhotoManager.getThumbnailFile(context, id)),
                         displayName = photoFile.name,
                         dateAdded = photoFile.lastModified(),
-                        size = photoFile.length()
+                        size = photoFile.length(),
+                        isMotionPhoto = videoFile.exists()
                     )
                 )
             }

@@ -1,8 +1,14 @@
 package com.hinnka.mycamera.ui.gallery
 
 import android.app.Activity
+import android.content.Context
 import android.graphics.Bitmap
+import android.net.Uri
 import android.util.Log
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
@@ -34,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import coil.request.ImageRequest
 import com.hinnka.mycamera.R
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.min
 import me.saket.telephoto.zoomable.coil.ZoomableAsyncImage
 import me.saket.telephoto.zoomable.rememberZoomableImageState
@@ -44,6 +51,15 @@ import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.delay
 import me.saket.telephoto.zoomable.ZoomSpec
 import kotlin.math.min
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.ui.PlayerView
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.isVisible
+import androidx.media3.ui.AspectRatioFrameLayout
+import com.hinnka.mycamera.utils.PLog
+import java.io.File
 
 /**
  * 照片详情界面
@@ -130,6 +146,21 @@ fun PhotoDetailScreen(
                     }
                 },
                 actions = {
+                    // LIVE 标记
+                    if (currentPhoto?.isMotionPhoto == true) {
+                        Box(
+                            modifier = Modifier.padding(8.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    painterResource(R.drawable.ic_live_photo),
+                                    contentDescription = stringResource(R.string.settings_use_live_photo),
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
                     IconButton(onClick = { showInfoDialog = true }) {
                         Icon(
                             imageVector = Icons.Default.Info,
@@ -258,16 +289,89 @@ fun PhotoDetailScreen(
                 ) { page ->
                     val photo = photos.getOrNull(page)
                     if (photo != null) {
-                        ZoomableImage(
-                            photo = photo,
-                            viewModel = viewModel,
-                            onZoomChange = { zoomed ->
-                                if (page == pagerState.currentPage) {
-                                    isZoomed = zoomed
+                        key(photo.id) {
+
+                            var showOrigin by remember { mutableStateOf(false) }
+                            var isPlaying by remember { mutableStateOf(false) }
+
+                            Box(modifier = Modifier.fillMaxSize().pointerInput(Unit) {
+                                awaitPointerEventScope {
+                                    while (true) {
+                                        // 确认第一个手指按下，且当前只有一个指针
+                                        val downEvent = awaitPointerEvent(PointerEventPass.Initial)
+                                        if (downEvent.type == PointerEventType.Press && downEvent.changes.size == 1) {
+                                            val touchSlop = viewConfiguration.touchSlop
+                                            val initialPosition = downEvent.changes[0].position
+                                            val longPressTimeout = viewConfiguration.longPressTimeoutMillis
+                                            var upEvent: PointerEvent? = null
+                                            var isMultiTouch = false
+                                            var isMoved = false
+
+                                            // 期间如果出现第二个手指，立即标志并退出
+                                            withTimeoutOrNull(longPressTimeout) {
+                                                while (true) {
+                                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                    if (event.changes.size > 1) {
+                                                        isMultiTouch = true
+                                                        break
+                                                    }
+
+                                                    val currentPosition = event.changes[0].position
+                                                    if ((currentPosition - initialPosition).getDistance() > touchSlop) {
+                                                        isMoved = true
+                                                        break
+                                                    }
+
+                                                    if (event.type == PointerEventType.Release) {
+                                                        upEvent = event
+                                                        break
+                                                    }
+                                                }
+                                            }
+
+                                            // 如果不是多指操作，才根据结果执行逻辑
+                                            if (!isMultiTouch && !isMoved) {
+                                                if (upEvent == null) {
+                                                    // 确认为长按
+                                                    if (photo.isMotionPhoto) {
+                                                        isPlaying = true
+                                                    } else {
+                                                        showOrigin = true
+                                                    }
+                                                    // 继续监控直到手指抬起，或者变成多指（开始缩放）
+                                                    while (true) {
+                                                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                        if (event.type == PointerEventType.Release || event.changes.size > 1) {
+                                                            break
+                                                        }
+                                                    }
+                                                    showOrigin = false
+                                                    isPlaying = false
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
+                            }) {
+                                ZoomableImage(
+                                    photo = photo,
+                                    showOrigin = showOrigin,
+                                    viewModel = viewModel,
+                                    onZoomChange = { zoomed ->
+                                        if (page == pagerState.currentPage) {
+                                            isZoomed = zoomed
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                                MotionPhotoPlayer(
+                                    photo = photo,
+                                    isPlaying = isPlaying,
+                                    viewModel = viewModel,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -426,125 +530,124 @@ private fun InfoRow(label: String, value: String) {
 @Composable
 private fun ZoomableImage(
     photo: PhotoData,
+    showOrigin: Boolean,
     viewModel: GalleryViewModel,
     onZoomChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
 
-    key(photo.id) {
-        var isLoading by remember { mutableStateOf(true) }
-        val maxZoom = min(photo.width, photo.height) / 300f
-        val zoomableState = rememberZoomableImageState(
-            zoomableState = rememberZoomableState(zoomSpec = ZoomSpec(maxZoomFactor = maxZoom))
-        )
-        var showOrigin by remember { mutableStateOf(false) }
+    var isLoading by remember { mutableStateOf(true) }
+    val maxZoom = min(photo.width, photo.height) / 300f
+    val zoomableState = rememberZoomableImageState(
+        zoomableState = rememberZoomableState(zoomSpec = ZoomSpec(maxZoomFactor = maxZoom))
+    )
 
-        LaunchedEffect(zoomableState.zoomableState.zoomFraction) {
-            onZoomChange((zoomableState.zoomableState.zoomFraction ?: 0f) > 0.01f)
+    LaunchedEffect(zoomableState.zoomableState.zoomFraction) {
+        onZoomChange((zoomableState.zoomableState.zoomFraction ?: 0f) > 0.01f)
+    }
+
+    Box(
+        modifier = modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        val metadataHash = remember(photo.metadata) {
+            photo.metadata?.toJson()?.hashCode() ?: 0
         }
 
-        Box(
-            modifier = modifier.fillMaxSize().pointerInput(Unit) {
-                awaitPointerEventScope {
-                    while (true) {
-                        // 确认第一个手指按下，且当前只有一个指针
-                        val downEvent = awaitPointerEvent(PointerEventPass.Initial)
-                        if (downEvent.type == PointerEventType.Press && downEvent.changes.size == 1) {
-                            val touchSlop = viewConfiguration.touchSlop
-                            val initialPosition = downEvent.changes[0].position
-                            val longPressTimeout = viewConfiguration.longPressTimeoutMillis
-                            var upEvent: PointerEvent? = null
-                            var isMultiTouch = false
-                            var isMoved = false
+        var bitmap by remember { mutableStateOf<Bitmap?>(null) }
 
-                            // 期间如果出现第二个手指，立即标志并退出
-                            withTimeoutOrNull(longPressTimeout) {
-                                while (true) {
-                                    val event = awaitPointerEvent(PointerEventPass.Initial)
-                                    if (event.changes.size > 1) {
-                                        isMultiTouch = true
-                                        break
-                                    }
-
-                                    val currentPosition = event.changes[0].position
-                                    if ((currentPosition - initialPosition).getDistance() > touchSlop) {
-                                        isMoved = true
-                                        break
-                                    }
-
-                                    if (event.type == PointerEventType.Release) {
-                                        upEvent = event
-                                        break
-                                    }
-                                }
-                            }
-
-                            // 如果不是多指操作，才根据结果执行逻辑
-                            if (!isMultiTouch && !isMoved) {
-                                if (upEvent == null) {
-                                    // 确认为长按：显示原图
-                                    showOrigin = true
-                                    // 继续监控直到手指抬起，或者变成多指（开始缩放）
-                                    while (true) {
-                                        val event = awaitPointerEvent(PointerEventPass.Initial)
-                                        if (event.type == PointerEventType.Release || event.changes.size > 1) {
-                                            break
-                                        }
-                                    }
-                                    showOrigin = false
-                                }
-                            }
-                        }
-                    }
+        LaunchedEffect(photo.id, metadataHash, showOrigin) {
+            suspend fun loadBitmap() {
+                isLoading = bitmap == null
+                bitmap = viewModel.getPreviewBitmap(photo, showOrigin = showOrigin)
+                if (bitmap == null) {
+                    delay(500)
+                    loadBitmap()
                 }
-            },
-            contentAlignment = Alignment.Center
-        ) {
-            // 使用 remember 缓存 transformation 和 ImageRequest，避免重组时重新创建导致图片闪烁
-            // 使用 metadata 的内容 hash 作为 key，确保编辑后能正确刷新
-            val metadataHash = remember(photo.metadata) {
-                photo.metadata?.toJson()?.hashCode() ?: 0
+                isLoading = bitmap == null
+            }
+            loadBitmap()
+        }
+
+        if (bitmap != null) {
+            val imageModel = remember(photo.id, metadataHash, bitmap) {
+                ImageRequest.Builder(context)
+                    .data(bitmap)
+                    .crossfade(true) // 禁用交叉淡入淡出，避免缩放时的抖动
+                    .build()
             }
 
-            var bitmap by remember { mutableStateOf<Bitmap?>(null) }
+            ZoomableAsyncImage(
+                model = imageModel,
+                contentDescription = photo.displayName,
+                contentScale = ContentScale.Fit,
+                state = zoomableState,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
 
-            LaunchedEffect(photo.id, metadataHash, showOrigin) {
-                suspend fun loadBitmap() {
-                    isLoading = bitmap == null
-                    bitmap = viewModel.getPreviewBitmap(photo, showOrigin = showOrigin)
-                    if (bitmap == null) {
-                        delay(500)
-                        loadBitmap()
-                    }
-                    isLoading = bitmap == null
-                }
-                loadBitmap()
-            }
+        if (isLoading) {
+            CircularProgressIndicator(
+                color = AccentOrange,
+                modifier = Modifier.size(48.dp)
+            )
+        }
+    }
+}
 
-            if (bitmap != null) {
-                val imageModel = remember(photo.id, metadataHash, bitmap) {
-                    ImageRequest.Builder(context)
-                        .data(bitmap)
-                        .crossfade(true) // 禁用交叉淡入淡出，避免缩放时的抖动
-                        .build()
-                }
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+@Composable
+fun MotionPhotoPlayer(
+    photo: PhotoData,
+    isPlaying: Boolean,
+    viewModel: GalleryViewModel,
+    modifier: Modifier = Modifier
+) {
+    if (!photo.isMotionPhoto) return
+    val context = LocalContext.current
+    
+    // Create player and keep it for the duration of the page
+    val exoPlayer = remember(photo.id) {
+        val videoFile = viewModel.getMotionPhotoVideo(photo)
+        if (videoFile == null || !videoFile.exists()) {
+            PLog.e("MotionPhotoPlayer", "Video file not found or empty for photo ${photo.id}")
+            return@remember null
+        }
+        ExoPlayer.Builder(context).build().apply {
+            setMediaItem(MediaItem.fromUri(Uri.fromFile(videoFile)))
+            repeatMode = Player.REPEAT_MODE_ONE
+            prepare()
+        }
+    }
 
-                ZoomableAsyncImage(
-                    model = imageModel,
-                    contentDescription = photo.displayName,
-                    contentScale = ContentScale.Fit,
-                    state = zoomableState,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
+    DisposableEffect(exoPlayer) {
+        onDispose {
+            exoPlayer?.release()
+        }
+    }
 
-            if (isLoading) {
-                CircularProgressIndicator(
-                    color = AccentOrange,
-                    modifier = Modifier.size(48.dp)
-                )
+    // Control playback based on isPlaying state
+    LaunchedEffect(isPlaying, exoPlayer) {
+        exoPlayer?.let {
+            it.playWhenReady = isPlaying
+            if (!isPlaying) {
+                it.seekTo(0)
             }
         }
     }
+
+    if (exoPlayer == null) return
+
+    AndroidView(
+        factory = {
+            LayoutInflater.from(context).inflate(R.layout.view_motion_photo_player, null) as PlayerView
+        },
+        update = {
+            it.player = exoPlayer
+            it.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            it.isVisible = isPlaying
+        },
+        modifier = modifier
+    )
 }

@@ -85,6 +85,10 @@ object PhotoManager {
         return File(getPhotoDir(context, photoId), THUMBNAIL_FILE)
     }
 
+    fun getVideoFile(context: Context, photoId: String): File {
+        return File(getPhotoDir(context, photoId), VIDEO_FILE)
+    }
+
     suspend fun exportPhoto(
         context: Context,
         id: String,
@@ -1011,6 +1015,17 @@ object PhotoManager {
                 } else {
                     // --- 常规 JPEG 处理逻辑 ---
                     tempImportJpeg(uri, context, photoFile, metadataFile, thumbnailFile)
+                }
+
+                // Check for Motion Photo after import
+                if (photoFile.exists() && MotionPhotoWriter.isMotionPhoto(photoFile.absolutePath)) {
+                    val videoFile = File(photoDir, VIDEO_FILE)
+                    if (MotionPhotoWriter.extractVideo(photoFile.absolutePath, videoFile.absolutePath)) {
+                        PLog.d(TAG, "Extracted video from imported Motion Photo: $photoId")
+                        val metadata = loadMetadata(context, photoId) ?: PhotoMetadata()
+                        val timestampUs = MotionPhotoWriter.getPresentationTimestampUs(photoFile.absolutePath)
+                        saveMetadata(context, photoId, metadata.copy(presentationTimestampUs = timestampUs))
+                    }
                 }
 
                 PLog.d(TAG, "Photo imported: $photoId (isRaw: $isRaw)")
