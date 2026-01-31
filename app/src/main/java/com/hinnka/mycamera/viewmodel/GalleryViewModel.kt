@@ -63,19 +63,21 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     // 软件处理参数
     val sharpening: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.sharpening }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0f)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
 
     val noiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.noiseReduction }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0f)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
 
     val chromaNoiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.chromaNoiseReduction }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0f)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
 
     val categoryOrder: StateFlow<List<String>> = userPreferencesRepository.userPreferences
         .map { it.categoryOrder }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val photoQuality: Flow<Int> = userPreferencesRepository.userPreferences.map { it.photoQuality }
 
     // 计费管理器
     private val billingManager = com.hinnka.mycamera.billing.BillingManagerImpl(application)
@@ -127,7 +129,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }.stateIn(
         scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
+        started = SharingStarted.Eagerly,
         initialValue = ColorRecipeParams.DEFAULT
     )
 
@@ -1030,7 +1032,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             val context = getApplication<Application>()
             PhotoManager.exportPhoto(context, photo.id, photoProcessor, metadata,
                 sharpening.value, noiseReduction.value,
-                chromaNoiseReduction.value) { success ->
+                chromaNoiseReduction.value, photoQuality.firstOrNull() ?: 95) { success ->
                 if (success) {
                     exitEditMode()
                     loadPhotos()
@@ -1057,8 +1059,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
             val sharedFile = File(sharedDir, "share_${photo.id}.jpg")
             FileOutputStream(sharedFile).use { out ->
-                // 使用 95 质量以获得更高的图像清晰度
-                processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                // 使用用户设置的照片质量
+                processedBitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality.firstOrNull() ?: 95, out)
             }
 
             processedBitmap.recycle()

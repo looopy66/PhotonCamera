@@ -59,7 +59,8 @@ data class UserPreferences(
     val useMultiFrame: Boolean = false, // 是否使用多帧合成
     val multiFrameCount: Int = 8, // 多帧合成帧数
     val useSuperResolution: Boolean = false, // 是否使用超分辨率
-    val rawEngine: RawEngine = RawEngine.NATIVE // RAW处理引擎
+    val rawEngine: RawEngine = RawEngine.NATIVE, // RAW处理引擎
+    val photoQuality: Int = 95 // 照片质量: 90, 95, 100
 )
 
 /**
@@ -105,6 +106,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val MULTI_FRAME_COUNT = intPreferencesKey("multi_frame_count")
         private val USE_SUPER_RESOLUTION = booleanPreferencesKey("use_super_resolution")
         private val RAW_ENGINE = stringPreferencesKey("raw_engine")
+        private val PHOTO_QUALITY = intPreferencesKey("photo_quality")
     }
 
     /**
@@ -144,7 +146,8 @@ class UserPreferencesRepository(private val context: Context) {
                 useSuperResolution = preferences[USE_SUPER_RESOLUTION] ?: false,
                 rawEngine = RawEngine.valueOf(
                     preferences[RAW_ENGINE] ?: RawEngine.NATIVE.name
-                )
+                ),
+                photoQuality = preferences[PHOTO_QUALITY] ?: 95
             )
         }
 
@@ -431,6 +434,15 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveRawEngine(engine: RawEngine) {
         context.dataStore.edit { preferences ->
             preferences[RAW_ENGINE] = engine.name
+        }
+    }
+
+    /**
+     * 保存照片质量
+     */
+    suspend fun savePhotoQuality(quality: Int) {
+        context.dataStore.edit { preferences ->
+            preferences[PHOTO_QUALITY] = quality
         }
     }
 }

@@ -92,7 +92,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         contentRepository.lutManager.getColorRecipeParams(id)
     }.stateIn(
         scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
+        started = SharingStarted.Eagerly,
         initialValue = ColorRecipeParams.DEFAULT
     )
 
@@ -130,24 +130,25 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val autoSaveAfterCapture: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.autoSaveAfterCapture }
     val nrLevel: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.nrLevel }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 1)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 1)
     val useRaw: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useRaw }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val edgeLevel: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.edgeLevel }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 1)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 1)
+    val photoQuality: Flow<Int> = userPreferencesRepository.userPreferences.map { it.photoQuality }
 
     val defaultFocalLength: Flow<Float> = userPreferencesRepository.userPreferences.map { it.defaultFocalLength }
     val useMultiFrame: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useMultiFrame }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val multiFrameCount: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.multiFrameCount }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 8)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 8)
     val useSuperResolution: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useSuperResolution }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val rawEngine: Flow<RawEngine> = userPreferencesRepository.userPreferences
         .map { it.rawEngine }
 
@@ -1139,6 +1140,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * 设置照片质量
+     */
+    fun setPhotoQuality(quality: Int) {
+        viewModelScope.launch {
+            userPreferencesRepository.savePhotoQuality(quality)
+        }
+    }
+
+    /**
      * 设置锐化强度
      */
     fun setSharpening(value: Float) {
@@ -1244,6 +1254,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val sharpeningValue = sharpening.firstOrNull() ?: 0f
             val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
             val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
+            val photoQualityValue = photoQuality.firstOrNull() ?: 95
             val currentCameraId = cameraController.getCurrentCameraId()
 
             // 计算旋转角度
@@ -1299,6 +1310,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     sharpeningValue,
                     noiseReductionValue,
                     chromaNoiseReductionValue,
+                    photoQualityValue,
                     onProcessingComplete = { cameraController.releaseImage(image) }
                 )
             }
@@ -1331,6 +1343,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val sharpeningValue = sharpening.firstOrNull() ?: 0f
             val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
             val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
+            val photoQualityValue = photoQuality.firstOrNull() ?: 95
             val currentCameraId = cameraController.getCurrentCameraId()
 
             // 计算旋转角度
@@ -1386,6 +1399,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     sharpeningValue,
                     noiseReductionValue,
                     chromaNoiseReductionValue,
+                    photoQualityValue,
                     useSuperResolution = useSuperResolution.value,
                     onProcessingComplete = { images.forEach { cameraController.releaseImage(it) } }
                 )

@@ -77,6 +77,7 @@ fun SettingsScreen(
     val multiFrameCount by viewModel.multiFrameCount.collectAsState()
     val useSuperResolution by viewModel.useSuperResolution.collectAsState()
     val rawEngine by viewModel.rawEngine.collectAsState(initial = RawEngine.NATIVE)
+    val photoQuality by viewModel.photoQuality.collectAsState(initial = 95)
     val isPurchased by viewModel.isPurchased.collectAsState()
 
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -244,6 +245,23 @@ fun SettingsScreen(
                     ),
                     currentLevel = edgeLevel,
                     onLevelSelected = { viewModel.setEdgeLevel(it) }
+                )
+
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 12.dp)
+                )
+
+                QualityLevelSetting(
+                    title = stringResource(R.string.settings_photo_quality),
+                    description = stringResource(R.string.settings_photo_quality_description),
+                    levels = listOf(
+                        90 to "90",
+                        95 to "95",
+                        100 to "100"
+                    ),
+                    currentLevel = photoQuality,
+                    onLevelSelected = { viewModel.setPhotoQuality(it) }
                 )
             }
 

@@ -98,6 +98,7 @@ object PhotoManager {
         sharpeningValue: Float,
         noiseReductionValue: Float,
         chromaNoiseReductionValue: Float,
+        photoQuality: Int = 95,
         onComplete: (Boolean) -> Unit = {}
     ) {
         withContext(Dispatchers.IO) {
@@ -126,7 +127,7 @@ object PhotoManager {
 
                 uri?.let {
                     context.contentResolver.openOutputStream(it)?.use { outputStream ->
-                        processedBitmap.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
+                        processedBitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
                     }
 
                     // 写入 EXIF 信息
@@ -224,6 +225,7 @@ object PhotoManager {
         sharpeningValue: Float,
         noiseReductionValue: Float,
         chromaNoiseReductionValue: Float,
+        photoQuality: Int = 95,
         onProcessingComplete: (() -> Unit)? = null
     ): String? = withContext(Dispatchers.IO) {
         try {
@@ -278,7 +280,7 @@ object PhotoManager {
                                     generateThumbnail(previewBitmap, thumbnailFile)
                                 }
                                 FileOutputStream(tempFile).use { outputStream ->
-                                    previewBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                                    previewBitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
                                 }
                                 tempFile.renameTo(photoFile)
                                 if (shouldAutoSave) {
@@ -289,7 +291,8 @@ object PhotoManager {
                                         metadataWithInfo,
                                         sharpeningValue,
                                         noiseReductionValue,
-                                        chromaNoiseReductionValue
+                                        chromaNoiseReductionValue,
+                                        photoQuality
                                     )
                                 }
                             }
@@ -345,7 +348,7 @@ object PhotoManager {
                                 generateThumbnail(bitmap, thumbnailFile)
                             }
                             FileOutputStream(tempFile).use { outputStream ->
-                                bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                                bitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
                             }
                             tempFile.renameTo(photoFile)
                             bitmap.recycle()
@@ -362,7 +365,8 @@ object PhotoManager {
                                     metadataWithInfo,
                                     sharpeningValue,
                                     noiseReductionValue,
-                                    chromaNoiseReductionValue
+                                    chromaNoiseReductionValue,
+                                    photoQuality
                                 )
                             }
                         } finally {
@@ -402,6 +406,7 @@ object PhotoManager {
         sharpeningValue: Float,
         noiseReductionValue: Float,
         chromaNoiseReductionValue: Float,
+        photoQuality: Int = 95,
         useSuperResolution: Boolean = false,
         onProcessingComplete: (() -> Unit)? = null
     ): String? = withContext(Dispatchers.IO) {
@@ -464,7 +469,7 @@ object PhotoManager {
                             }
                             // Save Original (Stacked Result)
                             FileOutputStream(tempFile).use { outputStream ->
-                                result.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                                result.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
                             }
                             tempFile.renameTo(photoFile)
                             result.recycle()
@@ -544,7 +549,7 @@ object PhotoManager {
                             }
                             // Save Original (Stacked Result)
                             FileOutputStream(tempFile).use { outputStream ->
-                                result.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                                result.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
                             }
                             tempFile.renameTo(photoFile)
                             result.recycle()
