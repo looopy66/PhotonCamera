@@ -176,6 +176,8 @@ data class CameraState(
     val useSuperResolution: Boolean = false,
     val useRaw: Boolean = false,
     val useLivePhoto: Boolean = false,
+    // 是否正在拍摄 Live Photo (用于 UI 动画)
+    val isCapturingLivePhoto: Boolean = false,
 ) {
     /**
      * 是否全自动曝光

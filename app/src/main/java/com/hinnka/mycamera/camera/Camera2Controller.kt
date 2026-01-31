@@ -1759,6 +1759,11 @@ class Camera2Controller(private val context: Context) {
     }
 
 
+    fun setCapturingLivePhoto(enabled: Boolean) {
+        _state.value = _state.value.copy(isCapturingLivePhoto = enabled)
+    }
+
+
 // ==================== 拍照 ====================
 
     /**

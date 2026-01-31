@@ -506,6 +506,7 @@ fun Controls(
         // 拍照按钮 (Center)
         CaptureButton(
             isCapturing = state.isCapturing,
+            isCapturingLivePhoto = state.isCapturingLivePhoto,
             onClick = { viewModel.capture() }
         )
 
@@ -535,6 +536,7 @@ fun Controls(
 @Composable
 fun CaptureButton(
     isCapturing: Boolean,
+    isCapturingLivePhoto: Boolean = false,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -544,11 +546,17 @@ fun CaptureButton(
         label = "captureScale"
     )
 
+    val rotation by animateFloatAsState(
+        targetValue = if (isCapturingLivePhoto) 360f else 0f,
+        animationSpec = if (isCapturingLivePhoto) tween(1500) else tween(0),
+        label = "livePhotoRotation"
+    )
+
     Box(
         modifier = modifier
-            .size(80.dp)
+            .size(72.dp)
             .scale(scale)
-            .clickable(enabled = !isCapturing) { onClick() },
+            .clickable(enabled = !isCapturing && !isCapturingLivePhoto) { onClick() },
         contentAlignment = Alignment.Center
     ) {
         // Inner Yellow Ring
@@ -557,6 +565,23 @@ fun CaptureButton(
                 .fillMaxSize()
                 .border(2.dp, Color(0xFFFFD700), CircleShape)
         )
+
+        // Live Photo Indicator (Spinning dash)
+        if (isCapturingLivePhoto) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val strokeWidth = 3.dp.toPx()
+                drawArc(
+                    color = Color(0xFFFFD700),
+                    startAngle = rotation - 90f,
+                    sweepAngle = 90f,
+                    useCenter = false,
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(
+                        width = strokeWidth,
+                        cap = androidx.compose.ui.graphics.StrokeCap.Round
+                    )
+                )
+            }
+        }
 
         // Center Solid Button (When not capturing)
         if (!isCapturing) {

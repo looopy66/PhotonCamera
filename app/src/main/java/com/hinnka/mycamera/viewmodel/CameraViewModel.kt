@@ -390,6 +390,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 generateThumbnail()
                 // 倒计时结束，拍照
                 cameraController.setCountdownValue(0)
+                if (useLivePhoto.value) {
+                    cameraController.setCapturingLivePhoto(true)
+                    viewModelScope.launch {
+                        delay(1500)
+                        cameraController.setCapturingLivePhoto(false)
+                    }
+                }
                 cameraController.capture()
             }
         } else {
@@ -400,12 +407,22 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             if (useMultiFrame.value) {
                 isBursting = true
                 if (useLivePhoto.value) {
+                    cameraController.setCapturingLivePhoto(true)
+                    viewModelScope.launch {
+                        delay(1500)
+                        cameraController.setCapturingLivePhoto(false)
+                    }
                     cameraController.snapshotLivePhoto()
                 }
                 cameraController.capture()
             } else {
                 isBursting = false
                 if (useLivePhoto.value) {
+                    cameraController.setCapturingLivePhoto(true)
+                    viewModelScope.launch {
+                        delay(1500)
+                        cameraController.setCapturingLivePhoto(false)
+                    }
                     cameraController.snapshotLivePhoto()
                 }
                 // 普通拍摄：直接拍照
