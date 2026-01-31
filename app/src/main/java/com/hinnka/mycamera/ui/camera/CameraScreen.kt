@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.paint
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Rect
@@ -30,8 +31,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -80,8 +83,6 @@ fun CameraScreen(
     val useRaw by viewModel.useRaw.collectAsState()
     val useMultiFrame by viewModel.useMultiFrame.collectAsState()
     val useSuperResolution by viewModel.useSuperResolution.collectAsState()
-
-    val backgroundColor = Color(0xFF434A5D)
 
     // 标记相机是否已打开
     var cameraOpened by remember { mutableStateOf(false) }
@@ -140,7 +141,7 @@ fun CameraScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(backgroundColor)
+                .paint(painterResource(R.drawable.camera_bg), contentScale = ContentScale.Crop)
         ) {
             // 顶部控制条
             CameraTopBar(
@@ -225,6 +226,22 @@ fun CameraScreen(
                             )
                         }
 
+                        // 网格线覆盖
+                        if (state.showGrid) {
+                            GridOverlay(
+                                aspectRatio = state.aspectRatio,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+
+                        // 水平仪覆盖
+                        if (showLevelIndicator) {
+                            LevelIndicatorOverlay(
+                                aspectRatio = state.aspectRatio,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+
                         if (activePanel == ActivePanel.NONE) {
                             // Zoom Control Bar (Overlay at bottom of preview)
                             ZoomControlBar(
@@ -240,22 +257,6 @@ fun CameraScreen(
                                         if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
                                 },
                                 modifier = Modifier.align(Alignment.BottomCenter)
-                            )
-                        }
-
-                        // 网格线覆盖
-                        if (state.showGrid) {
-                            GridOverlay(
-                                aspectRatio = state.aspectRatio,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-
-                        // 水平仪覆盖
-                        if (showLevelIndicator) {
-                            LevelIndicatorOverlay(
-                                aspectRatio = state.aspectRatio,
-                                modifier = Modifier.fillMaxSize()
                             )
                         }
 
@@ -520,29 +521,21 @@ fun CaptureButton(
             .clickable(enabled = !isCapturing) { onClick() },
         contentAlignment = Alignment.Center
     ) {
-        // Outer White Ring
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .border(2.dp, Color.White, CircleShape)
-        )
-
         // Inner Yellow Ring
         Box(
             modifier = Modifier
-                .padding(4.dp)
                 .fillMaxSize()
-                .border(4.dp, Color(0xFFFFD700), CircleShape)
+                .border(2.dp, Color(0xFFFFD700), CircleShape)
         )
 
         // Center Solid Button (When not capturing)
         if (!isCapturing) {
             Box(
                 modifier = Modifier
-                    .padding(12.dp)
+                    .padding(4.dp)
                     .fillMaxSize()
                     .clip(CircleShape)
-                    .background(Color(0xFF434A5D))
+                    .background(Color.White)
             )
         }
     }

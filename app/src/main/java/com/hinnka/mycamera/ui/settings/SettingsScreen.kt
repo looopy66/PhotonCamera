@@ -86,7 +86,7 @@ fun SettingsScreen(
     var softwareProcessingExpanded by remember { mutableStateOf(false) }
     var calibrationExpanded by remember { mutableStateOf(false) }
 
-    val backgroundColor = Color(0xFF434A5D)
+    val backgroundColor = Color(0xFF151515)
 
     Column(
         modifier = modifier

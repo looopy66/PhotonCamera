@@ -34,7 +34,7 @@ fun LutEditBottomSheet(
 ) {
     val viewModel: LutEditViewModel = viewModel()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val backgroundColor = Color(0xFF434A5D)
+    val backgroundColor = Color(0xFF151515)
 
     var editingParams by remember { mutableStateOf(ColorRecipeParams.DEFAULT) }
 

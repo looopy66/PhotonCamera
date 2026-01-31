@@ -54,7 +54,7 @@ fun CameraTopSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp))
-                .background(Color(0xFF2C3141))
+                .background(Color.Black.copy(alpha = 0.8f))
                 .padding(top = 48.dp, bottom = 24.dp, start = 24.dp, end = 24.dp)
         ) {
             // Aspect Ratio Section

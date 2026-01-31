@@ -68,13 +68,3 @@ fun PhotonCameraTheme(
         content = content
     )
 }
-
-// 保持旧主题函数用于兼容
-@Composable
-fun MyCameraTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,
-    content: @Composable () -> Unit
-) {
-    PhotonCameraTheme(darkTheme = darkTheme, dynamicColor = dynamicColor, content = content)
-}

@@ -146,7 +146,7 @@ fun FrameManagementScreen(
         }
     }
 
-    val backgroundColor = Color(0xFF434A5D)
+    val backgroundColor = Color(0xFF151515)
 
     Column(
         modifier = modifier
