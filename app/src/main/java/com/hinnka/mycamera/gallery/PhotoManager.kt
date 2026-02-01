@@ -673,14 +673,21 @@ object PhotoManager {
                                 useSuperResolution
                             )
                             byteBuffer ?: return@launch
-                            val scaledWidth = images[0].width * scale
-                            val scaledHeight = images[0].height * scale
                             val byteOutstream = ByteArrayOutputStream()
                             byteOutstream.use { outputStream ->
-                                RawProcessor.saveToDng(
-                                    byteBuffer.asReadOnlyBuffer(), characteristics,
-                                    captureResult, outputStream, scaledWidth, scaledHeight, rotation
-                                )
+                                try {
+                                    val scaledWidth = images[0].width * scale
+                                    val scaledHeight = images[0].height * scale
+                                    RawProcessor.saveToDng(
+                                        byteBuffer.asReadOnlyBuffer(), characteristics,
+                                        captureResult, outputStream, scaledWidth, scaledHeight, rotation
+                                    )
+                                } catch (e: Throwable) {
+                                    // Fallback: If scaled DNG is not supported by hardware, 
+                                    // save the first original frame to maintain DNG availability.
+                                    PLog.i(TAG, "SR DNG dimensions not supported, falling back to original frame DNG")
+                                    RawProcessor.saveToDng(images[0], characteristics, captureResult, outputStream, rotation)
+                                }
                             }
                             val array = byteOutstream.toByteArray()
                             FileOutputStream(dngFile).use {
