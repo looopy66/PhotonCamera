@@ -175,8 +175,7 @@ object PhotoManager {
                             }
 
                             if (Build.MANUFACTURER.lowercase().contains("vivo")) {
-                                val filename =
-                                    "PhotonCamera_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.mp4"
+                                val filename = filename.replace(".jpg", ".mp4")
                                 val contentValues = ContentValues().apply {
                                     put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
                                     put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")

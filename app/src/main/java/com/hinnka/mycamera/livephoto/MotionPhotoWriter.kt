@@ -60,7 +60,6 @@ object MotionPhotoWriter {
             if (!videoFile.exists()) return false
 
             val creator = getCreator(context)
-            PLog.d(TAG, "Using creator: ${creator::class.java.simpleName}")
             
             return creator.create(jpegPath, videoPath, outputPath, presentationTimestampUs)
 
