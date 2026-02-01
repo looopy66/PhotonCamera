@@ -607,33 +607,29 @@ fun MotionPhotoPlayer(
     if (!photo.isMotionPhoto) return
     val context = LocalContext.current
     
-    // Create player and keep it for the duration of the page
+    var isReadyToShow by remember(photo.id, isPlaying) { mutableStateOf(false) }
+
     val exoPlayer = remember(photo.id, isPlaying) {
         val videoFile = viewModel.getMotionPhotoVideo(photo)
         if (videoFile == null || !videoFile.exists()) {
-            PLog.e("MotionPhotoPlayer", "Video file not found or empty for photo ${photo.id}")
             return@remember null
         }
         ExoPlayer.Builder(context).build().apply {
             setMediaItem(MediaItem.fromUri(Uri.fromFile(videoFile)))
             repeatMode = Player.REPEAT_MODE_ONE
+            addListener(object : Player.Listener {
+                override fun onRenderedFirstFrame() {
+                    isReadyToShow = true
+                }
+            })
             prepare()
+            playWhenReady = isPlaying
         }
     }
 
     DisposableEffect(exoPlayer) {
         onDispose {
             exoPlayer?.release()
-        }
-    }
-
-    // Control playback based on isPlaying state
-    LaunchedEffect(isPlaying, exoPlayer) {
-        exoPlayer?.let {
-            it.playWhenReady = isPlaying
-            if (!isPlaying) {
-                it.seekTo(0)
-            }
         }
     }
 
@@ -645,8 +641,9 @@ fun MotionPhotoPlayer(
         },
         update = {
             it.player = exoPlayer
-            it.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            it.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
             it.isVisible = isPlaying
+            it.alpha = if (isReadyToShow) 1f else 0f
         },
         modifier = modifier
     )
