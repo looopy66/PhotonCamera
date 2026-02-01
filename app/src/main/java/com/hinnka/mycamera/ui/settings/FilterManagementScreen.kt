@@ -405,6 +405,8 @@ fun FilterManagementScreen(
 
         Column(modifier = Modifier.weight(1f)) {
             // 修正 Tab 越界（如果分类消失了）
+            val currentTabIndex = if (selectedTabIndex >= categories.size) 0 else selectedTabIndex
+            
             LaunchedEffect(categories.size) {
                 if (selectedTabIndex >= categories.size) {
                     selectedTabIndex = 0
@@ -414,21 +416,23 @@ fun FilterManagementScreen(
             val copy_suffix = stringResource(R.string.copy_suffix)
 
             ScrollableTabRow(
-                selectedTabIndex = selectedTabIndex,
+                selectedTabIndex = currentTabIndex,
                 containerColor = Color.Transparent,
                 contentColor = Color.White,
                 edgePadding = 16.dp,
                 divider = {},
                 indicator = { tabPositions ->
-                    TabRowDefaults.SecondaryIndicator(
-                        modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
-                        color = Color(0xFFFF6B35)
-                    )
+                    if (currentTabIndex < tabPositions.size) {
+                        TabRowDefaults.SecondaryIndicator(
+                            modifier = Modifier.tabIndicatorOffset(tabPositions[currentTabIndex]),
+                            color = Color(0xFFFF6B35)
+                        )
+                    }
                 }
             ) {
                 categories.forEachIndexed { index, category ->
                     Tab(
-                        selected = selectedTabIndex == index,
+                        selected = currentTabIndex == index,
                         onClick = {
                             selectedTabIndex = index
                             selectedIds = emptySet()
