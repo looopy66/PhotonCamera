@@ -29,7 +29,7 @@
     <string name="ratio_1_1">1:1</string>
 
     <!-- Permissions -->
-    <string name="camera_permission_required">需要相机权限</string>
+    <string name="camera_permission_required">需要相机和麦克风权限</string>
     <string name="grant_permission">授予权限</string>
 
     <!-- Zoom -->

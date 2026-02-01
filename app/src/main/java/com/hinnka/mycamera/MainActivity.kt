@@ -78,12 +78,17 @@ class MainActivity : ComponentActivity() {
     private val cameraViewModel: CameraViewModel by viewModels()
     private val galleryViewModel: GalleryViewModel by viewModels()
 
-    private var hasCameraPermission by mutableStateOf(false)
+    private val permissions = arrayOf(
+        Manifest.permission.CAMERA,
+        Manifest.permission.RECORD_AUDIO
+    )
+
+    private var hasPermissions by mutableStateOf(false)
 
     private val permissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        hasCameraPermission = isGranted
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
+        hasPermissions = result.values.all { it }
     }
 
     private val deletePhotoLauncher = registerForActivityResult(
@@ -106,10 +111,10 @@ class MainActivity : ComponentActivity() {
         hideSystemUI()
         OrientationObserver.observe(this)
 
-        // 检查相机权限
-        hasCameraPermission = ContextCompat.checkSelfPermission(
-            this, Manifest.permission.CAMERA
-        ) == PackageManager.PERMISSION_GRANTED
+        // 检查权限
+        hasPermissions = permissions.all {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+        }
 
         setContent {
             PhotonCameraTheme {
@@ -117,12 +122,12 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = Color.Black
                 ) {
-                    if (hasCameraPermission) {
+                    if (hasPermissions) {
                         NavigationHost(cameraViewModel, galleryViewModel)
                     } else {
                         PermissionScreen(
                             onRequestPermission = {
-                                permissionLauncher.launch(Manifest.permission.CAMERA)
+                                permissionLauncher.launch(permissions)
                             }
                         )
                     }

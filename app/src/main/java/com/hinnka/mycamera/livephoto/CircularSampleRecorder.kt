@@ -6,17 +6,17 @@ import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentLinkedDeque
 
 /**
- * 循环视频采样缓冲器
+ * 循环采样缓冲器
  *
- * 存储由 MediaCodec 编码后的视频样本 (Samples)。
+ * 存储由 MediaCodec 编码后的数据样本 (Samples)。
  * 相比存储原始像素，这种方式内存占用极低 (几百 KB vs 几百 MB)，彻底解决 OOM 问题。
  */
-class CircularVideoRecorder(
+class CircularSampleRecorder(
     private val bufferDurationMs: Long = 1500L
 ) {
     /**
-     * 编码后的视频样本
-     * @param data H.264/HEVC 编码数据
+     * 编码后的样本
+     * @param data 编码数据
      * @param info 媒体缓存信息 (包含时间戳、关键帧标志等)
      */
     data class Sample(
@@ -51,7 +51,7 @@ class CircularVideoRecorder(
     fun addSample(byteBuffer: ByteBuffer, info: MediaCodec.BufferInfo) {
         if (!isRecording) return
 
-        //PLog.v("CircularVideoRecorder", "Adding sample ts=${info.presentationTimeUs}, size=${info.size}")
+        //PLog.v("CircularSampleRecorder", "Adding sample ts=${info.presentationTimeUs}, size=${info.size}")
 
         // 拷贝数据，因为 ByteBuffer 会被 MediaCodec 回收
         val data = ByteArray(info.size)

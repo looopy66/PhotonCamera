@@ -29,7 +29,7 @@
     <string name="ratio_1_1">1:1</string>
     
     <!-- Permissions -->
-    <string name="camera_permission_required">Camera permission is required</string>
+    <string name="camera_permission_required">Camera and Microphone permissions are required</string>
     <string name="grant_permission">Grant Permission</string>
     
     <!-- Zoom -->
