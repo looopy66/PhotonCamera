@@ -976,6 +976,25 @@ fun FilterManagementScreen(
                     onSaveOrder = { newOrder ->
                         viewModel.saveCategoryOrder(newOrder)
                     },
+                    onRenameCategory = { oldName, newName ->
+                        scope.launch {
+                            // 立即更新本地 UI 列表防止闪烁
+                            localLutList = localLutList.map {
+                                if (it.category == oldName) it.copy(category = newName) else it
+                            }
+                            withContext(Dispatchers.IO) {
+                                // 批量在持久层更新分类
+                                val impacted = availableLuts.filter { it.category == oldName }
+                                impacted.forEach { lut ->
+                                    customImportManager.updateLutCategory(lut.id, newName)
+                                }
+                                // 在排序中更新
+                                val newOrder = categoryOrder.map { if (it == oldName) newName else it }
+                                viewModel.saveCategoryOrder(newOrder)
+                            }
+                            viewModel.refreshCustomContent()
+                        }
+                    },
                     onDeleteCategory = { target ->
                         scope.launch {
                             // 立即更新本地 UI 列表防止闪烁
@@ -1009,6 +1028,7 @@ fun FilterManagementScreen(
 private fun CategoryManagementSheet(
     categories: List<String>,
     onSaveOrder: (List<String>) -> Unit,
+    onRenameCategory: (String, String) -> Unit,
     onDeleteCategory: (String) -> Unit
 ) {
     var localCategories by remember { mutableStateOf(categories) }
@@ -1022,6 +1042,9 @@ private fun CategoryManagementSheet(
 
     var showAddDialog by remember { mutableStateOf(false) }
     var newCategoryName by remember { mutableStateOf("") }
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var renamingCategory by remember { mutableStateOf<String?>(null) }
+    var renameCategoryText by remember { mutableStateOf("") }
     var categoryToDelete by remember { mutableStateOf<String?>(null) }
 
     Column(
@@ -1097,6 +1120,17 @@ private fun CategoryManagementSheet(
                             modifier = Modifier.weight(1f),
                             fontSize = 16.sp
                         )
+                        IconButton(onClick = {
+                            renamingCategory = category
+                            renameCategoryText = category
+                            showRenameDialog = true
+                        }) {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = stringResource(R.string.rename),
+                                tint = Color.White.copy(alpha = 0.7f)
+                            )
+                        }
                         IconButton(onClick = { categoryToDelete = category }) {
                             Icon(
                                 imageVector = Icons.Default.Delete,
@@ -1138,6 +1172,44 @@ private fun CategoryManagementSheet(
                 },
                 dismissButton = {
                     TextButton(onClick = { showAddDialog = false }) {
+                        Text(stringResource(R.string.cancel))
+                    }
+                }
+            )
+        }
+
+        // 重命名分类对话框
+        if (showRenameDialog && renamingCategory != null) {
+            AlertDialog(
+                onDismissRequest = { showRenameDialog = false },
+                title = { Text(stringResource(R.string.rename_dialog_title)) },
+                text = {
+                    OutlinedTextField(
+                        value = renameCategoryText,
+                        onValueChange = { renameCategoryText = it },
+                        label = { Text(stringResource(R.string.category_name)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            val oldName = renamingCategory!!
+                            val newName = renameCategoryText.trim()
+                            if (newName.isNotEmpty() && newName != oldName) {
+                                onRenameCategory(oldName, newName)
+                                localCategories = localCategories.map { if (it == oldName) newName else it }
+                                onSaveOrder(localCategories)
+                            }
+                            showRenameDialog = false
+                        }
+                    ) {
+                        Text(stringResource(R.string.confirm))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showRenameDialog = false }) {
                         Text(stringResource(R.string.cancel))
                     }
                 }
