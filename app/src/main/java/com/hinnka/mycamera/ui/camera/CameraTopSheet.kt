@@ -337,7 +337,9 @@ fun QuickSettingToggle(
                 text = title,
                 color = if (checked) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.9f),
                 fontSize = 10.sp,
-                fontWeight = if (checked) FontWeight.Bold else FontWeight.Normal
+                lineHeight = 10.sp,
+                fontWeight = if (checked) FontWeight.Bold else FontWeight.Normal,
+                modifier = Modifier.weight(1f)
             )
 
             // Simple indicator
