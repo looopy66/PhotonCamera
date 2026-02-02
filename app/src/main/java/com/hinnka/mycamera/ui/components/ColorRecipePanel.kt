@@ -156,7 +156,7 @@ fun ColorRecipeSlider(
                 text = stringResource(param.displayNameRes),
                 color = Color.White,
                 fontSize = 11.sp,
-                modifier = Modifier.width(64.dp)
+                modifier = Modifier.weight(1f)
             )
 
             Text(
