@@ -8,10 +8,11 @@ import android.util.Range
  * 画面比例枚举
  */
 enum class AspectRatio(val widthRatio: Int, val heightRatio: Int) {
-    RATIO_3_2(3, 2),
+//    RATIO_3_2(3, 2),
     RATIO_4_3(4, 3),
     RATIO_16_9(16, 9),
-    RATIO_1_1(1, 1);
+    RATIO_1_1(1, 1),
+    XPAN(65, 24);
 
     fun getValue(isLandscape: Boolean): Float {
         return if (isLandscape) {
@@ -22,6 +23,9 @@ enum class AspectRatio(val widthRatio: Int, val heightRatio: Int) {
     }
 
     fun getDisplayName(): String {
+        if (this == XPAN) {
+            return "XPAN"
+        }
         return "$widthRatio:$heightRatio"
     }
 
