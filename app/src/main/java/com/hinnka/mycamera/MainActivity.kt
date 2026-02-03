@@ -138,17 +138,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @SuppressLint("RestrictedApi")
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        PLog.d("MainActivity", "dispatchKeyEvent: ${event.action} -> ${event.keyCode}")
-        // 检查是否是音量键
-        if (event.action == KeyEvent.ACTION_DOWN
-            && (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP || event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN)) {
-            if (cameraViewModel.handleVolumeKey(event.keyCode == KeyEvent.KEYCODE_VOLUME_UP)) {
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            if (cameraViewModel.handleVolumeKey(keyCode == KeyEvent.KEYCODE_VOLUME_UP)) {
                 return true
             }
         }
-        return super.dispatchKeyEvent(event)
+        return super.onKeyDown(keyCode, event)
     }
 
     private fun hideSystemUI() {

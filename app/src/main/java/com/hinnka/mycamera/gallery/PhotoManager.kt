@@ -192,6 +192,12 @@ object PhotoManager {
                                         tempMotionVideoFile.inputStream().use { input -> input.copyTo(outputStream) }
                                     }
                                     tempMotionVideoFile.delete()
+
+                                    val currentMetadata = loadMetadata(context, id) ?: metadata
+                                    val updatedMetadata = currentMetadata.copy(
+                                        exportedUris = currentMetadata.exportedUris + uri.toString()
+                                    )
+                                    saveMetadata(context, id, updatedMetadata)
                                 }
                             }
                         } finally {

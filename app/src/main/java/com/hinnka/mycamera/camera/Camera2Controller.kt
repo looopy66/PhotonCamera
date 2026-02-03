@@ -614,6 +614,7 @@ class Camera2Controller(private val context: Context) {
 
                     // 通知上层
                     onCameraError?.invoke(error, errorMessage, canRetry)
+                    _state.value = _state.value.copy(isCapturing = false)
                 }
             }, cameraHandler)
 
@@ -1809,7 +1810,7 @@ class Camera2Controller(private val context: Context) {
                 performCapture(device, reader)
             }
 
-        } catch (e: CameraAccessException) {
+        } catch (e: Exception) {
             PLog.e(TAG, "Failed to capture", e)
             PLog.e(TAG, "拍照失败", e)
             _state.value = _state.value.copy(isCapturing = false)
@@ -1829,7 +1830,7 @@ class Camera2Controller(private val context: Context) {
             val captureBuilder = device.createCaptureRequest(template).apply {
                 addTarget(reader.surface)
 
-                previewSurface?.let { addTarget(it) }
+                // previewSurface?.let { addTarget(it) }
 
                 // 应用所有相机参数（曝光、白平衡、闪光灯、变焦、色调映射）
                 // isCapture = true 确保使用完整的曝光时间（不限制长曝光）

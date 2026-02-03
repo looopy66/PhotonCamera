@@ -40,8 +40,9 @@ class LegacyLivePhotoCreator : LivePhotoCreator {
                 }
 
                 // 3. Append Marker
-                val markerStr = "LIVE_$videoLength"
-                val paddedMarker = markerStr.padEnd(20, ' ')
+                val markerstr1 = "500:1046"
+                val markerStr2 = "LIVE_$videoLength"
+                val paddedMarker = markerstr1.padEnd(20) + markerStr2.padEnd(20)
                 dos.write(paddedMarker.toByteArray(StandardCharsets.UTF_8))
                 
                 dos.flush()
