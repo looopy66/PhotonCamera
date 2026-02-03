@@ -131,7 +131,7 @@ class LutManager(private val context: Context) {
     fun loadLut(id: String): LutConfig? {
         // 先从缓存查找
         lutCache.get(id)?.let {
-            PLog.d(TAG, "LUT loaded from cache: $id")
+            //PLog.d(TAG, "LUT loaded from cache: $id")
             return it
         }
 

@@ -106,7 +106,6 @@ class Camera2Controller(private val context: Context) {
     private var isP010Supported = false
     private var availableAeModes: IntArray = intArrayOf()
     private var availableAwbModes: IntArray = intArrayOf()
-    private var isZslSupported = false
 
     private val _state = MutableStateFlow(CameraState())
     val state: StateFlow<CameraState> = _state.asStateFlow()
@@ -435,9 +434,6 @@ class Camera2Controller(private val context: Context) {
                     cachedCharacteristics?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
                         ?: intArrayOf()
                 isRawSupported = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)
-                isZslSupported =
-                    capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_PRIVATE_REPROCESSING) ||
-                            capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_YUV_REPROCESSING)
 
                 availableAeModes =
                     cachedCharacteristics?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES) ?: intArrayOf()
@@ -812,10 +808,6 @@ class Camera2Controller(private val context: Context) {
     private fun applyBaseCameraSettings(builder: CaptureRequest.Builder, isCapture: Boolean = false) {
         val currentState = _state.value
 
-        if (isZslSupported) {
-            builder.set(CaptureRequest.CONTROL_ENABLE_ZSL, currentState.useMultiFrame)
-        }
-
         // 1. 曝光设置
         applyExposureSettings(builder, currentState, isCapture)
 
@@ -1023,7 +1015,9 @@ class Camera2Controller(private val context: Context) {
      */
     private fun applyImageQualitySettings(builder: CaptureRequest.Builder, isCapture: Boolean) {
         try {
-            val edgeMode = when (edgeLevel) {
+            val isBurst = _state.value.useMultiFrame
+            val effectiveEdgeLevel = if (isBurst && edgeLevel == 2) 1 else edgeLevel
+            val edgeMode = when (effectiveEdgeLevel) {
                 0 -> CaptureRequest.EDGE_MODE_OFF
                 1 -> CaptureRequest.EDGE_MODE_FAST
                 2 -> CaptureRequest.EDGE_MODE_HIGH_QUALITY
@@ -1040,7 +1034,8 @@ class Camera2Controller(private val context: Context) {
             } else if (availableEdgeModes.contains(CaptureRequest.EDGE_MODE_FAST)) {
                 builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
             }
-            val noiseReductionMode = when (nrLevel) {
+            val effectiveNrLevel = if (isBurst && nrLevel == 2) 1 else nrLevel
+            val noiseReductionMode = when (effectiveNrLevel) {
                 0 -> CaptureRequest.NOISE_REDUCTION_MODE_OFF
                 4 -> if (availableNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_MINIMAL)) {
                     CaptureRequest.NOISE_REDUCTION_MODE_MINIMAL
@@ -1822,12 +1817,7 @@ class Camera2Controller(private val context: Context) {
      */
     private fun performCapture(device: CameraDevice, reader: ImageReader) {
         try {
-            val template = if (state.value.useMultiFrame) {
-                CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG
-            } else {
-                CameraDevice.TEMPLATE_STILL_CAPTURE
-            }
-            val captureBuilder = device.createCaptureRequest(template).apply {
+            val captureBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 addTarget(reader.surface)
 
                 // previewSurface?.let { addTarget(it) }
