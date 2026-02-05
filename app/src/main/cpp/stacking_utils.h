@@ -23,6 +23,7 @@ struct StagedYuvFrame {
   std::vector<uint16_t> y, u, v;
   GrayImage y8;
   int format;
+  float score = 0.0f;
 };
 
 // Represents a 2D vector field for tile-based alignment
@@ -141,6 +142,7 @@ struct StagedRawFrame {
   std::vector<uint16_t> planes[4];
   GrayImage proxy;
   int cfaPattern;
+  float score = 0.0f;
 };
 
 class RawStacker {

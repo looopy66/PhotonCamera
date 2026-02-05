@@ -29,7 +29,13 @@ VulkanImageStacker::VulkanImageStacker(uint32_t w, uint32_t h, bool sr)
   initVulkanResources();
 }
 
-VulkanImageStacker::~VulkanImageStacker() { releaseVulkanResources(); }
+VulkanImageStacker::~VulkanImageStacker() {
+  for (auto &frame : pendingFrames) {
+    AHardwareBuffer_release(frame.buffer);
+  }
+  pendingFrames.clear();
+  releaseVulkanResources();
+}
 
 void VulkanImageStacker::initVulkanResources() {
   VulkanManager &vm = VulkanManager::getInstance();
@@ -45,7 +51,7 @@ void VulkanImageStacker::initVulkanResources() {
   uint32_t tileH = (fullH + numTilesY - 1) / numTilesY;
 
   // Pad tile size slightly for safety
-  VkDeviceSize tileSize =
+  VkDeviceSize accumBufferSize =
       (VkDeviceSize)(tileW + 16) * (tileH + 16) * sizeof(float) * 4;
 
   int numTiles = numTilesX * numTilesY;
@@ -60,7 +66,7 @@ void VulkanImageStacker::initVulkanResources() {
   for (int i = 0; i < numTiles; ++i) {
     VkBufferCreateInfo bufferInfo{};
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.size = tileSize;
+    bufferInfo.size = accumBufferSize;
     bufferInfo.usage =
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -150,14 +156,14 @@ void VulkanImageStacker::initVulkanResources() {
   // Initial Clear
   VkCommandBuffer cb = vm.beginSingleTimeCommands();
   for (int i = 0; i < numTiles; ++i) {
-    vkCmdFillBuffer(cb, accumBuffers[i], 0, tileSize, 0);
+    vkCmdFillBuffer(cb, accumBuffers[i], 0, accumBufferSize, 0);
     VkBufferMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask =
         VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
     barrier.buffer = accumBuffers[i];
-    barrier.size = tileSize;
+    barrier.size = accumBufferSize;
     vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
                          &barrier, 0, nullptr);
@@ -284,7 +290,7 @@ bool VulkanImageStacker::addFrame(AHardwareBuffer *buffer) {
   if (buffer == nullptr)
     return false;
   AHardwareBuffer_acquire(buffer);
-  pendingBuffers.push_back(buffer);
+  pendingFrames.push_back({buffer, 0.0f});
   return true;
 }
 
@@ -396,38 +402,33 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
       referencePyramid = std::move(currentPyramid);
     } else {
       TileAlignment alignment =
-          computeTileAlignment(referencePyramid, currentPyramid, 32);
+          computeTileAlignment(referencePyramid, currentPyramid, 64);
 
+      // Update grid dimensions from alignment result
       gridW = alignment.gridW;
       gridH = alignment.gridH;
 
-      // Update alignment buffer
-      if (alignmentBuffer == VK_NULL_HANDLE) {
-        VkDeviceSize bufferSize = gridW * gridH * sizeof(Point);
-        VkBufferCreateInfo bufferInfo{};
-        bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bufferInfo.size = bufferSize;
-        bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        vkCreateBuffer(device, &bufferInfo, nullptr, &alignmentBuffer);
+      // Safety check: ensure we don't exceed allocated buffer size
+      // Original buffer was allocated with (width+31)/32 * (height+31)/32
+      uint32_t allocatedGridW = (width + 31) / 32;
+      uint32_t allocatedGridH = (height + 31) / 32;
+      uint32_t maxAllocatedPoints = allocatedGridW * allocatedGridH;
 
-        VkMemoryRequirements memReqs;
-        vkGetBufferMemoryRequirements(device, alignmentBuffer, &memReqs);
-        VkMemoryAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocInfo.allocationSize = memReqs.size;
-        allocInfo.memoryTypeIndex = vm.findMemoryType(
-            memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        vkAllocateMemory(device, &allocInfo, nullptr, &alignmentMemory);
-        vkBindBufferMemory(device, alignmentBuffer, alignmentMemory, 0);
+      size_t copyCount = std::min((size_t)alignment.offsets.size(),
+                                  (size_t)maxAllocatedPoints);
+
+      if (copyCount > 0) {
+        void *mapPtr = nullptr;
+        // Use VK_WHOLE_SIZE for safer mapping
+        VkResult res =
+            vkMapMemory(device, alignmentMemory, 0, VK_WHOLE_SIZE, 0, &mapPtr);
+        if (res == VK_SUCCESS && mapPtr != nullptr) {
+          memcpy(mapPtr, alignment.offsets.data(), copyCount * sizeof(Point));
+          vkUnmapMemory(device, alignmentMemory);
+        } else {
+          LOGE("VulkanImageStacker: Failed to map alignment memory: %d", res);
+        }
       }
-
-      void *mapPtr;
-      vkMapMemory(device, alignmentMemory, 0, gridW * gridH * sizeof(Point), 0,
-                  &mapPtr);
-      memcpy(mapPtr, alignment.offsets.data(), gridW * gridH * sizeof(Point));
-      vkUnmapMemory(device, alignmentMemory);
 
       // Calculate global average offset for fallback (redundant but kept for
       // safety)
@@ -498,6 +499,35 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
   return true;
 }
 
+float calculateYuvScore(AHardwareBuffer *buffer, uint32_t width,
+                        uint32_t height) {
+  AHardwareBuffer_Desc desc;
+  AHardwareBuffer_describe(buffer, &desc);
+  void *lockedData = nullptr;
+  long long score = 0;
+  if (AHardwareBuffer_lock(buffer, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, -1,
+                           nullptr, &lockedData) == 0) {
+    uint8_t *srcY = (uint8_t *)lockedData;
+    int stride = desc.stride;
+    bool is10bit = (desc.format == 0x36);
+    int step = 8;
+    for (uint32_t y = step; y < height - step; y += step) {
+      for (uint32_t x = step; x < width - step; x += step) {
+        int val = is10bit ? (((uint16_t *)srcY)[y * stride + x] >> 8)
+                          : srcY[y * stride + x];
+        int valR = is10bit ? (((uint16_t *)srcY)[y * stride + x + 1] >> 8)
+                           : srcY[y * stride + x + 1];
+        int valB = is10bit ? (((uint16_t *)srcY)[(y + 1) * stride + x] >> 8)
+                           : srcY[(y + 1) * stride + x];
+        score += std::abs(val - valR);
+        score += std::abs(val - valB);
+      }
+    }
+    AHardwareBuffer_unlock(buffer, nullptr);
+  }
+  return (float)score;
+}
+
 bool VulkanImageStacker::processStack(uint32_t *outBitmap, uint32_t outWidth,
                                       uint32_t outHeight, uint32_t stride,
                                       int rotation) {
@@ -505,15 +535,30 @@ bool VulkanImageStacker::processStack(uint32_t *outBitmap, uint32_t outWidth,
   setpriority(PRIO_PROCESS, 0, 10);
 
   // Process all queued frames first
-  if (pendingBuffers.empty() && isFirstFrame) {
+  if (pendingFrames.empty() && isFirstFrame) {
     return false;
   }
 
-  for (auto *buf : pendingBuffers) {
-    processFrame(buf);
-    AHardwareBuffer_release(buf);
+  // 1. Calculate scores for all pending frames
+  for (auto &frame : pendingFrames) {
+    frame.score = calculateYuvScore(frame.buffer, width, height);
   }
-  pendingBuffers.clear();
+
+  // 2. Sort pendingFrames by score descending
+  std::sort(
+      pendingFrames.begin(), pendingFrames.end(),
+      [](const FrameData &a, const FrameData &b) { return a.score > b.score; });
+
+  if (!pendingFrames.empty()) {
+    LOGI("VulkanImageStacker: Reference frame score: %.2f",
+         pendingFrames.front().score);
+  }
+
+  for (auto &frame : pendingFrames) {
+    processFrame(frame.buffer);
+    AHardwareBuffer_release(frame.buffer);
+  }
+  pendingFrames.clear();
 
   if (!outBitmap || isFirstFrame) // Check again after processing
     return false;

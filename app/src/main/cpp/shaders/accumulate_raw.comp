@@ -33,6 +33,7 @@ layout(push_constant, scalar) uniform PushConstants {
     uint bufferStride;
     uint gridW;
     uint gridH;
+    uint tileSize;
 } pc;
 
 ivec2 getPlaneOffsets(uint planeIdx, uint cfa) {
@@ -117,38 +118,35 @@ void main() {
     // Apply alignment offset
     vec2 offsetUV = baseUV;
     if (pc.isFirstFrame == 0) {
-        uint gx = uint((float(planeX) * (1.0 / pc.scale)) / 32.0);
-        uint gy = uint((float(planeY) * (1.0 / pc.scale)) / 32.0);
+        // Find corresponding tile in alignment grid
+        // The grid is based on the plane resolution (sensorWidth / 2)
+        float px = float(planeX) / pc.scale;
+        float py = float(planeY) / pc.scale;
+        
+        uint gx = uint(px / float(pc.tileSize));
+        uint gy = uint(py / float(pc.tileSize));
         gx = clamp(gx, 0, pc.gridW - 1);
         gy = clamp(gy, 0, pc.gridH - 1);
+        
         vec2 tileOffset = alignmentGrid.offsets[gy * pc.gridW + gx];
         
-        // CRITICAL FIX: Bayer Phase Locking
-        // We must align to even coordinates to avoid sampling from wrong-color pixels 
-        // or mixing Gr/Gb channels which are spatially distinct.
-        // Rounding to nearest 2.0 pixels preserves the Bayer 2x2 grid structure.
-        tileOffset = round(tileOffset / 2.0) * 2.0;
-        
-        offsetUV += tileOffset / (sensorSize / pc.scale);
+        // tileOffset is in plane-pixel units (stride 2 on physical sensor)
+        // Convert to UV shift: tileOffset / (sensorSize / 2.0)
+        offsetUV += tileOffset / (sensorSize * 0.5);
     }
     
-    // Safe sampling
+    // safe sampling with Bayer-aware bicubic
     float targetVal = sampleBicubicBayer(inputRawSampler, offsetUV, sensorSize);
     
-    // Hot Pixel Suppression
+    // Static pixel suppression on reference
     if (pc.isFirstFrame == 1) {
-        // Check 4 same-color neighbors (cross pattern, stride 2)
         vec2 invSize = 1.0 / sensorSize;
         float n1 = texture(inputRawSampler, offsetUV + vec2(-2.0, 0.0) * invSize).r;
         float n2 = texture(inputRawSampler, offsetUV + vec2( 2.0, 0.0) * invSize).r;
         float n3 = texture(inputRawSampler, offsetUV + vec2( 0.0,-2.0) * invSize).r;
         float n4 = texture(inputRawSampler, offsetUV + vec2( 0.0, 2.0) * invSize).r;
-        
         float maxN = max(max(n1, n2), max(n3, n4));
-        // If pixel is much brighter than all neighbors, clamp it
-        if (targetVal > maxN + 0.05) {
-            targetVal = maxN;
-        }
+        if (targetVal > maxN + 0.1) targetVal = maxN;
     }
     
     uint accIndex = ty * pc.bufferStride + tx;
@@ -156,89 +154,34 @@ void main() {
     
     float weight = 1.0;
     if (pc.isFirstFrame == 0) {
-        // --- FREQUENCY SEPARATION MERGE (Inspired by Google HDR+) ---
-        
-        // 1. Compute Low-Frequency (Box Blur 3x3 approximation)
-        // We need neighbours. Since we are in RAW, we need same-color neighbours.
-        // We can reuse the neighbours fetched for "Hot Pixel" check if available, or fetch now.
-        // Or simpler: define Low_Freq as the local mean of the reference block to avoid extra sampling.
-        // Let's sample 4 neighbours (cross) for the Target Low Freq.
-        vec2 invSize = 1.0 / sensorSize;
-        float n1 = texture(inputRawSampler, offsetUV + vec2(-2.0, 0.0) * invSize).r;
-        float n2 = texture(inputRawSampler, offsetUV + vec2( 2.0, 0.0) * invSize).r;
-        float n3 = texture(inputRawSampler, offsetUV + vec2( 0.0,-2.0) * invSize).r;
-        float n4 = texture(inputRawSampler, offsetUV + vec2( 0.0, 2.0) * invSize).r;
-        
-        float lowFreqTarget = (targetVal + n1 + n2 + n3 + n4) * 0.2;
-        float highFreqTarget = targetVal - lowFreqTarget;
-        
-        // Compute Ref Low Freq (Assuming accumulator holds current mean)
+        // --- Robust Weighting Merge (Match CPU version logic) ---
         float refVal = currentAccum.x / max(currentAccum.y, 0.001);
-        // We don't have Ref neighbours easily, so we approximate Ref High Freq 
-        // by assuming Ref is 'sharp' and comparing Target High to it? 
-        // No, comparing Low to Low is better.
-        float lowFreqRef = refVal; // Approx: Reference is already denoised/smooth
+        float diff = abs(targetVal - refVal);
         
-        // Define bias for noise model
-        float noiseSigma = 24.0 + sqrt(max(refVal * 65535.0, 0.0)) * 2.5;
-
-        // 2. Low-Frequency Accumulation (Robust Denoising)
-        // Low freq errors are just bias/shading, not structural. We can blend aggressively.
-        float lowDiff = abs(lowFreqTarget - lowFreqRef);
-        float lowThreshold = 0.05 + 2.0 * noiseSigma / 65535.0; // Very generous threshold
-        float wLow = 1.0;
-        if (lowDiff > lowThreshold) wLow = 0.0; // Large lighting change or movement
+        // Calculate local variance for noise model
+        float variance = computeLocalVarianceBayer(offsetUV);
         
-        // 3. High-Frequency Accumulation (Texture/Sharpness)
-        // High freq mismatch = Blur/Ghosting. Be extremely strict.
-        // Instead of Diff, we check if adding this HF component increases sharpness.
-        // Simplified: Standard diff check but with TIGHT threshold on the HF component
-        float highDiff = abs(highFreqTarget); // Magnitude of detail
-        float noiseFloorHF = noiseSigma / 65535.0;
+        // sigma^2 = variance + base_noise
+        // Adjusted noise sigma for RAW16 range
+        float noiseSigma = 24.0 / 65535.0 + sqrt(max(refVal, 0.0)) * 2.0 / 256.0;
+        float thresholdLow = 2.0 * noiseSigma; // More generous base threshold
         
-        // If Target HF is just noise, don't add it.
-        // If Target HF is real detail, does it match Ref?
-        // Since Ref is noisy single frame initially, this is hard.
-        // Fallback: Standard de-ghosting on the TOTAL signal, but weight combined.
+        // Relax threshold in busy areas (similar to CPU ImageStacker)
+        float vScale = (variance * 65535.0 * 65535.0);
+        float factorHigh = 3.5 + min(6.5, vScale / 10000.0);
+        float thresholdHigh = thresholdLow * factorHigh;
         
-        // Let's try: Reconstruct Target using LowRef + HighTarget (Coarse-to-Fine)
-        // If (RefLow + TargetHigh) is close to RefRaw, then structure is valid?
-        
-        // SIMPLIFIED POLYPHASE-LIKE STRATEGY:
-        // Blend Low Freq with High Weight.
-        // Blend High Freq with Weight modulated by alignment error.
-        
-        // Re-calculate Diff based on raw values for safety
-        float totalDiff = abs(targetVal - refVal);
-        
-        // Strict High-Freq Weight
-        float wHigh = 1.0;
-        float hfThreshold = (1.0 * noiseSigma) / 65535.0; // 1 sigma
-        if (totalDiff > hfThreshold) {
-             // Rapid falloff
-             float t = (totalDiff - hfThreshold) / hfThreshold;
-             wHigh = max(0.0, 1.0 - t*t);
+        if (diff < thresholdLow) {
+            weight = 1.0;
+        } else if (diff > thresholdHigh) {
+            weight = 0.0;
+        } else {
+            // Quadratic falloff for smoother blending
+            float t = (diff - thresholdLow) / (thresholdHigh - thresholdLow);
+            weight = 1.0 - t * t; 
         }
         
-        // Combined Weight Strategy:
-        // We do NOT multiply everything by min(wLow, wHigh).
-        // Instead, we attenuate the High Frequency component if it looks suspicious (wHigh low).
-        // We Keep the Low Frequency component (wLow high) to denoise color/luma.
-        
-        float hfGain = wHigh;
-        float lfGain = wLow;
-        
-        // Reconstruct safe target:
-        // If aligned:   safeTarget = Low + High * 1.0 = Original Target
-        // If misaligned: safeTarget = Low + High * 0.0 = Blurry Target (No ghosting)
-        float safeTarget = lowFreqTarget + highFreqTarget * hfGain;
-        
-        // Accumulate
-        // We use lfGain as the accumulation weight because the base signal is the Low Freq one.
-        // The High Freq part is just a detail modulation.
-        accumulator.data[accIndex] += vec2(safeTarget * lfGain, lfGain);
-        
-        // Skip default accumulation
+        accumulator.data[accIndex] += vec2(targetVal * weight, weight);
         return;
     }
     

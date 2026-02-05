@@ -993,17 +993,10 @@ class Camera2Controller(private val context: Context) {
         try {
             // 1. 处理 OIS (光学防抖)
             if (availableOpticalStabilizationModes.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)) {
-                if (state.value.useMultiFrame && state.value.useSuperResolution) {
-                    builder.set(
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
-                    )
-                } else {
-                    builder.set(
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
-                    )
-                }
+                builder.set(
+                    CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                    CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
+                )
             }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to apply stabilization settings", e)

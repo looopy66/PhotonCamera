@@ -129,15 +129,12 @@ void main() {
         float noiseSigma = sqrt(v16 + noiseFloor + signalDependency);
 
         // 2. Adaptive Thresholds
-        // Relax threshold in dark areas (where noise is visible but signal is low)
-        // Tighten in bright areas to prevent ghosting.
-        float lowThreshSigma = (refVal < 0.2) ? 2.5 : 1.5;
+        // Gradually transition threshold multiplier based on brightness
+        float lowThreshSigma = mix(1.8, 2.5, clamp(1.0 - refVal * 3.0, 0.0, 1.0));
         float threshold = lowThreshSigma * noiseSigma / 65535.0;
         
-        // 3. Soft Rejection
-        // Instead of a hard cutoff, use a wider transition range.
-        // This blends motion boundaries better, reducing the "cutout" look.
-        float factorHigh = 4.0 + min(6.0, v16 / 2000.0);
+        // 3. Soft Rejection (Relaxed for texture retention)
+        float factorHigh = 3.5 + min(6.5, v16 / 10000.0);
         float thresholdHigh = threshold * factorHigh;
 
         if (diff < threshold) {

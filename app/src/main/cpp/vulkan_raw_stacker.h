@@ -60,6 +60,7 @@ private:
   uint32_t gridH = 0;
   VkBuffer alignmentBuffer = VK_NULL_HANDLE;
   VkDeviceMemory alignmentMemory = VK_NULL_HANDLE;
+  uint32_t tileSize = 32;
 
   std::vector<GrayImage> referencePyramid;
 
@@ -81,11 +82,13 @@ private:
     uint32_t bufferStride;
     uint32_t gridW;
     uint32_t gridH;
+    uint32_t tileSize;
   };
 
   struct FrameData {
     std::vector<uint16_t> rawData;
     int cfaPattern;
+    float score = 0.0f;
   };
   std::vector<FrameData> pendingFrames;
 

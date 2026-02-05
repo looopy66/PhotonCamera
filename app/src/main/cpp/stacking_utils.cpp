@@ -513,6 +513,15 @@ void ImageStacker::stageFrame(const uint8_t *yData, const uint8_t *uData,
       frame.v[r * uvW + c] = vVal;
     }
   }
+  float score = 0.0f;
+  const int step = 8;
+  for (int r = step; r < height - step; r += step) {
+    for (int c = step; c < width - step; c += step) {
+      score += std::abs((int)frame.y8.data[r * width + c] -
+                        (int)frame.y8.data[r * width + c + 1]);
+    }
+  }
+  frame.score = score;
   stagedFrames.push_back(std::move(frame));
 }
 
@@ -521,10 +530,23 @@ void ImageStacker::processFrame(int index) {
     LOGE("ImageStacker::processFrame: Invalid index %d", index);
     return;
   }
-  const auto &staged = stagedFrames[index];
-  bool isP010 = (staged.format == 0x36);
 
   if (isFirstFrame) {
+    // Find best frame as reference
+    int bestIdx = 0;
+    float maxScore = -1.0f;
+    for (int i = 0; i < (int)stagedFrames.size(); ++i) {
+      if (stagedFrames[i].score > maxScore) {
+        maxScore = stagedFrames[i].score;
+        bestIdx = i;
+      }
+    }
+    const auto &staged = stagedFrames[bestIdx];
+    LOGI("ImageStacker: Using frame %d as reference (score: %.2f)", bestIdx,
+         staged.score);
+
+    bool isP010 = (staged.format == 0x36);
+
     referenceY = staged.y;
     referenceU = staged.u;
     referenceV = staged.v;
@@ -579,6 +601,7 @@ void ImageStacker::processFrame(int index) {
     return;
   }
 
+  const auto &staged = stagedFrames[index];
   // Align current frame against reference (Always at 1x scale)
   std::vector<GrayImage> currentPyramid =
       buildPyramid(staged.y8.data.data(), width, height, 4);
@@ -862,7 +885,6 @@ inline float computeRawScaleSafe(const uint8_t *rawDataBytes, int width,
 
 #pragma omp parallel for reduction(max : maxVal) num_threads(4)
   for (int y = startY; y < endY; y += 8) { // 步长加大，性能优先
-
     const uint16_t *row = (const uint16_t *)(rawDataBytes + y * rowStride);
     for (int x = startX; x < endX; x += 8) {
       if (row[x] > maxVal)
@@ -882,7 +904,6 @@ void smoothImage(GrayImage &img) {
 #pragma omp parallel for num_threads(4)
   for (int y = 1; y < h - 1; ++y) {
     for (int x = 1; x < w - 1; ++x) {
-
       int sum = 0;
       // 3x3 Box Blur
       sum += temp[(y - 1) * w + (x - 1)];
@@ -964,11 +985,19 @@ void RawStacker::stageFrame(const uint16_t *rawData, int rowStride,
     }
   }
 
-  if (!isFirstFrame) {
-    smoothImage(frame.proxy);
-  } else {
-    smoothImage(frame.proxy);
+  smoothImage(frame.proxy);
+
+  // Calculate sharpness score
+  float score = 0.0f;
+  const int step = 8;
+  for (int r = step; r < proxyH - step; r += step) {
+    for (int c = step; c < proxyW - step; c += step) {
+      score += std::abs((int)frame.proxy.data[r * proxyW + c] -
+                        (int)frame.proxy.data[r * proxyW + c + 1]);
+    }
   }
+  frame.score = score;
+
   stagedFrames.push_back(std::move(frame));
 }
 
@@ -977,12 +1006,24 @@ void RawStacker::processFrame(int index) {
     LOGE("RawStacker::processFrame: Invalid index %d", index);
     return;
   }
-  const auto &staged = stagedFrames[index];
 
   int proxyW = width / 2;
   int proxyH = height / 2;
 
   if (isFirstFrame) {
+    // Find best frame as reference
+    int bestIdx = 0;
+    float maxScore = -1.0f;
+    for (int i = 0; i < (int)stagedFrames.size(); ++i) {
+      if (stagedFrames[i].score > maxScore) {
+        maxScore = stagedFrames[i].score;
+        bestIdx = i;
+      }
+    }
+    const auto &staged = stagedFrames[bestIdx];
+    LOGI("RawStacker: Using frame %d as reference (score: %.2f)", bestIdx,
+         staged.score);
+
     mCfaPattern = staged.cfaPattern;
     referencePyramid =
         buildPyramid(staged.proxy.data.data(), proxyW, proxyH, 4);
@@ -1010,6 +1051,7 @@ void RawStacker::processFrame(int index) {
     return;
   }
 
+  const auto &staged = stagedFrames[index];
   std::vector<GrayImage> currentPyramid =
       buildPyramid(staged.proxy.data.data(), proxyW, proxyH, 4);
   TileAlignment alignment =

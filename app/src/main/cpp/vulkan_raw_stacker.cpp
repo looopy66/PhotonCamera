@@ -47,7 +47,7 @@ void VulkanRawStacker::initVulkanResources() {
   uint32_t tileW = (planeW + numTilesX - 1) / numTilesX;
   uint32_t tileH = (planeH + numTilesY - 1) / numTilesY;
   uint32_t stride = tileW + 16;
-  VkDeviceSize tileSize =
+  VkDeviceSize accumBufferSize =
       (VkDeviceSize)stride * (tileH + 16) * sizeof(float) * 2;
 
   int totalBuffers = numTilesX * numTilesY * 4;
@@ -59,7 +59,7 @@ void VulkanRawStacker::initVulkanResources() {
   for (int i = 0; i < totalBuffers; ++i) {
     VkBufferCreateInfo bufferInfo{};
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.size = tileSize;
+    bufferInfo.size = accumBufferSize;
     bufferInfo.usage =
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -119,23 +119,23 @@ void VulkanRawStacker::initVulkanResources() {
   // Clear Accumulator Buffers
   VkCommandBuffer cb = vm.beginSingleTimeCommands();
   for (int i = 0; i < totalBuffers; ++i) {
-    vkCmdFillBuffer(cb, accumBuffers[i], 0, tileSize, 0);
+    vkCmdFillBuffer(cb, accumBuffers[i], 0, accumBufferSize, 0);
     VkBufferMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask =
         VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
     barrier.buffer = accumBuffers[i];
-    barrier.size = tileSize;
+    barrier.size = accumBufferSize;
     vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
                          &barrier, 0, nullptr);
   }
 
   // Initialize Alignment Grid Buffer early (at plane scale)
-  gridW = (width / 2 + 31) / 32;
-  gridH = (height / 2 + 31) / 32;
-  VkDeviceSize alignBufferSize = gridW * gridH * sizeof(Point);
+  gridW = (width / 2 + tileSize - 1) / tileSize;
+  gridH = (height / 2 + tileSize - 1) / tileSize;
+  VkDeviceSize alignBufferSize = (VkDeviceSize)gridW * gridH * sizeof(Point);
   VkBufferCreateInfo alignInfo{};
   alignInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
   alignInfo.size = alignBufferSize;
@@ -461,6 +461,15 @@ bool VulkanRawStacker::processFrame(const uint16_t *rawData, int rowStride,
 
   float offsetX = 0.0f, offsetY = 0.0f;
 
+  // Calculate byteScale for proxy normalization (similar to CPU version)
+  uint16_t maxVal = 1;
+  for (uint32_t y = height / 4; y < 3 * height / 4; y += 8) {
+    for (uint32_t x = width / 4; x < 3 * width / 4; x += 8) {
+      maxVal = std::max(maxVal, rawData[y * width + x]);
+    }
+  }
+  float byteScale = 255.0f / std::max((float)maxVal, 255.0f);
+
   GrayImage currentGray;
   currentGray.width = width / 2;
   currentGray.height = height / 2;
@@ -477,8 +486,8 @@ bool VulkanRawStacker::processFrame(const uint16_t *rawData, int rowStride,
         gy = y * 2 + 1;
         gx = x * 2;
       }
-      currentGray.data[y * (width / 2) + x] =
-          static_cast<uint8_t>(rawData[gy * width + gx] >> 8);
+      currentGray.data[y * (width / 2) + x] = static_cast<uint8_t>(std::max(
+          0.0f, std::min(255.0f, (float)rawData[gy * width + gx] * byteScale)));
     }
   }
 
@@ -489,25 +498,43 @@ bool VulkanRawStacker::processFrame(const uint16_t *rawData, int rowStride,
     referencePyramid = currentPyramid;
   } else {
     TileAlignment alignment =
-        computeTileAlignment(referencePyramid, currentPyramid, 32);
+        computeTileAlignment(referencePyramid, currentPyramid, 64);
 
+    // Update grid dimensions from alignment result
     gridW = alignment.gridW;
     gridH = alignment.gridH;
+    tileSize = alignment.tileWidth;
 
-    void *mapPtr;
-    vkMapMemory(device, alignmentMemory, 0, gridW * gridH * sizeof(Point), 0,
-                &mapPtr);
-    memcpy(mapPtr, alignment.offsets.data(), gridW * gridH * sizeof(Point));
-    vkUnmapMemory(device, alignmentMemory);
+    // Safety check: ensure we don't exceed allocated buffer size
+    uint32_t allocatedGridW = (width / 2 + tileSize - 1) / tileSize;
+    uint32_t allocatedGridH = (height / 2 + tileSize - 1) / tileSize;
+    uint32_t maxAllocatedPoints = allocatedGridW * allocatedGridH;
+
+    size_t copyCount =
+        std::min((size_t)alignment.offsets.size(), (size_t)maxAllocatedPoints);
+
+    if (copyCount > 0) {
+      void *mapPtr = nullptr;
+      // Map the entire allocated memory range to be safe and avoid
+      // driver-specific alignment issues
+      VkResult res =
+          vkMapMemory(device, alignmentMemory, 0, VK_WHOLE_SIZE, 0, &mapPtr);
+      if (res == VK_SUCCESS && mapPtr != nullptr) {
+        memcpy(mapPtr, alignment.offsets.data(), copyCount * sizeof(Point));
+        vkUnmapMemory(device, alignmentMemory);
+      } else {
+        LOGE("VulkanRawStacker: Failed to map alignment memory: %d", res);
+      }
+    }
 
     float sumX = 0, sumY = 0;
-    for (const auto &p : alignment.offsets) {
-      sumX += p.x;
-      sumY += p.y;
+    for (size_t i = 0; i < copyCount; ++i) {
+      sumX += alignment.offsets[i].x;
+      sumY += alignment.offsets[i].y;
     }
-    if (!alignment.offsets.empty()) {
-      offsetX = sumX / alignment.offsets.size();
-      offsetY = sumY / alignment.offsets.size();
+    if (copyCount > 0) {
+      offsetX = sumX / copyCount;
+      offsetY = sumY / copyCount;
     }
   }
 
@@ -593,6 +620,7 @@ bool VulkanRawStacker::processFrame(const uint16_t *rawData, int rowStride,
         pc.bufferStride = tileW + 16;
         pc.gridW = gridW;
         pc.gridH = gridH;
+        pc.tileSize = tileSize;
 
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipelineLayout, 0, 1, &accumSets[bufferIdx], 0,
@@ -618,12 +646,60 @@ bool VulkanRawStacker::processFrame(const uint16_t *rawData, int rowStride,
   return true;
 }
 
+float calculateFrameScore(const uint16_t *rawData, uint32_t width,
+                          uint32_t height, int cfaPattern) {
+  long long score = 0;
+  // Use a green channel for sharpness proxy
+  int startY, startX;
+  if (cfaPattern == 0 || cfaPattern == 1) { // RGGB or GRBG
+    startY = 0;
+    startX = 1;
+  } else { // GBRG or BGGR
+    startY = 1;
+    startX = 0;
+  }
+
+  // Jump pixels for speed, but cover enough of the image
+  const int step = 8;
+  for (uint32_t y = step; y < height - step; y += step) {
+    // Ensure we stay on the same green channel
+    int gy = (y / 2) * 2 + startY;
+    for (uint32_t x = step; x < width - step; x += step) {
+      int gx = (x / 2) * 2 + startX;
+      int idx = gy * width + gx;
+      int right = gy * width + gx + 2;
+      int bottom = (gy + 2) * width + gx;
+      score += std::abs((int)rawData[idx] - (int)rawData[right]);
+      score += std::abs((int)rawData[idx] - (int)rawData[bottom]);
+    }
+  }
+  return (float)score;
+}
+
 bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
   // Lower CPU priority for this thread during heavy processing
   setpriority(PRIO_PROCESS, 0, 10);
 
   if (pendingFrames.empty() && isFirstFrame) {
     return false;
+  }
+
+  // 1. Calculate scores for all pending frames
+  for (auto &frame : pendingFrames) {
+    frame.score = calculateFrameScore(frame.rawData.data(), width, height,
+                                      frame.cfaPattern);
+  }
+
+  // 2. Sort pendingFrames by score descending
+  // The frame with the highest score will be processed first and become the
+  // reference frame.
+  std::sort(
+      pendingFrames.begin(), pendingFrames.end(),
+      [](const FrameData &a, const FrameData &b) { return a.score > b.score; });
+
+  if (!pendingFrames.empty()) {
+    LOGI("Reference frame score: %.2f, last frame score: %.2f",
+         pendingFrames.front().score, pendingFrames.back().score);
   }
 
   for (const auto &frame : pendingFrames) {

@@ -73,7 +73,11 @@ private:
     uint32_t bufferStride;
   };
 
-  std::vector<AHardwareBuffer *> pendingBuffers;
+  struct FrameData {
+    AHardwareBuffer *buffer;
+    float score = 0.0f;
+  };
+  std::vector<FrameData> pendingFrames;
 
   void initVulkanResources();
   void releaseVulkanResources();
