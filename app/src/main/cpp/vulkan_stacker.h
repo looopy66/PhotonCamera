@@ -25,6 +25,12 @@ private:
   int numTilesX = 1;
   int numTilesY = 1;
 
+  // Alignment grid info
+  uint32_t gridW = 0;
+  uint32_t gridH = 0;
+  VkBuffer alignmentBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory alignmentMemory = VK_NULL_HANDLE;
+
   std::vector<VkBuffer> accumBuffers;
   std::vector<VkDeviceMemory> accumMemories;
 
@@ -61,6 +67,10 @@ private:
     uint32_t tileY;
     uint32_t tileW;
     uint32_t tileH;
+    // Grid info
+    uint32_t gridW;
+    uint32_t gridH;
+    uint32_t bufferStride;
   };
 
   std::vector<AHardwareBuffer *> pendingBuffers;

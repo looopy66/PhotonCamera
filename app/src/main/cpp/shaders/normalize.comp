@@ -21,6 +21,7 @@ layout(push_constant, scalar) uniform PushConstants {
     uint tileY;
     uint tileW;
     uint tileH;
+    uint bufferStride;
 } pc;
 
 void main() {
@@ -41,7 +42,7 @@ void main() {
         
         uint localX = sx - pc.tileX;
         uint localY = sy - pc.tileY;
-        uint index = localY * pc.tileW + localX;
+        uint index = localY * pc.bufferStride + localX;
         vec4 accum = accumulator.data[index];
         
         vec3 color = accum.rgb / max(accum.a, 0.001);

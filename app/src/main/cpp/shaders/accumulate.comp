@@ -8,6 +8,10 @@ layout(binding = 1, scalar) buffer Accumulator {
     vec4 data[]; // Back to float32
 } accumulator;
 
+layout(binding = 2, scalar) buffer AlignmentGrid {
+    vec2 offsets[];
+} alignmentGrid;
+
 layout(push_constant, scalar) uniform PushConstants {
     float t0, t1, t2, t3, t4, t5;
     float offsetX, offsetY;
@@ -20,10 +24,17 @@ layout(push_constant, scalar) uniform PushConstants {
     uint tileY;   // Tile start Y
     uint tileW;   // Tile width
     uint tileH;   // Tile height
+    uint gridW;
+    uint gridH;
+    uint bufferStride;
 } pc;
 
 float cubicWeight(float t) {
-    float a = -0.5;
+    // Catmull-Rom with tuning for sharpness
+    // a = -0.5 is standard Catmull-Rom
+    // a = -0.75 provides slight sharpening
+    // a = -1.0 is aggressive sharpening
+    float a = -0.75; 
     float absT = abs(t);
     if (absT <= 1.0) return (a + 2.0) * absT * absT * absT - (a + 3.0) * absT * absT + 1.0;
     if (absT < 2.0) return a * absT * absT * absT - 5.0 * a * absT * absT + 8.0 * a * absT - 4.0 * a;
@@ -68,23 +79,33 @@ void main() {
         finalUV.y = normalizedUV.x * pc.t3 + normalizedUV.y * pc.t4 + pc.t5;
     }
     
-    // Apply alignment offset (calculated on CPU)
-    finalUV += vec2(pc.offsetX, pc.offsetY) / vec2(float(pc.width) / pc.scale, float(pc.height) / pc.scale);
+    // Apply alignment offset
+    vec2 nativeSize = vec2(float(pc.width) / pc.scale, float(pc.height) / pc.scale);
+    if (pc.isFirstFrame == 0) {
+        uint gx = uint((float(x) / pc.scale) / 32.0);
+        uint gy = uint((float(y) / pc.scale) / 32.0);
+        gx = clamp(gx, 0, pc.gridW - 1);
+        gy = clamp(gy, 0, pc.gridH - 1);
+        vec2 tileOffset = alignmentGrid.offsets[gy * pc.gridW + gx];
+        finalUV += tileOffset / nativeSize;
+    }
 
     // Manual Bicubic Sampling for better sharpness
-    vec2 nativeSize = vec2(float(pc.width) / pc.scale, float(pc.height) / pc.scale);
+    // Use Catmull-Rom spline (a=-0.5 but tuned to -0.75 for sharpness)
     vec4 targetVal = sampleBicubic(inputSampler, finalUV, nativeSize);
     
-    uint index = ty * pc.tileW + tx;
+    uint index = ty * pc.bufferStride + tx;
     vec4 currentAccum = accumulator.data[index];
     
     float weight = 1.0;
     if (pc.isFirstFrame == 0) {
         vec3 refRGB = currentAccum.rgb / max(currentAccum.a, 0.001);
+        // Compute reference luma/value proxy
         vec3 diffVec = abs(targetVal.rgb - refRGB);
         float diff = max(max(diffVec.r, diffVec.g), diffVec.b);
+        float refVal = refRGB.g; // G channel proxy for signal level
         
-        // Calculate local variance (matching C++ computeLocalVariance)
+        // Calculate local variance
         vec3 m1 = vec3(0.0);
         vec3 m2 = vec3(0.0);
         for(int dy = -1; dy <= 1; dy++) {
@@ -97,21 +118,36 @@ void main() {
         vec3 varVec = (m2 / 9.0) - (m1 / 9.0) * (m1 / 9.0);
         float variance = max(max(varVec.r, varVec.g), varVec.b);
         
-        // Convert to 16-bit units to use original code's thresholds
-        // 1600.0f base variance in 16-bit is 1600 / (65535^2) \approx 0.00000037
+        // Multi-frame Blending Strategy Optimization
         float v16 = variance * 65535.0 * 65535.0;
-        float sigma = sqrt(v16 + 1600.0);
-        float threshold = 3.0 * sigma / 65535.0;
         
-        float factorHigh = 4.0 + min(8.0, v16 / 5000.0);
+        // 1. Better Noise Model for YUV (Gamma corrected space)
+        // YUV typically has higher perceptual noise in dark areas.
+        // We boost the base noise floor to allow more accumulation there.
+        float noiseFloor = 1600.0;
+        float signalDependency = max(refVal * 65535.0, 0.0) * 0.5; // Signal dependency
+        float noiseSigma = sqrt(v16 + noiseFloor + signalDependency);
+
+        // 2. Adaptive Thresholds
+        // Relax threshold in dark areas (where noise is visible but signal is low)
+        // Tighten in bright areas to prevent ghosting.
+        float lowThreshSigma = (refVal < 0.2) ? 2.5 : 1.5;
+        float threshold = lowThreshSigma * noiseSigma / 65535.0;
+        
+        // 3. Soft Rejection
+        // Instead of a hard cutoff, use a wider transition range.
+        // This blends motion boundaries better, reducing the "cutout" look.
+        float factorHigh = 4.0 + min(6.0, v16 / 2000.0);
         float thresholdHigh = threshold * factorHigh;
-        
+
         if (diff < threshold) {
             weight = 1.0;
         } else if (diff > thresholdHigh) {
             weight = 0.0;
         } else {
-            weight = (thresholdHigh - diff) / (thresholdHigh - threshold);
+            // Cubic smoothstep for more natural blending
+            float t = (diff - threshold) / (thresholdHigh - threshold);
+            weight = 1.0 - t * t * (3.0 - 2.0 * t);
         }
     }
 

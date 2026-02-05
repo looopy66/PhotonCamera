@@ -55,6 +55,12 @@ private:
   VkBuffer stagingBuffer = VK_NULL_HANDLE;
   VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
 
+  // Alignment grid
+  uint32_t gridW = 0;
+  uint32_t gridH = 0;
+  VkBuffer alignmentBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory alignmentMemory = VK_NULL_HANDLE;
+
   std::vector<GrayImage> referencePyramid;
 
   struct PushConstants {
@@ -73,6 +79,8 @@ private:
     uint32_t tileW;
     uint32_t tileH;
     uint32_t bufferStride;
+    uint32_t gridW;
+    uint32_t gridH;
   };
 
   struct FrameData {

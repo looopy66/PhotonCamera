@@ -116,6 +116,7 @@ void VulkanRawStacker::initVulkanResources() {
   poolInfo.pPoolSizes = poolSizes;
   VK_CHECK(vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool));
 
+  // Clear Accumulator Buffers
   VkCommandBuffer cb = vm.beginSingleTimeCommands();
   for (int i = 0; i < totalBuffers; ++i) {
     vkCmdFillBuffer(cb, accumBuffers[i], 0, tileSize, 0);
@@ -130,6 +131,35 @@ void VulkanRawStacker::initVulkanResources() {
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
                          &barrier, 0, nullptr);
   }
+
+  // Initialize Alignment Grid Buffer early (at plane scale)
+  gridW = (width / 2 + 31) / 32;
+  gridH = (height / 2 + 31) / 32;
+  VkDeviceSize alignBufferSize = gridW * gridH * sizeof(Point);
+  VkBufferCreateInfo alignInfo{};
+  alignInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  alignInfo.size = alignBufferSize;
+  alignInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  alignInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  VK_CHECK(vkCreateBuffer(device, &alignInfo, nullptr, &alignmentBuffer));
+
+  VkMemoryRequirements alignMemReqs;
+  vkGetBufferMemoryRequirements(device, alignmentBuffer, &alignMemReqs);
+  VkMemoryAllocateInfo alignAlloc{};
+  alignAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  alignAlloc.allocationSize = alignMemReqs.size;
+  alignAlloc.memoryTypeIndex = vm.findMemoryType(
+      alignMemReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  VK_CHECK(vkAllocateMemory(device, &alignAlloc, nullptr, &alignmentMemory));
+  vkBindBufferMemory(device, alignmentBuffer, alignmentMemory, 0);
+
+  // Initial Clear for Alignment Buffer
+  void *ptr;
+  vkMapMemory(device, alignmentMemory, 0, alignBufferSize, 0, &ptr);
+  memset(ptr, 0, (size_t)alignBufferSize);
+  vkUnmapMemory(device, alignmentMemory);
+
   vm.endSingleTimeCommands(cb);
 }
 
@@ -138,7 +168,7 @@ void VulkanRawStacker::createPipelines() {
   VkDevice device = vm.getDevice();
 
   // Descriptor set layout for accumulation
-  VkDescriptorSetLayoutBinding bindings[2] = {};
+  VkDescriptorSetLayoutBinding bindings[3] = {};
   bindings[0].binding = 0;
   bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
   bindings[0].descriptorCount = 1;
@@ -149,9 +179,14 @@ void VulkanRawStacker::createPipelines() {
   bindings[1].descriptorCount = 1;
   bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
+  bindings[2].binding = 2;
+  bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  bindings[2].descriptorCount = 1;
+  bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
   VkDescriptorSetLayoutCreateInfo layoutInfo{};
   layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-  layoutInfo.bindingCount = 2;
+  layoutInfo.bindingCount = 3;
   layoutInfo.pBindings = bindings;
   vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
                               &descriptorSetLayout);
@@ -455,6 +490,16 @@ bool VulkanRawStacker::processFrame(const uint16_t *rawData, int rowStride,
   } else {
     TileAlignment alignment =
         computeTileAlignment(referencePyramid, currentPyramid, 32);
+
+    gridW = alignment.gridW;
+    gridH = alignment.gridH;
+
+    void *mapPtr;
+    vkMapMemory(device, alignmentMemory, 0, gridW * gridH * sizeof(Point), 0,
+                &mapPtr);
+    memcpy(mapPtr, alignment.offsets.data(), gridW * gridH * sizeof(Point));
+    vkUnmapMemory(device, alignmentMemory);
+
     float sumX = 0, sumY = 0;
     for (const auto &p : alignment.offsets) {
       sumX += p.x;
@@ -499,7 +544,12 @@ bool VulkanRawStacker::processFrame(const uint16_t *rawData, int rowStride,
         accumBufferInfo.offset = 0;
         accumBufferInfo.range = VK_WHOLE_SIZE;
 
-        VkWriteDescriptorSet descriptorWrites[2] = {};
+        VkDescriptorBufferInfo alignBufferInfo{};
+        alignBufferInfo.buffer = alignmentBuffer;
+        alignBufferInfo.offset = 0;
+        alignBufferInfo.range = VK_WHOLE_SIZE;
+
+        VkWriteDescriptorSet descriptorWrites[3] = {};
         descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         descriptorWrites[0].dstSet = accumSets[bufferIdx];
         descriptorWrites[0].dstBinding = 0;
@@ -515,7 +565,14 @@ bool VulkanRawStacker::processFrame(const uint16_t *rawData, int rowStride,
         descriptorWrites[1].descriptorCount = 1;
         descriptorWrites[1].pBufferInfo = &accumBufferInfo;
 
-        vkUpdateDescriptorSets(device, 2, descriptorWrites, 0, nullptr);
+        descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrites[2].dstSet = accumSets[bufferIdx];
+        descriptorWrites[2].dstBinding = 2;
+        descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        descriptorWrites[2].descriptorCount = 1;
+        descriptorWrites[2].pBufferInfo = &alignBufferInfo;
+
+        vkUpdateDescriptorSets(device, 3, descriptorWrites, 0, nullptr);
 
         PushConstants pc{};
         pc.offsetX = offsetX;
@@ -534,6 +591,8 @@ bool VulkanRawStacker::processFrame(const uint16_t *rawData, int rowStride,
         pc.tileW = std::min(tileW, planeW - pc.tileX);
         pc.tileH = std::min(tileH, planeH - pc.tileY);
         pc.bufferStride = tileW + 16;
+        pc.gridW = gridW;
+        pc.gridH = gridH;
 
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipelineLayout, 0, 1, &accumSets[bufferIdx], 0,
@@ -710,4 +769,9 @@ void VulkanRawStacker::releaseVulkanResources() {
     vkDestroyBuffer(device, stagingBuffer, nullptr);
   if (stagingMemory != VK_NULL_HANDLE)
     vkFreeMemory(device, stagingMemory, nullptr);
+
+  if (alignmentBuffer != VK_NULL_HANDLE)
+    vkDestroyBuffer(device, alignmentBuffer, nullptr);
+  if (alignmentMemory != VK_NULL_HANDLE)
+    vkFreeMemory(device, alignmentMemory, nullptr);
 }

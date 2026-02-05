@@ -15,6 +15,7 @@ inline uint8_t getPixel(const GrayImage &img, int x, int y) {
 }
 
 // Sub-pixel refinement using parabolic interpolation
+// (Consolidated definition)
 inline float interpolateSubpixel(long long s0, long long s_minus,
                                  long long s_plus) {
   long long denom = (s_plus + s_minus - 2 * s0);
@@ -262,6 +263,8 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
       int baseDy = (int)std::round(gDyL1);
       int bestDx = baseDx;
       int bestDy = baseDy;
+      float bestDx_f = 0.0f;
+      float bestDy_f = 0.0f;
 
       // Local search
       for (int dy = -2; dy <= 2; ++dy) {
