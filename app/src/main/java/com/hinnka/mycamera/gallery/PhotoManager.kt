@@ -558,6 +558,7 @@ object PhotoManager {
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
         useSuperResolution: Boolean = false,
+        useGpuAcceleration: Boolean = true,
     ) = withContext(Dispatchers.IO) {
         try {
             val photoDir = getPhotoDir(context, photoId)
@@ -572,7 +573,8 @@ object PhotoManager {
                 rotation,
                 aspectRatio,
                 yuvFile.absolutePath,
-                useSuperResolution
+                useSuperResolution,
+                useGpuAcceleration
             ) ?: return@withContext
             // Save Original (Stacked Result)
             FileOutputStream(tempFile).use { outputStream ->
@@ -614,6 +616,7 @@ object PhotoManager {
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
         useSuperResolution: Boolean = false,
+        useGpuAcceleration: Boolean = true,
     ) = withContext(Dispatchers.IO) {
         try {
             val photoDir = getPhotoDir(context, photoId)
@@ -634,7 +637,8 @@ object PhotoManager {
 
             val byteBuffer = MultiFrameStacker.processBurstRaw(
                 images, characteristics,
-                useSuperResolution
+                useSuperResolution,
+                useGpuAcceleration
             )
             byteBuffer ?: return@withContext
             val byteOutstream = ByteArrayOutputStream()
@@ -713,6 +717,7 @@ object PhotoManager {
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
         useSuperResolution: Boolean = false,
+        useGpuAcceleration: Boolean = true,
     ) = withContext(Dispatchers.IO) {
         when (val format = images[0].format) {
             ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
@@ -728,7 +733,8 @@ object PhotoManager {
                     noiseReductionValue,
                     chromaNoiseReductionValue,
                     photoQuality,
-                    useSuperResolution
+                    useSuperResolution,
+                    useGpuAcceleration
                 )
             }
 
@@ -747,7 +753,8 @@ object PhotoManager {
                     noiseReductionValue,
                     chromaNoiseReductionValue,
                     photoQuality,
-                    useSuperResolution
+                    useSuperResolution,
+                    useGpuAcceleration
                 )
             }
             else -> {

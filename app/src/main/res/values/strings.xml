@@ -113,6 +113,8 @@
     <string name="settings_raw_engine_self_developed">Self-developed</string>
     <string name="settings_use_live_photo">Live Photo</string>
     <string name="settings_use_live_photo_description">Capture a short video clip along with your photo for a dynamic live photo effect.</string>
+    <string name="settings_use_gpu_acceleration">GPU Acceleration</string>
+    <string name="settings_use_gpu_acceleration_description">Use GPU (Vulkan) to speed up multi-frame stacking. Default is on.</string>
     <string name="settings_section_frame">Frame Watermark</string>
     <string name="settings_frame_style">Frame Style</string>
     <string name="settings_frame_description">Add decorative frame and watermark to photos</string>

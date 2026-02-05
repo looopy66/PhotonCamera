@@ -83,6 +83,7 @@ fun SettingsScreen(
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
     val rawEngine by viewModel.rawEngine.collectAsState(initial = RawEngine.NATIVE)
     val photoQuality by viewModel.photoQuality.collectAsState(initial = 95)
+    val useGpuAcceleration by viewModel.useGpuAcceleration.collectAsState()
     val isPurchased by viewModel.isPurchased.collectAsState()
 
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -407,6 +408,18 @@ fun SettingsScreen(
                         description = stringResource(R.string.settings_use_super_resolution_description),
                         checked = useSuperResolution,
                         onCheckedChange = { viewModel.setUseSuperResolution(it) }
+                    )
+
+                    HorizontalDivider(
+                        color = Color.White.copy(alpha = 0.1f),
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+
+                    SwitchSettingItem(
+                        title = stringResource(R.string.settings_use_gpu_acceleration),
+                        description = stringResource(R.string.settings_use_gpu_acceleration_description),
+                        checked = useGpuAcceleration,
+                        onCheckedChange = { viewModel.setUseGpuAcceleration(it) }
                     )
 
                     HorizontalDivider(

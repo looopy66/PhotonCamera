@@ -162,6 +162,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val backgroundImage: StateFlow<String> = userPreferencesRepository.userPreferences
         .map { it.backgroundImage }
         .stateIn(viewModelScope, SharingStarted.Eagerly, "camera_bg")
+    val useGpuAcceleration: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.useGpuAcceleration }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     // 软件处理参数 Flow
     val sharpening: Flow<Float> = userPreferencesRepository.userPreferences.map { it.sharpening }
@@ -1483,6 +1486,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     chromaNoiseReductionValue,
                     photoQualityValue,
                     useSuperResolution = useSuperResolution.value,
+                    useGpuAcceleration = useGpuAcceleration.value,
                 )
             }
             PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
@@ -1515,6 +1519,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setBackgroundImage(image: String) {
         viewModelScope.launch {
             userPreferencesRepository.saveBackgroundImage(image)
+        }
+    }
+
+    /**
+     * 设置多帧合成是否使用 GPU 加速
+     */
+    fun setUseGpuAcceleration(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveUseGpuAcceleration(enabled)
         }
     }
 
