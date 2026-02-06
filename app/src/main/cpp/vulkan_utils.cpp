@@ -31,7 +31,6 @@ bool VulkanBufferImporter::importHardwareBuffer(AHardwareBuffer *buffer,
   }
 
   outImage.format = formatProps.format;
-  outImage.format = formatProps.format;
 
   // Create Image
   VkExternalFormatANDROID externalFormat{};
@@ -87,8 +86,6 @@ bool VulkanBufferImporter::importHardwareBuffer(AHardwareBuffer *buffer,
 
   vkBindImageMemory(device, outImage.image, outImage.memory, 0);
 
-  vkBindImageMemory(device, outImage.image, outImage.memory, 0);
-
   // We should create a YCbCr conversion if it's an external format OR a known
   // multi-planar YUV format
   bool isYUV = (formatProps.format == VK_FORMAT_UNDEFINED ||
@@ -102,29 +99,12 @@ bool VulkanBufferImporter::importHardwareBuffer(AHardwareBuffer *buffer,
         VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_CREATE_INFO;
     ycbcrCreateInfo.format = formatProps.format;
 
-    // CORRECT MODEL MAPPING:
-    // Model 2: BT.601 (Standard SDR)
-    // Model 3: BT.709 (HD SDR)
-    // Model 4: BT.2020 (UHD/HDR)
-    // Log showed Model 3 (709) but forced 2 (601) previously.
-    // If it's P010 (10-bit), it might actually be BT.2020.
-
     ycbcrCreateInfo.ycbcrModel = formatProps.suggestedYcbcrModel;
-    if (ycbcrCreateInfo.ycbcrModel ==
-        VK_SAMPLER_YCBCR_MODEL_CONVERSION_RGB_IDENTITY) {
-      ycbcrCreateInfo.ycbcrModel = VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_601;
-    }
     ycbcrCreateInfo.ycbcrRange = formatProps.suggestedYcbcrRange;
-    if (ycbcrCreateInfo.ycbcrRange == VK_SAMPLER_YCBCR_RANGE_ITU_FULL) {
-      // Many drivers incorrectly report FULL range for limited YUV
-      // 601 usually implies limited range for Camera2 YUV_420_888
-    }
 
-    // For YUV, identity swizzle is generally safer than driver suggestions,
-    // which can be buggy on some devices (e.g. Xiaomi 14/15).
     ycbcrCreateInfo.components = {
-        VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
-        VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
+      VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G,
+      VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_A};
 
     ycbcrCreateInfo.xChromaOffset = formatProps.suggestedXChromaOffset;
     ycbcrCreateInfo.yChromaOffset = formatProps.suggestedYChromaOffset;
