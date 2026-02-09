@@ -1,0 +1,301 @@
+<resources>
+    <string name="app_name">Photon Camera</string>
+    
+    <!-- Camera Controls -->
+    <string name="capture">ถ่ายภาพ</string>
+    <string name="switch_camera">สลับกล้อง</string>
+    <string name="settings">ตั้งค่า</string>
+    <string name="flash">แฟลช</string>
+    <string name="timer">ตัวนับเวลา</string>
+    <string name="histogram">ฮิสโตแกรม</string>
+    <string name="grid">เส้นตาราง</string>
+    <string name="back">กลับ</string>
+    
+    <!-- Exposure Controls -->
+    <string name="exposure_compensation">EV</string>
+    <string name="iso">ISO</string>
+    <string name="shutter_speed">ชัตเตอร์</string>
+    <string name="auto">อัตโนมัติ</string>
+    
+    <!-- Focus -->
+    <string name="focus">โฟกัส</string>
+    <string name="tap_to_focus">แตะเพื่อโฟกัส</string>
+    
+    <!-- Aspect Ratio -->
+    <string name="aspect_ratio">อัตราส่วนภาพ</string>
+    <string name="ratio_3_2">3:2</string>
+    <string name="ratio_4_3">4:3</string>
+    <string name="ratio_16_9">16:9</string>
+    <string name="ratio_1_1">1:1</string>
+    
+    <!-- Permissions -->
+    <string name="camera_permission_required">จำเป็นต้องมีการอนุญาตเข้าถึงกล้องและไมโครโฟน</string>
+    <string name="grant_permission">อนุญาตสิทธิ์</string>
+    
+    <!-- Zoom -->
+    <string name="zoom">ซูม</string>
+    
+    <!-- Gallery -->
+    <string name="gallery">แกลเลอรี</string>
+    <string name="photo_detail">รายละเอียดรูปภาพ</string>
+    <string name="share">แชร์</string>
+    <string name="delete">ลบ</string>
+    <string name="export">ส่งออก</string>
+    <string name="export_success">ส่งออกรูปภาพสำเร็จ</string>
+    <string name="export_failed">ส่งออกรูปภาพล้มเหลว</string>
+    <string name="edit">แก้ไข</string>
+    <string name="select_all">เลือกทั้งหมด</string>
+    <string name="cancel">ยกเลิก</string>
+    <string name="save">บันทึก</string>
+    <string name="rotate">หมุน</string>
+    <string name="crop">ตัดครอบ</string>
+    <string name="brightness">ความสว่าง</string>
+    <string name="delete_confirm">ลบรูปภาพนี้หรือไม่?</string>
+    <string name="delete_multiple_confirm">ลบรูปภาพ %d รูปหรือไม่?</string>
+    <string name="delete_exported_photos">ลบออกจากแกลเลอรีระบบด้วย</string>
+    <string name="no_photos">ยังไม่มีรูปภาพ</string>
+    <string name="photo_info">ข้อมูลรูปภาพ</string>
+    <string name="filter">LUT</string>
+    <string name="intensity">ความเข้ม</string>
+    <string name="original">ต้นฉบับ</string>
+    <string name="export_confirm">ส่งออกรูปภาพพร้อมใช้ LUT หรือไม่?</string>
+    <string name="items_selected">เลือกแล้ว %d รายการ</string>
+    <string name="not_selected">ไม่เลือก</string>
+    <string name="selected">เลือกแล้ว</string>
+    <string name="imported">นำเข้าแล้ว</string>
+    <string name="photo_info_date">วันที่</string>
+    <string name="photo_info_resolution">ความละเอียด</string>
+    <string name="photo_info_size">ขนาด</string>
+    <string name="photo_info_focal_length">ระยะโฟกัส</string>
+    <string name="photo_info_aperture">รูรับแสง</string>
+    <string name="photo_info_iso">ISO</string>
+    <string name="photo_info_shutter_speed">ความเร็วชัตเตอร์</string>
+    
+    <!-- Frame Watermark -->
+    <string name="frame">กรอบ</string>
+    <string name="none">ไม่มี</string>
+    <string name="show_app_branding">แสดงแบรนด์แอป</string>
+    <string name="export_with_frame_confirm">ส่งออกรูปภาพพร้อมลายน้ำกรอบหรือไม่?</string>
+    <string name="import_photo">นำเข้า</string>
+    <string name="adjust_watermark">ปรับลายน้ำ</string>
+    <string name="watermark_adjustment">การปรับลายน้ำ</string>
+    <string name="logo">โลโก้</string>
+    <string name="text_content">เนื้อหาข้อความ</string>
+    <string name="device_model">รุ่นอุปกรณ์</string>
+    <string name="brand_name">ชื่อแบรนด์</string>
+    <string name="date_label">วันที่ (DATE)</string>
+    <string name="time_label">เวลา (TIME)</string>
+    <string name="datetime_label">วันที่/เวลา (DATETIME)</string>
+    <string name="default_from_photo">ค่าเริ่มต้นจากรูปภาพ</string>
+    <string name="font_option">แบบอักษร</string>
+    <string name="default_text">ค่าเริ่มต้น</string>
+    <string name="custom_import">นำเข้า...</string>
+    
+    <!-- Settings -->
+    <string name="settings_title">ตั้งค่า</string>
+    <string name="settings_section_capture">การถ่ายภาพ</string>
+    <string name="settings_section_display">การแสดงผล</string>
+    <string name="settings_use_raw">ถ่ายภาพ RAW</string>
+    <string name="settings_use_raw_description">ถ่ายภาพในรูปแบบ RAW (DNG) เพื่อคุณภาพที่สูงขึ้น ปิดเพื่อใช้รูปแบบ YUV</string>
+    <string name="settings_level_indicator">ระดับแนวนอน</string>
+    <string name="settings_level_description">แสดงตัวบ่งชี้ระดับแนวนอนขณะถ่าย</string>
+    <string name="settings_grid_lines">เส้นตาราง</string>
+    <string name="settings_grid_description">แสดงเส้นตารางสำหรับการจัดองค์ประกอบ</string>
+    <string name="settings_use_multi_frame">การรวมหลายเฟรม</string>
+    <string name="settings_use_multi_frame_description">ถ่ายหลายเฟรมและนำมาซ้อนกันเพื่อคุณภาพที่ดีขึ้นและลดสัญญาณรบกวน (Noise)</string>
+    <string name="settings_multi_frame_count">จำนวนเฟรมที่รวม</string>
+    <string name="settings_multi_frame_count_description">จำนวนเฟรมสำหรับการรวมหลายเฟรม (เฟรมมาก = คุณภาพดีขึ้นแต่ช้าลง)</string>
+    <string name="settings_use_super_resolution">ความละเอียดสูงพิเศษ (Super Resolution)</string>
+    <string name="settings_use_super_resolution_description">ใช้การรวมหลายเฟรมแบบความละเอียดสูง 2 เท่าเพื่อเพิ่มรายละเอียด (ต้องการการเปิดใช้งานการรวมหลายเฟรม)</string>
+    <string name="settings_raw_engine">เครื่องยนต์ประมวลผล RAW</string>
+    <string name="settings_raw_engine_description">เลือกเครื่องยนต์สำหรับการประมวลผลข้อมูล RAW</string>
+    <string name="settings_raw_engine_native">Native</string>
+    <string name="settings_raw_engine_self_developed">พัฒนาเอง</string>
+    <string name="settings_use_live_photo">ภาพเคลื่อนไหว (Live Photo)</string>
+    <string name="settings_use_live_photo_description">บันทึกวิดีโอคลิปสั้นๆ พร้อมกับรูปภาพของคุณเพื่อให้ได้เอฟเฟกต์ภาพเคลื่อนไหวที่สมจริง</string>
+    <string name="settings_use_gpu_acceleration">การเร่งความเร็วด้วย GPU</string>
+    <string name="settings_use_gpu_acceleration_description">ใช้ GPU (Vulkan) เพื่อเร่งความเร็วในการรวมหลายเฟรม เปิดอยู่เป็นค่าเริ่มต้น</string>
+    <string name="settings_section_frame">ลายน้ำกรอบ</string>
+    <string name="settings_frame_style">สไตล์กรอบ</string>
+    <string name="settings_frame_description">เพิ่มกรอบตกแต่งและลายน้ำให้กับรูปภาพ</string>
+    <string name="settings_section_operation">การใช้งาน</string>
+    <string name="settings_section_image_processing">การประมวลผลภาพ</string>
+    <string name="settings_section_software_processing">การปรับจูน</string>
+    <string name="settings_shutter_sound">เสียงชัตเตอร์</string>
+    <string name="settings_shutter_sound_description">เล่นเสียงเมื่อถ่ายภาพ</string>
+    <string name="settings_vibration">การสั่น</string>
+    <string name="settings_vibration_description">สั่นเมื่อถ่ายภาพ</string>
+    <string name="settings_volume_key_action">การทำงานของปุ่มปรับระดับเสียง</string>
+    <string name="settings_volume_key_action_description">เลือกการทำงานของปุ่มปรับระดับเสียงขณะถ่ายภาพ</string>
+    <string name="settings_volume_key_action_none">ควบคุมระดับเสียง</string>
+    <string name="settings_volume_key_action_capture">ชัตเตอร์</string>
+    <string name="settings_volume_key_action_exposure">ชดเชยแสง</string>
+    <string name="settings_volume_key_action_zoom">สลับโฟกัส</string>
+    <string name="settings_auto_save">บันทึกอัตโนมัติ</string>
+    <string name="settings_auto_save_description">บันทึกรูปภาพโดยอัตโนมัติหลังจากถ่าย</string>
+    <string name="settings_nr_level">ระดับการลดสัญญาณรบกวน</string>
+    <string name="settings_nr_level_description">ปรับโหมดการลดสัญญาณรบกวนด้วยฮาร์ดแวร์ \"ปิด\" ช่วยรักษาความคมชัดเมื่อใช้การประมวลผลด้วยซอฟต์แวร์</string>
+    <string name="settings_nr_level_off">ปิด</string>
+    <string name="settings_nr_level_minimal">น้อยที่สุด</string>
+    <string name="settings_nr_level_fast">เร็ว</string>
+    <string name="settings_nr_level_high_quality">HQ</string>
+    <string name="settings_nr_level_zsl">ZSL</string>
+    <string name="settings_edge_level">ระดับความคมชัด</string>
+    <string name="settings_edge_level_description">ปรับโหมดการเร่งความคมชัดที่ขอบด้วยฮาร์ดแวร์</string>
+    <string name="settings_sharpening">เพิ่มความคมชัด</string>
+    <string name="settings_sharpening_description">เพิ่มความคมชัดของภาพและความชัดเจนของขอบ</string>
+    <string name="settings_noise_reduction">ลดสัญญาณรบกวน</string>
+    <string name="settings_noise_reduction_description">ลดสัญญาณรบกวนในภาพในขณะที่รักษาความละเอียดของรายละเอียด</string>
+    <string name="settings_chroma_noise_reduction">ลดสัญญาณรบกวนสี</string>
+    <string name="settings_chroma_noise_reduction_description">ลดสัญญาณรบกวนของสีและสิ่งแปลกปลอม</string>
+    <string name="settings_detail_enhancement_description">ปรับแต่งพารามิเตอร์ของความคมชัดและการลดสัญญาณรบกวนอย่างละเอียด</string>
+    <string name="settings_photo_quality">คุณภาพรูปภาพ</string>
+    <string name="settings_photo_quality_description">เลือกคุณภาพการบีบอัด JPEG สำหรับรูปภาพ (คุณภาพสูง = ภาพชัดขึ้น แต่ไฟล์มีขนาดใหญ่ขึ้น)</string>
+    <string name="settings_background">พื้นหลัง</string>
+    <string name="settings_background_description">เปลี่ยนรูปพื้นหลังของแอป</string>
+    <string name="settings_custom_background">กำหนดเอง...</string>
+    
+    <!-- LUT -->
+    <string name="filter_intensity">ความเข้ม LUT</string>
+    <string name="lut_intensity_none">ไม่มี</string>
+    <string name="lut_intensity_low">ต่ำ</string>
+    <string name="lut_intensity_medium">กลาง</string>
+    <string name="lut_intensity_high">สูง</string>
+    <string name="filters_panel">รายการ LUT</string>
+    <string name="toggle_display_mode">สลับโหมดการแสดงผล</string>
+    
+    <!-- Billing & Premium -->
+    <string name="billing_vip_tag">VIP</string>
+    <string name="billing_premium_unlock_title">ปลดล็อก LUT VIP ทั้งหมด</string>
+    <string name="billing_premium_unlock_description">จ่ายเพียงครั้งเดียวเพื่อเข้าถึงฟิลเตอร์ LUT ระดับพรีเมียมทั้งหมดและฟีเจอร์โปรในอนาคตได้ตลอดชีพ</string>
+    <string name="billing_feature_all_luts">เข้าถึง LUT เฉพาะทางทั้งหมด</string>
+    <string name="billing_feature_support_dev">สนับสนุนการพัฒนาซอฟต์แวร์อิสระ</string>
+    <string name="billing_feature_lifetime">ซื้อครั้งเดียว ใช้ได้ตลอดชีพ</string>
+    <string name="billing_premium_get_access">รับสิทธิ์เข้าถึงพรีเมียม</string>
+    <string name="billing_price_region_notice">ราคาแตกต่างกันไปตามภูมิภาค</string>
+    <string name="settings_premium_title">PhotonCamera Pro</string>
+    <string name="settings_premium_description">ปลดล็อก LUT พรีเมียมทั้งหมดและสนับสนุนเรา</string>
+    
+    <!-- Custom Import -->
+    <string name="custom_tag">กำหนดเอง</string>
+    <string name="settings_section_custom">นำเข้ากำหนดเอง</string>
+    <string name="settings_custom_import">นำเข้าเนื้อหาที่กำหนดเอง</string>
+    <string name="import_lut">นำเข้า LUT</string>
+    <string name="import_frame">นำเข้ากรอบ</string>
+    <string name="import_image_frame">นำเข้ากรอบรูปภาพ</string>
+    <string name="settings_import_description">นำเข้าฟิลเตอร์ LUT แบบกำหนดเอง (.cube) หรือเทมเพลตกรอบ (.png/.webp)</string>
+    <string name="custom_content_management">เนื้อหาที่นำเข้า</string>
+    <string name="lut_type">ฟิลเตอร์ LUT</string>
+    <string name="frame_type">เทมเพลตกรอบ</string>
+    <string name="delete_confirm_title">ยืนยันการลบ</string>
+    <string name="delete_custom_content_confirm">ลบ \"%s\" หรือไม่?</string>
+    <string name="importing">กำลังนำเข้า...</string>
+    <string name="edit_name">แก้ไขชื่อ</string>
+    <string name="name">ชื่อ</string>
+    <string name="confirm">ยืนยัน</string>
+    
+    <!-- Color Recipe -->
+    <string name="color_recipe">สูตรสี (Color Recipe)</string>
+    
+    <!-- Color Recipe Parameters -->
+    <string name="recipe_param_exposure">การรับแสง</string>
+    <string name="recipe_param_contrast">ความเปรียบต่าง</string>
+    <string name="recipe_param_saturation">ความอิ่มสี</string>
+    <string name="recipe_param_temperature">อุณหภูมิสี</string>
+    <string name="recipe_param_tint">สีสัน</string>
+    <string name="recipe_param_fade">จาง</string>
+    <string name="recipe_param_color">ความสดใส (Vibrance)</string>
+    <string name="recipe_param_highlights">ส่วนสว่าง</string>
+    <string name="recipe_param_shadows">ส่วนมืด</string>
+    <string name="recipe_param_film_grain">นอยซ์แบบฟิล์ม</string>
+    <string name="recipe_param_vignette">ขอบมืด</string>
+    <string name="recipe_param_bleach_bypass">การข้ามกระบวนการล้าง (Bleach Bypass)</string>
+    <string name="recipe_param_lut_intensity">LUT</string>
+    
+    <!-- Color Recipe Tabs -->
+    <string name="recipe_tab_basic">พื้นฐาน</string>
+    <string name="recipe_tab_color">สี</string>
+    <string name="recipe_tab_light">แสง</string>
+    <string name="recipe_tab_texture">เนื้อผิว</string>
+    <string name="recipe_tab_post">ขั้นตอนส่งออก</string>
+    
+    <!-- Post-Processing Parameters (Capture/Edit only) -->
+    <string name="recipe_param_sharpening">เพิ่มความคมชัด</string>
+    <string name="recipe_param_noise_reduction">ลดสัญญาณรบกวน</string>
+    <string name="recipe_param_chroma_noise_reduction">ลดสัญญาณรบกวนสี</string>
+    
+    <!-- Developer Options -->
+    <string name="settings_section_developer">ตัวเลือกสำหรับนักพัฒนา</string>
+    <string name="settings_log_viewer">ตัวดูบันทึกข้อความ (Log Viewer)</string>
+    <string name="settings_log_viewer_description">ดูและส่งออกบันทึกการทำงานของแอปเพื่อการวินิจฉัย</string>
+    <string name="logs">บันทึก (Logs)</string>
+    
+    <!-- Filter/Frame Management -->
+    <string name="settings_section_management">การจัดการเนื้อหา</string>
+    <string name="settings_filter_management">การจัดการ LUT</string>
+    <string name="settings_filter_management_description">จัดการ LUT, ตั้งค่าเริ่มต้น, จัดลำดับใหม่</string>
+    <string name="settings_frame_management">การจัดการกรอบ</string>
+    <string name="settings_frame_management_description">จัดการกรอบ, ตั้งค่าเริ่มต้น, จัดลำดับใหม่</string>
+    <string name="filter_management_title">การจัดการ LUT</string>
+    <string name="frame_management_title">การจัดการกรอบ</string>
+    <string name="category_all">ทั้งหมด</string>
+    <string name="category_custom">กำหนดเอง</string>
+    <string name="set_as_default">ตั้งเป็นค่าเริ่มต้น</string>
+    <string name="current_default">ค่าเริ่มต้น</string>
+    <string name="rename">เปลี่ยนชื่อ</string>
+    <string name="import_filter">นำเข้า LUT</string>
+    <string name="import_frame_json">นำเข้าการตั้งค่ากรอบ</string>
+    <string name="import_frame_image">นำเข้ากรอบรูปภาพ</string>
+    <string name="delete_filter_confirm_message">ลบ LUT \"%s\" หรือไม่?</string>
+    <string name="delete_frame_confirm_message">ลบกรอบ \"%s\" หรือไม่?</string>
+    <string name="rename_dialog_title">เปลี่ยนชื่อ</string>
+    <string name="copy">คัดลอก</string>
+    <string name="copy_lut_dialog_title">คัดลอก LUT</string>
+    <string name="copy_suffix"> (สำเนา)</string>
+    <string name="edit_category">แก้ไขหมวดหมู่</string>
+    <string name="batch_edit_category">แก้ไขหมวดหมู่แบบกลุ่ม</string>
+    <string name="sort_categories">จัดเรียงหมวดหมู่</string>
+    <string name="drag_to_reorder_categories">ลากที่จับเพื่อจัดลำดับแท็บใหม่</string>
+    <string name="selected_count">เลือกแล้ว %d รายการ</string>
+    <string name="category">หมวดหมู่</string>
+    <string name="category_management_title">การจัดการหมวดหมู่</string>
+    <string name="new_category">หมวดหมู่ใหม่</string>
+    <string name="category_name">ชื่อหมวดหมู่</string>
+    <string name="import_to_category">นำเข้าสู่หมวดหมู่</string>
+    <string name="import_success">นำเข้ารายการสำเร็จ %d รายการ</string>
+    <string name="import_failed">นำเข้าล้มเหลว: %d รายการ</string>
+    <string name="common_categories">หมวดหมู่ทั่วไป</string>
+    <string name="delete_category_title">ลบหมวดหมู่</string>
+    <string name="delete_category_message">คุณแน่ใจหรือไม่ว่าต้องการลบหมวดหมู่ \"%s\"? LUT ในหมวดหมู่นี้จะถูกรีเซ็ตเป็นแบบไม่ระบุหมวดหมู่</string>
+    <string name="built_in">ที่มากับแอป</string>
+    <string name="custom">กำหนดเอง</string>
+    <string name="no_filters">ไม่มี LUT ที่กำหนดเอง</string>
+    <string name="no_frames">ไม่มีกรอบที่กำหนดเอง</string>
+    <string name="input_curve">เส้นโค้งอินพุต</string>
+    
+    <!-- Frame Import Help -->
+    <string name="help">ช่วยเหลือ</string>
+    <string name="got_it">รับทราบ</string>
+    <string name="frame_import_help_title">คู่มือการนำเข้ากรอบ</string>
+    <string name="frame_import_help_message">รูปแบบที่รองรับ: PNG, WebP\n\nความต้องการ:\n• รูปภาพต้องมีพื้นที่ส่วนที่โปร่งใส (Alpha Channel)\n• รูปภาพของคุณจะถูกวางไว้หลังกรอบ โดยมองผ่านส่วนที่โปร่งใส\n\nเคล็ดลับ: ออกแบบกรอบโดยให้มีส่วนที่เจาะรูให้โปร่งใสในส่วนที่คุณต้องการให้รูปภาพปรากฏ</string>
+    
+    <!-- Camera Calibration -->
+    <string name="settings_section_calibration">การปรับเทียบกล้อง</string>
+    <string name="settings_camera_orientation">ทิศทางของรูปภาพ</string>
+    <string name="settings_camera_orientation_description">ปรับหากรูปภาพจากกล้องนี้หมุนไม่ถูกต้อง การเปลี่ยนแปลงจะใช้กับกล้องนี้โดยเฉพาะเท่านั้น</string>
+    <string name="settings_orientation_normal">0°</string>
+    <string name="settings_orientation_90">90°</string>
+    <string name="settings_orientation_180">180°</string>
+    <string name="settings_orientation_270">270°</string>
+    <string name="rear_camera">กล้องหลัง</string>
+    <string name="front_camera">กล้องหน้า</string>
+    <string name="camera">กล้อง</string>
+    <string name="current_camera">กล้องปัจจุบัน</string>
+    
+    <!-- About & Donation -->
+    <string name="settings_section_about">เกี่ยวกับ</string>
+    <string name="settings_donation">บริจาค</string>
+    <string name="settings_donation_description">สนับสนุนการพัฒนา Photon Camera</string>
+    <string name="settings_default_focal_length">ระยะโฟกัสเริ่มต้น</string>
+    <string name="settings_default_focal_length_description">ตั้งค่าระยะโฟกัสที่จะสลับไปใช้อัตโนมัติเมื่อเริ่มแอป</string>
+</resources>
