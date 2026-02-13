@@ -14,7 +14,6 @@ import android.provider.MediaStore
 import androidx.core.graphics.createBitmap
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
-import com.hinnka.mycamera.data.RawEngine
 import com.hinnka.mycamera.livephoto.MotionPhotoWriter
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.processor.MultiFrameStacker
@@ -25,7 +24,6 @@ import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.RawProcessor
 import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.*
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
@@ -426,16 +424,14 @@ object PhotoManager {
             val metadata = loadMetadata(context, photoId) ?: return@withContext
 
             captureResult ?: return@withContext
-            RawDemosaicProcessor.getInstance().loadToneCurveFromAssets(context)
             val bitmap = RawDemosaicProcessor.getInstance().process(
+                context,
                 image,
                 characteristics,
                 captureResult,
                 aspectRatio,
                 rotation,
                 sharpeningValue = 0.4f,
-                noiseReductionValue = 0.8f,
-                chromaNoiseReductionValue = 0.25f,
                 previewLuma = previewLuma
             ) ?: return@withContext
             FileOutputStream(tempFile).use { outputStream ->
@@ -609,7 +605,6 @@ object PhotoManager {
             characteristics ?: return@withContext
             captureResult ?: return@withContext
 
-            val firstImageData = images[0].planes[0].buffer
             val firstImageWidth = images[0].width
             val firstImageHeight = images[0].height
 
@@ -662,8 +657,8 @@ object PhotoManager {
                     // Keep original CCM and other params
                 )
 
-                RawDemosaicProcessor.getInstance().loadToneCurveFromAssets(context)
                 RawDemosaicProcessor.getInstance().process(
+                    context,
                     byteBuffer,
                     firstImageWidth,
                     firstImageHeight,
@@ -673,8 +668,6 @@ object PhotoManager {
                     metadata.cropRegion,
                     rotation,
                     sharpeningValue = 0.4f,
-                    noiseReductionValue = 0.2f,
-                    chromaNoiseReductionValue = 0.25f,
                     previewLuma = previewLuma
                 )
             } ?: return@withContext

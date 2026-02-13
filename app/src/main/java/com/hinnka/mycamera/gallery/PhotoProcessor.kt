@@ -3,7 +3,6 @@ package com.hinnka.mycamera.gallery
 import android.content.Context
 import android.graphics.*
 import android.os.Build
-import android.util.Log
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.data.RawEngine
 import com.hinnka.mycamera.frame.FrameManager
@@ -17,7 +16,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.ByteBuffer
-import java.nio.ShortBuffer
 
 /**
  * 照片处理器
@@ -41,6 +39,7 @@ class PhotoProcessor(
 
         if (dngFile.exists()) {
             return processDng(
+                context,
                 dngFile.absolutePath,
                 metadata,
                 sharpening,
@@ -79,6 +78,7 @@ class PhotoProcessor(
      * @return 处理后的 Bitmap
      */
     suspend fun processDng(
+        context: Context,
         dngPath: String,
         metadata: PhotoMetadata,
         sharpening: Float = 0f,
@@ -98,25 +98,23 @@ class PhotoProcessor(
         val colorRecipeParams = metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
         val cropRegion = metadata.cropRegion
 
-        if (metadata.rawEngine == RawEngine.SELF_DEVELOPED) {
-            result = RawDemosaicProcessor.getInstance().process(
-                dngPath,
-                metadata.ratio ?: AspectRatio.RATIO_4_3, cropRegion, metadata.rotation,
-                lutConfig, colorRecipeParams,
-                finalSharpening, finalNoiseReduction, finalChromaNoiseReduction
+        val bitmap = if (metadata.rawEngine == RawEngine.SELF_DEVELOPED) {
+            RawDemosaicProcessor.getInstance().process(
+                context, dngPath, metadata.ratio ?: AspectRatio.RATIO_4_3, cropRegion, metadata.rotation
             )
         } else {
-            val bitmap16 = RawProcessor.processAndToBitmap(File(dngPath), metadata.ratio, cropRegion, metadata.rotation)
-            result = bitmap16?.let {
-                lutImageProcessor.applyLut(
-                    bitmap16,
-                    lutConfig,
-                    colorRecipeParams,
-                    finalSharpening,
-                    finalNoiseReduction,
-                    finalChromaNoiseReduction
-                )
-            }
+            RawProcessor.processAndToBitmap(File(dngPath), metadata.ratio, cropRegion, metadata.rotation)
+        }
+
+        result = bitmap?.let {
+            lutImageProcessor.applyLut(
+                bitmap,
+                lutConfig,
+                colorRecipeParams,
+                finalSharpening,
+                finalNoiseReduction,
+                finalChromaNoiseReduction
+            )
         }
 
         result ?: return@withContext null

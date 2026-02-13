@@ -377,8 +377,6 @@ class Camera2Controller(private val context: Context) {
             discoverCameras()
         }
 
-        RawDemosaicProcessor.getInstance().preload()
-
         val cameraId = _state.value.currentCameraId
         val aspectRatio = _state.value.aspectRatio
         if (cameraId.isEmpty()) {

@@ -9,13 +9,12 @@ import android.media.Image
 import android.opengl.*
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.lut.LutConfig
-import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.lut.LutParser
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.RawProcessor
 import kotlinx.coroutines.asCoroutineDispatcher
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.ByteBuffer
@@ -23,7 +22,9 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import java.nio.ShortBuffer
 import java.util.concurrent.Executors
-import kotlin.math.min
+import kotlin.math.abs
+import kotlin.math.ln
+import kotlin.math.log2
 import kotlin.math.pow
 import android.opengl.Matrix as GlMatrix
 
@@ -148,7 +149,6 @@ class RawDemosaicProcessor {
 
     companion object {
         private const val TAG = "RawDemosaicProcessor"
-        private const val TILE_SIZE = 512 // 增加分片渲染，避免长时间占用 GPU 导致 UI 卡顿
 
         init {
             // 加载 JNI 库
@@ -221,17 +221,18 @@ class RawDemosaicProcessor {
     private var dhtWidth = 0
     private var dhtHeight = 0
 
-    // Guided Filter 多 Pass 降噪资源
-    private var gfPass1Program = 0
-    private var gfPass2Program = 0
-    private var gfPass3Program = 0
-    private var gfPass4Program = 0
+    // Guided Filter Pass 0 (Chroma) & NLM 降噪资源
+    private var gfPass0Program = 0
+    private var nlmPassHProgram = 0
+    private var nlmPassVProgram = 0
 
     // Guided Filter 中间纹理: ping-pong (RGBA16F)
     private var gfTexId = intArrayOf(0, 0)
     private var gfFboId = intArrayOf(0, 0)
     private var gfWidth = 0
     private var gfHeight = 0
+    private var gfChromaTexId = 0
+    private var gfChromaFboId = 0
 
     // 缓冲区
     private var vertexBuffer: FloatBuffer? = null
@@ -254,25 +255,9 @@ class RawDemosaicProcessor {
     private var uLutInputTextureLoc = 0
     private var uLut3DTextureLoc = 0
     private var uLutSizeLoc = 0
-    private var uLutIntensityLoc = 0
     private var uLutEnabledLoc = 0
     private var uLutCurveLoc = 0
     private var uLutTexMatrixLoc = 0
-
-    // ColorRecipe Uniform 位置
-    private var uColorRecipeEnabledLoc = 0
-    private var uExposureLoc = 0
-    private var uContrastLoc = 0
-    private var uSaturationLoc = 0
-    private var uTemperatureLoc = 0
-    private var uTintLoc = 0
-    private var uFadeLoc = 0
-    private var uVibranceLoc = 0
-    private var uHighlightsLoc = 0
-    private var uShadowsLoc = 0
-    private var uFilmGrainLoc = 0
-    private var uVignetteLoc = 0
-    private var uBleachBypassLoc = 0
     private var uTexelSizeLoc = 0
 
     // 后期处理 Uniform 位置
@@ -280,28 +265,23 @@ class RawDemosaicProcessor {
     private var uNoiseReductionLoc = 0
     private var uChromaNoiseReductionLoc = 0
 
-    // Guided Filter Uniform 位置 (每个 pass 独立)
-    private var gfPass1InputTexLoc = 0
-    private var gfPass1TexelSizeLoc = 0
-    private var gfPass1RadiusLoc = 0
-    private var gfPass1TexMatrixLoc = 0
-    private var gfPass2InputTexLoc = 0
-    private var gfPass2TexelSizeLoc = 0
-    private var gfPass2RadiusLoc = 0
-    private var gfPass2EpsilonLoc = 0
-    private var gfPass2TexMatrixLoc = 0
-    private var gfPass3InputTexLoc = 0
-    private var gfPass3TexelSizeLoc = 0
-    private var gfPass3RadiusLoc = 0
-    private var gfPass3TexMatrixLoc = 0
-    private var gfPass4InputTexLoc = 0
-    private var gfPass4OriginalTexLoc = 0
-    private var gfPass4TexelSizeLoc = 0
-    private var gfPass4RadiusLoc = 0
-    private var gfPass4StrengthLoc = 0
-    private var gfPass4ChromaStrengthLoc = 0
-    private var gfPass4ChromaStrideLoc = 0
-    private var gfPass4TexMatrixLoc = 0
+    // Guided Filter Uniform 位置 (Pass 0)
+    private var gfPass0InputTexLoc = 0
+    private var gfPass0TexelSizeLoc = 0
+    private var gfPass0TexMatrixLoc = 0
+
+    // NLM Pass H Uniforms
+    private var nlmPassHInputTexLoc = 0
+    private var nlmPassHTexelSizeLoc = 0
+    private var nlmPassHTexMatrixLoc = 0
+    private var nlmPassHHLoc = 0
+
+    // NLM Pass V Uniforms
+    private var nlmPassVInputTexLoc = 0
+    private var nlmPassVBlurTexLoc = 0
+    private var nlmPassVTexelSizeLoc = 0
+    private var nlmPassVTexMatrixLoc = 0
+    private var nlmPassVHLoc = 0
 
     private var lensShadingTextureId = 0
     private var dummyShadingTextureId = 0
@@ -316,12 +296,10 @@ class RawDemosaicProcessor {
     private var uToneMapParamsLoc = 0
     private var uToneMapInputTextureLoc = 0
     private var uToneMapTexMatrixLoc = 0
-    private var uToneCurveLoc = 0
     private var uToneMapTexelSizeLoc = 0
-
-    // ToneCurve 数据 (256 点线性 LUT)
-    private val toneCurve = FloatArray(256) { it / 255.0f } // 默认为线性
     private var isInitialized = false
+
+    private var baseLut: LutConfig? = null
 
     /**
      * 处理 DNG 文件
@@ -329,23 +307,16 @@ class RawDemosaicProcessor {
      * @param dngFilePath DNG 文件路径
      * @param aspectRatio 目标宽高比
      * @param cropRegion 可选裁切区域（在 RAW 纹理空间）
-     * @param lutConfig LUT 配置（可选）
-     * @param colorRecipeParams 色彩配方参数（可选）
      * @param sharpeningValue 锐化强度 (0.0-1.0)
-     * @param noiseReductionValue 降噪强度 (0.0-1.0)
-     * @param chromaNoiseReductionValue 减少杂色强度 (0.0-1.0)
      * @return 处理后的 Bitmap，失败返回 null
      */
     suspend fun process(
+        context: Context,
         dngFilePath: String,
         aspectRatio: AspectRatio?,
         cropRegion: Rect?,
         rotation: Int,
-        lutConfig: LutConfig? = null,
-        colorRecipeParams: ColorRecipeParams? = null,
-        sharpeningValue: Float = 0f,
-        noiseReductionValue: Float = 0f,
-        chromaNoiseReductionValue: Float = 0f
+        sharpeningValue: Float = 0f
     ): Bitmap? = withContext(glDispatcher) {
         val dngFile = File(dngFilePath)
         if (!dngFile.exists() || !dngFile.canRead()) {
@@ -366,6 +337,7 @@ class RawDemosaicProcessor {
                 // 使用提取的数据调用内部处理方法
                 // 注意：使用从 DNG 文件读取的 rotation，而不是外部传入的参数
                 processInternal(
+                    context = context,
                     rawData = it.rawData,
                     width = it.width,
                     height = it.height,
@@ -374,11 +346,7 @@ class RawDemosaicProcessor {
                     aspectRatio = aspectRatio,
                     cropRegion = cropRegion,
                     rotation = it.rotation,  // 使用从 DNG 文件读取的 rotation
-                    lutConfig = lutConfig,
-                    colorRecipeParams = colorRecipeParams,
-                    sharpeningValue = sharpeningValue,
-                    noiseReductionValue = noiseReductionValue,
-                    chromaNoiseReductionValue = chromaNoiseReductionValue
+                    sharpeningValue = sharpeningValue
                 )
             }
         } catch (e: Exception) {
@@ -395,24 +363,17 @@ class RawDemosaicProcessor {
      * @param captureResult 拍摄结果
      * @param aspectRatio 目标宽高比
      * @param rotation 旋转角度(0, 90, 180, 270)
-     * @param lutConfig LUT 配置 （ 可选 ）
-     * @param colorRecipeParams 色彩配方参数（可选）
      * @param sharpeningValue 锐化强度(0.0 - 1.0)
-     * @param noiseReductionValue 降噪强度(0.0 - 1.0)
-     * @param chromaNoiseReductionValue 减少杂色强度(0.0 - 1.0)
      * @return 处理后的 Bitmap ， 失败返回 null
      */
     suspend fun process(
+        context: Context,
         rawImage: SafeImage,
         characteristics: CameraCharacteristics,
         captureResult: CaptureResult,
         aspectRatio: AspectRatio,
         rotation: Int,
-        lutConfig: LutConfig? = null,
-        colorRecipeParams: ColorRecipeParams? = null,
         sharpeningValue: Float = 0f,
-        noiseReductionValue: Float = 0f,
-        chromaNoiseReductionValue: Float = 0f,
         previewLuma: Float = 0.5f
     ): Bitmap? = withContext(glDispatcher) {
         try {
@@ -433,6 +394,7 @@ class RawDemosaicProcessor {
             // 使用内部处理方法
             rawImage.use {
                 processInternal(
+                    context = context,
                     rawData = rawImage.planes[0].buffer,
                     width = width,
                     height = height,
@@ -441,11 +403,7 @@ class RawDemosaicProcessor {
                     aspectRatio = aspectRatio,
                     cropRegion = cropRegion,
                     rotation = rotation,
-                    lutConfig = lutConfig,
-                    colorRecipeParams = colorRecipeParams,
                     sharpeningValue = sharpeningValue,
-                    noiseReductionValue = noiseReductionValue,
-                    chromaNoiseReductionValue = chromaNoiseReductionValue,
                     previewLuma = previewLuma,
                 )
             }
@@ -459,6 +417,7 @@ class RawDemosaicProcessor {
      * 处理 RAW Buffer (例如来自 MultiFrameStacker 的输出)
      */
     suspend fun process(
+        context: Context,
         rawData: ByteBuffer,
         width: Int,
         height: Int,
@@ -467,11 +426,7 @@ class RawDemosaicProcessor {
         aspectRatio: AspectRatio,
         cropRegion: Rect?,
         rotation: Int,
-        lutConfig: LutConfig? = null,
-        colorRecipeParams: ColorRecipeParams? = null,
         sharpeningValue: Float = 0f,
-        noiseReductionValue: Float = 0f,
-        chromaNoiseReductionValue: Float = 0f,
         previewLuma: Float = 0.18f,
     ): Bitmap? = withContext(glDispatcher) {
         try {
@@ -483,6 +438,7 @@ class RawDemosaicProcessor {
             }
 
             processInternal(
+                context = context,
                 rawData = rawData,
                 width = width,
                 height = height,
@@ -491,11 +447,7 @@ class RawDemosaicProcessor {
                 aspectRatio = aspectRatio,
                 cropRegion = cropRegion,
                 rotation = rotation,
-                lutConfig = lutConfig,
-                colorRecipeParams = colorRecipeParams,
                 sharpeningValue = sharpeningValue,
-                noiseReductionValue = noiseReductionValue,
-                chromaNoiseReductionValue = chromaNoiseReductionValue,
                 previewLuma = previewLuma
             )
         } catch (e: Exception) {
@@ -508,6 +460,7 @@ class RawDemosaicProcessor {
      * 内部处理方法（共享的核心处理逻辑）
      */
     private suspend fun processInternal(
+        context: Context,
         rawData: ByteBuffer,
         width: Int,
         height: Int,
@@ -516,11 +469,7 @@ class RawDemosaicProcessor {
         aspectRatio: AspectRatio?,
         cropRegion: Rect?,
         rotation: Int,
-        lutConfig: LutConfig?,
-        colorRecipeParams: ColorRecipeParams?,
         sharpeningValue: Float = 0f,
-        noiseReductionValue: Float = 0f,
-        chromaNoiseReductionValue: Float = 0f,
         previewLuma: Float = 0.18f
     ): Bitmap? = withContext(glDispatcher) {
         if (!isInitialized) {
@@ -567,31 +516,25 @@ class RawDemosaicProcessor {
         PLog.d(TAG, "ToneMap Pass took: ${System.currentTimeMillis() - tonemapStart}ms")
 
         // 5.5 Guided Filter 降噪 (ToneMap 之后, LUT 之前)
-        var denoiseOutputTexture = tonemapTextureId  // 默认使用 ToneMap 的输出
-        if (noiseReductionValue > 0.01f) {
-            val denoiseStart = System.currentTimeMillis()
-            renderGuidedFilterPass(
-                sourceTextureId = tonemapTextureId,
-                width = width,
-                height = height,
-                noiseReductionValue = noiseReductionValue,
-                chromaNoiseReductionValue = chromaNoiseReductionValue
-            )
-            denoiseOutputTexture = gfTexId[1]  // LUT pass 从降噪结果读取
-            PLog.d(TAG, "Guided Filter Denoise took: ${System.currentTimeMillis() - denoiseStart}ms")
-        }
+        val denoiseStart = System.currentTimeMillis()
+        renderNLMPass(
+            sourceTextureId = tonemapTextureId,
+            width = width,
+            height = height
+        )
+        val denoiseOutputTexture = gfTexId[1]
+        PLog.d(TAG, "Guided Filter Denoise took: ${System.currentTimeMillis() - denoiseStart}ms")
 
-        // 6. 第三步：LUT + ColorRecipe 处理 (Color Pass)
+        // 6. 第三步：LUT
         setupLutFramebuffer(width, height)
+        if (baseLut == null) {
+            baseLut = LutParser.parseFromAssets(context, "luts/base.plut")
+        }
         val lutStart = System.currentTimeMillis()
         renderLutPass(
             metadata,
-            lutConfig,
-            colorRecipeParams,
-            sceneStats,
+            baseLut,
             sharpeningValue,
-            noiseReductionValue,
-            chromaNoiseReductionValue,
             denoiseOutputTexture
         )
         PLog.d(TAG, "Color Pass took: ${System.currentTimeMillis() - lutStart}ms")
@@ -616,19 +559,6 @@ class RawDemosaicProcessor {
 
         PLog.d(TAG, "RAW processing complete: ${finalBitmap.width}x${finalBitmap.height}")
         finalBitmap
-    }
-
-    /**
-     * 预加载 EGL 环境和 Shader
-     */
-    fun preload() {
-        Executors.newSingleThreadExecutor().execute {
-            runBlocking {
-                withContext(glDispatcher) {
-                    initializeOnGlThread()
-                }
-            }
-        }
     }
 
     private suspend fun initializeOnGlThread(): Boolean = withContext(glDispatcher) {
@@ -755,24 +685,9 @@ class RawDemosaicProcessor {
             uLutInputTextureLoc = GLES30.glGetUniformLocation(lutProgram, "uInputTexture")
             uLut3DTextureLoc = GLES30.glGetUniformLocation(lutProgram, "uLutTexture")
             uLutSizeLoc = GLES30.glGetUniformLocation(lutProgram, "uLutSize")
-            uLutIntensityLoc = GLES30.glGetUniformLocation(lutProgram, "uLutIntensity")
             uLutEnabledLoc = GLES30.glGetUniformLocation(lutProgram, "uLutEnabled")
             uLutCurveLoc = GLES30.glGetUniformLocation(lutProgram, "uLutCurve")
             uLutTexMatrixLoc = GLES30.glGetUniformLocation(lutProgram, "uTexMatrix")
-
-            uColorRecipeEnabledLoc = GLES30.glGetUniformLocation(lutProgram, "uColorRecipeEnabled")
-            uExposureLoc = GLES30.glGetUniformLocation(lutProgram, "uExposure")
-            uContrastLoc = GLES30.glGetUniformLocation(lutProgram, "uContrast")
-            uSaturationLoc = GLES30.glGetUniformLocation(lutProgram, "uSaturation")
-            uTemperatureLoc = GLES30.glGetUniformLocation(lutProgram, "uTemperature")
-            uTintLoc = GLES30.glGetUniformLocation(lutProgram, "uTint")
-            uFadeLoc = GLES30.glGetUniformLocation(lutProgram, "uFade")
-            uVibranceLoc = GLES30.glGetUniformLocation(lutProgram, "uVibrance")
-            uHighlightsLoc = GLES30.glGetUniformLocation(lutProgram, "uHighlights")
-            uShadowsLoc = GLES30.glGetUniformLocation(lutProgram, "uShadows")
-            uFilmGrainLoc = GLES30.glGetUniformLocation(lutProgram, "uFilmGrain")
-            uVignetteLoc = GLES30.glGetUniformLocation(lutProgram, "uVignette")
-            uBleachBypassLoc = GLES30.glGetUniformLocation(lutProgram, "uBleachBypass")
             uTexelSizeLoc = GLES30.glGetUniformLocation(lutProgram, "uTexelSize")
 
             // 后期处理 Uniform 位置
@@ -794,7 +709,6 @@ class RawDemosaicProcessor {
             uToneMapInputTextureLoc = GLES30.glGetUniformLocation(tonemapProgram, "uInputTexture")
             uToneMapParamsLoc = GLES30.glGetUniformLocation(tonemapProgram, "uToneMapParams")
             uToneMapTexMatrixLoc = GLES30.glGetUniformLocation(tonemapProgram, "uTexMatrix")
-            uToneCurveLoc = GLES30.glGetUniformLocation(tonemapProgram, "uToneCurve")
             uToneMapTexelSizeLoc = GLES30.glGetUniformLocation(tonemapProgram, "uTexelSize")
 
             GLES30.glDeleteShader(fShaderToneMap)
@@ -963,7 +877,7 @@ class RawDemosaicProcessor {
     }
 
     /**
-     * 初始化 Guided Filter 4-Pass 着色器程序
+     * 初始化 Guided Filter Pass 0 和 NLM 着色器
      */
     private fun initGuidedFilterPrograms(vShader: Int) {
         fun createGfProgram(vShader: Int, fSource: String, name: String): Int {
@@ -977,52 +891,36 @@ class RawDemosaicProcessor {
             return program
         }
 
-        gfPass1Program = createGfProgram(vShader, GuidedFilterShaders.PASS1_HORIZONTAL_MEAN, "GF_Pass1")
-        gfPass2Program = createGfProgram(vShader, GuidedFilterShaders.PASS2_VERTICAL_MEAN_COEF, "GF_Pass2")
-        gfPass3Program = createGfProgram(vShader, GuidedFilterShaders.PASS3_HORIZONTAL_MEAN_AB, "GF_Pass3")
-        gfPass4Program = createGfProgram(vShader, GuidedFilterShaders.PASS4_VERTICAL_MEAN_OUTPUT, "GF_Pass4")
+        gfPass0Program = createGfProgram(vShader, NLMShaders.PASS0_CHROMA_DENOISE, "GF_Pass0")
+        nlmPassHProgram = createGfProgram(vShader, NLMShaders.NLM_PASS_H, "NLM_PassH")
+        nlmPassVProgram = createGfProgram(vShader, NLMShaders.NLM_PASS_V, "NLM_PassV")
 
         // 缓存 Uniform 位置
-        if (gfPass1Program != 0) {
-            gfPass1InputTexLoc = GLES30.glGetUniformLocation(gfPass1Program, "uInputTexture")
-            gfPass1TexelSizeLoc = GLES30.glGetUniformLocation(gfPass1Program, "uTexelSize")
-            gfPass1RadiusLoc = GLES30.glGetUniformLocation(gfPass1Program, "uRadius")
-            gfPass1TexMatrixLoc = GLES30.glGetUniformLocation(gfPass1Program, "uTexMatrix")
+        if (gfPass0Program != 0) {
+            gfPass0InputTexLoc = GLES30.glGetUniformLocation(gfPass0Program, "uInputTexture")
+            gfPass0TexelSizeLoc = GLES30.glGetUniformLocation(gfPass0Program, "uTexelSize")
+            gfPass0TexMatrixLoc = GLES30.glGetUniformLocation(gfPass0Program, "uTexMatrix")
         }
-        if (gfPass2Program != 0) {
-            gfPass2InputTexLoc = GLES30.glGetUniformLocation(gfPass2Program, "uInputTexture")
-            gfPass2TexelSizeLoc = GLES30.glGetUniformLocation(gfPass2Program, "uTexelSize")
-            gfPass2RadiusLoc = GLES30.glGetUniformLocation(gfPass2Program, "uRadius")
-            gfPass2EpsilonLoc = GLES30.glGetUniformLocation(gfPass2Program, "uEpsilon")
-            gfPass2TexMatrixLoc = GLES30.glGetUniformLocation(gfPass2Program, "uTexMatrix")
-        }
-        if (gfPass3Program != 0) {
-            gfPass3InputTexLoc = GLES30.glGetUniformLocation(gfPass3Program, "uInputTexture")
-            gfPass3TexelSizeLoc = GLES30.glGetUniformLocation(gfPass3Program, "uTexelSize")
-            gfPass3RadiusLoc = GLES30.glGetUniformLocation(gfPass3Program, "uRadius")
-            gfPass3TexMatrixLoc = GLES30.glGetUniformLocation(gfPass3Program, "uTexMatrix")
-        }
-        if (gfPass4Program != 0) {
-            gfPass4InputTexLoc = GLES30.glGetUniformLocation(gfPass4Program, "uInputTexture")
-            gfPass4OriginalTexLoc = GLES30.glGetUniformLocation(gfPass4Program, "uOriginalTexture")
-            gfPass4TexelSizeLoc = GLES30.glGetUniformLocation(gfPass4Program, "uTexelSize")
-            gfPass4RadiusLoc = GLES30.glGetUniformLocation(gfPass4Program, "uRadius")
-            gfPass4StrengthLoc = GLES30.glGetUniformLocation(gfPass4Program, "uStrength")
-            gfPass4ChromaStrengthLoc = GLES30.glGetUniformLocation(gfPass4Program, "uChromaStrength")
-            gfPass4ChromaStrideLoc = GLES30.glGetUniformLocation(gfPass4Program, "uChromaStride")
-            gfPass4TexMatrixLoc = GLES30.glGetUniformLocation(gfPass4Program, "uTexMatrix")
+        
+        if (nlmPassHProgram != 0) {
+            nlmPassHInputTexLoc = GLES30.glGetUniformLocation(nlmPassHProgram, "uInputTexture")
+            nlmPassHTexelSizeLoc = GLES30.glGetUniformLocation(nlmPassHProgram, "uTexelSize")
+            nlmPassHTexMatrixLoc = GLES30.glGetUniformLocation(nlmPassHProgram, "uTexMatrix")
+            nlmPassHHLoc = GLES30.glGetUniformLocation(nlmPassHProgram, "uH")
         }
 
-        PLog.d(
-            TAG,
-            "Guided Filter programs: p1=$gfPass1Program p2=$gfPass2Program p3=$gfPass3Program p4=$gfPass4Program"
-        )
+        if (nlmPassVProgram != 0) {
+            nlmPassVInputTexLoc = GLES30.glGetUniformLocation(nlmPassVProgram, "uInputTexture")
+            nlmPassVBlurTexLoc = GLES30.glGetUniformLocation(nlmPassVProgram, "uBlurTexture")
+            nlmPassVTexelSizeLoc = GLES30.glGetUniformLocation(nlmPassVProgram, "uTexelSize")
+            nlmPassVTexMatrixLoc = GLES30.glGetUniformLocation(nlmPassVProgram, "uTexMatrix")
+            nlmPassVHLoc = GLES30.glGetUniformLocation(nlmPassVProgram, "uH")
+        }
+
+        PLog.d(TAG, "Denoise programs: GF_Pass0=$gfPass0Program NLM_H=$nlmPassHProgram NLM_V=$nlmPassVProgram")
     }
 
-    /**
-     * 设置 Guided Filter 中间帧缓冲 (ping-pong RGBA16F)
-     */
-    private fun setupGuidedFilterFramebuffers(width: Int, height: Int) {
+    private fun setupNLMFramebuffers(width: Int, height: Int) {
         if (gfWidth == width && gfHeight == height && gfTexId[0] != 0) return
         gfWidth = width
         gfHeight = height
@@ -1032,8 +930,26 @@ class RawDemosaicProcessor {
             if (gfTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(gfTexId[i]), 0)
             if (gfFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(gfFboId[i]), 0)
         }
+        if (gfChromaTexId != 0) GLES30.glDeleteTextures(1, intArrayOf(gfChromaTexId), 0)
+        if (gfChromaFboId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(gfChromaFboId), 0)
+
+        // 创建独立纹理用于色度降噪结果
+        val ct = IntArray(1)
+        val cf = IntArray(1)
+        GLES30.glGenTextures(1, ct, 0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, ct[0])
+        GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, width, height, 0, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glGenFramebuffers(1, cf, 0)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, cf[0])
+        GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, ct[0], 0)
+        gfChromaTexId = ct[0]; gfChromaFboId = cf[0]
 
         // 创建双缓冲 (RGBA16F) 用于中间 pass
+
         for (i in 0..1) {
             val t = IntArray(1)
             val f = IntArray(1)
@@ -1061,112 +977,79 @@ class RawDemosaicProcessor {
         checkGlError("setupGuidedFilterFramebuffers")
     }
 
+
     /**
-     * 渲染 Guided Filter 多 Pass 降噪
+     * 渲染 NLM 降噪
      *
-     * 管线: tonemapTexture → [Pass1→Pass2→Pass3→Pass4] → tonemapTexture (原地替换)
+     * 管线: tonemapTexture → [Pass0 Chroma] → [NLM] → gfFboId[1]
      *
      * @param sourceTextureId 输入纹理 (ToneMap 输出)
-     * @param outputFboId 输出 FBO (ToneMap FBO，用于原地写回)
-     * @param width 图像宽度
-     * @param height 图像高度
-     * @param noiseReductionValue 降噪强度 (0.0 - 1.0)
      */
-    private fun renderGuidedFilterPass(
+    private fun renderNLMPass(
         sourceTextureId: Int,
         width: Int,
-        height: Int,
-        noiseReductionValue: Float,
-        chromaNoiseReductionValue: Float
+        height: Int
     ) {
-        if (noiseReductionValue <= 0.01f && chromaNoiseReductionValue <= 0.01f) return
-        setupGuidedFilterFramebuffers(width, height)
+        setupNLMFramebuffers(width, height)
 
-        if (gfPass1Program == 0 || gfPass2Program == 0 || gfPass3Program == 0 || gfPass4Program == 0) {
-            PLog.w(TAG, "Guided Filter programs not initialized, skipping denoise")
+        if (gfPass0Program == 0 || nlmPassHProgram == 0 || nlmPassVProgram == 0) {
+            PLog.w(TAG, "Denoise programs not initialized, skipping denoise")
             return
         }
 
         val texelW = 1.0f / width
         val texelH = 1.0f / height
-
-        // 亮度降噪参数 (Guided Filter)
-        // radius: 控制滤波窗口大小
-        val radius = (4 + (noiseReductionValue * 16).toInt()).coerceAtMost(20)
-        // epsilon: 正则化参数, 控制平滑程度
-        val epsilon = 0.001f + noiseReductionValue * noiseReductionValue * 0.15f
-        // strength: 最终混合强度
-        val strength = noiseReductionValue.coerceIn(0.0f, 1.0f)
-
-        // 色度降噪参数 (Chroma Dilated Blur)
-        val chromaStrength = chromaNoiseReductionValue.coerceIn(0.0f, 1.0f)
-        val chromaStride = 1.0f + chromaNoiseReductionValue * 24.0f
+        
+        // NLM 参数配置
+        val h = 0.015f         // 衰减系数 (需要调优)
 
         val identityMatrix = FloatArray(16)
         GlMatrix.setIdentityM(identityMatrix, 0)
 
-        // ===== Pass 1: 水平 Box Filter (原图 → gfFbo[0]) =====
-        GLES30.glUseProgram(gfPass1Program)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, gfFboId[0])
+        // ===== Pass 0: 色度降噪 (输出到 gfChromaFboId) =====
+        GLES30.glUseProgram(gfPass0Program)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, gfChromaFboId)
         GLES30.glViewport(0, 0, width, height)
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
-        GLES30.glUniform1i(gfPass1InputTexLoc, 0)
-        GLES30.glUniform2f(gfPass1TexelSizeLoc, texelW, texelH)
-        GLES30.glUniform1i(gfPass1RadiusLoc, radius)
-        GLES30.glUniformMatrix4fv(gfPass1TexMatrixLoc, 1, false, identityMatrix, 0)
-        drawQuad(gfPass1Program)
+        GLES30.glUniform1i(gfPass0InputTexLoc, 0)
+        GLES30.glUniform2f(gfPass0TexelSizeLoc, texelW, texelH)
+        GLES30.glUniformMatrix4fv(gfPass0TexMatrixLoc, 1, false, identityMatrix, 0)
+        drawQuad(gfPass0Program)
 
-        // ===== Pass 2: 垂直 Box Filter + 计算 a,b (gfTex[0] → gfFbo[1]) =====
-        GLES30.glUseProgram(gfPass2Program)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, gfFboId[1])
-        GLES30.glViewport(0, 0, width, height)
-
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, gfTexId[0])
-        GLES30.glUniform1i(gfPass2InputTexLoc, 0)
-        GLES30.glUniform2f(gfPass2TexelSizeLoc, texelW, texelH)
-        GLES30.glUniform1i(gfPass2RadiusLoc, radius)
-        GLES30.glUniform1f(gfPass2EpsilonLoc, epsilon)
-        GLES30.glUniformMatrix4fv(gfPass2TexMatrixLoc, 1, false, identityMatrix, 0)
-        drawQuad(gfPass2Program)
-
-        // ===== Pass 3: 水平 Box Filter on a,b (gfTex[1] → gfFbo[0]) =====
-        GLES30.glUseProgram(gfPass3Program)
+        // ===== NLM Pass 1: Horizontal (gfChromaTexId -> gfFboId[0]) =====
+        GLES30.glUseProgram(nlmPassHProgram)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, gfFboId[0])
         GLES30.glViewport(0, 0, width, height)
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, gfTexId[1])
-        GLES30.glUniform1i(gfPass3InputTexLoc, 0)
-        GLES30.glUniform2f(gfPass3TexelSizeLoc, texelW, texelH)
-        GLES30.glUniform1i(gfPass3RadiusLoc, radius)
-        GLES30.glUniformMatrix4fv(gfPass3TexMatrixLoc, 1, false, identityMatrix, 0)
-        drawQuad(gfPass3Program)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, gfChromaTexId)
+        GLES30.glUniform1i(nlmPassHInputTexLoc, 0)
+        GLES30.glUniform2f(nlmPassHTexelSizeLoc, texelW, texelH)
+        GLES30.glUniformMatrix4fv(nlmPassHTexMatrixLoc, 1, false, identityMatrix, 0)
+        GLES30.glUniform1f(nlmPassHHLoc, h)
+        drawQuad(nlmPassHProgram)
 
-        // ===== Pass 4: 垂直 Box Filter on a,b + 最终输出 (gfTex[0] + 原图 → gfFboId[1]) =====
-        GLES30.glUseProgram(gfPass4Program)
+        // ===== NLM Pass 2: Vertical (gfChromaTexId + gfTexId[0] -> gfFboId[1]) =====
+        GLES30.glUseProgram(nlmPassVProgram)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, gfFboId[1])
         GLES30.glViewport(0, 0, width, height)
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, gfTexId[0])
-        GLES30.glUniform1i(gfPass4InputTexLoc, 0)
-
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, gfChromaTexId) // Original (Guide)
+        GLES30.glUniform1i(nlmPassVInputTexLoc, 0)
+        
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
-        GLES30.glUniform1i(gfPass4OriginalTexLoc, 1)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, gfTexId[0])    // Blur Input
+        GLES30.glUniform1i(nlmPassVBlurTexLoc, 1)
 
-        GLES30.glUniform2f(gfPass4TexelSizeLoc, texelW, texelH)
-        GLES30.glUniform1i(gfPass4RadiusLoc, radius)
-        GLES30.glUniform1f(gfPass4StrengthLoc, strength)
-        GLES30.glUniform1f(gfPass4ChromaStrengthLoc, chromaStrength)
-        GLES30.glUniform1f(gfPass4ChromaStrideLoc, chromaStride)
-        GLES30.glUniformMatrix4fv(gfPass4TexMatrixLoc, 1, false, identityMatrix, 0)
-        drawQuad(gfPass4Program)
+        GLES30.glUniform2f(nlmPassVTexelSizeLoc, texelW, texelH)
+        GLES30.glUniformMatrix4fv(nlmPassVTexMatrixLoc, 1, false, identityMatrix, 0)
+        GLES30.glUniform1f(nlmPassVHLoc, h)
+        drawQuad(nlmPassVProgram)
 
-        checkGlError("renderGuidedFilterPass")
+        checkGlError("renderNLMDenoise")
     }
 
     private fun dhtSetCommonUniforms(program: Int, metadata: RawMetadata) {
@@ -1675,7 +1558,7 @@ class RawDemosaicProcessor {
         textureId: Int,
         width: Int,
         height: Int,
-        previewLuma: Float = 0.18f
+        previewLuma: Float = 0.5f
     ): SceneStats {
         // 1. 生成 mipmap
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
@@ -1686,10 +1569,10 @@ class RawDemosaicProcessor {
         // 2. 选择合适的 mip level 进行读回
         // 目标: ~64x64 的降采样分辨率 (足够计算直方图，又足够小)
         val maxDim = maxOf(width, height)
-        val totalMipLevels = (kotlin.math.ln(maxDim.toFloat()) / kotlin.math.ln(2.0f)).toInt()
+        val totalMipLevels = (ln(maxDim.toFloat()) / ln(2.0f)).toInt()
         // 目标尺寸 ~64，所以需要降 log2(maxDim/64) 级
         val targetSize = 64
-        val desiredMipLevel = (kotlin.math.ln(maxDim.toFloat() / targetSize) / kotlin.math.ln(2.0f))
+        val desiredMipLevel = (ln(maxDim.toFloat() / targetSize) / ln(2.0f))
             .toInt().coerceIn(0, totalMipLevels)
 
         // 计算该 mip level 的实际尺寸
@@ -1806,7 +1689,7 @@ class RawDemosaicProcessor {
 
         // C. 计算动态范围压缩强度 (DRC Strength)
         val exposedMax = exposureGain * robustMax
-        val highlightHeadroom = kotlin.math.log2(exposedMax / targetMean)
+        val highlightHeadroom = log2(exposedMax / targetMean)
 
         val drcStrength = when {
             highlightHeadroom < 2.0f -> 0.0f
@@ -1819,7 +1702,7 @@ class RawDemosaicProcessor {
         val finalWhite = robustMax.coerceIn(0.1f, 2.0f)
 
         PLog.d(
-            TAG, "analyzeFromGpuTexture: avgLuma=$avgLuma, gain=$exposureGain, " +
+            TAG, "analyzeFromGpuTexture: previewLuma=$previewLuma avgLuma=$avgLuma, gain=$exposureGain, " +
                     "robustMin=$robustMin, robustMax=$robustMax, " +
                     "exposedMax=$exposedMax, headroom=${highlightHeadroom}stops, " +
                     "drc=$drcStrength, black=$finalBlack, white=$finalWhite"
@@ -1897,9 +1780,6 @@ class RawDemosaicProcessor {
             sceneStats.whitePoint
         )
 
-        // 设置 ToneCurve
-        GLES30.glUniform1fv(uToneCurveLoc, 256, toneCurve, 0)
-
         // 设置 TexelSize
         GLES30.glUniform2f(uToneMapTexelSizeLoc, 1.0f / metadata.width, 1.0f / metadata.height)
 
@@ -1913,79 +1793,12 @@ class RawDemosaicProcessor {
     }
 
     /**
-     * 加载并解析自定义 ToneCurve (XML 格式)
-     * @param xmlContent XML 文件内容
-     */
-    fun loadToneCurve(xmlContent: String) {
-        try {
-            val factory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
-            val builder = factory.newDocumentBuilder()
-            val doc = builder.parse(java.io.ByteArrayInputStream(xmlContent.toByteArray()))
-            val elements = doc.getElementsByTagName("Element")
-
-            val hValues = mutableListOf<Float>()
-            val vValues = mutableListOf<Float>()
-
-            for (i in 0 until elements.length) {
-                val node = elements.item(i) as org.w3c.dom.Element
-                hValues.add(node.getAttribute("h").toFloat())
-                vValues.add(node.getAttribute("v").toFloat())
-            }
-
-            // 重新采样到 256 点线性 LUT
-            for (i in 0 until 256) {
-                val targetH = i / 255.0f
-                toneCurve[i] = interpolateCurve(targetH, hValues, vValues)
-            }
-            PLog.d(TAG, "ToneCurve loaded: ${hValues.size} points")
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to load ToneCurve: ${e.message}")
-        }
-    }
-
-    /**
-     * 从 Assets 加载 ToneCurve
-     */
-    fun loadToneCurveFromAssets(context: Context, fileName: String = "tonecurve.xml") {
-        try {
-            val xmlContent = context.assets.open(fileName).bufferedReader().use { it.readText() }
-            loadToneCurve(xmlContent)
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to load ToneCurve from assets: ${e.message}")
-        }
-    }
-
-    private fun interpolateCurve(x: Float, h: List<Float>, v: List<Float>): Float {
-        if (x <= h.first()) return v.first()
-        if (x >= h.last()) return v.last()
-
-        // 二分查找
-        var low = 0
-        var high = h.size - 2
-        while (low <= high) {
-            val mid = (low + high) / 2
-            if (x < h[mid]) high = mid - 1
-            else if (x > h[mid + 1]) low = mid + 1
-            else {
-                // 线性插值
-                val ratio = (x - h[mid]) / (h[mid + 1] - h[mid])
-                return v[mid] + ratio * (v[mid + 1] - v[mid])
-            }
-        }
-        return v.first()
-    }
-
-    /**
      * LUT + ColorRecipe 处理 Pass
      */
     private fun renderLutPass(
         metadata: RawMetadata,
         lutConfig: LutConfig?,
-        colorRecipeParams: ColorRecipeParams?,
-        sceneStats: SceneStats,
         sharpeningValue: Float = 0f,
-        noiseReductionValue: Float = 0f,
-        chromaNoiseReductionValue: Float = 0f,
         inputTextureId: Int = tonemapTextureId
     ) {
         GLES30.glUseProgram(lutProgram)
@@ -1998,56 +1811,21 @@ class RawDemosaicProcessor {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId) // 使用降噪后或 ToneMap 后的纹理
         GLES30.glUniform1i(uLutInputTextureLoc, 0)
 
-        val lutIntensity = colorRecipeParams?.lutIntensity ?: 0f
         lutConfig?.let { uploadLut3DTexture(it) }
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, lut3DTextureId)
         GLES30.glUniform1i(uLut3DTextureLoc, 1)
         GLES30.glUniform1f(uLutSizeLoc, lutConfig?.size?.toFloat() ?: 0f)
-        GLES30.glUniform1f(uLutIntensityLoc, lutIntensity)
         GLES30.glUniform1i(uLutEnabledLoc, if (lutConfig != null) 1 else 0)
         GLES30.glUniform1i(uLutCurveLoc, lutConfig?.curve?.ordinal ?: 0)
 
-        val colorRecipeEnabled = colorRecipeParams != null && !colorRecipeParams.isDefault()
-        GLES30.glUniform1i(uColorRecipeEnabledLoc, if (colorRecipeEnabled) 1 else 0)
-
-        if (colorRecipeEnabled) {
-            GLES30.glUniform1f(uExposureLoc, colorRecipeParams!!.exposure)
-            GLES30.glUniform1f(uContrastLoc, colorRecipeParams.contrast)
-            GLES30.glUniform1f(uSaturationLoc, colorRecipeParams.saturation)
-            GLES30.glUniform1f(uTemperatureLoc, colorRecipeParams.temperature)
-            GLES30.glUniform1f(uTintLoc, colorRecipeParams.tint)
-            GLES30.glUniform1f(uFadeLoc, colorRecipeParams.fade)
-            GLES30.glUniform1f(uVibranceLoc, colorRecipeParams.color)
-            GLES30.glUniform1f(uHighlightsLoc, colorRecipeParams.highlights)
-            GLES30.glUniform1f(uShadowsLoc, colorRecipeParams.shadows)
-            GLES30.glUniform1f(uFilmGrainLoc, colorRecipeParams.filmGrain)
-            GLES30.glUniform1f(uVignetteLoc, colorRecipeParams.vignette)
-            GLES30.glUniform1f(uBleachBypassLoc, colorRecipeParams.bleachBypass)
-        }
-
         GLES30.glUniform2f(uTexelSizeLoc, 1.0f / metadata.width, 1.0f / metadata.height)
         GLES30.glUniform1f(uSharpeningLoc, sharpeningValue)
-        GLES30.glUniform1f(uNoiseReductionLoc, noiseReductionValue)
-        GLES30.glUniform1f(uChromaNoiseReductionLoc, chromaNoiseReductionValue)
 
-        GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
-        for (y in 0 until metadata.height step TILE_SIZE) {
-            val h = min(TILE_SIZE, metadata.height - y)
-            for (x in 0 until metadata.width step TILE_SIZE) {
-                val w = min(TILE_SIZE, metadata.width - x)
-                GLES30.glViewport(x, y, w, h)
-                GLES30.glScissor(x, y, w, h)
-                val tileMatrix = FloatArray(16)
-                GlMatrix.setIdentityM(tileMatrix, 0)
-                GlMatrix.translateM(tileMatrix, 0, x.toFloat() / metadata.width, y.toFloat() / metadata.height, 0f)
-                GlMatrix.scaleM(tileMatrix, 0, w.toFloat() / metadata.width, h.toFloat() / metadata.height, 1f)
-                GLES30.glUniformMatrix4fv(uLutTexMatrixLoc, 1, false, tileMatrix, 0)
-                drawQuad(lutProgram)
-                GLES30.glFlush()
-            }
-        }
-        GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
+        val identityMatrix = FloatArray(16)
+        GlMatrix.setIdentityM(identityMatrix, 0)
+        GLES30.glUniformMatrix4fv(uLutTexMatrixLoc, 1, false, identityMatrix, 0)
+        drawQuad(lutProgram)
         checkGlError("renderLutPass")
     }
 
@@ -2066,17 +1844,7 @@ class RawDemosaicProcessor {
             val identity = FloatArray(16)
             GlMatrix.setIdentityM(identity, 0)
             GLES30.glUniformMatrix4fv(uLinearTexMatrixLoc, 1, false, identity, 0)
-            GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
-            for (y in 0 until metadata.height step TILE_SIZE) {
-                val h = min(TILE_SIZE, metadata.height - y)
-                for (x in 0 until metadata.width step TILE_SIZE) {
-                    val w = min(TILE_SIZE, metadata.width - x)
-                    GLES30.glViewport(x, y, w, h)
-                    GLES30.glScissor(x, y, w, h)
-                    drawQuad(linearProgram)
-                }
-            }
-            GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
+            drawQuad(linearProgram)
             return
         }
 
@@ -2184,7 +1952,7 @@ class RawDemosaicProcessor {
         val srcRatio = srcWidth.toFloat() / srcHeight.toFloat()
         val targetRatio = aspectRatio.getValue(false)
 
-        if (kotlin.math.abs(srcRatio - targetRatio) < 0.01f) {
+        if (abs(srcRatio - targetRatio) < 0.01f) {
             return bitmap
         }
 
@@ -2245,10 +2013,9 @@ class RawDemosaicProcessor {
             if (dhtNdirFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(dhtNdirFboId[i]), 0)
         }
 
-        // Guided Filter programs
-        for (p in intArrayOf(gfPass1Program, gfPass2Program, gfPass3Program, gfPass4Program)) {
-            if (p != 0) GLES30.glDeleteProgram(p)
-        }
+        // Guided Filter & NLM programs
+        if (nlmPassHProgram != 0) GLES30.glDeleteProgram(nlmPassHProgram)
+        if (nlmPassVProgram != 0) GLES30.glDeleteProgram(nlmPassVProgram)
         // Guided Filter textures and FBOs
         for (i in 0..1) {
             if (gfTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(gfTexId[i]), 0)
