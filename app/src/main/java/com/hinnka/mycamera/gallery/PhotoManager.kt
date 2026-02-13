@@ -688,6 +688,9 @@ object PhotoManager {
                     aspectRatio,
                     metadata.cropRegion,
                     rotation,
+                    sharpeningValue = 0.4f,
+                    noiseReductionValue = 0.2f,
+                    chromaNoiseReductionValue = 0.25f,
                     previewLuma = previewLuma
                 )
             } ?: return@withContext

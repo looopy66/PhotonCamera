@@ -508,19 +508,16 @@ class RawDemosaicProcessor {
         val finalWidth = bounds.width()
         val finalHeight = bounds.height()
 
-        // 3. 场景分析 (CPU Pre-pass)
-        val sceneStats = analyzeRawBuffer(rawData, width, height, rowStride, metadata, previewLuma)
-        PLog.d(
-            TAG,
-            "Scene Analysis: Gain=${sceneStats.exposureGain}, DRC=${sceneStats.drcStrength}, Black=${sceneStats.blackPoint}, White=${sceneStats.whitePoint}"
-        )
-
         // 4. 第一步：全分辨率解马赛克 (Demosaic Pass)
         // 保持 Linear HDR 原色，不再这里进行曝光增益
         setupFullResFramebuffer(width, height)
         val demosaicStart = System.currentTimeMillis()
         renderDemosaicPass(metadata, 1.0f)
         PLog.d(TAG, "Demosaic Pass took: ${System.currentTimeMillis() - demosaicStart}ms")
+
+        // 场景分析: 从 GPU demosaic 纹理读回精确的 Linear RGB 数据
+        // 计算平均亮度、直方图、黑白点、DRC 强度
+        val sceneStats = analyzeFromGpuTexture(demosaicTextureId, width, height, previewLuma)
 
         // 5. 第二步：Tone Mapping (HDR Linear -> LDR sRGB)
         setupTonemapFramebuffer(width, height)
@@ -1150,126 +1147,172 @@ class RawDemosaicProcessor {
         checkGlError("setupOutputFramebuffer")
     }
 
+
     /**
-     * 3. 场景分析 (CPU Pre-pass)
-     * 计算自动曝光增益、动态范围和黑白点
+     * 场景分析 (GPU Post-Demosaic)
+     *
+     * 从 demosaic 后的 RGBA16F 纹理中间 mip level 读回降采样数据，
+     * 在精确的 Linear RGB 数据上计算所有统计量。
+     *
+     * 优势:
+     * - 数据已经过完整的 BLC → WB → LSC → Demosaic → CCM 变换链
+     * - 与 ToneMap shader 输入完全一致，不存在 CPU/GPU 不匹配
+     * - 读取量极小 (~64x64 * 16bytes ≈ 64KB)，性能优于 CPU 全图采样
+     * - 直方图基于真实亮度，百分位数（黑白点）更准确
      */
-    private fun analyzeRawBuffer(
-        buffer: ByteBuffer,
+    private fun analyzeFromGpuTexture(
+        textureId: Int,
         width: Int,
         height: Int,
-        rowStride: Int,
-        metadata: RawMetadata,
         previewLuma: Float = 0.18f
     ): SceneStats {
-        val black = metadata.blackLevel[0].toInt() // 简化：使用 R 通道黑电平
-        val white = metadata.whiteLevel.toInt()
-        val range = (white - black).toFloat()
+        // 1. 生成 mipmap
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR_MIPMAP_NEAREST)
+        GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+        checkGlError("analyzeFromGpuTexture: glGenerateMipmap")
 
-        // 采样参数
-        val sampleStep = 8 // 采样步长 (降低 CPU 负载)
-        var sumLogLuma = 0.0
-        var pixelCount = 0
+        // 2. 选择合适的 mip level 进行读回
+        // 目标: ~64x64 的降采样分辨率 (足够计算直方图，又足够小)
+        val maxDim = maxOf(width, height)
+        val totalMipLevels = (kotlin.math.ln(maxDim.toFloat()) / kotlin.math.ln(2.0f)).toInt()
+        // 目标尺寸 ~64，所以需要降 log2(maxDim/64) 级
+        val targetSize = 64
+        val desiredMipLevel = (kotlin.math.ln(maxDim.toFloat() / targetSize) / kotlin.math.ln(2.0f))
+            .toInt().coerceIn(0, totalMipLevels)
 
-        // 极值统计 (用于计算动态范围)
-        var minVal = 1.0f
-        var maxVal = 0.0f
+        // 计算该 mip level 的实际尺寸
+        val mipWidth = maxOf(1, width shr desiredMipLevel)
+        val mipHeight = maxOf(1, height shr desiredMipLevel)
 
-        // 直方图 (简易版 64 bins，用于更稳健的极值查找)
-        val histogram = IntArray(64)
+        PLog.d(TAG, "analyzeFromGpuTexture: mipLevel=$desiredMipLevel, mipSize=${mipWidth}x${mipHeight}")
 
-        val savedPos = buffer.position()
-        val savedOrder = buffer.order()
-        buffer.order(ByteOrder.nativeOrder())
-        buffer.position(0)
+        // 3. 创建临时 FBO 绑定到该 mip level
+        val tempFbo = IntArray(1)
+        GLES30.glGenFramebuffers(1, tempFbo, 0)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, tempFbo[0])
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER,
+            GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D,
+            textureId,
+            desiredMipLevel
+        )
 
-        // 这里的 pixelStride 取决于 buffer 类型，RawByteBuffer 通常是 Short
-        val pixelStride = 2 // 16-bit
-
-        try {
-            for (y in 0 until height step sampleStep) {
-                // 计算行偏移
-                val rowOffset = y * rowStride // rowStride is in bytes
-
-                for (x in 0 until width step sampleStep) {
-                    val offset = rowOffset + x * pixelStride
-
-                    if (offset + 1 < buffer.limit()) {
-                        val rawVal = buffer.getShort(offset).toInt() and 0xFFFF
-                        // 归一化到 0.0 - 1.0
-                        val norm = ((rawVal - black) / range).coerceIn(0.0001f, 1.0f)
-
-                        // 1. 累加对数亮度 (用于计算几何平均值 Geometric Mean)
-                        // 几何平均值比算术平均值更接近人眼对“中间调”的感觉，受高光噪点影响小
-                        sumLogLuma += kotlin.math.ln(norm.toDouble())
-                        pixelCount++
-
-                        // 2. 统计极值
-                        if (norm < minVal) minVal = norm
-                        if (norm > maxVal) maxVal = norm
-
-                        // 3. 填充直方图
-                        val bin = (norm * 63).toInt().coerceIn(0, 63)
-                        histogram[bin]++
-                    }
-                }
-            }
-        } finally {
-            buffer.position(savedPos)
-            buffer.order(savedOrder)
+        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
+            PLog.w(TAG, "analyzeFromGpuTexture: FBO incomplete, status=$status, fallback")
+            GLES30.glDeleteFramebuffers(1, tempFbo, 0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+            return SceneStats(1.0f, 0.0f, 0.0f, 1.0f)
         }
 
-        if (pixelCount == 0) return SceneStats(1.0f, 0.5f, 0.0f, 1.0f)
+        // 4. 读取整个 mip 的像素数据 (RGBA float)
+        val pixelCount = mipWidth * mipHeight
+        val floatBuffer = ByteBuffer.allocateDirect(pixelCount * 4 * 4)
+            .order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
+        GLES30.glReadPixels(0, 0, mipWidth, mipHeight, GLES30.GL_RGBA, GLES30.GL_FLOAT, floatBuffer)
+        checkGlError("analyzeFromGpuTexture: glReadPixels")
 
-        // A. 计算自动曝光增益 (Auto Exposure)
-        val avgLogLuma = sumLogLuma / pixelCount
-        val geometricMean = kotlin.math.exp(avgLogLuma).toFloat()
+        // 5. 清理 GPU 资源
+        GLES30.glDeleteFramebuffers(1, tempFbo, 0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
 
-        // 目标是将场景的几何平均亮度映射到中灰 (Middle Gray, usually 0.18)
-        val targetMean = 0.12f
-        val exposureGain = (targetMean / geometricMean).coerceIn(1.0f, 100.0f)
+        // ====== 以下全部基于精确的 GPU Linear RGB 数据 ======
 
-        // B. 计算稳健的黑白点 (Robust Min/Max)
-        var count = 0
+        // 6. 遍历读回的像素，计算统计量
+        val histBins = 256
+        val histogram = IntArray(histBins)
+        var sumLuma = 0.0
+        var validCount = 0
+
+        floatBuffer.position(0)
+        for (i in 0 until pixelCount) {
+            val r = floatBuffer.get()
+            val g = floatBuffer.get()
+            val b = floatBuffer.get()
+            val a = floatBuffer.get() // skip alpha
+
+            // Rec.709 亮度 (Linear 域)
+            val luma = r * 0.2126f + g * 0.7152f + b * 0.0722f
+
+            // 排除无效像素 (可能有 NaN 或 负值)
+            if (luma.isNaN() || luma < 0f) continue
+
+            validCount++
+            sumLuma += luma.toDouble()
+
+            // 直方图: 将亮度 clamp 到 [0, 2] 范围映射到 bins
+            // 范围扩展到 2.0 是因为 CCM 后可能 > 1.0
+            val histVal = (luma / 2.0f).coerceIn(0.0f, 1.0f)
+            val bin = (histVal * (histBins - 1)).toInt().coerceIn(0, histBins - 1)
+            histogram[bin]++
+        }
+
+        if (validCount == 0) return SceneStats(1.0f, 0.0f, 0.0f, 1.0f)
+
+        // A. 计算平均亮度和自动曝光增益
+        val avgLuma = (sumLuma / validCount).toFloat()
+        val targetMean = previewLuma.pow(2.2f)
+        val exposureGain = if (avgLuma > 0.0001f) {
+            (targetMean / avgLuma).coerceIn(0.25f, 64.0f)
+        } else {
+            1.0f
+        }
+
+        // B. 计算稳健的黑白点 (Robust Percentiles)
+        var count: Int
         var robustMin = 0.0f
         var robustMax = 1.0f
-        val threshold = (pixelCount * 0.005).toInt() // 0.5% 阈值
+        val thresholdLow = (validCount * 0.005).toInt()   // P0.5
+        val thresholdHigh = (validCount * 0.005).toInt()   // P99.5
 
-        // Find Min (1st percentile)
+        // P0.5 (黑点)
         count = 0
-        for (i in 0 until 64) {
+        for (i in 0 until histBins) {
             count += histogram[i]
-            if (count > threshold) {
-                robustMin = i / 63.0f
+            if (count > thresholdLow) {
+                // 映射回 [0, 2] 范围
+                robustMin = (i.toFloat() / (histBins - 1).toFloat()) * 2.0f
                 break
             }
         }
 
-        // Find Max (99th percentile)
+        // P99.5 (白点)
         count = 0
-        for (i in 63 downTo 0) {
+        for (i in histBins - 1 downTo 0) {
             count += histogram[i]
-            if (count > threshold) {
-                robustMax = i / 63.0f
+            if (count > thresholdHigh) {
+                robustMax = (i.toFloat() / (histBins - 1).toFloat()) * 2.0f
                 break
             }
         }
 
         // C. 计算动态范围压缩强度 (DRC Strength)
         val exposedMax = exposureGain * robustMax
-        val exposedMin = exposureGain * robustMin
-        val drStops = kotlin.math.log2(exposedMax / kotlin.math.max(exposedMin, 0.0001f))
+        val highlightHeadroom = kotlin.math.log2(exposedMax / targetMean)
 
         val drcStrength = when {
-            drStops < 6.0f -> 0.95f
-            drStops > 12.0f -> 0.5f
-            else -> 1.0f - ((drStops - 6.0f) / 6.0f) * 0.4f
+            highlightHeadroom < 2.0f -> 0.0f
+            highlightHeadroom > 5.0f -> 0.6f
+            else -> ((highlightHeadroom - 2.0f) / 3.0f) * 0.6f
         }
 
-        // D. 修正黑白点 (返回 RAW 尺度 0.0-1.0，不带曝光增益)
-        // 降低黑点，稍微压低底噪
-        val finalBlack = (robustMin * 0.9f).coerceIn(0.0f, 0.1f)
-        val finalWhite = robustMax.coerceIn(0.1f, 1.0f)
+        // D. 修正黑白点 (传给 Shader, 在 Linear 空间)
+        val finalBlack = (robustMin * 0.8f).coerceIn(0.0f, 0.05f)
+        val finalWhite = robustMax.coerceIn(0.1f, 2.0f)
+
+        PLog.d(
+            TAG, "analyzeFromGpuTexture: avgLuma=$avgLuma, gain=$exposureGain, " +
+                    "robustMin=$robustMin, robustMax=$robustMax, " +
+                    "exposedMax=$exposedMax, headroom=${highlightHeadroom}stops, " +
+                    "drc=$drcStrength, black=$finalBlack, white=$finalWhite"
+        )
 
         return SceneStats(exposureGain, drcStrength, finalBlack, finalWhite)
     }
@@ -1368,10 +1411,10 @@ class RawDemosaicProcessor {
             val builder = factory.newDocumentBuilder()
             val doc = builder.parse(java.io.ByteArrayInputStream(xmlContent.toByteArray()))
             val elements = doc.getElementsByTagName("Element")
-            
+
             val hValues = mutableListOf<Float>()
             val vValues = mutableListOf<Float>()
-            
+
             for (i in 0 until elements.length) {
                 val node = elements.item(i) as org.w3c.dom.Element
                 hValues.add(node.getAttribute("h").toFloat())
@@ -1404,7 +1447,7 @@ class RawDemosaicProcessor {
     private fun interpolateCurve(x: Float, h: List<Float>, v: List<Float>): Float {
         if (x <= h.first()) return v.first()
         if (x >= h.last()) return v.last()
-        
+
         // 二分查找
         var low = 0
         var high = h.size - 2

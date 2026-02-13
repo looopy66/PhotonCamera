@@ -699,54 +699,6 @@ object RawShaders {
         uniform float uToneCurve[256];
         uniform vec2 uTexelSize;
         
-        float getLuma(vec3 color) {
-            return dot(color, vec3(0.2126, 0.7152, 0.0722));
-        }
-        
-        vec3 simpleLocalToneMap(vec3 color, vec2 uv) {
-            float luma = getLuma(color);
-            
-            // --- 参数 ---
-            float blurRadius = 3.0;
-            float sigmaColor = 0.3;
-            float detailStrength = 1.5;
-            float betaEdge = 0.6;
-            float threshold = 0.1;
-
-            // --- 1. 计算 Base (双边滤波近似) ---
-            float baseLuma = 0.0;
-            float totalWeight = 0.0;
-            
-            for (int x = -2; x <= 2; x++) {
-                for (int y = -2; y <= 2; y++) {
-                    vec2 offset = vec2(float(x), float(y)) * uTexelSize * blurRadius;
-                    vec3 rawSample = texture(uInputTexture, uv + offset).rgb;
-                    float sampleLuma = getLuma(rawSample);
-                    
-                    float wSpatial = exp(-(float(x*x + y*y)) / 4.0);
-                    float diff = abs(sampleLuma - luma);
-                    float wRange = exp(-(diff * diff) / (2.0 * sigmaColor * sigmaColor));
-                    
-                    float weight = wSpatial * wRange;
-                    baseLuma += sampleLuma * weight;
-                    totalWeight += weight;
-                }
-            }
-            baseLuma /= max(0.001, totalWeight);
-            baseLuma = max(baseLuma, 0.0001);
-
-            // --- 2. 细节分离与重映射 ---
-            float detail = luma - baseLuma;
-            float remappedDetail = (abs(detail) < threshold) ? 
-                                   (detail * detailStrength) : 
-                                   (sign(detail) * (threshold * detailStrength + (abs(detail) - threshold) * betaEdge));
-
-            float newLuma = max(0.0, baseLuma + remappedDetail);            
-
-            float noiseGuard = 0.001;
-            float lGain = (newLuma + noiseGuard) / (luma + noiseGuard);
-            return color * lGain;
-        }
         
         vec3 linearToSRGB(vec3 linear) {
             return mix(
@@ -775,35 +727,108 @@ object RawShaders {
             float e = 0.14;
             return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
         }
+
+        // ==========================================
+        // 轻量局部 DRC (Dynamic Range Compression)
+        // ==========================================
+        // 
+        // 原理: 基于 Exposure Fusion / Adaptive Gain 的简化实现
+        // 1. 稀疏十字采样估算局部平均亮度 (Local Average Luminance)
+        // 2. 根据局部亮度与目标中灰的偏差计算自适应增益
+        // 3. 暗区提亮、亮区压暗，在 Linear 域完成
+        //
+        // 性能: ~12 次额外纹理采样 (十字形 3 层级)
+        // ==========================================
+        
+        float getLumaLinear(vec3 c) {
+            return dot(c, vec3(0.2126, 0.7152, 0.0722));
+        }
+        
+        // 稀疏十字采样计算局部平均亮度
+        // 使用 3 个不同半径的十字形采样 (4+4+4=12 次)
+        // 模拟一个大范围的高斯模糊，但代价极低
+        float getLocalAvgLuma(vec2 uv, float blackPt, float exposureGain) {
+            float sum = 0.0;
+            float wSum = 0.0;
+
+            // 3层十字采样, 半径分别约 8, 24, 48 像素
+            // 权重由内到外递减 (模拟高斯分布)
+            const float radii[3] = float[3](8.0, 24.0, 48.0);
+            const float weights[3] = float[3](0.50, 0.33, 0.17);
+
+            for (int i = 0; i < 3; i++) {
+                float r = radii[i];
+                float w = weights[i];
+                vec2 dx = vec2(r * uTexelSize.x, 0.0);
+                vec2 dy = vec2(0.0, r * uTexelSize.y);
+
+                // 十字 4 点
+                vec3 s0 = max(vec3(0.0), texture(uInputTexture, uv + dx).rgb - blackPt) * exposureGain;
+                vec3 s1 = max(vec3(0.0), texture(uInputTexture, uv - dx).rgb - blackPt) * exposureGain;
+                vec3 s2 = max(vec3(0.0), texture(uInputTexture, uv + dy).rgb - blackPt) * exposureGain;
+                vec3 s3 = max(vec3(0.0), texture(uInputTexture, uv - dy).rgb - blackPt) * exposureGain;
+
+                sum += (getLumaLinear(s0) + getLumaLinear(s1) + 
+                        getLumaLinear(s2) + getLumaLinear(s3)) * w;
+                wSum += 4.0 * w;
+            }
+            return sum / wSum;
+        }
+        
+        vec3 applyHighlightRecovery(vec3 color) {
+            float threshold = 0.9;
+            float maxOutput = 1.0;
+            float maxVal = max(color.r, max(color.g, color.b));
+            if (maxVal <= threshold) {
+                return color;
+            }
+            float range = maxOutput - threshold;
+            float over = maxVal - threshold;
+
+            float compressedMax = threshold + (over * range) / (over + range);
+            
+            return color * (compressedMax / maxVal);
+        }
         
         void main() {
             vec3 rawColor = texture(uInputTexture, vTexCoord).rgb;
             
             float gain = uToneMapParams.x;
+            float drcStrength = uToneMapParams.y;
             float blackPoint = uToneMapParams.z;
             float whitePoint = uToneMapParams.w;
             
-            float softBlack = blackPoint * 0.95;
-            float normScale = gain * 1.4;
+            // 1. 扣除黑点
+            vec3 color = max(vec3(0.0), rawColor - blackPoint);
             
-            // 映射到曝光后的线性空间
-            vec3 color = max(vec3(0.0), (rawColor - softBlack) * normScale);
-            
-            // 2. 局部细节增强
-            color = simpleLocalToneMap(color, vTexCoord);
-            
-            color = ACESFilm(color);
+            // 2. 应用曝光增益
+            color *= gain;
 
-            // 4. 应用自定义 ToneCurve
-            color = mix(color, applyCurve(color), 0.5);
+            // 3. 局部 DRC
+            if (drcStrength > 0.01) {
+                float pixelLuma = getLumaLinear(color);
+                float localAvg = getLocalAvgLuma(vTexCoord, blackPoint, gain);
+                
+                float eps = 0.001;
+                
+                float targetMidGray = 0.18;
+                float localGain = targetMidGray / max(localAvg, eps);
+                localGain = clamp(localGain, 0.2, 8.0);
+                float adaptiveGain = mix(1.0, localGain, drcStrength);
+                color *= adaptiveGain;
+            }
             
-            // 5. 应用 sRGB Gamma
+            color = applyHighlightRecovery(color);
+
+            // 5. 应用自定义 ToneCurve
+            color = applyCurve(color);
+            
+            // 6. 应用 sRGB Gamma 空间转换
             color = linearToSRGB(color);
             
             fragColor = vec4(color, 1.0);
         }
     """.trimIndent()
-
 
 
     /**
@@ -920,68 +945,8 @@ object RawShaders {
                 vec4 color = texture(uInputTexture, vTexCoord);
 
                 // === 后期处理：降噪和减少杂色（在色彩处理之前，避免放大噪点） ===
-
-                // 1. 降噪（Bilateral Denoise for Luma + Gaussian for Chroma）
-                if (uNoiseReduction > 0.0) {
-                    vec3 centerYCbCr = rgb2ycbcr(color.rgb);
-                    float centerY = centerYCbCr.x;
-                    vec2 centerCbCr = centerYCbCr.yz;
-
-                    // 色度降噪（简单高斯平滑）
-                    vec2 sumCbCr = vec2(0.0);
-                    float sumWeightChroma = 0.0;
-                    int cRadius = 4;
-
-                    for (int x = -cRadius; x <= cRadius; x+=2) {
-                        for (int y = -cRadius; y <= cRadius; y+=2) {
-                            vec2 offset = vec2(float(x), float(y)) * uTexelSize;
-                            vec3 sampleRgb = texture(uInputTexture, vTexCoord + offset).rgb;
-                            vec2 sampleCbCr = rgb2ycbcr(sampleRgb).yz;
-
-                            float distSq = float(x*x + y*y);
-                            float weight = exp(-distSq / (2.0 * 4.0));
-
-                            sumCbCr += sampleCbCr * weight;
-                            sumWeightChroma += weight;
-                        }
-                    }
-
-                    vec2 finalCbCr = sumCbCr / sumWeightChroma;
-                    finalCbCr = mix(centerCbCr, finalCbCr, clamp(uNoiseReduction * 1.5, 0.0, 1.0));
-
-                    // 亮度降噪（双边滤波保边）
-                    float sumY = 0.0;
-                    float sumWeightLuma = 0.0;
-                    int lRadius = 3;
-
-                    float sigmaSpatial = 2.0;
-                    float sigmaRange = 0.05 + uNoiseReduction * 0.15;
-
-                    for (int x = -lRadius; x <= lRadius; x++) {
-                        for (int y = -lRadius; y <= lRadius; y++) {
-                            vec2 offset = vec2(float(x), float(y)) * uTexelSize;
-                            float sampleY = rgb2ycbcr(texture(uInputTexture, vTexCoord + offset).rgb).x;
-
-                            float distSq = float(x*x + y*y);
-                            float wSpatial = exp(-distSq / (2.0 * sigmaSpatial * sigmaSpatial));
-
-                            float diff = sampleY - centerY;
-                            float wRange = exp(-(diff * diff) / (2.0 * sigmaRange * sigmaRange));
-
-                            float weight = wSpatial * wRange;
-                            sumY += sampleY * weight;
-                            sumWeightLuma += weight;
-                        }
-                    }
-
-                    float finalY = sumY / sumWeightLuma;
-                    finalY = mix(finalY, centerY, 0.1);  // 细节回掺
-
-                    color.rgb = ycbcr2rgb(vec3(finalY, finalCbCr));
-                }
-                color.rgb = clamp(color.rgb, 0.0, 1.0);
-
-                // 2. 强力色度降噪（Chroma Denoise）
+                
+                // 1. 强力色度降噪（Chroma Denoise）
                 if (uChromaNoiseReduction > 0.0) {
                     vec3 yuv = rgb2ycbcr(color.rgb);
 
@@ -1016,6 +981,49 @@ object RawShaders {
                     color.rgb = ycbcr2rgb(yuv);
                 }
 
+                // 2. 降噪（Only Bilateral Denoise for Luma）
+                if (uNoiseReduction > 0.0) {
+                    vec3 centerYCbCr = rgb2ycbcr(color.rgb);
+                    float centerY = centerYCbCr.x;
+                    
+                    vec2 finalCbCr = centerYCbCr.yz; 
+                
+                    float sumY = 0.0;
+                    float sumWeightLuma = 0.0;
+                    int lRadius = 4; 
+                    float sigmaSpatial = 3.0; 
+                    
+                    float sigmaRange = 0.1 + uNoiseReduction * 0.3; 
+                
+                    for (int x = -lRadius; x <= lRadius; x++) {
+                        for (int y = -lRadius; y <= lRadius; y++) {
+                            vec2 offset = vec2(float(x), float(y)) * uTexelSize;
+                            
+                            // 采样并只计算 Luma
+                            float sampleY = rgb2ycbcr(texture(uInputTexture, vTexCoord + offset).rgb).x;
+                
+                            float distSq = float(x*x + y*y);
+                            float wSpatial = exp(-distSq / (2.0 * sigmaSpatial * sigmaSpatial));
+                
+                            float diff = sampleY - centerY;
+                            // 核心保边逻辑
+                            float wRange = exp(-(diff * diff) / (2.0 * sigmaRange * sigmaRange));
+                
+                            float weight = wSpatial * wRange;
+                            sumY += sampleY * weight;
+                            sumWeightLuma += weight;
+                        }
+                    }
+                
+                    float finalY = sumY / sumWeightLuma;
+                
+                    // 细节回掺：随着降噪强度增加，减少回掺原始噪点
+                    float detailRecover = max(0.0, 0.1 - uNoiseReduction * 0.1); 
+                    finalY = mix(finalY, centerY, detailRecover);
+                
+                    // 组合回 RGB
+                    color.rgb = ycbcr2rgb(vec3(finalY, finalCbCr));
+                }
 
                 // === 色彩配方处理 ===
                 if (uColorRecipeEnabled) {

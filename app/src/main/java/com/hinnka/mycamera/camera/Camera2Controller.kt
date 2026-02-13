@@ -1814,7 +1814,7 @@ class Camera2Controller(private val context: Context) {
             val captureBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 addTarget(reader.surface)
 
-//                previewSurface?.let { addTarget(it) }
+                previewSurface?.let { addTarget(it) }
 
                 // 应用所有相机参数（曝光、白平衡、闪光灯、变焦、色调映射）
                 // isCapture = true 确保使用完整的曝光时间（不限制长曝光）
@@ -1836,9 +1836,14 @@ class Camera2Controller(private val context: Context) {
                     }
                 }
 
-                // RAW + MultiFrame 曝光补偿策略
-                if (_state.value.useRaw && _state.value.useMultiFrame && _state.value.multiFrameCount > 1
-                    && _state.value.isIsoAuto && _state.value.isShutterSpeedAuto) {
+                // RAW + MultiFrame 曝光补偿策略（自适应版本）
+                // 原理：多帧堆叠提升 SNR √N 倍，理论上可缩减 0.5*log2(N) EV 的曝光
+                // 来换取高光余量。但在暗光场景，传感器读出噪声(read noise)主导，
+                // 降曝光会使暗部信号被噪声淹没，多帧堆叠也无法有效恢复。
+                // 因此需根据场景亮度（AE 选择的 ISO 反映）动态调整降幅。
+                /*if (_state.value.useRaw && _state.value.useMultiFrame && _state.value.multiFrameCount > 1
+                    && _state.value.isIsoAuto && _state.value.isShutterSpeedAuto
+                ) {
                     try {
                         val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(device.id)
                         val step = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)
@@ -1848,21 +1853,52 @@ class Camera2Controller(private val context: Context) {
                             val stepValue = step.numerator.toDouble() / step.denominator.toDouble()
                             if (stepValue > 0) {
                                 val count = _state.value.multiFrameCount.toDouble()
-                                // log2(sqrt(x)) = ln(x^0.5) / ln(2)
-                                val reductionEv = ln(count.pow(0.5)) / ln(2.0)
-                                val reductionSteps = (reductionEv / stepValue).roundToInt()
+                                // 理论最大降幅: 0.5 * log2(N)
+                                val maxReductionEv = ln(count.pow(0.5)) / ln(2.0)
 
-                                val currentCompensation = _state.value.exposureCompensation
-                                val targetCompensation =
-                                    (currentCompensation - reductionSteps).coerceIn(range.lower, range.upper)
+                                // 基于当前 AE ISO 判断场景亮度，自适应调整降幅
+                                // - 当 ISO ≤ isoLow (明亮): 完全降曝光 (scaleFactor = 1.0)
+                                // - 当 ISO ≥ isoHigh (暗光): 不降曝光   (scaleFactor = 0.0)
+                                // - 中间区域: 对数域平滑过渡
+                                val currentIso = _state.value.iso
+                                val isoLow = 200    // 低于此值认为场景足够亮
+                                val isoHigh = 1600  // 高于此值认为场景太暗，不应降曝光
+                                val scaleFactor = if (currentIso <= isoLow) {
+                                    1.0
+                                } else if (currentIso >= isoHigh) {
+                                    0.0
+                                } else {
+                                    // 在对数域平滑过渡: log(iso) 在 [log(isoLow), log(isoHigh)] 之间线性插值
+                                    val logIso = ln(currentIso.toDouble())
+                                    val logLow = ln(isoLow.toDouble())
+                                    val logHigh = ln(isoHigh.toDouble())
+                                    1.0 - (logIso - logLow) / (logHigh - logLow)
+                                }
 
-                                set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, targetCompensation)
+                                val actualReductionEv = maxReductionEv * scaleFactor
+                                val reductionSteps = (actualReductionEv / stepValue).roundToInt()
+
+                                if (reductionSteps > 0) {
+                                    val currentCompensation = _state.value.exposureCompensation
+                                    val targetCompensation =
+                                        (currentCompensation - reductionSteps).coerceIn(range.lower, range.upper)
+
+                                    set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, targetCompensation)
+                                    PLog.d(
+                                        TAG, "RAW MultiFrame EV reduction: ISO=$currentIso, " +
+                                                "scale=${String.format("%.2f", scaleFactor)}, " +
+                                                "reduction=${String.format("%.2f", actualReductionEv)}EV, " +
+                                                "steps=$reductionSteps"
+                                    )
+                                } else {
+                                    PLog.d(TAG, "RAW MultiFrame: low light (ISO=$currentIso), skip EV reduction")
+                                }
                             }
                         }
                     } catch (e: Exception) {
                         PLog.e(TAG, "Failed to apply exposure reduction", e)
                     }
-                }
+                }*/
 
                 PLog.d(
                     TAG,
