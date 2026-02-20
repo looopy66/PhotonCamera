@@ -8,6 +8,7 @@ import kotlin.math.max
 import kotlin.math.min
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import com.hinnka.mycamera.utils.PLog
 import kotlin.math.roundToInt
 
 /**
@@ -44,7 +45,11 @@ object LutConverter {
     ): Boolean {
         return try {
             // 解析 .cube 文件
-            val cubeData = parseCubeFile(cubeInputStream)
+            var cubeData = parseCubeFile(cubeInputStream)
+
+            if (cubeData.size > 65) {
+                cubeData = resampleSize(cubeData, 33)
+            }
 
             // 不再进行重采样，而是直接写入原始数据并记录曲线类型
             // 写入 .plut 格式
@@ -151,7 +156,10 @@ object LutConverter {
 
             bitmap.recycle()
 
-            val cubeData = CubeData(lutSize, values)
+            var cubeData = CubeData(lutSize, values)
+            if (cubeData.size > 65) {
+                cubeData = resampleSize(cubeData, 33)
+            }
             writePLutFile(cubeData, plutOutputStream, curve)
             true
         } catch (e: Exception) {
@@ -287,6 +295,42 @@ object LutConverter {
         return result
     }
 
+    private fun resampleSize(cubeData: CubeData, targetSize: Int): CubeData {
+        PLog.d("resampleSize", "${cubeData.size} $targetSize")
+        val nativeData = try {
+            LutProcessor.resampleSizeNative(cubeData.data, cubeData.size, targetSize)
+        } catch (e: Throwable) {
+            PLog.e("resampleSize", "error", e)
+            null
+        }
+
+        if (nativeData != null) {
+            PLog.d("resampleSize", "complete")
+            return CubeData(targetSize, nativeData)
+        }
+
+        val newData = ShortArray(targetSize * targetSize * targetSize * 3)
+        val step = 1.0f / (targetSize - 1)
+
+        for (bIdx in 0 until targetSize) {
+            for (gIdx in 0 until targetSize) {
+                for (rIdx in 0 until targetSize) {
+                    val r = rIdx * step
+                    val g = gIdx * step
+                    val b = bIdx * step
+
+                    val interpolated = trilinearSample(cubeData, r, g, b)
+
+                    val index = ((bIdx * targetSize + gIdx) * targetSize + rIdx) * 3
+                    newData[index] = interpolated[0]
+                    newData[index + 1] = interpolated[1]
+                    newData[index + 2] = interpolated[2]
+                }
+            }
+        }
+        return CubeData(targetSize, newData)
+    }
+
     /**
      * 解析 .cube 文件
      * 优化版本：单遍流式处理避免内存溢出
@@ -300,6 +344,31 @@ object LutConverter {
 
         // 临时存储 RGB 数据（只在找到 size 之前使用）
         val tempDataList = mutableListOf<FloatArray>()
+        
+        // 预分配数组以备解析单行数字使用
+        val floatValues = FloatArray(3)
+
+        fun parseFloats(line: String, startIndex: Int = 0): Boolean {
+            var count = 0
+            var i = startIndex
+            val len = line.length
+            while (i < len && count < 3) {
+                while (i < len && line[i].isWhitespace()) {
+                    i++
+                }
+                if (i >= len) break
+                val start = i
+                while (i < len && !line[i].isWhitespace()) {
+                    i++
+                }
+                try {
+                    floatValues[count++] = line.substring(start, i).toFloat()
+                } catch (e: NumberFormatException) {
+                    return false
+                }
+            }
+            return count == 3
+        }
 
         inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
             reader.forEachLine { line ->
@@ -312,63 +381,55 @@ object LutConverter {
 
                 when {
                     trimmed.startsWith("LUT_3D_SIZE") -> {
-                        size = trimmed.split("\\s+".toRegex())[1].toInt()
-                        // 找到 size 后，立即分配数组并写入已缓存的数据
-                        data = ShortArray(size * size * size * 3)
-
-                        // 将临时数据写入数组
-                        for (rgb in tempDataList) {
-                            for (i in 0..2) {
-                                var value = (rgb[i] - domainMin[i]) / (domainMax[i] - domainMin[i])
-                                value = max(0f, min(1f, value))
-                                data[dataIndex++] = (value * 65535f + 0.5f).toInt().toShort()
-                            }
-                        }
-                        tempDataList.clear()  // 释放临时列表内存
-                    }
-
-                    trimmed.startsWith("DOMAIN_MIN") -> {
-                        val values = trimmed.split("\\s+".toRegex()).drop(1)
-                        domainMin = floatArrayOf(
-                            values[0].toFloat(),
-                            values[1].toFloat(),
-                            values[2].toFloat()
-                        )
-                    }
-
-                    trimmed.startsWith("DOMAIN_MAX") -> {
-                        val values = trimmed.split("\\s+".toRegex()).drop(1)
-                        domainMax = floatArrayOf(
-                            values[0].toFloat(),
-                            values[1].toFloat(),
-                            values[2].toFloat()
-                        )
-                    }
-
-                    !trimmed.startsWith("TITLE") -> {
-                        // 尝试解析 RGB 数据
-                        val parts = trimmed.split("\\s+".toRegex())
-                        if (parts.size == 3) {
+                        val spaceIdx = trimmed.indexOfFirst { it.isWhitespace() }
+                        if (spaceIdx != -1) {
                             try {
-                                val rgb = floatArrayOf(
-                                    parts[0].toFloat(),
-                                    parts[1].toFloat(),
-                                    parts[2].toFloat()
-                                )
+                                size = trimmed.substring(spaceIdx).trim().toInt()
+                                // 找到 size 后，立即分配数组并写入已缓存的数据
+                                data = ShortArray(size * size * size * 3)
 
-                                if (data != null && dataIndex < data.size) {
-                                    // 已经分配了数组，直接写入
+                                // 将临时数据写入数组
+                                for (rgb in tempDataList) {
                                     for (i in 0..2) {
                                         var value = (rgb[i] - domainMin[i]) / (domainMax[i] - domainMin[i])
                                         value = max(0f, min(1f, value))
                                         data[dataIndex++] = (value * 65535f + 0.5f).toInt().toShort()
                                     }
-                                } else {
-                                    // 还未分配数组，暂存数据
-                                    tempDataList.add(rgb)
                                 }
+                                tempDataList.clear()  // 释放临时列表内存
                             } catch (e: NumberFormatException) {
-                                // 忽略无法解析的行
+                                // ignore
+                            }
+                        }
+                    }
+
+                    trimmed.startsWith("DOMAIN_MIN") -> {
+                        val spaceIdx = trimmed.indexOfFirst { it.isWhitespace() }
+                        if (spaceIdx != -1 && parseFloats(trimmed, spaceIdx)) {
+                            domainMin = floatArrayOf(floatValues[0], floatValues[1], floatValues[2])
+                        }
+                    }
+
+                    trimmed.startsWith("DOMAIN_MAX") -> {
+                        val spaceIdx = trimmed.indexOfFirst { it.isWhitespace() }
+                        if (spaceIdx != -1 && parseFloats(trimmed, spaceIdx)) {
+                            domainMax = floatArrayOf(floatValues[0], floatValues[1], floatValues[2])
+                        }
+                    }
+
+                    !trimmed.startsWith("TITLE") && !trimmed.startsWith("LUT_1D_SIZE") -> {
+                        // 尝试解析 RGB 数据
+                        if (parseFloats(trimmed)) {
+                            if (data != null && dataIndex < data!!.size) {
+                                // 已经分配了数组，直接写入
+                                for (i in 0..2) {
+                                    var value = (floatValues[i] - domainMin[i]) / (domainMax[i] - domainMin[i])
+                                    value = max(0f, min(1f, value))
+                                    data!![dataIndex++] = (value * 65535f + 0.5f).toInt().toShort()
+                                }
+                            } else {
+                                // 还未分配数组，暂存数据
+                                tempDataList.add(floatArrayOf(floatValues[0], floatValues[1], floatValues[2]))
                             }
                         }
                     }

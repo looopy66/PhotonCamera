@@ -26,7 +26,6 @@ class ContentRepository private constructor(context: Context) {
         fun getInstance(context: Context): ContentRepository {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: ContentRepository(context.applicationContext).also {
-                    it.initialize()
                     INSTANCE = it
                 }
             }

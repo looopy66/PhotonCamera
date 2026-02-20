@@ -10,4 +10,5 @@ object LutProcessor {
     }
 
     external fun resampleLutNative(srcData: ShortArray, size: Int, curveType: Int): ShortArray?
+    external fun resampleSizeNative(srcData: ShortArray, srcSize: Int, targetSize: Int): ShortArray?
 }

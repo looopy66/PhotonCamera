@@ -1,6 +1,7 @@
 package com.hinnka.mycamera
 
 import android.app.Application
+import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.utils.BuglyHelper
 
 class MyCameraApplication : Application() {
@@ -9,5 +10,6 @@ class MyCameraApplication : Application() {
         super.onCreate()
 
         BuglyHelper.init(this)
+        ContentRepository.getInstance(this).initialize()
     }
 }

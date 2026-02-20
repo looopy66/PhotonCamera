@@ -211,3 +211,37 @@ Java_com_hinnka_mycamera_lut_LutProcessor_resampleLutNative(
 
   return result_data;
 }
+
+extern "C" JNIEXPORT jshortArray JNICALL
+Java_com_hinnka_mycamera_lut_LutProcessor_resampleSizeNative(
+    JNIEnv *env, jobject thiz, jshortArray src_data, jint src_size,
+    jint target_size) {
+  jshort *src = env->GetShortArrayElements(src_data, nullptr);
+  uint16_t *src_u16 = reinterpret_cast<uint16_t *>(src);
+
+  jsize len = target_size * target_size * target_size * 3;
+  jshortArray result_data = env->NewShortArray(len);
+  jshort *dst = env->GetShortArrayElements(result_data, nullptr);
+  uint16_t *dst_u16 = reinterpret_cast<uint16_t *>(dst);
+
+  float step = 1.0f / (target_size - 1);
+
+#pragma omp parallel for collapse(2)
+  for (int bIdx = 0; bIdx < target_size; bIdx++) {
+    for (int gIdx = 0; gIdx < target_size; gIdx++) {
+      for (int rIdx = 0; rIdx < target_size; rIdx++) {
+        float r = rIdx * step;
+        float g = gIdx * step;
+        float b = bIdx * step;
+
+        int index = ((bIdx * target_size + gIdx) * target_size + rIdx) * 3;
+        trilinearSample(src_u16, src_size, r, g, b, &dst_u16[index]);
+      }
+    }
+  }
+
+  env->ReleaseShortArrayElements(src_data, src, JNI_ABORT);
+  env->ReleaseShortArrayElements(result_data, dst, 0);
+
+  return result_data;
+}

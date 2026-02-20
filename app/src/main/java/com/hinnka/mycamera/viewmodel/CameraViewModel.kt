@@ -760,13 +760,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * 预加载 LUT
-     */
-    fun preloadLut(id: String) {
-        contentRepository.lutManager.preloadLut(id)
-    }
-
-    /**
      * 从相机捕获预览帧并生成所有 LUT 的预览图
      */
     fun generateThumbnail() {

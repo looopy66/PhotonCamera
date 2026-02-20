@@ -82,7 +82,11 @@ object XmpLutParser {
 
         val decodedData = decodeBase85(tableDataEncoded)
         val decompressedData = decompress(decodedData)
-        val lutData = parseLutData(decompressedData)
+        var lutData = parseLutData(decompressedData)
+
+        if (lutData.divisions > 65) {
+            lutData = resampleSize(lutData, 33)
+        }
 
         return writePlutFile(outputStream, lutData, curve)
     }
@@ -172,6 +176,39 @@ object XmpLutParser {
             result[c] = (v + 0.5f).toInt().toShort()
         }
         return result
+    }
+
+    private fun resampleSize(lutData: LutData, targetSize: Int): LutData {
+        val nativeData = try {
+            LutProcessor.resampleSizeNative(lutData.samples, lutData.divisions, targetSize)
+        } catch (e: Throwable) {
+            null
+        }
+
+        if (nativeData != null) {
+            return LutData(targetSize, nativeData)
+        }
+
+        val newData = ShortArray(targetSize * targetSize * targetSize * 3)
+        val step = 1.0f / (targetSize - 1)
+
+        for (bIdx in 0 until targetSize) {
+            for (gIdx in 0 until targetSize) {
+                for (rIdx in 0 until targetSize) {
+                    val r = rIdx * step
+                    val g = gIdx * step
+                    val b = bIdx * step
+
+                    val interpolated = trilinearSample(lutData, r, g, b)
+
+                    val index = ((bIdx * targetSize + gIdx) * targetSize + rIdx) * 3
+                    newData[index] = interpolated[0]
+                    newData[index + 1] = interpolated[1]
+                    newData[index + 2] = interpolated[2]
+                }
+            }
+        }
+        return LutData(targetSize, newData)
     }
 
     private fun decodeBase85(input: String): ByteArray {

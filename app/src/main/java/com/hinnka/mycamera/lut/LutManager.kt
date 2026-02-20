@@ -137,7 +137,7 @@ class LutManager(private val context: Context) {
 
         // 查找 LUT 信息
         val lutInfo = getLutInfo(id) ?: run {
-            PLog.e(TAG, "LUT not found: $id")
+            PLog.w(TAG, "LUT not found: $id")
             return null
         }
 
@@ -159,7 +159,7 @@ class LutManager(private val context: Context) {
             if (lutConfig.isValid()) {
                 // 添加到缓存
                 lutCache.put(id, lutConfig)
-                PLog.d(TAG, "LUT loaded: $id, size: ${lutConfig.size}")
+//                PLog.d(TAG, "LUT loaded: $id, size: ${lutConfig.size}")
                 lutConfig
             } else {
                 PLog.e(TAG, "Invalid LUT data: $id")
@@ -169,27 +169,6 @@ class LutManager(private val context: Context) {
             PLog.e(TAG, "Failed to load LUT: $id", e)
             null
         }
-    }
-
-    /**
-     * 获取自定义导入管理器
-     */
-    fun getCustomImportManager(): CustomImportManager = customImportManager
-
-    /**
-     * 预加载 LUT
-     *
-     * 在后台线程中预加载 LUT，以便快速切换
-     */
-    fun preloadLut(id: String) {
-        if (lutCache.get(id) != null) {
-            return // 已在缓存中
-        }
-
-        // 后台加载
-        Thread {
-            loadLut(id)
-        }.start()
     }
 
     /**
