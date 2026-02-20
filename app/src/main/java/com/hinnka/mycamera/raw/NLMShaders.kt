@@ -13,6 +13,7 @@ object NLMShaders {
         uniform sampler2D uInputTexture;
         uniform vec2 uTexelSize;
         uniform mat4 uTexMatrix;
+        uniform float uH;
 
         float getLuma(vec3 rgb) {
             return dot(rgb, vec3(0.2126, 0.7152, 0.0722));
@@ -30,15 +31,39 @@ object NLMShaders {
             vec3 oriRgb = texture(uInputTexture, vTexCoord).rgb;            
             vec3 yuv = rgb2ycbcr(oriRgb);
             vec2 sumUV = vec2(0.0); float sumW = 0.0;
-            // 采样步长随强度增加
+            
+            // 采样步长随强度增加，色度噪声通常是低频的大色块
             float stepScale = 6.5; 
+            
+            // 动态计算权重参数
+            // 色度权重容差稍微放宽，以消除色度噪点
+            float chromaH = uH * 1.5;
+            // 亮度权重容差必须严格，以保边并防止跨边缘渗色 (光晕)
+            float lumaH = uH * 0.5; 
+            
+            float invChromaH2 = 1.0 / max(chromaH * chromaH, 1e-6);
+            float invLumaH2 = 1.0 / max(lumaH * lumaH, 1e-6);
+
             for (int x = -2; x <= 2; x++) {
                 for (int y = -2; y <= 2; y++) {
-                    vec3 s = texture(uInputTexture, vTexCoord + vec2(x,y) * uTexelSize * stepScale).rgb;
+                    vec2 offset = vec2(float(x), float(y)) * uTexelSize * stepScale;
+                    vec3 s = texture(uInputTexture, vTexCoord + offset).rgb;
                     vec3 sYuv = rgb2ycbcr(s);
-                    // 空间权重 * 相似性权重 (双边滤波)
-                    float w = exp(-float(x*x+y*y)/4.0) * (1.0 - smoothstep(0.1, 0.4, distance(sYuv.yz, yuv.yz)));
-                    sumUV += sYuv.yz * w; sumW += w;
+                    
+                    // 空间权重 (Gaussian)
+                    float wS = exp(-float(x*x+y*y)/4.0);
+                    
+                    // 相似性权重 (Cross-Bilateral)
+                    float dL = sYuv.x - yuv.x;
+                    vec2 dC = sYuv.yz - yuv.yz;
+                    float wR = exp(-(dL * dL) * invLumaH2 - dot(dC, dC) * invChromaH2);
+                    
+                    float w = wS * wR;
+                    // 中心像素保证一定权重
+                    if (x == 0 && y == 0) w = max(w, 0.1);
+                    
+                    sumUV += sYuv.yz * w; 
+                    sumW += w;
                 }
             }
             yuv.yz = sumUV / sumW;

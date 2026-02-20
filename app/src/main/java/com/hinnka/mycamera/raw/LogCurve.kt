@@ -34,8 +34,8 @@ enum class LogCurve(
     ),
     LOGC4(
         // ARRI LogC4 params (transformed to log10 structure)
-        2231.8263f, 64.0f, 0.2268344f, -0.2293489f, 21.43176f, 0.5161f,
-        -0.02408f, 0.0f, 0.2784f, 117.45f, 0
+        2231.8263f, 64.0f, 0.21524584f, -0.29590839f, 8.80302f, 0.158957f,
+        -0.018057f, 0.0f, 0.2784f, 469.8f, 0
     ),
     APPLE_LOG(
         // Apple Log params (transformed to log10 structure)

@@ -243,6 +243,7 @@ class RawDemosaicProcessor {
     private var gfPass0InputTexLoc = 0
     private var gfPass0TexelSizeLoc = 0
     private var gfPass0TexMatrixLoc = 0
+    private var gfPass0HLoc = 0
 
     // NLM Pass H Uniforms
     private var nlmPassHInputTexLoc = 0
@@ -846,6 +847,7 @@ class RawDemosaicProcessor {
             gfPass0InputTexLoc = GLES30.glGetUniformLocation(gfPass0Program, "uInputTexture")
             gfPass0TexelSizeLoc = GLES30.glGetUniformLocation(gfPass0Program, "uTexelSize")
             gfPass0TexMatrixLoc = GLES30.glGetUniformLocation(gfPass0Program, "uTexMatrix")
+            gfPass0HLoc = GLES30.glGetUniformLocation(gfPass0Program, "uH")
         }
 
         if (nlmPassHProgram != 0) {
@@ -984,6 +986,7 @@ class RawDemosaicProcessor {
         GLES30.glUniform1i(gfPass0InputTexLoc, 0)
         GLES30.glUniform2f(gfPass0TexelSizeLoc, texelW, texelH)
         GLES30.glUniformMatrix4fv(gfPass0TexMatrixLoc, 1, false, identityMatrix, 0)
+        GLES30.glUniform1f(gfPass0HLoc, h)
         drawQuad(gfPass0Program)
 
         // ===== NLM Pass 1: Horizontal (gfChromaTexId -> gfFboId[0]) =====

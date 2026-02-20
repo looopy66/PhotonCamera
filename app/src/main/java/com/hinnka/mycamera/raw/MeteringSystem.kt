@@ -55,7 +55,7 @@ object MeteringSystem {
         val baseWeight = 0.15f // 增加基础权重，让环境（田地）更多参与
 
         var totalWeight = 0.0
-        var weightedSumFLog2 = 0.0 // 在 F-Log2 空间累加
+        var weightedSumLog = 0.0 // 在 Log 空间累加
         var maxColor = 0.0f
         var totalSumLuma = 0.0f
 
@@ -105,7 +105,7 @@ object MeteringSystem {
 
                 val finalWeight = gaussianWeight * envWeight * skinWeight
 
-                weightedSumFLog2 += logLuma.toDouble() * finalWeight
+                weightedSumLog += logLuma.toDouble() * finalWeight
                 totalWeight += finalWeight
 
                 totalSumLuma += luma
@@ -128,7 +128,7 @@ object MeteringSystem {
         val lv = ev - log2(iso / 100f)
 
         // 计算 Log 空间的加权平均亮度
-        val avgLog = (weightedSumFLog2 / totalWeight).toFloat()
+        val avgLog = (weightedSumLog / totalWeight).toFloat()
 
         // 映射回线性空间，得到场景的“代表性亮度”
         val logCurve = logCurve

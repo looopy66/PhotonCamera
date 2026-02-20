@@ -182,7 +182,7 @@ object RawShaders {
             
             if (uCustomCurveEnable) {
                 float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
-                color *= pow(luma, 0.1);
+                color *= pow(luma, 0.15);
             }
             
             fragColor = vec4(color, 1.0);
