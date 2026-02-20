@@ -298,4 +298,22 @@
     <string name="settings_donation_description">Dukung pengembangan Photon Camera</string>
     <string name="settings_default_focal_length">Panjang Fokus Default</string>
     <string name="settings_default_focal_length_description">Setel panjang fokus untuk beralih secara otomatis saat aplikasi dimulai.</string>
+    <string name="refresh">Segarkan</string>
+    <string name="refresh_success">Pratinjau disegarkan</string>
+    <string name="refresh_failed">Gagal menyegarkan pratinjau</string>
+    <string name="settings_raw_restore_lut">LUT Restorasi RAW</string>
+    <string name="settings_raw_restore_lut_description">Pilih LUT yang digunakan untuk restorasi warna RAW. Gunakan "None" untuk output log.</string>
+    <string name="settings_dro_mode">Pengoptimal Rentang Dinamis RAW (DRO)</string>
+    <string name="settings_dro_mode_description">Mengoptimalkan detail bayangan dan kompresi sorotan dengan memanfaatkan headroom kurva Log. Nilai yang lebih tinggi mempertahankan lebih banyak sorotan tetapi mungkin membutuhkan lebih banyak cahaya.</string>
+    <string name="settings_dro_off">Mati</string>
+    <string name="settings_dro_low">Rendah</string>
+    <string name="settings_dro_high">Tinggi</string>
+    <string name="settings_apply_ultra_hdr">Strategi Eksposur Ultra HDR</string>
+    <string name="settings_apply_ultra_hdr_description">Berdasarkan penumpukan multi-frame dan analisis histogram, secara otomatis mengurangi eksposur untuk melindungi sorotan saat cahaya cukup. Efektif hanya jika RAW dan Multi-Frame diaktifkan.</string>
+    <string name="settings_color_space">Ruang Warna RAW</string>
+    <string name="settings_color_space_description">Pilih ruang warna target untuk pemrosesan RAW.</string>
+    <string name="settings_log_curve">Gamma RAW</string>
+    <string name="settings_log_curve_description">Pilih fungsi transfer untuk pemrosesan RAW (Kurva Log).</string>
+    <string name="settings_use_p010">P010 (10-bit YUV)</string>
+    <string name="settings_use_p010_description">Aktifkan output YUV 10-bit untuk presisi data gambar yang lebih baik. Efektif pada perangkat yang didukung saat RAW dinonaktifkan.</string>
 </resources>

@@ -298,4 +298,22 @@
     <string name="settings_donation_description">Unterstützen Sie die Entwicklung von Photon Camera</string>
     <string name="settings_default_focal_length">Standard-Brennweite</string>
     <string name="settings_default_focal_length_description">Brennweite festlegen, auf die beim App-Start automatisch gewechselt werden soll.</string>
+    <string name="refresh">Aktualisieren</string>
+    <string name="refresh_success">Vorschau aktualisiert</string>
+    <string name="refresh_failed">Vorschau konnte nicht aktualisiert werden</string>
+    <string name="settings_raw_restore_lut">RAW-Wiederherstellungs-LUT</string>
+    <string name="settings_raw_restore_lut_description">Wählen Sie die LUT für die RAW-Farbwiederherstellung. Wählen Sie "Keine" für Log-Ausgabe.</string>
+    <string name="settings_dro_mode">RAW Dynamic Range Optimizer (DRO)</string>
+    <string name="settings_dro_mode_description">Optimiert Schattendetails und Glanzlichtkompression durch Nutzung des Log-Kurven-Spielraums. Höhere Werte bewahren mehr Glanzlichter, erfordern aber möglicherweise mehr Licht.</string>
+    <string name="settings_dro_off">Aus</string>
+    <string name="settings_dro_low">Niedrig</string>
+    <string name="settings_dro_high">Hoch</string>
+    <string name="settings_apply_ultra_hdr">Ultra HDR Belichtungsstrategie</string>
+    <string name="settings_apply_ultra_hdr_description">Reduziert basierend auf Multi-Frame-Stacking und Histogrammanalyse automatisch die Belichtung, um Glanzlichter bei ausreichenden Lichtverhältnissen zu schützen. Nur wirksam, wenn RAW und Multi-Frame aktiviert sind.</string>
+    <string name="settings_color_space">RAW-Farbraum</string>
+    <string name="settings_color_space_description">Wählen Sie den Zielfarbraum für die RAW-Verarbeitung.</string>
+    <string name="settings_log_curve">RAW-Gamma</string>
+    <string name="settings_log_curve_description">Wählen Sie die Transferfunktion für die RAW-Verarbeitung (Log-Kurve).</string>
+    <string name="settings_use_p010">P010 (10-Bit YUV)</string>
+    <string name="settings_use_p010_description">Aktiviert die 10-Bit YUV-Ausgabe für eine bessere Bildpräzision. Wirksam auf unterstützten Geräten, wenn RAW deaktiviert ist.</string>
 </resources>

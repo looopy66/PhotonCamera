@@ -298,4 +298,22 @@
     <string name="settings_donation_description">สนับสนุนการพัฒนา Photon Camera</string>
     <string name="settings_default_focal_length">ระยะโฟกัสเริ่มต้น</string>
     <string name="settings_default_focal_length_description">ตั้งค่าระยะโฟกัสที่จะสลับไปใช้อัตโนมัติเมื่อเริ่มแอป</string>
+    <string name="refresh">รีเฟรช</string>
+    <string name="refresh_success">รีเฟรชตัวอย่างแล้ว</string>
+    <string name="refresh_failed">รีเฟรชตัวอย่างล้มเหลว</string>
+    <string name="settings_raw_restore_lut">LUT คืนค่า RAW</string>
+    <string name="settings_raw_restore_lut_description">เลือก LUT ที่ใช้สำหรับการคืนค่าสี RAW เลือก "ไม่มี" สำหรับเอาต์พุต log</string>
+    <string name="settings_dro_mode">ตัวเพิ่มประสิทธิภาพช่วงไดนามิก RAW (DRO)</string>
+    <string name="settings_dro_mode_description">เพิ่มประสิทธิภาพรายละเอียดเงาและการบีบอัดไฮไลท์โดยใช้พื้นที่ว่างของเส้นโค้ง Log ค่าที่สูงขึ้นจะช่วยเก็บรักษาไฮไลท์ได้มากขึ้น แต่อาจต้องการแสงมากขึ้น</string>
+    <string name="settings_dro_off">ปิด</string>
+    <string name="settings_dro_low">ต่ำ</string>
+    <string name="settings_dro_high">สูง</string>
+    <string name="settings_apply_ultra_hdr">กลยุทธ์การเปิดรับแสง Ultra HDR</string>
+    <string name="settings_apply_ultra_hdr_description">อ้างอิงจากการซ้อนภาพหลายเฟรมและการวิเคราะห์ฮิสโตแกรม จะลดการเปิดรับแสงโดยอัตโนมัติเพื่อป้องกันไฮไลท์เมื่อมีแสงเพียงพอ มีผลเมื่อเปิดใช้งาน RAW และ Multi-Frame เท่านั้น</string>
+    <string name="settings_color_space">พื้นที่สี RAW</string>
+    <string name="settings_color_space_description">เลือกพื้นที่สีเป้าหมายสำหรับการประมวลผล RAW</string>
+    <string name="settings_log_curve">RAW Gamma</string>
+    <string name="settings_log_curve_description">เลือกฟังก์ชันการถ่ายโอนสำหรับการประมวลผล RAW (Log Curve)</string>
+    <string name="settings_use_p010">P010 (YUV 10 บิต)</string>
+    <string name="settings_use_p010_description">เปิดใช้งานเอาต์พุต YUV 10 บิตเพื่อความแม่นยำของข้อมูลภาพที่ดีขึ้น มีผลกับอุปกรณ์ที่รองรับเมื่อปิดใช้งาน RAW</string>
 </resources>

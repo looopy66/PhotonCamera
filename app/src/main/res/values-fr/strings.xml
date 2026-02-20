@@ -298,4 +298,22 @@
     <string name="settings_donation_description">Soutenir le développement de Photon Camera</string>
     <string name="settings_default_focal_length">Distance focale par défaut</string>
     <string name="settings_default_focal_length_description">Définir la distance focale à basculer automatiquement au démarrage de l\'application.</string>
+    <string name="refresh">Actualiser</string>
+    <string name="refresh_success">Aperçu actualisé</string>
+    <string name="refresh_failed">Échec de l\'actualisation de l\'aperçu</string>
+    <string name="settings_raw_restore_lut">LUT de restauration RAW</string>
+    <string name="settings_raw_restore_lut_description">Choisissez la LUT utilisée pour la restauration des couleurs RAW. Utilisez "Aucune" pour une sortie Log.</string>
+    <string name="settings_dro_mode">Optimiseur de plage dynamique RAW (DRO)</string>
+    <string name="settings_dro_mode_description">Optimise les détails des ombres et la compression des hautes lumières en utilisant la marge de la courbe Log. Des valeurs plus élevées préservent davantage de hautes lumières mais peuvent nécessiter plus de lumière.</string>
+    <string name="settings_dro_off">Désactivé</string>
+    <string name="settings_dro_low">Bas</string>
+    <string name="settings_dro_high">Haut</string>
+    <string name="settings_apply_ultra_hdr">Stratégie d\'exposition Ultra HDR</string>
+    <string name="settings_apply_ultra_hdr_description">En se basant sur l\'empilement multi-images et l\'analyse de l\'histogramme, réduit automatiquement l\'exposition pour protéger les hautes lumières lorsque l\'éclairage est suffisant. Efficace uniquement lorsque RAW et Multi-images sont activés.</string>
+    <string name="settings_color_space">Espace colorimétrique RAW</string>
+    <string name="settings_color_space_description">Choisissez l\'espace colorimétrique cible pour le traitement RAW.</string>
+    <string name="settings_log_curve">Gamma RAW</string>
+    <string name="settings_log_curve_description">Choisissez la fonction de transfert pour le traitement RAW (courbe Log).</string>
+    <string name="settings_use_p010">P010 (YUV 10 bits)</string>
+    <string name="settings_use_p010_description">Active la sortie YUV 10 bits pour une meilleure précision des données d\'image. Efficace sur les appareils compatibles lorsque le mode RAW est désactivé.</string>
 </resources>

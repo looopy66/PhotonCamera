@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Photon Camera</string>
+    <string name="app_name">光子相机</string>
 
     <!-- Camera Controls -->
     <string name="capture">拍摄</string>
@@ -44,6 +44,7 @@
     <string name="export_success">照片导出成功</string>
     <string name="export_failed">照片导出失败</string>
     <string name="edit">编辑</string>
+    <string name="refresh_failed">刷新预览失败</string>
     <string name="select_all">全选</string>
     <string name="cancel">取消</string>
     <string name="save">保存</string>
@@ -52,6 +53,7 @@
     <string name="brightness">亮度</string>
     <string name="delete_confirm">删除这张照片吗？</string>
     <string name="delete_multiple_confirm">删除 %d 张照片吗？</string>
+    <string name="delete_exported_photos">同时删除系统相册中的导出图</string>
     <string name="no_photos">暂无照片</string>
     <string name="photo_info">照片信息</string>
     <string name="filter">滤镜</string>
@@ -254,6 +256,7 @@
     <string name="drag_to_reorder_categories">拖动图标调整 Tab 显示顺序</string>
     <string name="selected_count">已选择 %d</string>
     <string name="category">分类</string>
+    <string name="import_failed">导入失败: %d 个项目</string>
     <string name="common_categories">已有分类</string>
     <string name="delete_category_title">删除分类</string>
     <string name="delete_category_message">确认删除分类 "%s"？该分类下的滤镜将被设为未分类。</string>
@@ -286,14 +289,31 @@
     <string name="settings_section_about">关于</string>
     <string name="settings_donation">捐赠</string>
     <string name="settings_donation_description">支持 Photon Camera 的持续开发</string>
+    <string name="settings_background_description">更改应用背景图</string>
     <string name="settings_custom_background">自定义...</string>
+    <string name="settings_default_focal_length_description">设置启动 App 时自动切换到的焦段</string>
     <string name="settings_raw_restore_lut">RAW 还原 LUT</string>
-    <string name="settings_raw_restore_lut_description">选择用于 RAW 色彩还原的 LUT。选择“灰片”以获得 Log 风格输出。</string>
+    <string name="settings_raw_restore_lut_description">选择用于 RAW 色彩还原的 LUT。选择“无”以获得 Log 风格输出。</string>
     <string name="settings_dro_mode">RAW动态范围优化 (DRO)</string>
-    <string name="settings_dro_mode_description">通过利用 F-Log2 高光冗余，在不牺牲高光的前提下提升阴影细节。</string>
+    <string name="settings_dro_mode_description">通过利用 Log 曲线高光冗余，在不牺牲高光的前提下提升阴影细节。</string>
     <string name="settings_dro_off">关闭</string>
     <string name="settings_dro_low">中等</string>
     <string name="settings_dro_high">最高</string>
+    <string name="settings_log_curve_description">选择 RAW 处理的传输函数 (Log 曲线)。</string>
     <string name="settings_use_p010">P010 (10位 YUV)</string>
     <string name="settings_use_p010_description">启用 10位 YUV 输出以获得更好的图像数据精度。仅在支持的设备上且 RAW 关闭时生效。</string>
+    <string name="refresh">刷新</string>
+    <string name="refresh_success">预览已刷新</string>
+    <string name="settings_background">背景设置</string>
+    <string name="category_management_title">分类管理</string>
+    <string name="new_category">新建分类</string>
+    <string name="category_name">分类名称</string>
+    <string name="import_to_category">导入至分类</string>
+    <string name="import_success">成功导入 %d 个项目</string>
+    <string name="settings_default_focal_length">默认焦段</string>
+    <string name="settings_apply_ultra_hdr">Ultra HDR 曝光策略</string>
+    <string name="settings_apply_ultra_hdr_description">基于多帧堆叠和直方图分析，在光照充足时自动压低曝光以保护高光。仅当 RAW 和多帧合成同时开启时生效。</string>
+    <string name="settings_color_space">RAW 色彩空间</string>
+    <string name="settings_color_space_description">选择 RAW 处理的目标色彩空间。</string>
+    <string name="settings_log_curve">RAW 伽马</string>
 </resources>

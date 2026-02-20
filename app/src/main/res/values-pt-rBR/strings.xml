@@ -298,4 +298,22 @@
     <string name="settings_donation_description">Apoie o desenvolvimento da Photon Camera</string>
     <string name="settings_default_focal_length">Distância Focal Padrão</string>
     <string name="settings_default_focal_length_description">Defina a distância focal para alternar automaticamente quando o app for iniciado.</string>
+    <string name="refresh">Atualizar</string>
+    <string name="refresh_success">Visualização atualizada</string>
+    <string name="refresh_failed">Falha ao atualizar a visualização</string>
+    <string name="settings_raw_restore_lut">LUT de Restauração RAW</string>
+    <string name="settings_raw_restore_lut_description">Escolha a LUT usada para restauração de cores RAW. Use "Nenhuma" para saída log.</string>
+    <string name="settings_dro_mode">Otimizador de Faixa Dinâmica RAW (DRO)</string>
+    <string name="settings_dro_mode_description">Otimiza os detalhes das sombras e a compressão de realces utilizando a margem da curva Log. Valores mais altos preservam mais realces, mas podem exigir mais luz.</string>
+    <string name="settings_dro_off">Desativado</string>
+    <string name="settings_dro_low">Baixo</string>
+    <string name="settings_dro_high">Alto</string>
+    <string name="settings_apply_ultra_hdr">Estratégia de Exposição Ultra HDR</string>
+    <string name="settings_apply_ultra_hdr_description">Com base no empilhamento de vários quadros e na análise de histograma, reduz automaticamente a exposição para proteger os realces quando a iluminação é suficiente. Eficaz apenas quando RAW e Multi-Frame estão ativados.</string>
+    <string name="settings_color_space">Espaço de Cor RAW</string>
+    <string name="settings_color_space_description">Escolha o espaço de cor de destino para o processamento RAW.</string>
+    <string name="settings_log_curve">Gamma RAW</string>
+    <string name="settings_log_curve_description">Escolha a função de transferência para o processamento RAW (Curva Log).</string>
+    <string name="settings_use_p010">P010 (YUV de 10 bits)</string>
+    <string name="settings_use_p010_description">Ativa a saída YUV de 10 bits para melhor precisão dos dados da imagem. Eficaz em dispositivos suportados quando o RAW está desativado.</string>
 </resources>
