@@ -42,6 +42,7 @@ import kotlin.use
 object PhotoManager {
     private const val TAG = "PhotoManager"
     private const val PHOTOS_DIR = "photos"
+    private const val BURST_DIR = "burst"
     private const val PHOTO_FILE = "original.jpg"
     private const val YUV_FILE = "original.jxl"
     private const val VIDEO_FILE = "video.mp4"
@@ -286,10 +287,11 @@ object PhotoManager {
         captureResult: CaptureResult?,
         thumbnail: Bitmap?,
         useLivePhoto: Boolean,
-        useSuperResolution: Boolean
+        useSuperResolution: Boolean,
+        photoId: String? = null,
     ) = withContext(Dispatchers.IO) {
         try {
-            val photoId = UUID.randomUUID().toString()
+            val photoId = photoId ?: UUID.randomUUID().toString()
             val photoDir = getPhotoDir(context, photoId)
             val photoFile = File(photoDir, PHOTO_FILE)
             val videoFile = File(photoDir, VIDEO_FILE)
@@ -381,7 +383,7 @@ object PhotoManager {
 
             // YUV 格式：使用 native 处理（包含旋转和裁切）并直接保存为 FP16 JXL
             val success = image.use {
-                YuvProcessor.processAndSave(
+                YuvProcessor.processAndSave16(
                     image, aspectRatio, rotation,
                     yuvFile.absolutePath, previewBitmap
                 )
@@ -789,6 +791,79 @@ object PhotoManager {
                 return@withContext null
             }
         }
+    }
+
+    /**
+     * 保存连拍照片
+     */
+    suspend fun saveBurstPhoto(
+        context: Context,
+        photoId: String,
+        image: SafeImage,
+        shouldAutoSave: Boolean = true,
+        photoProcessor: PhotoProcessor,
+        photoQuality: Int = 95
+    ) {
+        val photoDir = getPhotoDir(context, photoId)
+        val mainPhotoFile = File(photoDir, PHOTO_FILE)
+        val burstDir = File(photoDir, BURST_DIR)
+        if (!burstDir.exists()) {
+            burstDir.mkdirs()
+        }
+        try {
+            val photoFile = File(burstDir, System.currentTimeMillis().toString() + ".jpg")
+
+            val metadata = loadMetadata(context, photoId) ?: return
+            val sharpeningValue = metadata.sharpening ?: 0f
+            val noiseReductionValue = metadata.noiseReduction ?: 0f
+            val chromaNoiseReductionValue = metadata.chromaNoiseReduction ?: 0f
+
+            image.use {
+                YuvProcessor.processAndSave(
+                    image, metadata.rotation, photoFile.absolutePath
+                )
+            }
+            if (!mainPhotoFile.exists() || mainPhotoFile.length() == 0L) {
+                processingScope.launch {
+                    photoFile.copyTo(mainPhotoFile, overwrite = true)
+                    if (shouldAutoSave) {
+                        exportPhoto(
+                            context,
+                            photoId,
+                            null,
+                            photoProcessor,
+                            metadata,
+                            sharpeningValue,
+                            noiseReductionValue,
+                            chromaNoiseReductionValue,
+                            photoQuality
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to savePhoto", e)
+        }
+    }
+
+    /**
+     * 获取指定照片的连拍照片文件列表
+     */
+    fun getBurstPhotos(context: Context, photoId: String): List<File> {
+        val burstDir = File(getPhotoDir(context, photoId), BURST_DIR)
+        return if (burstDir.exists()) {
+            burstDir.listFiles()?.toList()?.sortedBy { it.lastModified() } ?: emptyList()
+        } else {
+            emptyList()
+        }
+    }
+
+    /**
+     * 检查是否有连拍照片
+     */
+    fun hasBurstPhotos(context: Context, photoId: String): Boolean {
+        val burstDir = File(getPhotoDir(context, photoId), BURST_DIR)
+        return burstDir.exists() && (burstDir.listFiles()?.isNotEmpty() == true)
     }
 
     /**

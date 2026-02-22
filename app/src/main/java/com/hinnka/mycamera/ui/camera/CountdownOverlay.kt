@@ -4,6 +4,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -12,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
@@ -41,6 +43,38 @@ fun CountdownOverlay(
                 fontWeight = FontWeight.Bold,
                 color = Color.White,
                 modifier = Modifier.scale(scale)
+            )
+        }
+    }
+}
+
+/**
+ * 倒计时覆盖层
+ * 在屏幕中央显示倒计时数字，带缩放动画
+ */
+@Composable
+fun BurstCaptureOverlay(
+    count: Int,
+    modifier: Modifier = Modifier
+) {
+    if (count > 0) {
+        // 每次数字变化时触发缩放动画
+        val scale by animateFloatAsState(
+            targetValue = 1f,
+            animationSpec = tween(durationMillis = 300),
+            label = "countdownScale"
+        )
+
+        Box(
+            modifier = modifier.fillMaxSize(),
+            contentAlignment = Alignment.TopCenter
+        ) {
+            Text(
+                text = count.toString(),
+                fontSize = 60.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                modifier = Modifier.padding(top = 20.dp).scale(scale)
             )
         }
     }

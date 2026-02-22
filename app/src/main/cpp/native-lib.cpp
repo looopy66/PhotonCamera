@@ -11,6 +11,7 @@
 #include <map>
 #include <omp.h>
 #include <string>
+#include <turbojpeg.h>
 #include <vector>
 
 #include "common.h"
@@ -664,6 +665,145 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
 
   env->ReleaseStringUTFChars(outputPath, path);
   return success ? JNI_TRUE : JNI_FALSE;
+}
+
+/**
+ * 带有保存到本地文件的 JPG 压缩版本的 processToBitmap
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_hinnka_mycamera_utils_YuvProcessor_processToFile(
+    JNIEnv *env, jobject /* this */, jobject yBuffer, jobject uBuffer,
+    jobject vBuffer, jint width, jint height, jint yRowStride, jint uvRowStride,
+    jint uvPixelStride, jint rotation, jint format, jstring outputPath) {
+
+  const char *path = env->GetStringUTFChars(outputPath, nullptr);
+
+  auto *yData = static_cast<uint8_t *>(env->GetDirectBufferAddress(yBuffer));
+  auto *uData = static_cast<uint8_t *>(env->GetDirectBufferAddress(uBuffer));
+  auto *vData = static_cast<uint8_t *>(env->GetDirectBufferAddress(vBuffer));
+
+  if (yData == nullptr || uData == nullptr || vData == nullptr) {
+    LOGE("Failed to get buffer addresses");
+    env->ReleaseStringUTFChars(outputPath, path);
+    return JNI_FALSE;
+  }
+
+  bool isP010 = (format == 0x36);
+  int rotatedWidth = (rotation == 90 || rotation == 270) ? height : width;
+  int rotatedHeight = (rotation == 90 || rotation == 270) ? width : height;
+
+  std::vector<uint8_t> yDest(rotatedWidth * rotatedHeight);
+  std::vector<uint8_t> uDest((rotatedWidth / 2) * (rotatedHeight / 2));
+  std::vector<uint8_t> vDest((rotatedWidth / 2) * (rotatedHeight / 2));
+
+#pragma omp parallel for num_threads(4)
+  for (int y = 0; y < rotatedHeight; y++) {
+    for (int x = 0; x < rotatedWidth; x++) {
+      int sx, sy;
+      if (rotation == 90) {
+        sx = y;
+        sy = height - 1 - x;
+      } else if (rotation == 180) {
+        sx = width - 1 - x;
+        sy = height - 1 - y;
+      } else if (rotation == 270) {
+        sx = width - 1 - y;
+        sy = x;
+      } else { // 0
+        sx = x;
+        sy = y;
+      }
+
+      if (isP010) {
+        yDest[y * rotatedWidth + x] =
+            readValue<uint16_t>(yData + sy * yRowStride + sx * 2, false) >> 8;
+      } else {
+        yDest[y * rotatedWidth + x] = yData[sy * yRowStride + sx];
+      }
+    }
+  }
+
+#pragma omp parallel for num_threads(4)
+  for (int y = 0; y < rotatedHeight / 2; y++) {
+    for (int x = 0; x < rotatedWidth / 2; x++) {
+      int rx = x * 2;
+      int ry = y * 2;
+      int sx, sy;
+      if (rotation == 90) {
+        sx = ry;
+        sy = height - 1 - rx;
+      } else if (rotation == 180) {
+        sx = width - 1 - rx;
+        sy = height - 1 - ry;
+      } else if (rotation == 270) {
+        sx = width - 1 - ry;
+        sy = rx;
+      } else { // 0
+        sx = rx;
+        sy = ry;
+      }
+
+      int uv_sx = sx / 2;
+      int uv_sy = sy / 2;
+
+      if (isP010) {
+        uDest[y * (rotatedWidth / 2) + x] =
+            readValue<uint16_t>(
+                uData + uv_sy * uvRowStride + uv_sx * uvPixelStride, false) >>
+            8;
+        vDest[y * (rotatedWidth / 2) + x] =
+            readValue<uint16_t>(
+                vData + uv_sy * uvRowStride + uv_sx * uvPixelStride, false) >>
+            8;
+      } else {
+        uDest[y * (rotatedWidth / 2) + x] =
+            uData[uv_sy * uvRowStride + uv_sx * uvPixelStride];
+        vDest[y * (rotatedWidth / 2) + x] =
+            vData[uv_sy * uvRowStride + uv_sx * uvPixelStride];
+      }
+    }
+  }
+
+  tjhandle tjInstance = tj3Init(TJINIT_COMPRESS);
+  if (!tjInstance) {
+    LOGE("Failed to init turbojpeg: %s", tj3GetErrorStr(nullptr));
+    env->ReleaseStringUTFChars(outputPath, path);
+    return JNI_FALSE;
+  }
+
+  tj3Set(tjInstance, TJPARAM_QUALITY, 90);
+  tj3Set(tjInstance, TJPARAM_SUBSAMP, TJSAMP_420);
+
+  const unsigned char *srcPlanes[3] = {yDest.data(), uDest.data(),
+                                       vDest.data()};
+  int strides[3] = {rotatedWidth, rotatedWidth / 2, rotatedWidth / 2};
+
+  unsigned char *jpegBuf = nullptr;
+  size_t jpegSize = 0;
+
+  if (tj3CompressFromYUVPlanes8(tjInstance, srcPlanes, rotatedWidth, strides,
+                                rotatedHeight, &jpegBuf, &jpegSize) < 0) {
+    LOGE("Failed to compress turbojpeg: %s", tj3GetErrorStr(tjInstance));
+    tj3Destroy(tjInstance);
+    env->ReleaseStringUTFChars(outputPath, path);
+    return JNI_FALSE;
+  }
+
+  FILE *file = fopen(path, "wb");
+  if (!file) {
+    LOGE("Failed to open file for writing: %s", path);
+    tj3Free(jpegBuf);
+    tj3Destroy(tjInstance);
+    env->ReleaseStringUTFChars(outputPath, path);
+    return JNI_FALSE;
+  }
+  fwrite(jpegBuf, 1, jpegSize, file);
+  fclose(file);
+
+  tj3Free(jpegBuf);
+  tj3Destroy(tjInstance);
+  env->ReleaseStringUTFChars(outputPath, path);
+  return JNI_TRUE;
 }
 
 /**

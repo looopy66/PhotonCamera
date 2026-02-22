@@ -938,7 +938,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /**
      * 获取应用 LUT 和边框后的预览 Bitmap
      */
-    suspend fun getPreviewBitmap(photo: PhotoData, useGlobalEdit: Boolean = false, showOrigin: Boolean = false): Bitmap? {
+    suspend fun getPreviewBitmap(photo: PhotoData, useGlobalEdit: Boolean = false, showOrigin: Boolean = false, bitmap: Bitmap? = null): Bitmap? {
         return withContext(Dispatchers.IO) {
             try {
                 val context = getApplication<Application>()
@@ -971,7 +971,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         ?: (if (finalMetadata.isImported) 0f else chromaNoiseReduction.value)
                 }
 
-                val bitmap = PhotoManager.loadBitmap(context, photo.id, 4096) ?: return@withContext null
+                val bitmap = bitmap ?: PhotoManager.loadBitmap(context, photo.id, 4096) ?: return@withContext null
 
                 if (showOrigin) {
                     bitmap
@@ -1084,11 +1084,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /**
      * 导出照片到公共目录（带 LUT 烘焙）
      */
-    fun exportPhoto(photo: PhotoData, onComplete: (Boolean) -> Unit = {}) {
+    fun exportPhoto(photo: PhotoData, bitmap: Bitmap? = null, onComplete: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             val metadata = photo.metadata ?: PhotoManager.loadMetadata(getApplication(), photo.id) ?: PhotoMetadata()
             val context = getApplication<Application>()
-            PhotoManager.exportPhoto(context, photo.id, null, photoProcessor, metadata,
+            PhotoManager.exportPhoto(context, photo.id, bitmap, photoProcessor, metadata,
                 sharpening.value, noiseReduction.value,
                 chromaNoiseReduction.value, photoQuality.firstOrNull() ?: 95) { success ->
                 if (success) {

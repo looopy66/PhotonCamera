@@ -39,6 +39,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.ui.camera.CameraScreen
+import com.hinnka.mycamera.ui.gallery.BurstDetailScreen
 import com.hinnka.mycamera.ui.gallery.GalleryScreen
 import com.hinnka.mycamera.ui.gallery.PhotoDetailScreen
 import com.hinnka.mycamera.ui.gallery.PhotoEditScreen
@@ -58,12 +59,14 @@ object Routes {
     const val CAMERA = "camera"
     const val GALLERY = "gallery"
     const val PHOTO_DETAIL = "photo_detail/{index}"
+    const val BURST_DETAIL = "burst_detail/{photoId}"
     const val PHOTO_EDIT = "photo_edit"
     const val SETTINGS = "settings"
     const val FILTER_MANAGEMENT = "filter_management"
     const val FRAME_MANAGEMENT = "frame_management"
 
     fun photoDetail(index: Int) = "photo_detail/$index"
+    fun burstDetail(photoId: String) = "burst_detail/$photoId"
 }
 
 class MainActivity : ComponentActivity() {
@@ -205,6 +208,9 @@ fun NavigationHost(
                             onEdit = {
                                 navController.navigate(Routes.PHOTO_EDIT)
                             },
+                            onViewBurst = { photoId ->
+                                navController.navigate(Routes.burstDetail(photoId))
+                            },
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -254,6 +260,26 @@ fun NavigationHost(
                     },
                     onEdit = {
                         navController.navigate(Routes.PHOTO_EDIT)
+                    },
+                    onViewBurst = { id ->
+                        navController.navigate(Routes.burstDetail(id))
+                    }
+                )
+            }
+
+            composable(
+                route = Routes.BURST_DETAIL,
+                arguments = listOf(navArgument("photoId") { type = NavType.StringType })
+            ) { backStackEntry ->
+                val photoId = backStackEntry.arguments?.getString("photoId") ?: ""
+                BurstDetailScreen(
+                    viewModel = galleryViewModel,
+                    photoId = photoId,
+                    onEdit = {
+                        navController.navigate(Routes.PHOTO_EDIT)
+                    },
+                    onBack = {
+                        navController.popBackStack()
                     }
                 )
             }

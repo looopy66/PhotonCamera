@@ -41,8 +41,11 @@
     <string name="share">Share</string>
     <string name="delete">Delete</string>
     <string name="export">Export</string>
+    <string name="export_all">Export All</string>
     <string name="export_success">Photo exported successfully</string>
+    <string name="export_all_success">All photos exported successfully</string>
     <string name="export_failed">Failed to export photo</string>
+    <string name="export_all_confirm">Export all burst photos?</string>
     <string name="edit">Edit</string>
     <string name="refresh">Refresh</string>
     <string name="refresh_success">Preview refreshed</string>

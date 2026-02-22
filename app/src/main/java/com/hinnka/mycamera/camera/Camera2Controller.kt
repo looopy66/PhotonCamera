@@ -51,6 +51,8 @@ class Camera2Controller(private val context: Context) {
         // 自定义错误代码
         const val ERROR_CAMERA_DISCONNECTED = 1000
 
+        const val MAX_IMAGES = 20
+
         // 拍照状态机常量
         private const val STATE_PREVIEW = 0 // Showing camera preview.
         private const val STATE_WAITING_PRECAPTURE = 2 // Waiting for the exposure to be precapture state.
@@ -121,6 +123,8 @@ class Camera2Controller(private val context: Context) {
     private val pendingCloseReaders = mutableListOf<ImageReader>()
     private val openImagesCount = AtomicInteger(0)
 
+    private var burstCapturing = false
+
     // 保留最近的一个结果作为后备
     @Volatile
     private var lastCaptureResult: TotalCaptureResult? = null
@@ -147,7 +151,11 @@ class Camera2Controller(private val context: Context) {
     var onCameraError: ((errorCode: Int, message: String, canRetry: Boolean) -> Unit)? = null
 
     fun onImageRelease() {
-        if (openImagesCount.decrementAndGet() == 0) {
+        val count = openImagesCount.decrementAndGet()
+        if (MAX_IMAGES - count >= state.value.multiFrameCount) {
+            _state.value = _state.value.copy(isCapturing = false)
+        }
+        if (count == 0) {
             _state.value = _state.value.copy(isCapturing = false)
             checkAndClosePendingReaders()
         }
@@ -476,9 +484,6 @@ class Camera2Controller(private val context: Context) {
             // 配置 SurfaceTexture
             previewSurface = Surface(surfaceTexture)
 
-//            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
-//            HighResolutionHelper.logResolutionCapabilities(characteristics)
-
             // 创建 ImageReader 用于拍照
             // 开启 RAW 开关且设备支持时，优先使用 RAW 格式（更高质量），否则使用 YUV
             val effectivelyUseRaw = state.value.useRaw && isRawSupported
@@ -508,24 +513,27 @@ class Camera2Controller(private val context: Context) {
                     }
                 }"
             )
-            val maxImages = if (state.value.useMultiFrame) state.value.multiFrameCount else 2
             imageReader = ImageReader.newInstance(
                 captureSize.width,
                 captureSize.height,
                 captureFormat,
-                maxImages
+                MAX_IMAGES
             ).apply {
                 setOnImageAvailableListener({ reader ->
                     try {
                         PLog.d(TAG, "ImageReader onImageAvailableListener triggered")
-                        // 关键修复：使用 acquireNextImage() 而不是 acquireLatestImage()
-                        if (openImagesCount.get() >= maxImages) {
+                        if (openImagesCount.get() >= MAX_IMAGES) {
                             PLog.w(TAG, "Too many open images ($openImagesCount), skipping acquire")
                             return@setOnImageAvailableListener
                         }
-                        val image = trackImage(reader.acquireNextImage())
+                        val rawImage = when {
+                            state.value.burstCapturing -> reader.acquireLatestImage()
+                            state.value.useMultiFrame -> reader.acquireNextImage()
+                            else -> reader.acquireLatestImage()
+                        }
+                        val image = trackImage(rawImage)
                         if (image != null) {
-                            if (state.value.useRaw && isRawSupported) {
+                            if (effectivelyUseRaw) {
                                 val timestamp = image.timestamp
                                 val pendingResult = pendingResults.remove(timestamp)
                                 if (pendingResult != null) {
@@ -2384,5 +2392,50 @@ class Camera2Controller(private val context: Context) {
             onCaptured?.invoke(file, timestamp)
             onLivePhotoVideoCaptured?.invoke(file, timestamp)
         }
+    }
+
+    /**
+     * 启动连拍
+     */
+    fun startBurstCapture() {
+        val device = cameraDevice ?: return
+        val session = captureSession ?: return
+        val builder = previewRequestBuilder ?: return
+
+        PLog.d(TAG, "Start Burst Capture")
+        _state.value = _state.value.copy(burstCapturing = true, isCapturing = true)
+        burstCapturing = true
+
+        try {
+            // Apply capture intent
+            val captureBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
+                imageReader?.surface?.let { addTarget(it) }
+                previewSurface?.let { addTarget(it) }
+
+                applyBaseCameraSettings(this, isCapture = true)
+
+                set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE)
+
+                builder.get(CaptureRequest.CONTROL_AF_MODE)?.let { set(CaptureRequest.CONTROL_AF_MODE, it) }
+                builder.get(CaptureRequest.CONTROL_AF_REGIONS)?.let { set(CaptureRequest.CONTROL_AF_REGIONS, it) }
+                builder.get(CaptureRequest.CONTROL_AE_REGIONS)?.let { set(CaptureRequest.CONTROL_AE_REGIONS, it) }
+            }
+
+            val request = captureBuilder.build()
+            session.capture(request, null, cameraHandler)
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to start hardware burst capture", e)
+            _state.value = _state.value.copy(burstCapturing = false, isCapturing = false)
+        }
+    }
+
+    /**
+     * 停止连拍
+     */
+    fun stopBurstCapture() {
+        PLog.d(TAG, "Stop Burst Capture")
+        _state.value = _state.value.copy(burstCapturing = false, isCapturing = false)
+        captureSession?.abortCaptures()
+        resetPreviewAfterCapture()
     }
 }

@@ -6,6 +6,8 @@ set(LIB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
 # 4. 添加头文件路径
 include_directories(${LIB_PATH}/include)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/LibRaw)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libjpeg-turbo/src)
+include_directories(${CMAKE_CURRENT_BINARY_DIR}/libjpeg-turbo)
 
 file(GLOB JXL_LIBS "${LIB_PATH}/lib/${ANDROID_ABI}/*.a")
 
@@ -67,6 +69,11 @@ file(GLOB_RECURSE LIBRAW_SOURCES LibRaw/src/*.cpp LibRaw/src/*.c)
 list(FILTER LIBRAW_SOURCES EXCLUDE REGEX ".*_ph\\.cpp$")
 
 # 6. 将你的 native 库链接到 libyuv
+set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -O3 -ffast-math")
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O3 -ffast-math")
+set(REQUIRE_SIMD ON CACHE BOOL "Require SIMD" FORCE)
+set(WITH_SIMD ON CACHE BOOL "Enable SIMD" FORCE)
+add_subdirectory(libjpeg-turbo)
 add_library(my-native-lib SHARED 
     native-lib.cpp
     yuv_utils.cpp
@@ -89,6 +96,7 @@ target_compile_options(my-native-lib PRIVATE -O3 -ffast-math -w ${OpenMP_CXX_FLA
 target_link_libraries(
     my-native-lib
     ${JXL_LIBS}
+    turbojpeg-static
     OpenMP::OpenMP_CXX
     log
     jnigraphics

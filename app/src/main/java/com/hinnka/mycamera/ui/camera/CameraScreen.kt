@@ -95,6 +95,8 @@ fun CameraScreen(
     var activePanel by remember { mutableStateOf(ActivePanel.NONE) }
     var selectedParameter by remember { mutableStateOf(CameraParameter.EXPOSURE_COMPENSATION) }
 
+    val burstCapturingCount = viewModel.burstImageCount
+
     // 当打开滤镜面板时，生成预览图
     LaunchedEffect(activePanel) {
         if (activePanel == ActivePanel.FILTERS) {
@@ -300,6 +302,13 @@ fun CameraScreen(
                         if (state.countdownValue > 0) {
                             CountdownOverlay(
                                 countdownValue = state.countdownValue,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+
+                        if (burstCapturingCount > 0) {
+                            BurstCaptureOverlay(
+                                count = burstCapturingCount,
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
@@ -514,7 +523,9 @@ fun Controls(
         // 拍照按钮 (Center)
         CaptureButton(
             isCapturing = state.isCapturing,
-            onClick = { viewModel.capture() }
+            onTap = { viewModel.capture() },
+            onLongPressStart = { viewModel.startContinuousCapture() },
+            onLongPressEnd = { viewModel.stopContinuousCapture() }
         )
 
         // 切换摄像头按钮 (Right)
@@ -543,7 +554,9 @@ fun Controls(
 @Composable
 fun CaptureButton(
     isCapturing: Boolean,
-    onClick: () -> Unit,
+    onTap: () -> Unit,
+    onLongPressStart: () -> Unit,
+    onLongPressEnd: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "infinite transition")
@@ -562,11 +575,38 @@ fun CaptureButton(
         label = "livePhotoRotation"
     )
 
+    val currentIsCapturing by rememberUpdatedState(isCapturing)
+
     Box(
         modifier = modifier
             .size(72.dp)
             .scale(scale)
-            .clickable(enabled = !isCapturing) { onClick() },
+            .pointerInput(Unit) {
+                var isLongPressStarted = false
+                detectTapGestures(
+                    onTap = {
+                        if (!currentIsCapturing) {
+                            onTap()
+                        }
+                    },
+                    onLongPress = {
+                        if (!currentIsCapturing) {
+                            isLongPressStarted = true
+                            onLongPressStart()
+                        }
+                    },
+                    onPress = {
+                        isLongPressStarted = false
+                        try {
+                            tryAwaitRelease()
+                        } finally {
+                            if (isLongPressStarted) {
+                                onLongPressEnd()
+                            }
+                        }
+                    }
+                )
+            },
         contentAlignment = Alignment.Center
     ) {
         // Inner Yellow Ring

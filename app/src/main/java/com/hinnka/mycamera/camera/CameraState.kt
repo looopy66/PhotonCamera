@@ -186,6 +186,7 @@ data class CameraState(
     val applyUltraHDR: Boolean = true,
     val useP010: Boolean = false,
     val isP010Supported: Boolean = false,
+    val burstCapturing: Boolean = false,
 ) {
     /**
      * 是否全自动曝光

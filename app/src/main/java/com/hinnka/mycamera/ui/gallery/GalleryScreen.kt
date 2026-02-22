@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.AddPhotoAlternate
+import androidx.compose.material.icons.filled.BurstMode
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -427,6 +428,23 @@ private fun PhotoGridItem(
                         contentDescription = stringResource(R.string.settings_use_live_photo),
                         tint = Color.White,
                         modifier = Modifier.size(13.dp)
+                    )
+                }
+            }
+        }
+
+        if (photo.isBurstPhoto) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(4.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.BurstMode,
+                        contentDescription = "Burst photo",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }

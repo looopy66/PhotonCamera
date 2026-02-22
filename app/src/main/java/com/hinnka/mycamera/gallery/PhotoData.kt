@@ -15,6 +15,7 @@ data class PhotoData(
     val width: Int = 0,
     val height: Int = 0,
     var isMotionPhoto: Boolean = false,
+    var isBurstPhoto: Boolean = false,
     var metadata: PhotoMetadata? = null
 ) {
     /**

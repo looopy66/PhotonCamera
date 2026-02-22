@@ -72,6 +72,7 @@ class GalleryRepository(private val context: Context) {
 
             if (photoFile.exists()) {
                 val videoFile = PhotoManager.getVideoFile(context, id)
+                val isBurstPhoto = PhotoManager.hasBurstPhotos(context, id)
                 photos.add(
                     PhotoData(
                         id = id,
@@ -80,7 +81,8 @@ class GalleryRepository(private val context: Context) {
                         displayName = photoFile.name,
                         dateAdded = photoFile.lastModified(),
                         size = photoFile.length(),
-                        isMotionPhoto = videoFile.exists()
+                        isMotionPhoto = videoFile.exists(),
+                        isBurstPhoto = isBurstPhoto
                     )
                 )
             }

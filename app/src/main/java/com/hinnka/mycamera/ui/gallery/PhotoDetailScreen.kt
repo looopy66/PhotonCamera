@@ -48,6 +48,7 @@ import me.saket.telephoto.zoomable.coil.ZoomableAsyncImage
 import me.saket.telephoto.zoomable.rememberZoomableImageState
 import me.saket.telephoto.zoomable.rememberZoomableState
 import com.hinnka.mycamera.gallery.PhotoData
+import com.hinnka.mycamera.gallery.PhotoManager
 import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.delay
@@ -75,6 +76,7 @@ fun PhotoDetailScreen(
     isExpanded: Boolean = false,
     onBack: () -> Unit = {},
     onEdit: () -> Unit,
+    onViewBurst: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val photos by viewModel.photos.collectAsState()
@@ -207,6 +209,15 @@ fun PhotoDetailScreen(
                                         rotationZ = rotation
                                     }
                                 }
+                            )
+                        }
+                    }
+                    if (currentPhoto != null && currentPhoto.isBurstPhoto) {
+                        IconButton(onClick = { onViewBurst?.invoke(currentPhoto.id) }) {
+                            Icon(
+                                imageVector = Icons.Default.BurstMode,
+                                contentDescription = "查看连拍照片", // 连拍照片
+                                tint = Color.White
                             )
                         }
                     }

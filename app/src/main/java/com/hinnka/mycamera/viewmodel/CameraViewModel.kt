@@ -3,11 +3,9 @@ package com.hinnka.mycamera.viewmodel
 import android.app.Application
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
-import android.media.Image
 import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -37,6 +35,7 @@ import com.hinnka.mycamera.utils.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.io.File
+import java.util.UUID
 import kotlin.math.abs
 
 /**
@@ -204,34 +203,47 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private var hasAppliedDefaultFocalLength = false
 
-    // Burst State
-    private var isBursting = false
+    private val stackingImages = mutableListOf<SafeImage>()
+
     private val burstImages = mutableListOf<SafeImage>()
+    private var burstCaptureInfo: CaptureInfo? = null
+    private var burstPhotoId: String? = null
+    var burstImageCount by mutableStateOf(0)
+        private set
 
     init {
         cameraController.initialize()
         cameraController.onImageCaptured = { image, captureInfo, characteristics, captureResult ->
-            synchronized(burstImages) {
-                if (isBursting) {
-                    val count = state.value.multiFrameCount
-                    PLog.d(TAG, "Burst frame received: ${burstImages.size + 1}/$count")
-                    burstImages.add(image)
-                    if (burstImages.size >= count) {
-                        val imagesToProcess = burstImages.toList()
-                        burstImages.clear()
-                        isBursting = false
-                        viewModelScope.launch {
-                            processBurst(imagesToProcess, captureInfo, characteristics, captureResult)
-                        }
+            if (state.value.burstCapturing) {
+                if (burstCaptureInfo == null) {
+                    burstCaptureInfo = captureInfo
+                }
+                burstImages.add(image)
+                burstImageCount++
+                viewModelScope.launch {
+                    processBurst()
+                    if (state.value.burstCapturing) {
+                        cameraController.startBurstCapture()
                     }
-                } else {
-                    PLog.d(
-                        TAG,
-                        "onImageCaptured callback triggered - image: ${image.width}x${image.height}, format: ${image.format}"
-                    )
+                }
+            } else if (state.value.useMultiFrame) {
+                val count = state.value.multiFrameCount
+                PLog.d(TAG, "Burst frame received: ${stackingImages.size + 1}/$count")
+                stackingImages.add(image)
+                if (stackingImages.size >= count) {
+                    val imagesToProcess = stackingImages.toList()
+                    stackingImages.clear()
                     viewModelScope.launch {
-                        saveImage(image, captureInfo, characteristics, captureResult)
+                        processStacking(imagesToProcess, captureInfo, characteristics, captureResult)
                     }
+                }
+            } else {
+                PLog.d(
+                    TAG,
+                    "onImageCaptured callback triggered - image: ${image.width}x${image.height}, format: ${image.format}"
+                )
+                viewModelScope.launch {
+                    saveImage(image, captureInfo, characteristics, captureResult)
                 }
             }
         }
@@ -241,11 +253,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // 相机恢复应该由 CameraScreen 的 ON_RESUME 生命周期事件处理
             // 这样可以避免在相机被其他应用占用时的无限重试循环
             PLog.d(TAG, "onCameraError: code=$code, message=$message, canRetry=$canRetry")
-            isBursting = false
+            stackingImages.forEach {
+                it.close()
+            }
+            stackingImages.clear()
             burstImages.forEach {
                 it.close()
             }
             burstImages.clear()
+            burstImageCount = 0
         }
 
         // 监听快门声音、震动和软件处理设置
@@ -448,35 +464,46 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         } else {
             generateThumbnail()
-            // Check if we should use burst/stacking
-            // Skip raw (stacking raw not supported yet)
-            burstImages.clear()
-            if (useMultiFrame.value) {
-                isBursting = true
-                if (useLivePhoto.value) {
-                    cameraController.setCapturingLivePhoto(true)
-                    viewModelScope.launch {
-                        delay(1500)
-                        cameraController.setCapturingLivePhoto(false)
-                    }
-                    cameraController.snapshotLivePhoto()
+            stackingImages.clear()
+
+            if (useLivePhoto.value) {
+                cameraController.setCapturingLivePhoto(true)
+                viewModelScope.launch {
+                    delay(1500)
+                    cameraController.setCapturingLivePhoto(false)
                 }
-                cameraController.capture()
-            } else {
-                isBursting = false
-                if (useLivePhoto.value) {
-                    cameraController.setCapturingLivePhoto(true)
-                    viewModelScope.launch {
-                        delay(1500)
-                        cameraController.setCapturingLivePhoto(false)
-                    }
-                    cameraController.snapshotLivePhoto()
-                }
-                // 普通拍摄：直接拍照
-                cameraController.capture()
+                cameraController.snapshotLivePhoto()
             }
+            cameraController.capture()
         }
     }
+
+    /**
+     * 开始连拍
+     */
+    fun startContinuousCapture() {
+        if (state.value.useRaw && state.value.isRawSupported) return
+        generateThumbnail()
+        burstImages.clear()
+        burstImageCount = 0
+        burstPhotoId = UUID.randomUUID().toString()
+        cameraController.startBurstCapture()
+    }
+
+    /**
+     * 停止连拍
+     */
+    fun stopContinuousCapture() {
+        if (state.value.useRaw && state.value.isRawSupported) return
+        cameraController.stopBurstCapture()
+        burstImageCount = 0
+        burstPhotoId = null
+        viewModelScope.launch {
+            burstImages.clear()
+            _imageSavedEvent.emit(Unit)
+        }
+    }
+
 
     /**
      * 切换摄像头（前后置切换）
@@ -807,55 +834,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun handleMeteringUpdate(totalWeight: Double, weightedSumLuminance: Double) {
         cameraController.calculateAutoMetering(totalWeight, weightedSumLuminance)
-    }
-
-    /**
-     * 将 YUV Image 转换为 Bitmap
-     */
-    private fun yuvImageToBitmap(image: Image): Bitmap? {
-        return try {
-            val planes = image.planes
-            val yPlane = planes[0]
-            val uPlane = planes[1]
-            val vPlane = planes[2]
-
-            val yBuffer = yPlane.buffer
-            val uBuffer = uPlane.buffer
-            val vBuffer = vPlane.buffer
-
-            val ySize = yBuffer.remaining()
-            val uSize = uBuffer.remaining()
-            val vSize = vBuffer.remaining()
-
-            val nv21 = ByteArray(ySize + uSize + vSize)
-
-            // 复制 Y 数据
-            yBuffer.get(nv21, 0, ySize)
-
-            // 交织 U 和 V 数据为 NV21 格式
-            val pixelStride = vPlane.pixelStride
-            val rowStride = vPlane.rowStride
-            var pos = ySize
-
-            for (row in 0 until image.height / 2) {
-                for (col in 0 until image.width / 2) {
-                    val vuPos = row * rowStride + col * pixelStride
-                    nv21[pos++] = vBuffer.get(vuPos)
-                    nv21[pos++] = uBuffer.get(vuPos)
-                }
-            }
-
-            // 使用 android.graphics.YuvImage 转换为 Bitmap
-            val yuvImage =
-                android.graphics.YuvImage(nv21, android.graphics.ImageFormat.NV21, image.width, image.height, null)
-            val out = java.io.ByteArrayOutputStream()
-            yuvImage.compressToJpeg(android.graphics.Rect(0, 0, image.width, image.height), 100, out)
-            val imageBytes = out.toByteArray()
-            android.graphics.BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to convert YUV to Bitmap", e)
-            null
-        }
     }
 
     // ==================== 边框相关方法 ====================
@@ -1467,14 +1445,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private suspend fun processBurst(
+    private suspend fun processStacking(
         images: List<SafeImage>,
         captureInfo: CaptureInfo,
         characteristics: CameraCharacteristics?,
         captureResult: CaptureResult?
     ) {
         try {
-            PLog.d(TAG, "processBurst started - image size ${images.size}")
+            PLog.d(TAG, "processStacking started - image size ${images.size}")
             val context = getApplication<Application>()
 
             // 保存当前配置信息
@@ -1589,6 +1567,85 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    private suspend fun processBurst() = withContext(Dispatchers.IO) {
+        val image = burstImages.removeFirstOrNull() ?: return@withContext
+        val captureInfo = burstCaptureInfo ?: return@withContext
+        val context = getApplication<Application>()
+        val photoId = burstPhotoId ?: return@withContext
+        try {
+            val metadata = PhotoManager.loadMetadata(context, photoId)
+            if (metadata == null) {
+                // 保存当前配置信息
+                val lutIdToSave = currentLutId.value
+                val aspectRatio = state.value.aspectRatio
+                val frameIdToSave = currentFrameId
+                val sharpeningValue = sharpening.firstOrNull() ?: 0f
+                val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
+                val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
+                val currentCameraId = cameraController.getCurrentCameraId()
+
+                // 计算旋转角度
+                val sensorOrientation = cameraController.getSensorOrientation()
+                val lensFacing = cameraController.getLensFacing()
+                val deviceRotation = OrientationObserver.rotationDegrees.toInt()
+
+                // 基础旋转角度计算
+                val baseRotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+                    (sensorOrientation - deviceRotation + 360) % 360
+                } else {
+                    (sensorOrientation + deviceRotation) % 360
+                }
+
+                // 获取用户配置的摄像头方向偏移
+                val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
+                val orientationOffset = userPrefs?.cameraOrientationOffsets?.get(currentCameraId) ?: 0
+
+                // 应用方向偏移
+                val rotation = (baseRotation + orientationOffset) % 360
+
+                // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
+                val metadata = PhotoMetadata(
+                    lutId = lutIdToSave,
+                    frameId = frameIdToSave,
+                    colorRecipeParams = currentRecipeParams.value,
+                    sharpening = sharpeningValue,
+                    noiseReduction = noiseReductionValue,
+                    chromaNoiseReduction = chromaNoiseReductionValue,
+                    width = image.width,
+                    height = image.height,
+                    ratio = aspectRatio,
+                    rotation = rotation,
+                    deviceModel = captureInfo.model,
+                    brand = captureInfo.make.replaceFirstChar { it.uppercase() },
+                    dateTaken = captureInfo.captureTime,
+                    iso = captureInfo.iso,
+                    shutterSpeed = captureInfo.formatExposureTime(),
+                    focalLength = captureInfo.formatFocalLength(),
+                    focalLength35mm = captureInfo.formatFocalLength35mm(),
+                    aperture = captureInfo.formatAperture(),
+                )
+
+                PhotoManager.preparePhoto(
+                    context, metadata, null, previewThumbnail,
+                    false, false, photoId
+                )
+            }
+            val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
+            val photoQualityValue = photoQuality.firstOrNull() ?: 95
+            PhotoManager.saveBurstPhoto(
+                context,
+                photoId,
+                image,
+                shouldAutoSave,
+                photoProcessor,
+                photoQualityValue,
+            )
+            PLog.d(TAG, "Image saved: $photoId")
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to save image", e)
+        }
+    }
+
     fun getAvailableFocalLengths(): List<Float> {
         val currentState = state.value
         val availableCameras = currentState.availableCameras
@@ -1665,10 +1722,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         shutterSoundPlayer.release()
 
         // 清理未处理的连拍图片
+        stackingImages.forEach {
+            it.close()
+        }
+        stackingImages.clear()
         burstImages.forEach {
             it.close()
         }
         burstImages.clear()
+        burstImageCount = 0
     }
 
     /**
