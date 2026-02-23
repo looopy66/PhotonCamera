@@ -115,14 +115,22 @@ void main() {
     // This shader processes a specific Output Channel (pc.outputChannel).
     int targetCFA = int(pc.outputChannel); // 0=R, 1=G, 2=B
     
-    // Get Alignment Flow (from map)
+    // Get Alignment Flow (from map) with bilinear interpolation
     vec2 flow = vec2(0.0);
     if (pc.isFirstFrame == 0) {
-        uint gx = uint(float(planeX) / float(pc.tileSize)); // tileSize is in plane pixels
-        uint gy = uint(float(planeY) / float(pc.tileSize));
-        gx = clamp(gx, 0, pc.gridW - 1);
-        gy = clamp(gy, 0, pc.gridH - 1);
-        flow = alignBuffer.offsets[gy * pc.gridW + gx]; // In plane-pixels
+        // Bilinear interpolation of flow field for smooth sub-tile alignment
+        vec2 gCoord = vec2(float(planeX), float(planeY)) / float(pc.tileSize) - 0.5;
+        ivec2 g0 = ivec2(floor(gCoord));
+        vec2 gf = gCoord - vec2(g0);
+        ivec2 g1 = g0 + 1;
+        g0 = clamp(g0, ivec2(0), ivec2(int(pc.gridW)-1, int(pc.gridH)-1));
+        g1 = clamp(g1, ivec2(0), ivec2(int(pc.gridW)-1, int(pc.gridH)-1));
+        
+        vec2 f00 = alignBuffer.offsets[g0.y * pc.gridW + g0.x];
+        vec2 f10 = alignBuffer.offsets[g0.y * pc.gridW + g1.x];
+        vec2 f01 = alignBuffer.offsets[g1.y * pc.gridW + g0.x];
+        vec2 f11 = alignBuffer.offsets[g1.y * pc.gridW + g1.x];
+        flow = mix(mix(f00, f10, gf.x), mix(f01, f11, gf.x), gf.y);
     }
     
     vec2 flowRaw = flow * 2.0; // In raw pixels
@@ -131,8 +139,9 @@ void main() {
     vec2 centerPos = vec2(float(outX) / pc.scale, float(outY) / pc.scale) + flowRaw;
     
     // Window search in Current Frame (Bayer)
-    // 5x5 Window (radius 2) around the center to ensure multiple 
-    // identical color samples are found for proper spatial denoising.
+    // 3×3 nearest neighbors (Paper §5.4: "每个输出像素独立处理 9 个最近邻")
+    // For Bayer, we need slightly larger to find same-color samples,
+    // but 5×5 is sufficient (guarantees ≥4 same-color in any CFA pattern).
     ivec2 iCenter = ivec2(round(centerPos));
     
     for (int dy = -2; dy <= 2; dy++) {
@@ -176,8 +185,11 @@ void main() {
              
              // --- Strict Weight Calculation ---
              
-             // Spatial Distance d = x_input - x_projected
-             vec2 d = vec2(samplePos) - centerPos;
+             // Spatial Distance d = samplePos - centerPos (in raw sensor pixels)
+             vec2 d_raw = vec2(samplePos) - centerPos;
+             // Convert to plane pixels (half-res) to match kernel parameter coordinate space
+             // k1, k2 were computed at plane resolution in raw_structure_tensor.comp
+             vec2 d = d_raw * 0.5;
              
              // Kernel Weight: exp( -0.5 * d^T * Omega^-1 * d )
              // OmegaInv packed as vec3(a, b, c) -> [a b; b c]

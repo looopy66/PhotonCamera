@@ -125,23 +125,26 @@ void main() {
     if (trace > 1e-9) A = (lambda1 - lambda2) / trace;
     
     // k_detail determination
-    // Base scale based on signal strength (lambda1) vs Noise
-    // Signal > Noise -> Edge -> Small Kernel (High k)
-    // Signal < Noise -> Flat -> Large Kernel (Low k)
-    float signalMetric = lambda1; 
-    // Heuristic: Scale signal by noise floor to get "SNR-like" metric
-    float noiseFloor = max(pc.baseNoise, 1e-6);
-    float SNR = signalMetric / noiseFloor;
+    // Use noise-aware SNR: compare gradient energy to expected noise gradient energy
+    // For UNORM textures, noise variance = alpha * brightness + beta
+    // Gradient noise energy ≈ 2 * noise_variance (central difference doubles noise)
+    // Mid-tone brightness ≈ 0.05 in UNORM for typical 10-12 bit sensors
+    float noiseVar = pc.noiseAlpha * 0.05 + max(pc.noiseBeta, 1e-10);
+    float noiseGradEnergy = 2.0 * noiseVar * 9.0; // × 9 for 3×3 sum  
+    float SNR = lambda1 / max(noiseGradEnergy, 1e-12);
     
-    // Tunable constants
-    const float k_flat = 0.5;  // Wide kernel for flat areas
-    const float k_edge = 4.0;  // Narrow kernel for edges
-    float k_iso = mix(k_flat, k_edge, smoothstep(2.0, 10.0, SNR));
+    // Adaptive kernel width:
+    // Low SNR (flat/noisy): wide kernel (k=2.0) → spatial denoising
+    // High SNR (edges/text): tight kernel (k=16.0) → preserve sharpness
+    // Multi-frame temporal averaging supplements spatial denoising
+    const float k_flat = 0.3;   // Wide: σ≈1.8 plane px → good denoising in flat areas
+    const float k_edge = 64.0;  // Tight: near-delta → preserve edges/text
+    float k_iso = mix(k_flat, k_edge, smoothstep(1.0, 8.0, SNR));
     
     // Anisotropic scaling
     // Stretch along the edge (minor eigenvector direction e2)
     // Shrink across the edge (major eigenvector direction e1)
-    const float k_stretch_max = 4.0;
+    const float k_stretch_max = 6.0;
     
     // The "k" in exp(-0.5 * k * d^2) is Inverse Variance.
     // Large k -> Small Variance -> Narrow.

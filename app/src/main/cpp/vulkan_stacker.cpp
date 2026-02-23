@@ -89,8 +89,8 @@ void VulkanImageStacker::initVulkanResources() {
   }
 
   // Initialize Alignment Grid Buffer early
-  gridW = (width + 31) / 32;
-  gridH = (height + 31) / 32;
+  gridW = (width + 15) / 16;
+  gridH = (height + 15) / 16;
   VkDeviceSize alignBufferSize = gridW * gridH * sizeof(Point);
   VkBufferCreateInfo alignInfo{};
   alignInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -738,9 +738,9 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
       gridH = alignment.gridH;
 
       // Safety check: ensure we don't exceed allocated buffer size
-      // Original buffer was allocated with (width+31)/32 * (height+31)/32
-      uint32_t allocatedGridW = (width + 31) / 32;
-      uint32_t allocatedGridH = (height + 31) / 32;
+      // Buffer was allocated with 16px tile grid
+      uint32_t allocatedGridW = (width + 15) / 16;
+      uint32_t allocatedGridH = (height + 15) / 16;
       uint32_t maxAllocatedPoints = allocatedGridW * allocatedGridH;
 
       size_t copyCount = std::min((size_t)alignment.offsets.size(),

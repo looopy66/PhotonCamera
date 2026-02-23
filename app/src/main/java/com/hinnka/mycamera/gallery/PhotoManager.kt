@@ -678,6 +678,7 @@ object PhotoManager {
                     blackLevel = floatArrayOf(0f, 0f, 0f, 0f),
                     whiteLevel = 65535f,
                     whiteBalanceGains = floatArrayOf(1f, 1f, 1f, 1f),
+                    noiseProfile = floatArrayOf(0f, 0f),
                     // Keep original CCM and other params
                 )
 

@@ -148,15 +148,27 @@ void main() {
     float motionError = 0.0;
     
     if (pc.isFirstFrame == 0) {
-        uint gx = uint((finalUV.x * nativeSize.x) / 32.0);
-        uint gy = uint((finalUV.y * nativeSize.y) / 32.0);
-        gx = clamp(gx, 0, pc.gridW - 1);
-        gy = clamp(gy, 0, pc.gridH - 1);
-        alignment = alignmentGrid.offsets[gy * pc.gridW + gx];
+        // Bilinear interpolation of flow field for smooth sub-tile alignment
+        // Use gridW/gridH directly instead of hardcoded tile size
+        vec2 gCoord = finalUV * vec2(float(pc.gridW), float(pc.gridH)) - 0.5;
+        ivec2 g0 = ivec2(floor(gCoord));
+        vec2 gf = gCoord - vec2(g0);
+        ivec2 g1 = g0 + 1;
+        g0 = clamp(g0, ivec2(0), ivec2(int(pc.gridW)-1, int(pc.gridH)-1));
+        g1 = clamp(g1, ivec2(0), ivec2(int(pc.gridW)-1, int(pc.gridH)-1));
         
-        // Read Motion Prior
-        // High error means unstable flow -> reduce trust
-        motionError = motionPrior.errors[gy * pc.gridW + gx];
+        vec2 f00 = alignmentGrid.offsets[g0.y * pc.gridW + g0.x];
+        vec2 f10 = alignmentGrid.offsets[g0.y * pc.gridW + g1.x];
+        vec2 f01 = alignmentGrid.offsets[g1.y * pc.gridW + g0.x];
+        vec2 f11 = alignmentGrid.offsets[g1.y * pc.gridW + g1.x];
+        alignment = mix(mix(f00, f10, gf.x), mix(f01, f11, gf.x), gf.y);
+        
+        // Bilinear interpolation of motion prior error
+        float e00 = motionPrior.errors[g0.y * pc.gridW + g0.x];
+        float e10 = motionPrior.errors[g0.y * pc.gridW + g1.x];
+        float e01 = motionPrior.errors[g1.y * pc.gridW + g0.x];
+        float e11 = motionPrior.errors[g1.y * pc.gridW + g1.x];
+        motionError = mix(mix(e00, e10, gf.x), mix(e01, e11, gf.x), gf.y);
         
         finalUV += alignment / nativeSize;
     }
@@ -185,49 +197,26 @@ void main() {
         expectedSigma = max(expectedSigma, 0.015);
         
         float ratio = diff / expectedSigma;
-        float T1 = 2.0; float T2 = 5.0;
+        float T1 = 2.0; float T2 = 8.0;
         if (ratio <= T1) centerRobustness = 1.0;
         else if (ratio >= T2) centerRobustness = 0.0;
         else centerRobustness = (T2 - ratio) / (T2 - T1);
         
-        centerRobustness *= (1.0 / (1.0 + motionError * 0.4));
+        // Gentle motion error penalty
+        centerRobustness *= (1.0 / (1.0 + motionError * 0.005));
     }
 
-    // Accumulate neighbors (8x8 window)
-    for (int j = -3; j <= 4; ++j) {
-        for (int i = -3; i <= 4; ++i) {
+    // Accumulate neighbors
+    for (int j = -2; j <= 2; ++j) {
+        for (int i = -2; i <= 2; ++i) {
             vec2 samplePos = centerSource + vec2(float(i), float(j));
             vec2 sampleUV = samplePos / nativeSize;
             
             vec3 sampleColor = texture(rgbSampler, sampleUV).rgb;
             vec2 d = (samplePos - posInSource); 
 
-            // 6. Per-sample Robustness with Boundary Fallback
-            float robustness = centerRobustness; 
-            if (pc.isFirstFrame == 0 && currentW > 0.001) {
-                ivec2 outOffset = ivec2(round(d * pc.scale));
-                int nX = int(tx) + outOffset.x;
-                int nY = int(ty) + outOffset.y;
-                
-                if (nX >= 0 && nX < int(pc.tileW) && nY >= 0 && nY < int(pc.tileH)) {
-                    uint nIdx = uint(nY) * pc.bufferStride + uint(nX);
-                    vec4 nAccum = accumulator.data[nIdx];
-                    if (nAccum.a > 0.001) {
-                        vec3 nRef = nAccum.rgb / nAccum.a;
-                        float nDiff = max(abs(sampleColor.r - nRef.r), max(abs(sampleColor.g - nRef.g), abs(sampleColor.b - nRef.b)));
-                        float nSigma = pc.noiseAlpha * nRef.g + pc.noiseBeta;
-                        nSigma = max(nSigma, 0.015);
-                        float nRatio = nDiff / nSigma;
-                        
-                        float rVal;
-                        if (nRatio <= 2.0) rVal = 1.0;
-                        else if (nRatio >= 5.0) rVal = 0.0;
-                        else rVal = (5.0 - nRatio) / (5.0 - 2.0);
-                        
-                        robustness = min(centerRobustness, rVal);
-                    }
-                }
-            }
+            // Per-sample robustness
+            float robustness = centerRobustness;
             
             // 5. Calculate Weight (Anisotropic)
             float c_ = kp.z; float s_ = kp.w;

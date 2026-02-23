@@ -73,31 +73,34 @@ void main() {
     }
     
     // Eigen Analysis of J
-    // Reasonable noise floor (10.0)
-    float noiseFloor = 10.0;
+    // Noise-aware floor for gradient energy
+    float noiseSigma = max(pc.noiseBeta * 0.25, 0.008);
+    float gradNoiseStd = 255.0 * noiseSigma * 1.414;
+    float noiseFloor = max(gradNoiseStd * gradNoiseStd / 25.0, 2.0);
+    
     float IxIx = max(sIxIx / 25.0 - noiseFloor, 0.0);
     float IyIy = max(sIyIy / 25.0 - noiseFloor, 0.0);
     float IxIy = sIxIy / 25.0; 
     
     float trace = IxIx + IyIy;
-    float disc = sqrt(max((IxIx - IyIy)*(IxIx - IyIy) + 4.0 * IxIy*IxIy, 0.0));
+    float det = IxIx * IyIy - IxIy * IxIy;
+    float diff_tr = IxIx - IyIy;
+    float sqrt_term = sqrt(diff_tr * diff_tr + 4.0 * IxIy * IxIy);
     
-    float lambda1 = 0.5 * (trace + disc);
-    float lambda2 = 0.5 * (trace - disc); 
+    float lambda1 = 0.5 * (trace + sqrt_term);
+    float lambda2 = 0.5 * (trace - sqrt_term);
     
-    // Feature amplitude
-    float C = sqrt(max(lambda1, 0.0));
+    float C = lambda1;
     float A = (lambda1 - lambda2) / (lambda1 + lambda2 + 0.01);
     
-    // Logic: Balanced Denoising
-    float k_base = mix(8.0, 0.5, clamp(C / 100.0, 0.0, 1.0));
+    // Adaptive kernel
+    // Flat areas: wider kernel (k=3.0) for spatial+temporal denoising
+    // Edges/text: tight kernel (k=0.12) for sharpness
+    float k_base = mix(5.0, 0.015, clamp(C / 80.0, 0.0, 1.0));
     float stretch = 1.0 + 3.0 * A; 
     
-    float k1 = k_base / stretch; 
-    float k2 = k_base * stretch;
-    
-    k1 = max(k1, 0.5);
-    k2 = min(k2, 16.0); 
+    float k1 = max(k_base / stretch, 0.1); 
+    float k2 = min(k_base * stretch, 8.0);
     
     // 2*theta logic for orientation
     float diff = IxIx - IyIy;

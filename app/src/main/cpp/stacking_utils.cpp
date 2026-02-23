@@ -211,7 +211,7 @@ long long computeBlockSAD(const GrayImage &ref, const GrayImage &target,
 TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
                                    const std::vector<GrayImage> &targetPyramid,
                                    int maxShift) {
-  const int tileSize = 32; // Grid step size
+  const int tileSize = 16; // Grid step size (finer for better alignment)
   int width = refPyramid[0].width;
   int height = refPyramid[0].height;
 
@@ -330,78 +330,120 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
 
       int cx = tx * tileSize + tileSize / 2;
       int cy = ty * tileSize + tileSize / 2;
-      int lkHalfWin = 8; // 16x16 LK window
 
-      for (int iter = 0; iter < 3; ++iter) {
-        float sumIxIx = 0, sumIyIy = 0, sumIxIy = 0;
-        float sumIxIt = 0, sumIyIt = 0;
+      // Optimization: L0 doesn't need a huge window because the L1 estimate is
+      // already accurate to within 1-2 pixels. 10x10 (half-win=5) is completely
+      // sufficient. Previous 24x24 was a massive performance killer.
+      int lkHalfWin = 5;
 
-        for (int wy = -lkHalfWin; wy < lkHalfWin; ++wy) {
-          for (int wx = -lkHalfWin; wx < lkHalfWin; ++wx) {
-            int rx = cx + wx;
-            int ry = cy + wy;
-            if (rx < 1 || rx >= width - 1 || ry < 1 || ry >= height - 1)
-              continue;
+      // Pre-compute spatial gradients (Ix, Iy) and the Hessian matrix (sumIxIx,
+      // sumIyIy, sumIxIy) These are static for the reference frame and DO NOT
+      // change across iterations!
+      float sumIxIx = 0, sumIyIy = 0, sumIxIy = 0;
 
-            float Ix =
-                (getPixelF(refL0, rx + 1, ry) - getPixelF(refL0, rx - 1, ry)) *
-                0.5f;
-            float Iy =
-                (getPixelF(refL0, rx, ry + 1) - getPixelF(refL0, rx, ry - 1)) *
-                0.5f;
-            float It = sampleBilinearGray(tgtL0, rx + lkDx, ry + lkDy) -
-                       getPixelF(refL0, rx, ry);
+      // Max size for local arrays: (2*5)*(2*5) = 100 elements. Very cache
+      // friendly.
+      const int maxPts = 400;
+      float Ixs[maxPts], Iys[maxPts], Tvals[maxPts];
+      int ptsx[maxPts], ptsy[maxPts];
+      int ptCount = 0;
 
-            sumIxIx += Ix * Ix;
-            sumIyIy += Iy * Iy;
-            sumIxIy += Ix * Iy;
-            sumIxIt += Ix * It;
-            sumIyIt += Iy * It;
+      for (int wy = -lkHalfWin; wy < lkHalfWin; ++wy) {
+        for (int wx = -lkHalfWin; wx < lkHalfWin; ++wx) {
+          int rx = cx + wx;
+          int ry = cy + wy;
+          if (rx < 1 || rx >= width - 1 || ry < 1 || ry >= height - 1)
+            continue;
+
+          float Ix =
+              (getPixelF(refL0, rx + 1, ry) - getPixelF(refL0, rx - 1, ry)) *
+              0.5f;
+          float Iy =
+              (getPixelF(refL0, rx, ry + 1) - getPixelF(refL0, rx, ry - 1)) *
+              0.5f;
+
+          sumIxIx += Ix * Ix;
+          sumIyIy += Iy * Iy;
+          sumIxIy += Ix * Iy;
+
+          if (ptCount < maxPts) {
+            Ixs[ptCount] = Ix;
+            Iys[ptCount] = Iy;
+            Tvals[ptCount] = getPixelF(refL0, rx, ry);
+            ptsx[ptCount] = rx;
+            ptsy[ptCount] = ry;
+            ptCount++;
           }
         }
+      }
 
-        float det = sumIxIx * sumIyIy - sumIxIy * sumIxIy;
-        if (std::abs(det) < 1e-6f)
-          break;
+      float det = sumIxIx * sumIyIy - sumIxIy * sumIxIy;
 
-        float dvx = (sumIyIy * sumIxIt - sumIxIy * sumIyIt) / det;
-        float dvy = (sumIxIx * sumIyIt - sumIxIy * sumIxIt) / det;
+      if (std::abs(det) > 1e-6f) { // Only iterate if the patch has texture
+        for (int iter = 0; iter < 6; ++iter) {
+          float sumIxIt = 0, sumIyIt = 0;
 
-        // Clamp per-iteration update to prevent divergence
-        dvx = std::max(-1.0f, std::min(1.0f, dvx));
-        dvy = std::max(-1.0f, std::min(1.0f, dvy));
+          // Only compute the temporal difference It = I(x+p) - T(x) inside the
+          // loop
+          for (int p = 0; p < ptCount; ++p) {
+            float It =
+                sampleBilinearGray(tgtL0, ptsx[p] + lkDx, ptsy[p] + lkDy) -
+                Tvals[p];
+            sumIxIt += Ixs[p] * It;
+            sumIyIt += Iys[p] * It;
+          }
 
-        lkDx -= dvx;
-        lkDy -= dvy;
+          float dvx = (sumIyIy * sumIxIt - sumIxIy * sumIyIt) / det;
+          float dvy = (sumIxIx * sumIyIt - sumIxIy * sumIxIt) / det;
 
-        if (dvx * dvx + dvy * dvy < 0.001f)
-          break;
+          // Clamp per-iteration update to prevent divergence
+          dvx = std::max(-2.0f, std::min(2.0f, dvx));
+          dvy = std::max(-2.0f, std::min(2.0f, dvy));
+
+          lkDx -= dvx;
+          lkDy -= dvy;
+
+          if (dvx * dvx + dvy * dvy < 0.0001f)
+            break; // Early convergence
+        }
       }
 
       rawOffsets[ty * gridW + tx] = {lkDx, lkDy};
     }
   }
 
-  // 4. Vector Field Smoothing (Regularization) - KEY for removing Jello Effect
-  // Apply 3x3 Box Blur to the offset field
+  // 4. Edge-Preserving Flow Smoothing (Bilateral by flow consistency)
+  // Only smooth with neighbors that have similar flow vectors.
+  // This preserves motion boundaries while stabilizing flat regions.
 #pragma omp parallel for collapse(2) num_threads(4)
   for (int y = 0; y < gridH; ++y) {
     for (int x = 0; x < gridW; ++x) {
 
-      float sumX = 0, sumY = 0;
-      float wSum = 0;
+      Point center = rawOffsets[y * gridW + x];
+      float sumX = center.x * 4.0f; // Strong center weight
+      float sumY = center.y * 4.0f;
+      float wSum = 4.0f;
 
-      // 3x3 neighborhood
+      // 3x3 neighborhood with flow-similarity weighting
       for (int dy = -1; dy <= 1; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {
+          if (dx == 0 && dy == 0)
+            continue;
           int nx = std::max(0, std::min(x + dx, gridW - 1));
           int ny = std::max(0, std::min(y + dy, gridH - 1));
 
-          // Optional: Give center more weight
-          float w = (dx == 0 && dy == 0) ? 2.0f : 1.0f;
+          Point neighbor = rawOffsets[ny * gridW + nx];
+          float diffX = neighbor.x - center.x;
+          float diffY = neighbor.y - center.y;
+          float distSq = diffX * diffX + diffY * diffY;
 
-          sumX += rawOffsets[ny * gridW + nx].x * w;
-          sumY += rawOffsets[ny * gridW + nx].y * w;
+          // Bilateral weight: exponential decay with flow difference
+          // sigma = 0.5px: neighbors with >1px flow difference get very low
+          // weight
+          float w = std::exp(-distSq / (2.0f * 0.5f * 0.5f));
+
+          sumX += neighbor.x * w;
+          sumY += neighbor.y * w;
           wSum += w;
         }
       }

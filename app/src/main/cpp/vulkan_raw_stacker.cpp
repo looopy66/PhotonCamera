@@ -155,7 +155,7 @@ void VulkanRawStacker::initVulkanResources() {
   VK_CHECK(vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool));
 
   // --- Alignment Buffer (Coarse) ---
-  tileSize = 32; // Default
+  tileSize = 16; // Finer tiles for better alignment precision
   gridW = (inputW + tileSize - 1) / tileSize;
   gridH = (inputH + tileSize - 1) / tileSize; // Grid on Plane Resolution
 
@@ -768,6 +768,34 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
     bool isRef = (i == 0);
     const auto &frame = pendingFrames[i];
 
+    // Build grayscale proxy (plane-resolution) from RAW for CPU alignment
+    GrayImage proxy;
+    {
+      uint32_t proxyW = width / 2;
+      uint32_t proxyH = height / 2;
+      proxy.width = proxyW;
+      proxy.height = proxyH;
+      proxy.data.resize(proxyW * proxyH);
+      // Use whiteLevel to properly normalize to 8-bit
+      // For 10-bit sensors whiteLevel~1023, 12-bit~4095, 14-bit~16383
+      float invWL = 255.0f / std::max(1.0f, mWhiteLevel);
+      for (uint32_t py = 0; py < proxyH; ++py) {
+        for (uint32_t px = 0; px < proxyW; ++px) {
+          // Average 2x2 Bayer block to grayscale
+          uint32_t sx = px * 2;
+          uint32_t sy = py * 2;
+          int sum = (int)frame.rawData[sy * width + sx] +
+                    (int)frame.rawData[sy * width + sx + 1] +
+                    (int)frame.rawData[(sy + 1) * width + sx] +
+                    (int)frame.rawData[(sy + 1) * width + sx + 1];
+          int avg = sum / 4;
+          int val = (int)(avg * invWL);
+          proxy.data[py * proxyW + px] =
+              (uint8_t)std::min(255, std::max(0, val));
+        }
+      }
+    }
+
     // Upload Frame
     VkImage currImage;
     VkImageView currView;
@@ -871,6 +899,10 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
       refView = currView;
       refMem = currMem;
 
+      // Build reference pyramid for CPU-side coarse alignment
+      referencePyramid =
+          buildPyramid(proxy.data.data(), proxy.width, proxy.height, 4);
+
       VkCommandBuffer cb = vm.beginSingleTimeCommands();
 
       // Structure tensor pass
@@ -948,26 +980,61 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
       vm.endSingleTimeCommands(cb);
 
     } else {
-      // --- Process Target Frame (Combined CB) ---
+      // --- Process Target Frame ---
+
+      // CPU-side coarse alignment: pyramid SAD + LK for initial flow estimate
+      auto targetPyramid =
+          buildPyramid(proxy.data.data(), proxy.width, proxy.height, 4);
+      TileAlignment coarseAlign =
+          computeTileAlignment(referencePyramid, targetPyramid, 64);
+
+      // Convert coarse alignment offsets from proxy-pixel to plane-pixel
+      // coordinates Proxy is at plane resolution, so offsets are already in
+      // plane pixels. However, the grid dimensions may differ from the GPU
+      // grid. We need to resample to match the GPU grid (gridW x gridH,
+      // tileSize=32).
+      {
+        void *mapPtr = nullptr;
+        VkResult res =
+            vkMapMemory(device, alignmentMemory, 0, VK_WHOLE_SIZE, 0, &mapPtr);
+        if (res == VK_SUCCESS && mapPtr != nullptr) {
+          Point *dstOffsets = (Point *)mapPtr;
+          for (uint32_t gy = 0; gy < (uint32_t)gridH; ++gy) {
+            for (uint32_t gx = 0; gx < (uint32_t)gridW; ++gx) {
+              // Sample from coarse alignment at this grid cell's center
+              int cx = gx * tileSize + tileSize / 2;
+              int cy = gy * tileSize + tileSize / 2;
+              Point off = coarseAlign.getOffset(cx, cy);
+              dstOffsets[gy * gridW + gx] = off;
+            }
+          }
+          vkUnmapMemory(device, alignmentMemory);
+        } else {
+          LOGE("VulkanRawStacker: Failed to map alignment memory for coarse "
+               "init: %d",
+               res);
+        }
+      }
+
       {
         VkCommandBuffer cb = vm.beginSingleTimeCommands();
 
-        // 1. GPU Reset alignment buffer (No CPU-GPU sync)
-        vkCmdFillBuffer(cb, alignmentBuffer, 0, VK_WHOLE_SIZE, 0);
+        // Barrier: HOST_WRITE -> SHADER_READ for alignment buffer
         {
-          VkBufferMemoryBarrier fillBarrier{
+          VkBufferMemoryBarrier hostBarrier{
               VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
-          fillBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-          fillBarrier.dstAccessMask =
+          hostBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+          hostBarrier.dstAccessMask =
               VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-          fillBarrier.buffer = alignmentBuffer;
-          fillBarrier.size = VK_WHOLE_SIZE;
-          vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+          hostBarrier.buffer = alignmentBuffer;
+          hostBarrier.size = VK_WHOLE_SIZE;
+          vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_HOST_BIT,
                                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
-                               nullptr, 1, &fillBarrier, 0, nullptr);
+                               nullptr, 1, &hostBarrier, 0, nullptr);
         }
 
-        // 2. Pass 1: LK Alignment (5 iterations)
+        // 2. Pass 1: LK Alignment (5 iterations) - now refining from coarse
+        // init
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, alignLkPipeline);
         updateImageDescriptorSet(device, alignSet, refView, sampler, 0);
         updateImageDescriptorSet(device, alignSet, currView, sampler, 1);

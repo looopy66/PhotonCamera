@@ -45,10 +45,16 @@ layout(binding = 2, scalar) buffer AlignmentBuffer {
     vec2 offsets[]; // Alignment (u,v) per tile
 } alignBuffer;
 
-// Helper to sample image gradient and time derivative
-// I(x,y)
-float getPixelVal(sampler2D tex, vec2 uv) {
-    return texture(tex, uv).r; 
+// Helper: Sample half-resolution luminance at plane coordinate (px, py)
+// Uses textureGather to fetch 2×2 Bayer quad and averages for CFA-aware luminance.
+// This avoids hardware bilinear which mixes Bayer colors at boundaries.
+float getLuma(sampler2D tex, vec2 planeUV) {
+    // Convert plane UV to sensor UV, targeting center of the 2×2 Bayer block
+    vec2 sensorUV = planeUV;
+    // textureGather fetches 4 texels from a 2×2 block around the UV
+    vec4 quad = textureGather(tex, sensorUV, 0);
+    // Average all 4 Bayer values → approximate luminance
+    return dot(quad, vec4(0.25));
 }
 
 void main() {
@@ -109,34 +115,20 @@ void main() {
              
              vec2 baseUV = (vec2(px, py) + 0.5) / planeDims;
              
-             // 1. Sample Base Frame T(x)
-             // Base Frame is Ref (index 0). Assuming bound as refImg?
-             // Or passed as texture.
-             // Actually `refImg` is bound as texture 3? No `inputRawSampler` is bound.
-             // Usually we align Current to Base.
-             // Base is fixed.
-             // `refImg` sampler should be available.
-             // Existing code uses `refImg`.
+             // 1. Sample Base Frame T(x) — Bayer-averaged luminance
+             float T = getLuma(refImg, baseUV);
              
-             float T = texture(refImg, baseUV).r;
-             
-             // 2. Sample Current Frame I(x + p)
-             // Point in Current Frame
+             // 2. Sample Current Frame I(x + p) — Bayer-averaged luminance
              vec2 currentValPoint = baseUV + (currentFlow / planeDims);
-             float I = texture(trgImg, currentValPoint).r;
+             float I = getLuma(trgImg, currentValPoint);
              
-             // 3. Compute Gradient of I at (x + p)
-             // Central Difference
-             // Requires sampling I at (x+p+1, y) etc.
-             // Step size? 1 Raw pixel? or 1 Plane pixel?
-             // Flow is in Plane Pixels. We usually align Plane Structures.
-             // Let's use Plane Pixel step size for gradient.
-             // 1.0 / planeDims
+             // 3. Compute Gradient of I at (x + p) using plane-pixel steps
+             // One plane pixel = one 2×2 Bayer block
              vec2 dX = vec2(1.0 / planeDims.x, 0.0);
              vec2 dY = vec2(0.0, 1.0 / planeDims.y);
              
-             float I_x = (texture(trgImg, currentValPoint + dX).r - texture(trgImg, currentValPoint - dX).r) * 0.5;
-             float I_y = (texture(trgImg, currentValPoint + dY).r - texture(trgImg, currentValPoint - dY).r) * 0.5;
+             float I_x = (getLuma(trgImg, currentValPoint + dX) - getLuma(trgImg, currentValPoint - dX)) * 0.5;
+             float I_y = (getLuma(trgImg, currentValPoint + dY) - getLuma(trgImg, currentValPoint - dY)) * 0.5;
              
              // 4. Temporal Derivative / Error
              // It = I(x+p) - T(x)
@@ -184,7 +176,7 @@ void main() {
     }
     
     // Clamp Motion (Trust Region)
-    float maxJump = 1.0; // Max 1 pixel update per iteration
+    float maxJump = 2.0; // Max 2 pixel update per iteration for faster convergence
     float len = length(delta);
     if (len > maxJump) {
         delta *= (maxJump / len);

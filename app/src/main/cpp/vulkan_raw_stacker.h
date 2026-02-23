@@ -95,6 +95,9 @@ private:
   int gridW = 0;
   int gridH = 0;
 
+  // Reference pyramid for CPU-side coarse alignment (plane resolution proxy)
+  std::vector<GrayImage> referencePyramid;
+
   // Accumulated RGB buffers (3 planes: R, G, B) instead of Bayer
   // We reuse accumBuffers but maybe need to change count/size logic?
   // Current logic: numTilesX * numTilesY * 4.
