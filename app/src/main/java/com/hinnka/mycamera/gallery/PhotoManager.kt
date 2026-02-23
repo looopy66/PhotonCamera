@@ -102,6 +102,7 @@ object PhotoManager {
         noiseReductionValue: Float,
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
+        suffix: String? = null,
         onComplete: (Boolean) -> Unit = {}
     ) {
         withContext(Dispatchers.IO) {
@@ -118,8 +119,10 @@ object PhotoManager {
                 ) ?: return@withContext
 
                 // 保存到指定目录
+                val date = metadata.dateTaken ?: System.currentTimeMillis()
+                val withSuffix = suffix?.let { "_$it" } ?: "_${metadata.exportedUris.size + 1}"
                 val filename =
-                    "PhotonCamera_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.jpg"
+                    "PhotonCamera_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(date))}$withSuffix.jpg"
                 val contentValues = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
                     put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
@@ -855,6 +858,30 @@ object PhotoManager {
             burstDir.listFiles()?.toList()?.sortedBy { it.lastModified() } ?: emptyList()
         } else {
             emptyList()
+        }
+    }
+
+    /**
+     * 将连拍照片设为主图并重新生成缩略图
+     */
+    suspend fun setMainBurstPhoto(context: Context, photoId: String, burstFile: File): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                val photoDir = getPhotoDir(context, photoId)
+                val mainPhotoFile = File(photoDir, PHOTO_FILE)
+                val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
+
+                if (burstFile.exists()) {
+                    burstFile.copyTo(mainPhotoFile, overwrite = true)
+                    generateThumbnail(burstFile, thumbnailFile)
+                    true
+                } else {
+                    false
+                }
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to set main burst photo", e)
+                false
+            }
         }
     }
 

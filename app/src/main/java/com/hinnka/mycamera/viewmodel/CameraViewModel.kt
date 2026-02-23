@@ -219,13 +219,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     burstCaptureInfo = captureInfo
                 }
                 burstImages.add(image)
-                burstImageCount++
-                viewModelScope.launch {
-                    processBurst()
-                    if (state.value.burstCapturing) {
-                        cameraController.startBurstCapture()
-                    }
-                }
             } else if (state.value.useMultiFrame) {
                 val count = state.value.multiFrameCount
                 PLog.d(TAG, "Burst frame received: ${stackingImages.size + 1}/$count")
@@ -487,7 +480,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         burstImages.clear()
         burstImageCount = 0
         burstPhotoId = UUID.randomUUID().toString()
+        shutterSoundPlayer.playBurst()
         cameraController.startBurstCapture()
+        viewModelScope.launch {
+            processBurst()
+        }
     }
 
     /**
@@ -496,10 +493,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun stopContinuousCapture() {
         if (state.value.useRaw && state.value.isRawSupported) return
         cameraController.stopBurstCapture()
-        burstImageCount = 0
-        burstPhotoId = null
+        shutterSoundPlayer.stopBurst()
         viewModelScope.launch {
-            burstImages.clear()
             _imageSavedEvent.emit(Unit)
         }
     }
@@ -1567,82 +1562,104 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    private suspend fun prepareBurst(context: Context, photoId: String, image: SafeImage, captureInfo: CaptureInfo) {
+        // 保存当前配置信息
+        val lutIdToSave = currentLutId.value
+        val aspectRatio = state.value.aspectRatio
+        val frameIdToSave = currentFrameId
+        val sharpeningValue = sharpening.firstOrNull() ?: 0f
+        val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
+        val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
+        val currentCameraId = cameraController.getCurrentCameraId()
+
+        // 计算旋转角度
+        val sensorOrientation = cameraController.getSensorOrientation()
+        val lensFacing = cameraController.getLensFacing()
+        val deviceRotation = OrientationObserver.rotationDegrees.toInt()
+
+        // 基础旋转角度计算
+        val baseRotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+            (sensorOrientation - deviceRotation + 360) % 360
+        } else {
+            (sensorOrientation + deviceRotation) % 360
+        }
+
+        // 获取用户配置的摄像头方向偏移
+        val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
+        val orientationOffset = userPrefs?.cameraOrientationOffsets?.get(currentCameraId) ?: 0
+
+        // 应用方向偏移
+        val rotation = (baseRotation + orientationOffset) % 360
+
+        // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
+        val metadata = PhotoMetadata(
+            lutId = lutIdToSave,
+            frameId = frameIdToSave,
+            colorRecipeParams = currentRecipeParams.value,
+            sharpening = sharpeningValue,
+            noiseReduction = noiseReductionValue,
+            chromaNoiseReduction = chromaNoiseReductionValue,
+            width = image.width,
+            height = image.height,
+            ratio = aspectRatio,
+            rotation = rotation,
+            deviceModel = captureInfo.model,
+            brand = captureInfo.make.replaceFirstChar { it.uppercase() },
+            dateTaken = captureInfo.captureTime,
+            iso = captureInfo.iso,
+            shutterSpeed = captureInfo.formatExposureTime(),
+            focalLength = captureInfo.formatFocalLength(),
+            focalLength35mm = captureInfo.formatFocalLength35mm(),
+            aperture = captureInfo.formatAperture(),
+        )
+
+        PhotoManager.preparePhoto(
+            context, metadata, null, previewThumbnail,
+            false, false, photoId
+        )
+    }
+
     private suspend fun processBurst() = withContext(Dispatchers.IO) {
-        val image = burstImages.removeFirstOrNull() ?: return@withContext
-        val captureInfo = burstCaptureInfo ?: return@withContext
-        val context = getApplication<Application>()
-        val photoId = burstPhotoId ?: return@withContext
-        try {
-            val metadata = PhotoManager.loadMetadata(context, photoId)
-            if (metadata == null) {
-                // 保存当前配置信息
-                val lutIdToSave = currentLutId.value
-                val aspectRatio = state.value.aspectRatio
-                val frameIdToSave = currentFrameId
-                val sharpeningValue = sharpening.firstOrNull() ?: 0f
-                val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
-                val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
-                val currentCameraId = cameraController.getCurrentCameraId()
-
-                // 计算旋转角度
-                val sensorOrientation = cameraController.getSensorOrientation()
-                val lensFacing = cameraController.getLensFacing()
-                val deviceRotation = OrientationObserver.rotationDegrees.toInt()
-
-                // 基础旋转角度计算
-                val baseRotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
-                    (sensorOrientation - deviceRotation + 360) % 360
-                } else {
-                    (sensorOrientation + deviceRotation) % 360
-                }
-
-                // 获取用户配置的摄像头方向偏移
-                val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
-                val orientationOffset = userPrefs?.cameraOrientationOffsets?.get(currentCameraId) ?: 0
-
-                // 应用方向偏移
-                val rotation = (baseRotation + orientationOffset) % 360
-
-                // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
-                val metadata = PhotoMetadata(
-                    lutId = lutIdToSave,
-                    frameId = frameIdToSave,
-                    colorRecipeParams = currentRecipeParams.value,
-                    sharpening = sharpeningValue,
-                    noiseReduction = noiseReductionValue,
-                    chromaNoiseReduction = chromaNoiseReductionValue,
-                    width = image.width,
-                    height = image.height,
-                    ratio = aspectRatio,
-                    rotation = rotation,
-                    deviceModel = captureInfo.model,
-                    brand = captureInfo.make.replaceFirstChar { it.uppercase() },
-                    dateTaken = captureInfo.captureTime,
-                    iso = captureInfo.iso,
-                    shutterSpeed = captureInfo.formatExposureTime(),
-                    focalLength = captureInfo.formatFocalLength(),
-                    focalLength35mm = captureInfo.formatFocalLength35mm(),
-                    aperture = captureInfo.formatAperture(),
-                )
-
-                PhotoManager.preparePhoto(
-                    context, metadata, null, previewThumbnail,
-                    false, false, photoId
-                )
+        while (true) {
+            if (!state.value.burstCapturing && burstImages.isEmpty()) run {
+                burstPhotoId = null
+                burstImageCount = 0
+                burstCaptureInfo = null
+                break
             }
-            val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
-            val photoQualityValue = photoQuality.firstOrNull() ?: 95
-            PhotoManager.saveBurstPhoto(
-                context,
-                photoId,
-                image,
-                shouldAutoSave,
-                photoProcessor,
-                photoQualityValue,
-            )
-            PLog.d(TAG, "Image saved: $photoId")
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to save image", e)
+            val image = burstImages.removeFirstOrNull() ?: run {
+                delay(33)
+                continue
+            }
+            val captureInfo = burstCaptureInfo ?: run {
+                delay(33)
+                continue
+            }
+            val context = getApplication<Application>()
+            val photoId = burstPhotoId ?: run {
+                delay(33)
+                continue
+            }
+            burstImageCount++
+            try {
+                val metadata = PhotoManager.loadMetadata(context, photoId)
+                if (metadata == null) {
+                    prepareBurst(context, photoId, image, captureInfo)
+                }
+                val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
+                val photoQualityValue = photoQuality.firstOrNull() ?: 95
+                PhotoManager.saveBurstPhoto(
+                    context,
+                    photoId,
+                    image,
+                    shouldAutoSave,
+                    photoProcessor,
+                    photoQualityValue,
+                )
+//                PLog.d(TAG, "Image saved: $photoId")
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to save image", e)
+            }
         }
     }
 

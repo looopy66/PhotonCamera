@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.model.SafeImage
+import kotlinx.coroutines.delay
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -521,13 +522,13 @@ class Camera2Controller(private val context: Context) {
             ).apply {
                 setOnImageAvailableListener({ reader ->
                     try {
-                        PLog.d(TAG, "ImageReader onImageAvailableListener triggered")
+                        // PLog.d(TAG, "ImageReader onImageAvailableListener triggered")
                         if (openImagesCount.get() >= MAX_IMAGES) {
                             PLog.w(TAG, "Too many open images ($openImagesCount), skipping acquire")
                             return@setOnImageAvailableListener
                         }
                         val rawImage = when {
-                            state.value.burstCapturing -> reader.acquireLatestImage()
+                            state.value.burstCapturing -> reader.acquireNextImage()
                             state.value.useMultiFrame -> reader.acquireNextImage()
                             else -> reader.acquireLatestImage()
                         }
@@ -2333,7 +2334,7 @@ class Camera2Controller(private val context: Context) {
         try {
             val width = image.width
             val height = image.height
-            PLog.d(TAG, "Matching Image and CaptureResult found for timestamp ${image.timestamp}")
+            // PLog.d(TAG, "Matching Image and CaptureResult found for timestamp ${image.timestamp}")
 
             // 构建 CaptureInfo
             val captureInfo = rebuildCaptureInfo(result, width, height)
@@ -2422,11 +2423,34 @@ class Camera2Controller(private val context: Context) {
             }
 
             val request = captureBuilder.build()
-            session.capture(request, null, cameraHandler)
+            val requests = mutableListOf<CaptureRequest>()
+            for (i in 0 until 8) {
+                requests.add(request)
+            }
+            session.captureBurst(requests, object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureSequenceCompleted(
+                    session: CameraCaptureSession,
+                    sequenceId: Int,
+                    frameNumber: Long
+                ) {
+                    checkBurstCaptureContinue()
+                }
+            }, cameraHandler)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to start hardware burst capture", e)
             _state.value = _state.value.copy(burstCapturing = false, isCapturing = false)
         }
+    }
+
+    private fun checkBurstCaptureContinue() {
+        if (!state.value.burstCapturing) return
+        if (MAX_IMAGES - openImagesCount.get() < 8) {
+            cameraHandler?.postDelayed({
+                checkBurstCaptureContinue()
+            }, 100)
+            return
+        }
+        startBurstCapture()
     }
 
     /**

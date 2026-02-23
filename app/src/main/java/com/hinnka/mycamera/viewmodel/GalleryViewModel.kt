@@ -601,6 +601,23 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
+     * 设为连拍主图
+     */
+    fun setMainBurstPhoto(photo: PhotoData, burstFile: File, onComplete: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            val success = PhotoManager.setMainBurstPhoto(context, photo.id, burstFile)
+            if (success) {
+                photoRefreshKeys[photo.id] = System.currentTimeMillis()
+                loadPhotos()
+            }
+            withContext(Dispatchers.Main) {
+                onComplete(success)
+            }
+        }
+    }
+
+    /**
      * 批量删除选中的照片
      *
      * @param deleteExported 是否同时删除系统相册中的导出图片
@@ -1084,13 +1101,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /**
      * 导出照片到公共目录（带 LUT 烘焙）
      */
-    fun exportPhoto(photo: PhotoData, bitmap: Bitmap? = null, onComplete: (Boolean) -> Unit = {}) {
+    fun exportPhoto(photo: PhotoData, bitmap: Bitmap? = null, suffix: String? = null, onComplete: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
-            val metadata = photo.metadata ?: PhotoManager.loadMetadata(getApplication(), photo.id) ?: PhotoMetadata()
+            val metadata = PhotoManager.loadMetadata(getApplication(), photo.id) ?: photo.metadata ?: PhotoMetadata()
             val context = getApplication<Application>()
             PhotoManager.exportPhoto(context, photo.id, bitmap, photoProcessor, metadata,
                 sharpening.value, noiseReduction.value,
-                chromaNoiseReduction.value, photoQuality.firstOrNull() ?: 95) { success ->
+                chromaNoiseReduction.value, photoQuality.firstOrNull() ?: 95, suffix) { success ->
                 if (success) {
                     exitEditMode()
                     loadPhotos()

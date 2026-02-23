@@ -17,10 +17,13 @@ class ShutterSoundPlayer(private val context: Context) {
     companion object {
         private const val TAG = "ShutterSoundPlayer"
         private const val SHUTTER_SOUND_PATH = "shutter.mp3"
+        private const val BURST_SOUND_PATH = "burst.mp3"
     }
     
     private var soundPool: SoundPool? = null
     private var soundId: Int = -1
+    private var burstSoundId: Int = -1
+    private var burstStreamId: Int = -1
     private var isLoaded = false
     
     init {
@@ -52,7 +55,9 @@ class ShutterSoundPlayer(private val context: Context) {
             }
             
             val afd = context.assets.openFd(SHUTTER_SOUND_PATH)
+            val burstAfd = context.assets.openFd(BURST_SOUND_PATH)
             soundId = soundPool?.load(afd, 1) ?: -1
+            burstSoundId = soundPool?.load(burstAfd, 1) ?: -1
             afd.close()
             
             PLog.d(TAG, "Shutter sound player initialized with SoundPool")
@@ -82,6 +87,36 @@ class ShutterSoundPlayer(private val context: Context) {
             PLog.e(TAG, "Failed to play shutter sound", e)
         }
     }
+
+    /**
+     * 播放连拍快门音效
+     */
+    fun playBurst() {
+        if (soundPool == null || burstSoundId == -1 || !isLoaded) {
+            PLog.w(TAG, "SoundPool not ready: soundPool=$soundPool, burstSoundId=$soundId, isLoaded=$isLoaded")
+            // 如果是因为未初始化或加载失败，尝试重新初始化
+            if (soundPool == null) {
+                initializePlayer()
+            }
+            return
+        }
+
+        try {
+            // 播放音效：左声道音量, 右声道音量, 优先级, 循环次数(循环), 播放速率(1.0正常)
+            burstStreamId = soundPool?.play(burstSoundId, 1.0f, 1.0f, 1, -1, 1.0f) ?: -1
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to play shutter sound", e)
+        }
+    }
+
+    fun stopBurst() {
+        if (soundPool == null || burstStreamId == -1) return
+        try {
+            soundPool?.stop(burstStreamId)
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to stop shutter sound", e)
+        }
+    }
     
     /**
      * 释放资源
@@ -91,6 +126,7 @@ class ShutterSoundPlayer(private val context: Context) {
             soundPool?.release()
             soundPool = null
             soundId = -1
+            burstSoundId = -1
             isLoaded = false
             PLog.d(TAG, "Shutter sound player released")
         } catch (e: Exception) {

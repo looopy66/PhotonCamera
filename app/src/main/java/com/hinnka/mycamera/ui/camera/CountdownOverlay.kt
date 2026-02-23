@@ -71,10 +71,10 @@ fun BurstCaptureOverlay(
         ) {
             Text(
                 text = count.toString(),
-                fontSize = 60.sp,
+                fontSize = 36.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White,
-                modifier = Modifier.padding(top = 20.dp).scale(scale)
+                modifier = Modifier.padding(top = 16.dp).scale(scale)
             )
         }
     }

@@ -24,6 +24,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.border
+import androidx.compose.ui.draw.clip
+import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.gallery.PhotoManager
@@ -39,16 +46,19 @@ import java.io.File
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.painterResource
 import androidx.core.content.FileProvider
 import com.hinnka.mycamera.gallery.PhotoData
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
+import kotlin.math.max
 import kotlin.math.min
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -95,6 +105,12 @@ fun BurstDetailScreen(
 
     val pagerState = rememberPagerState(pageCount = { burstFiles.size })
     val currentFile = burstFiles.getOrNull(pagerState.currentPage)
+
+    val mainPhotoFile = remember(photoId) { PhotoManager.getPhotoFile(context, photoId) }
+    val refreshKey = viewModel.photoRefreshKeys[photoId] ?: 0L
+    val isMainPhoto = remember(currentFile, refreshKey) {
+        currentFile?.exists() == true && mainPhotoFile.exists() && currentFile.length() == mainPhotoFile.length()
+    }
 
     var showDeleteDialog by remember { mutableStateOf(false) }
     var isZoomed by remember { mutableStateOf(false) }
@@ -155,9 +171,21 @@ fun BurstDetailScreen(
                         )
                     }*/
 
-                    // 导出
+                    // 设为主图
                     IconButton(
-                        onClick = { currentFile?.let { showExportDialog = true } },
+                        onClick = {
+                            currentFile?.let { file ->
+                                isSaving = true
+                                viewModel.setMainBurstPhoto(photoData, file) { success ->
+                                    isSaving = false
+                                    if (success) {
+                                        Toast.makeText(context, "设置成功", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        Toast.makeText(context, "设置失败", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        },
                         modifier = Modifier
                             .size(56.dp)
                             .background(Color.White.copy(alpha = 0.1f), CircleShape)
@@ -170,11 +198,25 @@ fun BurstDetailScreen(
                             )
                         } else {
                             Icon(
-                                imageVector = Icons.Default.Output,
-                                contentDescription = stringResource(R.string.export),
-                                tint = AccentOrange
+                                imageVector = if (isMainPhoto) Icons.Default.Star else Icons.Default.StarBorder,
+                                contentDescription = "设为主图",
+                                tint = if (isMainPhoto) AccentOrange else Color.White
                             )
                         }
+                    }
+
+                    // 导出
+                    IconButton(
+                        onClick = { currentFile?.let { showExportDialog = true } },
+                        modifier = Modifier
+                            .size(56.dp)
+                            .background(Color.White.copy(alpha = 0.1f), CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Output,
+                            contentDescription = stringResource(R.string.export),
+                            tint = AccentOrange
+                        )
                     }
 
                     // 导出全部
@@ -192,7 +234,7 @@ fun BurstDetailScreen(
                             )
                         } else {
                             Icon(
-                                imageVector = Icons.Default.Collections,
+                                painterResource(R.drawable.ic_output_all),
                                 contentDescription = stringResource(R.string.export_all),
                                 tint = AccentOrange
                             )
@@ -218,7 +260,7 @@ fun BurstDetailScreen(
         containerColor = Color.Black,
         modifier = modifier
     ) { paddingValues ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
@@ -235,7 +277,7 @@ fun BurstDetailScreen(
                 HorizontalPager(
                     state = pagerState,
                     key = { page -> if (page < burstFiles.size) burstFiles[page].absolutePath else page },
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxWidth().weight(1f),
                     userScrollEnabled = !isZoomed,
                     beyondViewportPageCount = 1
                 ) { page ->
@@ -244,7 +286,6 @@ fun BurstDetailScreen(
                         key(photo.absolutePath) {
 
                             var showOrigin by remember { mutableStateOf(false) }
-                            var isPlaying by remember { mutableStateOf(false) }
 
                             Box(modifier = Modifier.fillMaxSize().pointerInput(Unit) {
                                 awaitPointerEventScope {
@@ -294,7 +335,6 @@ fun BurstDetailScreen(
                                                         }
                                                     }
                                                     showOrigin = false
-                                                    isPlaying = false
                                                 }
                                             }
                                         }
@@ -317,41 +357,73 @@ fun BurstDetailScreen(
                         }
                     }
                 }
+
+                AnimatedVisibility(visible = !isZoomed) {
+                    val lazyListState = rememberLazyListState()
+
+                    LaunchedEffect(pagerState.currentPage) {
+                        lazyListState.animateScrollToItem(max(0, pagerState.currentPage - 2))
+                    }
+
+                    LazyRow(
+                        state = lazyListState,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 16.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        itemsIndexed(burstFiles) { index, file ->
+                            val isSelected = pagerState.currentPage == index
+                            val isThisMainPhoto = remember(file, refreshKey) {
+                                file.exists() && mainPhotoFile.exists() && file.length() == mainPhotoFile.length()
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .size(60.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .border(
+                                        width = if (isSelected) 2.dp else 0.dp,
+                                        color = if (isSelected) AccentOrange else Color.Transparent,
+                                        shape = RoundedCornerShape(8.dp)
+                                    )
+                                    .clickable {
+                                        coroutineScope.launch {
+                                            pagerState.animateScrollToPage(index)
+                                        }
+                                    }
+                            ) {
+                                AsyncImage(
+                                    model = file,
+                                    contentDescription = null,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                                if (isThisMainPhoto) {
+                                    Icon(
+                                        imageVector = Icons.Default.Star,
+                                        contentDescription = "",
+                                        tint = AccentOrange,
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 
     // 删除确认对话框
     if (showDeleteDialog) {
-        var deleteExported by remember { mutableStateOf(false) }
-
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
             title = { Text(stringResource(R.string.delete)) },
             text = {
-                Column {
-                    Text(stringResource(R.string.delete_confirm))
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.clickable { deleteExported = !deleteExported }
-                    ) {
-                        Checkbox(
-                            checked = deleteExported,
-                            onCheckedChange = { deleteExported = it },
-                            colors = CheckboxDefaults.colors(
-                                checkedColor = Color(0xFFFF6B35),
-                                uncheckedColor = Color.White.copy(alpha = 0.6f)
-                            )
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = stringResource(R.string.delete_exported_photos),
-                            color = Color.White.copy(alpha = 0.9f),
-                            fontSize = 14.sp
-                        )
-                    }
-                }
+                Text(stringResource(R.string.delete_confirm))
             },
             confirmButton = {
                 TextButton(
@@ -399,7 +471,8 @@ fun BurstDetailScreen(
                             isSaving = true
                             coroutineScope.launch(Dispatchers.IO) {
                                 val bitmap = BitmapFactory.decodeFile(it.path)
-                                viewModel.exportPhoto(photoData, bitmap) { success ->
+                                val suffix = "burst${pagerState.currentPage + 1}"
+                                viewModel.exportPhoto(photoData, bitmap, suffix = suffix) { success ->
                                     isSaving = false
                                     if (success) {
                                         Toast.makeText(context, R.string.export_success, Toast.LENGTH_SHORT).show()
@@ -441,10 +514,11 @@ fun BurstDetailScreen(
                             isSavingAll = true
                             coroutineScope.launch(Dispatchers.IO) {
                                 var allSuccess = true
-                                for (file in burstFiles) {
+                                burstFiles.forEachIndexed { index, file ->
                                     val success = suspendCancellableCoroutine { continuation ->
                                         val bitmap = BitmapFactory.decodeFile(file.path)
-                                        viewModel.exportPhoto(photoData, bitmap) { result ->
+                                        val suffix = "burst${index + 1}"
+                                        viewModel.exportPhoto(photoData, bitmap, suffix = suffix) { result ->
                                             continuation.resume(result)
                                         }
                                     }
