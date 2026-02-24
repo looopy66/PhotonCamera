@@ -331,19 +331,15 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
       int cx = tx * tileSize + tileSize / 2;
       int cy = ty * tileSize + tileSize / 2;
 
-      // Optimization: L0 doesn't need a huge window because the L1 estimate is
-      // already accurate to within 1-2 pixels. 10x10 (half-win=5) is completely
-      // sufficient. Previous 24x24 was a massive performance killer.
-      int lkHalfWin = 5;
+
+      int lkHalfWin = 12;
 
       // Pre-compute spatial gradients (Ix, Iy) and the Hessian matrix (sumIxIx,
       // sumIyIy, sumIxIy) These are static for the reference frame and DO NOT
       // change across iterations!
       float sumIxIx = 0, sumIyIy = 0, sumIxIy = 0;
 
-      // Max size for local arrays: (2*5)*(2*5) = 100 elements. Very cache
-      // friendly.
-      const int maxPts = 400;
+      const int maxPts = 600;
       float Ixs[maxPts], Iys[maxPts], Tvals[maxPts];
       int ptsx[maxPts], ptsy[maxPts];
       int ptCount = 0;

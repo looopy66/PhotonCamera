@@ -193,7 +193,11 @@ void main() {
         vec3 diffVec = abs(centerColor - refRGB);
         float diff = max(diffVec.r, max(diffVec.g, diffVec.b));
         float luma = refRGB.g;
-        float expectedSigma = pc.noiseAlpha * luma + pc.noiseBeta;
+        // Note: noiseAlpha and noiseBeta are given as Variances in the new model.
+        // We must translate this variance back to Standard Deviation (sqrt) to 
+        // compare linearly against the absolute difference `diff`.
+        float expectedVar = pc.noiseAlpha * luma + pc.noiseBeta;
+        float expectedSigma = sqrt(max(expectedVar, 1e-7));
         expectedSigma = max(expectedSigma, 0.015);
         
         float ratio = diff / expectedSigma;
@@ -225,7 +229,12 @@ void main() {
             if (s_ < 0.0) sinT = -sinT;
             float u = d.x * cosT + d.y * sinT;
             float v = -d.x * sinT + d.y * cosT;
-            float w = exp(-0.5 * (u*u/max(kp.x, 0.1) + v*v/max(kp.y, 0.1)));
+            
+            // The kernel variables derived from Python (k1, k2) are tuned for a RAW 
+            // 0.5x resolution coordinate space. Because YUV samples in a native 1.0x space,
+            // the squared distance (u*u, v*v) grows exactly 4 times faster.
+            // We multiply the inverse variances by 0.25 to normalize the spatial spread.
+            float w = exp(-0.5 * (u*u * kp.x * 0.25 + v*v * kp.y * 0.25));
             
             float combinedWeight = w * robustness;
             accumulator.data[outIndex] += vec4(sampleColor * combinedWeight, combinedWeight);

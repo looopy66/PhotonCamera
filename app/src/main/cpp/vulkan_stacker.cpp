@@ -808,8 +808,11 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
   pc.gridW = gridW;
   pc.gridH = gridH;
   // Phase 6: High-ISO Capable Noise Model
-  pc.noiseAlpha = 0.12f;
-  pc.noiseBeta = 0.10f;
+  // Because YUV is calculated at full native 1.0x resolution instead of a 0.5x
+  // downsampled guide image, the high-frequency pixel delta variance is larger
+  // than pure RAW. Expected native SD is 5-7% (Variance = 0.005).
+  pc.noiseAlpha = 0.005f;
+  pc.noiseBeta = 0.001f;
 
   LOGI("processFrame: Dispatching. Alpha=%f, Beta=%f, Scale=%f, Grid=%dx%d",
        pc.noiseAlpha, pc.noiseBeta, pc.scale, gridW, gridH);

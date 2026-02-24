@@ -79,7 +79,7 @@ void main() {
     }
 
     float resLinear = 0.0;
-    if (accum.y > 1e-5) {
+    if (accum.y > 0) {
         float val = accum.x / accum.y; // Already [0, 1] net signal per sample
         // Scale and apply WB gain
         // Net signal range is [0, (white - black)]

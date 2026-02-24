@@ -63,8 +63,8 @@ void main() {
             float cyp = rgb2gray(texture(rgbSampler, sampleUV + vec2(0.0, pixelSize.y)).rgb);
             float cym = rgb2gray(texture(rgbSampler, sampleUV - vec2(0.0, pixelSize.y)).rgb);
             
-            float Ix_ = (cxp - cxm) * 0.5 * 255.0;
-            float Iy_ = (cyp - cym) * 0.5 * 255.0;
+            float Ix_ = (cxp - cxm) * 0.5;
+            float Iy_ = (cyp - cym) * 0.5;
             
             sIxIx += Ix_ * Ix_;
             sIyIy += Iy_ * Iy_;
@@ -72,47 +72,64 @@ void main() {
         }
     }
     
+    // Normalize gradients to [0, 1] range to match noise model scale properly
+    // The previous 255.0 multipliers artificially distorted the tensor energy. 
+    // We now keep it strictly in Unorm space.
+    float varIxIx = sIxIx / 25.0;
+    float varIyIy = sIyIy / 25.0;
+    float varIxIy = sIxIy / 25.0;
+    
     // Eigen Analysis of J
-    // Noise-aware floor for gradient energy
-    float noiseSigma = max(pc.noiseBeta * 0.25, 0.008);
-    float gradNoiseStd = 255.0 * noiseSigma * 1.414;
-    float noiseFloor = max(gradNoiseStd * gradNoiseStd / 25.0, 2.0);
-    
-    float IxIx = max(sIxIx / 25.0 - noiseFloor, 0.0);
-    float IyIy = max(sIyIy / 25.0 - noiseFloor, 0.0);
-    float IxIy = sIxIy / 25.0; 
-    
-    float trace = IxIx + IyIy;
-    float det = IxIx * IyIy - IxIy * IxIy;
-    float diff_tr = IxIx - IyIy;
-    float sqrt_term = sqrt(diff_tr * diff_tr + 4.0 * IxIy * IxIy);
+    float trace = varIxIx + varIyIy;
+    float diff_tr = varIxIx - varIyIy;
+    float sqrt_term = sqrt(diff_tr * diff_tr + 4.0 * varIxIy * varIxIy);
     
     float lambda1 = 0.5 * (trace + sqrt_term);
     float lambda2 = 0.5 * (trace - sqrt_term);
     
-    float C = lambda1;
-    float A = (lambda1 - lambda2) / (lambda1 + lambda2 + 0.01);
+    // --- Exact Google MFSR Python Reconstruction ---
+    // Noise estimation (Mid-tone Unorm noise variance)
+    float noiseVar = pc.noiseAlpha * 0.5 + max(pc.noiseBeta, 1e-10);
+    float noiseGradEnergy = 2.0 * noiseVar * 9.0; // Assume 3x3 equivalent smoothing
+    float SNR = lambda1 / max(noiseGradEnergy, 1e-12);
     
-    // Adaptive kernel
-    // Flat areas: wider kernel (k=3.0) for spatial+temporal denoising
-    // Edges/text: tight kernel (k=0.12) for sharpness
-    float k_base = mix(5.0, 0.015, clamp(C / 80.0, 0.0, 1.0));
-    float stretch = 1.0 + 3.0 * A; 
+    // Parameters derived from reference code (Relaxed for YUV fp domain scale)
+    float k_detail = 0.30; 
+    float k_denoise = 16.0; 
+    float k_shrink = 2.0;
+    float k_stretch = 4.0;
     
-    float k1 = max(k_base / stretch, 0.1); 
-    float k2 = min(k_base * stretch, 8.0);
+    // D is the "flatness" metric
+    float D = 1.0 - smoothstep(0.5, 4.0, SNR);
+    
+    // Anisotropy factor A 
+    float A_py = 1.0 + sqrt(max(lambda1 - lambda2, 0.0) / max(lambda1 + lambda2, 1e-7));
+    
+    float k1_base = 1.0;
+    float k2_base = 1.0;
+    if (A_py > 1.95) {
+        k1_base = 1.0 / k_shrink;
+        k2_base = k_stretch;
+    }
+    
+    float pre_k1 = k_detail * mix(k1_base, k_denoise, D);
+    float pre_k2 = k_detail * mix(k2_base, k_denoise, D);
+    
+    // Passed as INVERSE variance to the accumulator
+    float k1 = 1.0 / max(pre_k1 * pre_k1, 1e-7);
+    float k2 = 1.0 / max(pre_k2 * pre_k2, 1e-7);
     
     // 2*theta logic for orientation
-    float diff = IxIx - IyIy;
-    float length = sqrt(diff * diff + 4.0 * IxIy * IxIy);
+    float diff = varIxIx - varIyIy;
+    float length = sqrt(diff * diff + 4.0 * varIxIy * varIxIy);
     
     float cos2t, sin2t;
-    if (length < 0.001) {
+    if (length < 1e-9) {
         cos2t = 1.0;
         sin2t = 0.0;
     } else {
         cos2t = diff / length;
-        sin2t = 2.0 * IxIy / length;
+        sin2t = 2.0 * varIxIy / length;
     }
     
     kernelParams.data[y * pc.width + x] = vec4(k1, k2, cos2t, sin2t);

@@ -8,6 +8,7 @@ import android.opengl.EGLDisplay
 import android.opengl.EGLSurface
 import android.opengl.GLES30
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.raw.NLMShaders
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
@@ -45,6 +46,17 @@ class LutImageProcessor {
     private var texCoordBuffer: FloatBuffer? = null
     private var indexBuffer: ShortBuffer? = null
 
+    private var nlmChromaProgram = 0
+    private var nlmPassHProgram = 0
+    private var nlmPassVProgram = 0
+
+    private var nlmChromaTexId = 0
+    private var nlmChromaFboId = 0
+    private val nlmPassTexId = IntArray(2)
+    private val nlmPassFboId = IntArray(2)
+    private var nlmWidth = 0
+    private var nlmHeight = 0
+
     private var isInitialized = false
 
     // Uniform 位置
@@ -73,8 +85,6 @@ class LutImageProcessor {
 
     // 后期处理参数 Uniform 位置（仅拍摄和后期编辑时生效）
     private var uSharpeningLoc = 0
-    private var uNoiseReductionLoc = 0
-    private var uChromaNoiseReductionLoc = 0
     private var uTexelSizeLoc = 0  // 用于卷积计算
 
     /**
@@ -149,6 +159,7 @@ class LutImageProcessor {
 
             // 初始化 shader 和缓冲区
             initShaderProgram()
+            initNLMPrograms()
             initBuffers()
 
             isInitialized = true
@@ -218,6 +229,10 @@ class LutImageProcessor {
         // 上传 RGBA 16-bit 数据作为图片纹理
         uploadImageTextureFromArgb(argbData, width, height)
 
+        if (noiseReduction > 0 || chromaNoiseReduction > 0) {
+            renderNLMDenoise(imageTextureId, width, height, noiseReduction, chromaNoiseReduction)
+        }
+
         // 上传 LUT 纹理
         if (lutConfig != null) {
             uploadLutTexture(lutConfig)
@@ -226,11 +241,12 @@ class LutImageProcessor {
         // 执行渲染
         val outputBitmap = performRender(
             width, height,
+            if (noiseReduction > 0 || chromaNoiseReduction > 0) nlmPassTexId[1] else imageTextureId,
             lutConfig,
             colorRecipeEnabled,
             exposure, contrast, saturation, temperature, tint, fade,
             vibrance, highlights, shadows, filmGrain, vignette, bleachBypass,
-            intensity, sharpening, noiseReduction, chromaNoiseReduction
+            intensity, sharpening
             // GL_RGBA16 已自动归一化，使用标准 shader
         )
 
@@ -294,6 +310,10 @@ class LutImageProcessor {
         // 上传图片纹理
         uploadImageTexture(bitmap)
 
+        if (noiseReduction > 0 || chromaNoiseReduction > 0) {
+            renderNLMDenoise(imageTextureId, width, height, noiseReduction, chromaNoiseReduction)
+        }
+
         // 上传 LUT 纹理
         if (lutConfig != null) {
             uploadLutTexture(lutConfig)
@@ -302,11 +322,12 @@ class LutImageProcessor {
         // 执行渲染
         val outputBitmap = performRender(
             width, height,
+            if (noiseReduction > 0 || chromaNoiseReduction > 0) nlmPassTexId[1] else imageTextureId,
             lutConfig,
             colorRecipeEnabled,
             exposure, contrast, saturation, temperature, tint, fade,
             vibrance, highlights, shadows, filmGrain, vignette, bleachBypass,
-            intensity, sharpening, noiseReduction, chromaNoiseReduction
+            intensity, sharpening
         )
 
         outputBitmap
@@ -318,6 +339,7 @@ class LutImageProcessor {
     private fun performRender(
         width: Int,
         height: Int,
+        inputTextureId: Int,
         lutConfig: LutConfig?,
         colorRecipeEnabled: Boolean,
         exposure: Float,
@@ -333,9 +355,7 @@ class LutImageProcessor {
         vignette: Float,
         bleachBypass: Float,
         intensity: Float,
-        sharpening: Float,
-        noiseReduction: Float,
-        chromaNoiseReduction: Float
+        sharpening: Float
     ): Bitmap {
         val program = shaderProgram
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
@@ -347,7 +367,7 @@ class LutImageProcessor {
 
         // 设置纹理 uniform
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, imageTextureId)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uImageTexture"), 0)
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
@@ -385,8 +405,6 @@ class LutImageProcessor {
 
         // 设置后期处理参数
         GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uSharpening"), sharpening)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uNoiseReduction"), noiseReduction)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uChromaNoiseReduction"), chromaNoiseReduction)
         GLES30.glUniform2f(GLES30.glGetUniformLocation(program, "uTexelSize"), 1.0f / width, 1.0f / height)
 
         // 设置 MVP 矩阵
@@ -625,6 +643,181 @@ class LutImageProcessor {
         uFilmGrainLoc = GLES30.glGetUniformLocation(shaderProgram, "uFilmGrain")
         uVignetteLoc = GLES30.glGetUniformLocation(shaderProgram, "uVignette")
         uBleachBypassLoc = GLES30.glGetUniformLocation(shaderProgram, "uBleachBypass")
+
+        uSharpeningLoc = GLES30.glGetUniformLocation(shaderProgram, "uSharpening")
+        uTexelSizeLoc = GLES30.glGetUniformLocation(shaderProgram, "uTexelSize")
+    }
+
+    private fun initNLMPrograms() {
+        fun createProgram(vShader: Int, fSource: String): Int {
+            val fShader = compileShader(GLES30.GL_FRAGMENT_SHADER, fSource)
+            if (vShader == 0 || fShader == 0) return 0
+            val program = GLES30.glCreateProgram()
+            GLES30.glAttachShader(program, vShader)
+            GLES30.glAttachShader(program, fShader)
+            GLES30.glLinkProgram(program)
+            GLES30.glDeleteShader(fShader)
+            return program
+        }
+
+        val vShader = compileShader(GLES30.GL_VERTEX_SHADER, IMAGE_VERTEX_SHADER)
+        nlmChromaProgram = createProgram(vShader, NLMShaders.PASS0_CHROMA_DENOISE)
+        nlmPassHProgram = createProgram(vShader, NLMShaders.NLM_PASS_H)
+        nlmPassVProgram = createProgram(vShader, NLMShaders.NLM_PASS_V)
+        GLES30.glDeleteShader(vShader)
+
+        PLog.d(TAG, "NLM programs initialized: Chroma=$nlmChromaProgram H=$nlmPassHProgram V=$nlmPassVProgram")
+    }
+
+    private fun setupNLMFramebuffers(width: Int, height: Int) {
+        if (nlmWidth == width && nlmHeight == height && nlmChromaTexId != 0) return
+        nlmWidth = width
+        nlmHeight = height
+
+        // 清理旧资源
+        if (nlmChromaTexId != 0) GLES30.glDeleteTextures(1, intArrayOf(nlmChromaTexId), 0)
+        if (nlmChromaFboId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(nlmChromaFboId), 0)
+        for (i in 0..1) {
+            if (nlmPassTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(nlmPassTexId[i]), 0)
+            if (nlmPassFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(nlmPassFboId[i]), 0)
+        }
+
+        // 创建色度降噪 FBO
+        val ct = IntArray(1)
+        val cf = IntArray(1)
+        GLES30.glGenTextures(1, ct, 0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, ct[0])
+        GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, width, height, 0, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glGenFramebuffers(1, cf, 0)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, cf[0])
+        GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, ct[0], 0)
+        nlmChromaTexId = ct[0]
+        nlmChromaFboId = cf[0]
+
+        var status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
+            PLog.e(TAG, "NLM Chroma Framebuffer not complete: $status")
+        }
+
+        // 创建 NLM ping-pong FBO
+        for (i in 0..1) {
+            val t = IntArray(1)
+            val f = IntArray(1)
+            GLES30.glGenTextures(1, t, 0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, t[0])
+            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, width, height, 0, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glGenFramebuffers(1, f, 0)
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, f[0])
+            GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, t[0], 0)
+            nlmPassTexId[i] = t[0]
+            nlmPassFboId[i] = f[0]
+
+            status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+            if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
+                PLog.e(TAG, "NLM Pass $i Framebuffer not complete: $status")
+            }
+        }
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+    }
+
+    private fun renderNLMDenoise(sourceTextureId: Int, width: Int, height: Int, noiseReduction: Float, chromaNoiseReduction: Float) {
+        setupNLMFramebuffers(width, height)
+
+        if (nlmChromaProgram == 0 || nlmPassHProgram == 0 || nlmPassVProgram == 0) return
+
+        val texelW = 1.0f / width
+        val texelH = 1.0f / height
+        // 将降噪强度映射到合理范围 (0.01 ~ 0.1)
+        val h = 0.01f + noiseReduction * noiseReduction * 4f
+        val ch = 0.01f + chromaNoiseReduction * chromaNoiseReduction * 2f
+
+        val identityMatrix = FloatArray(16)
+        android.opengl.Matrix.setIdentityM(identityMatrix, 0)
+
+        // Pass 0: Chroma Denoise
+        GLES30.glUseProgram(nlmChromaProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, nlmChromaFboId)
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmChromaProgram, "uInputTexture"), 0)
+        GLES30.glUniform2f(GLES30.glGetUniformLocation(nlmChromaProgram, "uTexelSize"), texelW, texelH)
+        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(nlmChromaProgram, "uMVPMatrix"), 1, false, identityMatrix, 0)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(nlmChromaProgram, "uH"), ch)
+        drawQuad(nlmChromaProgram)
+
+        // NLM Pass H
+        GLES30.glUseProgram(nlmPassHProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, nlmPassFboId[0])
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, nlmChromaTexId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmPassHProgram, "uInputTexture"), 0)
+        GLES30.glUniform2f(GLES30.glGetUniformLocation(nlmPassHProgram, "uTexelSize"), texelW, texelH)
+        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(nlmPassHProgram, "uMVPMatrix"), 1, false, identityMatrix, 0)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(nlmPassHProgram, "uH"), h)
+        drawQuad(nlmPassHProgram)
+
+        // NLM Pass V
+        GLES30.glUseProgram(nlmPassVProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, nlmPassFboId[1])
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, nlmChromaTexId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmPassVProgram, "uInputTexture"), 0)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, nlmPassTexId[0])
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmPassVProgram, "uBlurTexture"), 1)
+        GLES30.glUniform2f(GLES30.glGetUniformLocation(nlmPassVProgram, "uTexelSize"), texelW, texelH)
+        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(nlmPassVProgram, "uMVPMatrix"), 1, false, identityMatrix, 0)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(nlmPassVProgram, "uH"), h)
+        drawQuad(nlmPassVProgram)
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        checkGlError("renderNLMDenoise")
+    }
+
+    private fun checkGlError(op: String) {
+        val error = GLES30.glGetError()
+        if (error != GLES30.GL_NO_ERROR) {
+            PLog.e(TAG, "$op: glError $error")
+        }
+    }
+
+    private fun drawQuad(program: Int) {
+        val positionHandle = GLES30.glGetAttribLocation(program, "aPosition")
+        val texCoordHandle = GLES30.glGetAttribLocation(program, "aTexCoord")
+
+        if (positionHandle >= 0) {
+            vertexBuffer?.let {
+                GLES30.glEnableVertexAttribArray(positionHandle)
+                it.position(0)
+                GLES30.glVertexAttribPointer(positionHandle, 2, GLES30.GL_FLOAT, false, 0, it)
+            }
+        }
+        if (texCoordHandle >= 0) {
+            texCoordBuffer?.let {
+                GLES30.glEnableVertexAttribArray(texCoordHandle)
+                it.position(0)
+                GLES30.glVertexAttribPointer(texCoordHandle, 2, GLES30.GL_FLOAT, false, 0, it)
+            }
+        }
+
+        indexBuffer?.let {
+            it.position(0)
+            GLES30.glDrawElements(GLES30.GL_TRIANGLES, 6, GLES30.GL_UNSIGNED_SHORT, it)
+        }
+
+        if (positionHandle >= 0) GLES30.glDisableVertexAttribArray(positionHandle)
+        if (texCoordHandle >= 0) GLES30.glDisableVertexAttribArray(texCoordHandle)
     }
 
     private fun compileShader(type: Int, source: String): Int {
@@ -700,6 +893,26 @@ class LutImageProcessor {
             pboId = 0
         }
 
+        if (nlmChromaProgram != 0) {
+            GLES30.glDeleteProgram(nlmChromaProgram)
+        }
+        if (nlmPassHProgram != 0) {
+            GLES30.glDeleteProgram(nlmPassHProgram)
+        }
+        if (nlmPassVProgram != 0) {
+            GLES30.glDeleteProgram(nlmPassVProgram)
+        }
+        if (nlmChromaTexId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(nlmChromaTexId), 0)
+        }
+        if (nlmChromaFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(nlmChromaFboId), 0)
+        }
+        for (i in 0..1) {
+            if (nlmPassTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(nlmPassTexId[i]), 0)
+            if (nlmPassFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(nlmPassFboId[i]), 0)
+        }
+
         EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
         EGL14.eglDestroySurface(eglDisplay, eglSurface)
         EGL14.eglDestroyContext(eglDisplay, eglContext)
@@ -758,8 +971,6 @@ class LutImageProcessor {
             
             // 后期处理参数
             uniform float uSharpening;
-            uniform float uNoiseReduction;
-            uniform float uChromaNoiseReduction;
             uniform vec2 uTexelSize;
             
             // 辅助函数：亮度计算
@@ -828,160 +1039,6 @@ class LutImageProcessor {
 
             void main() {
                 vec4 color = sampleImage(vTexCoord);
-                
-                // === 后期处理：降噪和减少杂色（在色彩处理之前，避免放大噪点） ===
-                
-                if (uNoiseReduction > 0.0) {
-                    // 转换到 YCbCr
-                    vec3 centerRGB = texture(uImageTexture, vTexCoord).rgb;
-                    vec3 centerYCbCr = rgb2ycbcr(centerRGB);
-                    
-                    float centerY = centerYCbCr.x;
-                    vec2 centerCbCr = centerYCbCr.yz;
-                    
-                    // =======================================================
-                    // 🎨 Part 1: 色度降噪 (Chroma Denoise) - 简单粗暴的平滑
-                    // =======================================================
-                    // 色度噪点（红绿斑）最影响观感，且人眼对色度分辨率不敏感。
-                    // 我们使用一个较大的高斯核来彻底抹平色噪。
-                    
-                    vec2 sumCbCr = vec2(0.0);
-                    float sumWeightChroma = 0.0;
-                    
-                    // 半径可以大一点 (比如 3~5)，步长可以大一点以节省性能
-                    int cRadius = 4; 
-                    
-                    for (int x = -cRadius; x <= cRadius; x+=2) { // 步长2优化性能
-                        for (int y = -cRadius; y <= cRadius; y+=2) {
-                            vec2 offset = vec2(float(x), float(y)) * uTexelSize;
-                            vec3 sampleRgb = texture(uImageTexture, vTexCoord + offset).rgb;
-                            vec2 sampleCbCr = rgb2ycbcr(sampleRgb).yz;
-                            
-                            // 简单的空间高斯权重
-                            float distSq = float(x*x + y*y);
-                            float weight = exp(-distSq / (2.0 * 4.0)); // Sigma ~ 2.0
-                            
-                            sumCbCr += sampleCbCr * weight;
-                            sumWeightChroma += weight;
-                        }
-                    }
-                    
-                    vec2 finalCbCr = sumCbCr / sumWeightChroma;
-                    
-                    // 根据降噪强度混合：强度低时保留一点原色，强度高时完全使用模糊色
-                    // uNoiseReduction: 0.0 ~ 1.0
-                    finalCbCr = mix(centerCbCr, finalCbCr, clamp(uNoiseReduction * 1.5, 0.0, 1.0));
-                
-                
-                    // =======================================================
-                    // 💡 Part 2: 亮度降噪 (Luma Denoise) - 双边滤波 (Bilateral)
-                    // =======================================================
-                    // 亮度必须保边！不能用 Box Blur。
-                    // 双边滤波同时考虑“距离”和“亮度差”，只模糊相似的像素。
-                    
-                    float sumY = 0.0;
-                    float sumWeightLuma = 0.0;
-                    
-                    // 亮度降噪半径小一点 (2~3)，保持精细
-                    int lRadius = 3;
-                    
-                    // 动态调整 Sigma (根据降噪强度)
-                    // sigmaSpatial: 空间范围
-                    float sigmaSpatial = 2.0; 
-                    // sigmaRange: 亮度差异容忍度 (越小越保边，越大越糊)
-                    // 关键：根据 uNoiseReduction 动态调整。范围建议 0.05 ~ 0.2
-                    float sigmaRange = 0.05 + uNoiseReduction * 0.15; 
-                    
-                    for (int x = -lRadius; x <= lRadius; x++) {
-                        for (int y = -lRadius; y <= lRadius; y++) {
-                            vec2 offset = vec2(float(x), float(y)) * uTexelSize;
-                            
-                            // 采样 (这里只取 Y 即可，甚至可以直接取 RGB 的 G 通道近似，省一次转换)
-                            float sampleY = rgb2ycbcr(texture(uImageTexture, vTexCoord + offset).rgb).x;
-                            
-                            // 1. 空间权重 (Spatial Weight) - 高斯
-                            float distSq = float(x*x + y*y);
-                            float wSpatial = exp(-distSq / (2.0 * sigmaSpatial * sigmaSpatial));
-                            
-                            // 2. 范围权重 (Range Weight) - 核心保边逻辑！
-                            // 如果 sampleY 和 centerY 差异很大（边缘），diff 大，exp 趋近 0，权重忽略
-                            float diff = sampleY - centerY;
-                            float wRange = exp(-(diff * diff) / (2.0 * sigmaRange * sigmaRange));
-                            
-                            // 综合权重
-                            float weight = wSpatial * wRange;
-                            
-                            sumY += sampleY * weight;
-                            sumWeightLuma += weight;
-                        }
-                    }
-                    
-                    float finalY = sumY / sumWeightLuma;
-                    
-                    // 细节回掺 (Detail Recovery) - 可选
-                    // 双边滤波有时候会有“塑料感”，可以稍微掺回一点点原始噪点增加质感
-                    // mix(Blur, Original, 0.1)
-                    finalY = mix(finalY, centerY, 0.1); 
-                    
-                    // =======================================================
-                    // 🔄 合成输出
-                    // =======================================================
-                    color.rgb = ycbcr2rgb(vec3(finalY, finalCbCr));
-                    color.rgb = clamp(color.rgb, 0.0, 1.0);
-                }
-            
-                // --- 2. 强力色度降噪 (Chroma Denoise) ---
-                if (uChromaNoiseReduction > 0.0) {
-                    vec3 yuv = rgb2ycbcr(color.rgb);
-                    
-                    vec2 sumUV = vec2(0.0);
-                    float sumWeight = 0.0;
-            
-                    // 基础半径 2.0，滑块拉满时步长极大
-                    float maxStride = 2.0 + uChromaNoiseReduction * 10.0; 
-            
-                    // 阈值越大，越容易模糊(保护越弱)
-                    float colorThreshold = 0.15;
-            
-                    // 采用 5x5 循环
-                    const int RADIUS_UV = 2; 
-                    
-                    for (int x = -RADIUS_UV; x <= RADIUS_UV; x++) {
-                        for (int y = -RADIUS_UV; y <= RADIUS_UV; y++) {
-                            vec2 offset = vec2(float(x), float(y)) * uTexelSize * maxStride;
-                            
-                            vec3 sampleRgb = texture(uImageTexture, vTexCoord + offset).rgb;
-                            // 注意：这里必须用 sampleRgb，不要用 color.rgb
-                            vec3 sampleYuv = rgb2ycbcr(sampleRgb);
-                            
-                            // 1. 距离权重
-                            float distSq = float(x*x + y*y);
-                            float wDist = exp(-distSq / 4.0);
-                            
-                            // 2. 颜色相似度权重
-                            float uvDiff = distance(sampleYuv.yz, yuv.yz);
-                            
-                            float wColor = 1.0 - smoothstep(colorThreshold, colorThreshold + 0.1, uvDiff);
-                            
-                            float weight = wDist * wColor;
-                            
-                            sumUV += sampleYuv.yz * weight;
-                            sumWeight += weight;
-                        }
-                    }
-            
-                    // 防止除以 0 的保护
-                    if (sumWeight > 0.001) {
-                        vec2 cleanUV = sumUV / sumWeight;
-            
-                        // Saturation 曲线混合
-                        float mixFactor = clamp(uChromaNoiseReduction * 3.0, 0.0, 1.0);
-            
-                        yuv.yz = mix(yuv.yz, cleanUV, mixFactor);
-                    }
-            
-                    color.rgb = ycbcr2rgb(yuv);
-                }
 
                 // === 色彩配方处理（按专业后期流程顺序） ===
                 if (uColorRecipeEnabled) {

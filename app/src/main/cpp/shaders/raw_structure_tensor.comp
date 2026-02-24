@@ -133,35 +133,39 @@ void main() {
     float noiseGradEnergy = 2.0 * noiseVar * 9.0; // × 9 for 3×3 sum  
     float SNR = lambda1 / max(noiseGradEnergy, 1e-12);
     
-    // Adaptive kernel width:
-    // Low SNR (flat/noisy): wide kernel (k=2.0) → spatial denoising
-    // High SNR (edges/text): tight kernel (k=16.0) → preserve sharpness
-    // Multi-frame temporal averaging supplements spatial denoising
-    const float k_flat = 0.3;   // Wide: σ≈1.8 plane px → good denoising in flat areas
-    const float k_edge = 64.0;  // Tight: near-delta → preserve edges/text
-    float k_iso = mix(k_flat, k_edge, smoothstep(1.0, 8.0, SNR));
+    // --- Exact Google MFSR Python Reconstruction ---
+    // Parameters derived from reference code at SNR ≈ 15
+    float k_detail = 0.30; 
+    float k_denoise = 4.0; 
+    float k_shrink = 4.0;
+    float k_stretch = 4.0;
     
-    // Anisotropic scaling
-    // Stretch along the edge (minor eigenvector direction e2)
-    // Shrink across the edge (major eigenvector direction e1)
-    const float k_stretch_max = 6.0;
+    // D is the "flatness" metric. 1.0 = flat area, 0.0 = strong edge.
+    float D = 1.0 - smoothstep(1.0, 8.0, SNR);
     
-    // The "k" in exp(-0.5 * k * d^2) is Inverse Variance.
-    // Large k -> Small Variance -> Narrow.
-    // Small k -> Large Variance -> Wide.
+    // Anisotropy factor A 
+    float A_py = 1.0 + sqrt(max(lambda1 - lambda2, 0.0) / max(lambda1 + lambda2, 1e-7));
     
-    // Across Edge (Direction e1, Gradient): We want Narrow kernel to preserve edge. 
-    // So k1 should be High.
-    // k1 = k_iso * stretch
+    // Python's "hard_threshold" selection law
+    float k1_base = 1.0;
+    float k2_base = 1.0;
+    if (A_py > 1.95) {
+        k1_base = 1.0 / k_shrink;
+        k2_base = k_stretch;
+    }
     
-    // Along Edge (Direction e2): We want Wide kernel to smooth.
-    // So k2 should be Low.
-    // k2 = k_iso / stretch
+    // Interpolate based on flatness
+    // pre_k1 describes the spatial standard deviation (covariance) ACROSS the edge (should be very small to preserve details: ~0.075)
+    // pre_k2 describes the spatial standard deviation (covariance) ALONG the edge (should be very large to smooth noise: ~1.2)
+    float pre_k1 = k_detail * mix(k1_base, k_denoise, D);
+    float pre_k2 = k_detail * mix(k2_base, k_denoise, D);
     
-    float stretch = 1.0 + (k_stretch_max - 1.0) * A;
-    
-    float k1 = k_iso * stretch; 
-    float k2 = k_iso / stretch;
+    // GLSL Optimization: We pass the INVERSE Covariance eigenvalues directly.
+    // k1 = Inverse Variance ACROSS the edge = 1 / pre_k1^2 (Huge penalty for crossing: ~177.0)
+    // k2 = Inverse Variance ALONG the edge = 1 / pre_k2^2  (Tiny penalty for blurring: ~0.69)
+    float k1 = 1.0 / max(pre_k1 * pre_k1, 1e-7);
+    float k2 = 1.0 / max(pre_k2 * pre_k2, 1e-7);
+    // ------------------------------------------------
     
     // 4. Orientation (cos2theta, sin2theta)
     // Main eigenvector angle e1 (Gradient Direction)

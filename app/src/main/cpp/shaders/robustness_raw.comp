@@ -160,26 +160,49 @@ void main() {
              // Use green channel for comparison
              float greenRef = getGreen(refImg, nx, ny);
 
-             // Target: use hardware texture sampling for speed
+             // Target: use manual bilinear sampling of Green pixels.
+             // Our flow vector 'flow' is in the half-res "plane" scale.
+             // So trgPlane is in half-res coordinates (0 to planeWidth-1).
              vec2 trgPlane = vec2(nx, ny) + flow;
-             vec2 trgSensorUV = (trgPlane * 2.0 + 1.0) / vec2(pc.sensorWidth, pc.sensorHeight);
-             float greenTrg = texture(trgImg, trgSensorUV).r;
+             
+             // Bilinear weights for half-res sampling
+             vec2 trgPlaneFloor = floor(trgPlane);
+             vec2 trgPlaneFrac = trgPlane - trgPlaneFloor;
+             int txi = int(trgPlaneFloor.x);
+             int tyi = int(trgPlaneFloor.y);
+             
+             // Sample 4 surrounding Green pixels using our helper function (which acts on plane coords)
+             float g00 = getGreen(trgImg, txi, tyi);
+             float g10 = getGreen(trgImg, txi + 1, tyi);
+             float g01 = getGreen(trgImg, txi, tyi + 1);
+             float g11 = getGreen(trgImg, txi + 1, tyi + 1);
+             
+             float greenTrg = mix(mix(g00, g10, trgPlaneFrac.x),
+                                  mix(g01, g11, trgPlaneFrac.x),
+                                  trgPlaneFrac.y);
 
              // Squared difference
              float diff = greenRef - greenTrg;
+             // Scale from UNORM to native 14-bit equivalent to match noise models roughly?
+             // Actually, noise model expects UNORM.
              float d_ms_sq = diff * diff;
 
-             // Wiener shrinkage noise correction (Paper §6.4)
-             // d_corrected = d_ms² * d_ms² / (d_ms² + d_noise²)
-             // where d_noise² = 2 * sigma² (expected noise difference of 2 observations)
+             // Wiener shrinkage noise correction (Paper §6.4 & Python Reference)
              float d_noise_sq = 2.0 * sigma2;
-             float d_corrected_sq = d_ms_sq * d_ms_sq / max(d_ms_sq + d_noise_sq, 1e-10);
+             float shrink = d_ms_sq / max(d_ms_sq + d_noise_sq, 1e-10);
+             float d_corrected_sq = d_ms_sq * shrink * shrink; // Multiplied twice per paper
              
-             // Robustness: R = exp(-d_corrected / (S² * sigma²))
-             // S = 4.0 for lenient frame acceptance (temporal averaging handles noise)
-             float S = 4.0;
-             float denom = sigma2 * S * S;
-             float R = exp(-d_corrected_sq / max(denom, 1e-10));
+             // Python Reference Parameter mapped S and t
+             // S2 = 12.0 (Relaxed) is used when flow is smooth and reliable (flowRange <= 0.8).
+             // This relaxation is VITAL: it allows sub-pixel shifted frames to pass the temporal mask
+             // and accumulate, physically filling in the missing Bayer colors on thin text!
+             // S1 = 2.0 (Strict) is used when flow is chaotic (flowRange > 0.8) to prevent ghosting.
+             float S_param = (flowRange > 0.8) ? 2.0 : 12.0; 
+             float t_param = 0.12;
+             
+             // Robustness calculation: R = S * exp(-d / sigma^2) - t
+             float exponential = exp(-d_corrected_sq / max(sigma2, 1e-10));
+             float R = clamp(S_param * exponential - t_param, 0.0, 1.0);
 
              // Apply pre-computed penalties
              R *= globalPenalty;

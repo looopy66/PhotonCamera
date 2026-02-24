@@ -213,6 +213,7 @@ class RawDemosaicProcessor {
     )
 
     private var isInitialized = false
+    private var maxTextureSize = 8192 // default, queried at init
 
     private var baseLut: LutConfig? = null
     private var colorSpace = ColorSpace.BT2020
@@ -394,6 +395,56 @@ class RawDemosaicProcessor {
                 }
             }
 
+            // Check GL_MAX_TEXTURE_SIZE and downscale if needed
+            if (actualWidth > maxTextureSize || actualHeight > maxTextureSize) {
+                PLog.w(TAG, "Input ${actualWidth}x${actualHeight} exceeds GL_MAX_TEXTURE_SIZE=$maxTextureSize, downscaling")
+                val scaleX = maxTextureSize.toFloat() / actualWidth
+                val scaleY = maxTextureSize.toFloat() / actualHeight
+                val scaleFactor = minOf(scaleX, scaleY, 1f)
+                val newWidth = (actualWidth * scaleFactor).toInt() and 0xFFFFFFFE.toInt() // align to even
+                val newHeight = (actualHeight * scaleFactor).toInt() and 0xFFFFFFFE.toInt()
+
+                val isLinearRGB = actualMetadata.cfaPattern == RawMetadata.CFA_LINEAR_RGB
+                if (isLinearRGB) {
+                    // CPU bilinear downscale for interleaved RGB16 buffer
+                    val srcBuf = actualRawData.duplicate().order(java.nio.ByteOrder.nativeOrder())
+                    srcBuf.position(0)
+                    val src = srcBuf.asShortBuffer()
+                    val dstSize = newWidth * newHeight * 3 * 2 // 3 channels * 2 bytes
+                    val dstByteBuf = ByteBuffer.allocateDirect(dstSize).order(java.nio.ByteOrder.nativeOrder())
+                    val dst = dstByteBuf.asShortBuffer()
+
+                    val srcChannels = 3
+                    for (dy in 0 until newHeight) {
+                        val sy = dy.toFloat() / newHeight * actualHeight
+                        val sy0 = sy.toInt().coerceIn(0, actualHeight - 1)
+                        val sy1 = (sy0 + 1).coerceIn(0, actualHeight - 1)
+                        val fy = sy - sy0
+                        for (dx in 0 until newWidth) {
+                            val sx = dx.toFloat() / newWidth * actualWidth
+                            val sx0 = sx.toInt().coerceIn(0, actualWidth - 1)
+                            val sx1 = (sx0 + 1).coerceIn(0, actualWidth - 1)
+                            val fx = sx - sx0
+                            for (c in 0 until srcChannels) {
+                                val v00 = (src.get((sy0 * actualWidth + sx0) * srcChannels + c).toInt() and 0xFFFF).toFloat()
+                                val v10 = (src.get((sy0 * actualWidth + sx1) * srcChannels + c).toInt() and 0xFFFF).toFloat()
+                                val v01 = (src.get((sy1 * actualWidth + sx0) * srcChannels + c).toInt() and 0xFFFF).toFloat()
+                                val v11 = (src.get((sy1 * actualWidth + sx1) * srcChannels + c).toInt() and 0xFFFF).toFloat()
+                                val v = v00 * (1 - fx) * (1 - fy) + v10 * fx * (1 - fy) + v01 * (1 - fx) * fy + v11 * fx * fy
+                                dst.put((dy * newWidth + dx) * srcChannels + c, v.toInt().coerceIn(0, 65535).toShort())
+                            }
+                        }
+                    }
+                    actualRawData = dstByteBuf
+                    actualRowStride = newWidth * 6
+                    PLog.d(TAG, "Downscaled to ${newWidth}x${newHeight}")
+                }
+                actualWidth = newWidth
+                actualHeight = newHeight
+                // Update metadata dimensions
+                actualMetadata = actualMetadata.copy(width = newWidth, height = newHeight)
+            }
+
             val bounds = BitmapUtils.calculateProcessedRect(actualWidth, actualHeight, aspectRatio, cropRegion, actualRotation)
             val finalWidth = bounds.width()
             val finalHeight = bounds.height()
@@ -537,6 +588,12 @@ class RawDemosaicProcessor {
 
             // 创建静默遮挡图
             dummyShadingTextureId = createDummyShadingTexture()
+
+            // Query hardware texture size limit
+            val maxTexSizeArr = IntArray(1)
+            GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, maxTexSizeArr, 0)
+            maxTextureSize = maxTexSizeArr[0]
+            PLog.d(TAG, "GL_MAX_TEXTURE_SIZE = $maxTextureSize")
 
             isInitialized = true
             PLog.d(TAG, "RawDemosaicProcessor initialized")
