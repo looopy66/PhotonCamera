@@ -37,9 +37,12 @@ fun CameraParameterBar(
             isEnabled = state.isAutoExposure, // Only available in auto exposure mode
             onClick = { onParameterClick(CameraParameter.EXPOSURE_COMPENSATION) }
         )
+        val tvValue = if (state.shutterSpeed <= 0) "0"
+            else if (state.shutterSpeed >= 1_000_000_000.0) (state.shutterSpeed / 1_000_000_000.0).toInt().toString()
+            else "1/${(1_000_000_000.0 / state.shutterSpeed).toInt()}"
         ParameterItem(
             label = "Tv",
-            value = if (state.shutterSpeed >= 1_000_000_000.0) (state.shutterSpeed / 1_000_000_000.0).toInt().toString() else "1/${(1_000_000_000.0 / state.shutterSpeed).toInt()}",
+            value = tvValue,
             labelColor = yellow,
             valueColor = if (state.shutterSpeed > 1_000_000_000.0 / 15) Color.Red else null,
             isSelected = selectedParameter == CameraParameter.SHUTTER_SPEED,
