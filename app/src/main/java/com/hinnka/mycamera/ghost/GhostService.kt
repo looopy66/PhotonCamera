@@ -25,6 +25,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Filter
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -66,7 +68,6 @@ import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.data.UserPreferencesRepository
 import com.hinnka.mycamera.gallery.PhotoManager
 import com.hinnka.mycamera.utils.PLog
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -84,6 +85,13 @@ class GhostService(val context: Context) : LifecycleOwner, SavedStateRegistryOwn
         const val TAG = "GhostService"
         const val MIN_IMPORT_SIZE = 1024 * 1024L
     }
+
+    data class ProcessingInfo(
+        val uri: Uri,
+        val photoId: String,
+        val thumbnail: Bitmap? = null,
+        val size: Long
+    )
 
     private var registry = LifecycleRegistry(this)
 
@@ -105,16 +113,13 @@ class GhostService(val context: Context) : LifecycleOwner, SavedStateRegistryOwn
 
     private val processPhotoTaskMap = mutableMapOf<Uri, Deferred<*>>()
 
-    private var selfChanging = false
-    private var thumbnail: Bitmap? by mutableStateOf(null)
-    private var photoId: String? by mutableStateOf(null)
+    private var processingInfo: ProcessingInfo? by mutableStateOf(null)
 
     private val contentObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean, uri: Uri?) {
             super.onChange(selfChange, uri)
             val uri = uri ?: return
             if (selfChange) return
-            if (selfChanging) return
 
             val projection = arrayOf(
                 OpenableColumns.DISPLAY_NAME,
@@ -140,18 +145,19 @@ class GhostService(val context: Context) : LifecycleOwner, SavedStateRegistryOwn
                     val isTrashed = if (isTrashedIndex != -1) cursor.getInt(isTrashedIndex) else 0
                     val relativePath = if (relativePathIndex != -1) cursor.getString(relativePathIndex) else ""
 
+                    if (isPending != 0) return
+                    if (isTrashed != 0) return
+                    if (size <= MIN_IMPORT_SIZE) return
+                    if (processingInfo?.uri == uri && processingInfo?.size == size) return
+                    if (!relativePath.contains("DCIM/Camera", ignoreCase = true)) return
 
-                    if (isPending == 0 && isTrashed == 0 && size > MIN_IMPORT_SIZE && relativePath.startsWith("DCIM/Camera")) {
-                        PLog.d(TAG, "Content changed: $name, size: $size, relativePath: $relativePath")
-                        processPhotoTaskMap[uri]?.cancel()
-                        processPhotoTaskMap[uri] = lifecycleScope.async {
-                            delay(200L)
-                            if (isActive) {
-                                photoProcessTask(uri)
-                                processPhotoTaskMap.remove(uri)
-                            } else {
-                                PLog.d(TAG, "Photo process task cancelled")
-                            }
+                    PLog.d(TAG, "Content changed: $name, size: $size, relativePath: $relativePath")
+                    processPhotoTaskMap[uri]?.cancel()
+                    processPhotoTaskMap[uri] = lifecycleScope.async {
+                        delay(200L)
+                        if (isActive) {
+                            photoProcessTask(uri)
+                            processPhotoTaskMap.remove(uri)
                         }
                     }
                 }
@@ -218,28 +224,21 @@ class GhostService(val context: Context) : LifecycleOwner, SavedStateRegistryOwn
     }
 
     private suspend fun photoProcessTask(uri: Uri) = withContext(Dispatchers.IO) {
-        selfChanging = true
         val userPreferencesRepository = ContentRepository.getInstance(context).userPreferencesRepository
         val availableLutList = ContentRepository.getInstance(context).getAvailableLuts()
         val photoProcessor = ContentRepository.getInstance(context).photoProcessor
         val lutId = userPreferencesRepository.userPreferences.map { it.lutId }.firstOrNull()
             ?: availableLutList.firstOrNull { it.isDefault }?.id
-        val photoQuality = userPreferencesRepository.userPreferences.map { it.photoQuality }.firstOrNull() ?: 95
-        val photoId = PhotoManager.importPhoto(context, uri, lutId) ?: run {
-            selfChanging = false
+        val existingPhotoId = if (processingInfo?.uri == uri) processingInfo?.photoId else null
+        val photoId = PhotoManager.importPhoto(context, uri, lutId, existingPhotoId) ?: run {
             return@withContext
         }
         val metadata = PhotoManager.loadMetadata(context, photoId) ?: run {
-            selfChanging = false
             return@withContext
         }
-        val thumbnail = PhotoManager.updateExternalPhoto(context, photoId, uri, photoProcessor, metadata, photoQuality)
-        thumbnail?.let {
-            this@GhostService.thumbnail = it
-            this@GhostService.photoId = photoId
-        }
+        if (!isActive) return@withContext
+        this@GhostService.processingInfo = PhotoManager.updateExternalPhoto(context, photoId, uri, photoProcessor, metadata)
         delay(200L)
-        selfChanging = false
     }
 
     private fun initWindowParams() {
@@ -290,17 +289,23 @@ class GhostService(val context: Context) : LifecycleOwner, SavedStateRegistryOwn
                             if (!expanded) {
                                 expanded = true
                             } else {
-                                context.startActivity(Intent(context, MainActivity::class.java).apply {
-                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                    putExtra("route", Routes.photoDetail(0))
-                                })
+                                context.startActivity(
+                                    Intent(
+                                        context,
+                                        MainActivity::class.java
+                                    ).apply {
+                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                        if (processingInfo?.thumbnail != null) {
+                                            putExtra("route", Routes.photoDetail(0))
+                                        }
+                                    })
                             }
                         },
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (thumbnail != null) {
+                    if (processingInfo?.thumbnail != null) {
                         Image(
-                            bitmap = thumbnail!!.asImageBitmap(),
+                            bitmap = processingInfo!!.thumbnail!!.asImageBitmap(),
                             contentDescription = stringResource(R.string.app_name),
                             modifier = Modifier
                                 .size(40.dp)
@@ -316,6 +321,20 @@ class GhostService(val context: Context) : LifecycleOwner, SavedStateRegistryOwn
                         )
                     }
                     if (expanded) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        IconButton(onClick = {
+                            context.startActivity(
+                                Intent(context, MainActivity::class.java).apply {
+                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                    putExtra("route", Routes.FILTER_MANAGEMENT)
+                                })
+                        }) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = "LUT",
+                                tint = Color.White
+                            )
+                        }
                         Spacer(modifier = Modifier.width(8.dp))
                         IconButton(onClick = {
                             scope.launch {

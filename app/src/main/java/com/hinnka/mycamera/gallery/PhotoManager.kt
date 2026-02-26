@@ -11,10 +11,14 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.util.Log
 import androidx.core.graphics.createBitmap
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.ghost.GhostService
+import com.hinnka.mycamera.livephoto.GoogleLivePhotoCreator
 import com.hinnka.mycamera.livephoto.MotionPhotoWriter
+import com.hinnka.mycamera.livephoto.VivoLivePhotoCreator
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.processor.MultiFrameStacker
 import com.hinnka.mycamera.raw.MeteringSystem
@@ -106,6 +110,7 @@ object PhotoManager {
         onComplete: (Boolean) -> Unit = {}
     ) {
         withContext(Dispatchers.IO) {
+            val tempExportFile = File(context.cacheDir, "temp_export_${System.nanoTime()}.jpg")
             try {
                 // 读取照片
                 val processedBitmap = bitmap?.let {
@@ -138,7 +143,6 @@ object PhotoManager {
                     val videoFile = File(getPhotoDir(context, id), VIDEO_FILE)
                     val isLivePhoto = videoFile.exists()
 
-                    val tempExportFile = File(context.cacheDir, "temp_export_${System.nanoTime()}.jpg")
                     FileOutputStream(tempExportFile).use { outputStream ->
                         processedBitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
                     }
@@ -189,7 +193,10 @@ object PhotoManager {
                                 val contentValues = ContentValues().apply {
                                     put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
                                     put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
-                                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/PhotonCamera")
+                                    put(
+                                        MediaStore.MediaColumns.RELATIVE_PATH,
+                                        Environment.DIRECTORY_DCIM + "/PhotonCamera"
+                                    )
                                 }
 
                                 val uri = context.contentResolver.insert(
@@ -197,7 +204,8 @@ object PhotoManager {
                                     contentValues
                                 )
                                 uri?.let { uri -> context.contentResolver.openOutputStream(uri) }?.use { outputStream ->
-                                    val tempMotionVideoFile = File(tempMotionPhotoFile.absolutePath.replace(".jpg", ".mp4"))
+                                    val tempMotionVideoFile =
+                                        File(tempMotionPhotoFile.absolutePath.replace(".jpg", ".mp4"))
                                     if (tempMotionVideoFile.exists()) {
                                         tempMotionVideoFile.inputStream().use { input -> input.copyTo(outputStream) }
                                     }
@@ -239,6 +247,8 @@ object PhotoManager {
                 withContext(Dispatchers.Main) {
                     onComplete(false)
                 }
+            } finally {
+                tempExportFile.delete()
             }
         }
     }
@@ -252,9 +262,9 @@ object PhotoManager {
         uri: Uri,
         photoProcessor: PhotoProcessor,
         metadata: PhotoMetadata,
-        photoQuality: Int = 95
-    ): Bitmap? {
+    ): GhostService.ProcessingInfo? {
         return withContext(Dispatchers.IO) {
+            val tempExportFile = File(context.cacheDir, "temp_export_${System.nanoTime()}.jpg")
             try {
                 // 读取照片
                 val processedBitmap = photoProcessor.process(
@@ -263,11 +273,10 @@ object PhotoManager {
                 ) ?: return@withContext null
 
                 val videoFile = File(getPhotoDir(context, id), VIDEO_FILE)
-                val isLivePhoto = videoFile.exists()
+                val photoFile = getPhotoFile(context, id)
 
-                val tempExportFile = File(context.cacheDir, "temp_export_${System.nanoTime()}.jpg")
                 FileOutputStream(tempExportFile).use { outputStream ->
-                    processedBitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
+                    processedBitmap.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
                 }
 
                 ExifWriter.writeExif(
@@ -277,13 +286,22 @@ object PhotoManager {
                     )
                 )
 
-                if (isLivePhoto) {
+
+                var size = 0L
+
+                if (videoFile.exists()) {
                     val tempMotionPhotoFile = File(context.cacheDir, "temp_motion_${System.nanoTime()}.jpg")
                     try {
                         PLog.d(
                             TAG,
                             "Attempting to create Motion Photo for export: JPEG=${tempExportFile.length()}, Video=${videoFile.length()}"
                         )
+
+                        val creator = if (Build.MANUFACTURER.lowercase().contains("vivo") && videoFile.exists()) {
+                            // Vivo Live Photo 照片中没有内嵌视频文件，存在视频文件说明非 Vivo Live Photo
+                            // 而是 Google Live Photo，需要特殊处理
+                            GoogleLivePhotoCreator()
+                        } else null
 
                         // 重新从磁盘加载最新元数据，以获取可能刚写回的 presentationTimestampUs
                         val latestMetadata = loadMetadata(context, id) ?: metadata
@@ -292,19 +310,22 @@ object PhotoManager {
                             videoFile.absolutePath,
                             tempMotionPhotoFile.absolutePath,
                             latestMetadata.presentationTimestampUs ?: 0L,
-                            context
+                            context,
+                            creator
                         )
 
                         PLog.d(TAG, "MotionPhotoWriter result: $success")
 
                         context.contentResolver.openOutputStream(uri, "wt")?.use { outputStream ->
                             if (success) {
+                                size = tempMotionPhotoFile.length()
                                 tempMotionPhotoFile.inputStream().use { input -> input.copyTo(outputStream) }
                                 PLog.d(
                                     TAG,
                                     "Exported Live Photo successfully: ${tempMotionPhotoFile.length()} bytes"
                                 )
                             } else {
+                                size = tempExportFile.length()
                                 // Fallback to normal JPEG (with EXIF)
                                 PLog.w(TAG, "Motion Photo synthesis failed, falling back to JPEG")
                                 tempExportFile.inputStream().use { input -> input.copyTo(outputStream) }
@@ -313,9 +334,20 @@ object PhotoManager {
                     } finally {
                         tempMotionPhotoFile.delete()
                     }
+                } else if (VivoLivePhotoCreator.isVivoPhoto(photoFile.absolutePath)) {
+                    // 如果是 Vivo Photo，特殊处理
+                    val vivoMetadata = VivoLivePhotoCreator.extractVivoMetadata(photoFile.absolutePath)
+                    context.contentResolver.openOutputStream(uri, "wt")?.use { outputStream ->
+                        tempExportFile.inputStream().use { input -> input.copyTo(outputStream) }
+                        if (vivoMetadata != null) {
+                            outputStream.write(vivoMetadata)
+                        }
+                        size = tempExportFile.length() + (vivoMetadata?.size?.toLong() ?: 0L)
+                    }
                 } else {
                     // 3b. Normal Export: Copy Temp File (with EXIF) to MediaStore
                     context.contentResolver.openOutputStream(uri, "wt")?.use { outputStream ->
+                        size = tempExportFile.length()
                         tempExportFile.inputStream().use { input -> input.copyTo(outputStream) }
                     }
                 }
@@ -333,10 +365,18 @@ object PhotoManager {
                 saveMetadata(context, id, updatedMetadata)
                 PLog.d(TAG, "Exported URI saved: $uri for photo $id")
 
-                ThumbnailUtils.extractThumbnail(processedBitmap, 512, 512)
+                val thumbnail = ThumbnailUtils.extractThumbnail(processedBitmap, 512, 512)
+                GhostService.ProcessingInfo(
+                    uri = uri,
+                    photoId = id,
+                    thumbnail = thumbnail,
+                    size = size
+                )
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to export photo", e)
                 null
+            } finally {
+                tempExportFile.delete()
             }
         }
     }
@@ -406,7 +446,13 @@ object PhotoManager {
             }
 
             val dimensions =
-                BitmapUtils.calculateProcessedRect(metadata.width, metadata.height, metadata.ratio, cropRegion, metadata.rotation)
+                BitmapUtils.calculateProcessedRect(
+                    metadata.width,
+                    metadata.height,
+                    metadata.ratio,
+                    cropRegion,
+                    metadata.rotation
+                )
             val finalWidth = dimensions.width()
             val finalHeight = dimensions.height()
             // 保存元数据
@@ -433,7 +479,11 @@ object PhotoManager {
         }
     }
 
-    suspend fun saveVideo(context: Context, photoId: String, livePhotoVideoDeferred: Deferred<Pair<File, Long>?>? = null) {
+    suspend fun saveVideo(
+        context: Context,
+        photoId: String,
+        livePhotoVideoDeferred: Deferred<Pair<File, Long>?>? = null
+    ) {
         val photoDir = getPhotoDir(context, photoId)
         val videoFile = File(photoDir, VIDEO_FILE)
         val livePhotoResult = livePhotoVideoDeferred?.await()
@@ -654,6 +704,7 @@ object PhotoManager {
                     droMode
                 )
             }
+
             else -> {
                 PLog.e(TAG, "Unsupported image format: $format")
             }
@@ -752,7 +803,14 @@ object PhotoManager {
             val firstImageWidth = images[0].width
             val firstImageHeight = images[0].height
 
-            val rawMetadata = RawMetadata.create(firstImageWidth, firstImageHeight, characteristics, captureResult, exposureBias, droMode)
+            val rawMetadata = RawMetadata.create(
+                firstImageWidth,
+                firstImageHeight,
+                characteristics,
+                captureResult,
+                exposureBias,
+                droMode
+            )
 
             val byteBuffer = MultiFrameStacker.processBurstRaw(
                 images, characteristics,
@@ -888,6 +946,7 @@ object PhotoManager {
                     droMode
                 )
             }
+
             else -> {
                 PLog.e(TAG, "Unsupported image format: $format")
                 return@withContext null
@@ -1225,10 +1284,10 @@ object PhotoManager {
     /**
      * 从系统相册导入照片
      */
-    suspend fun importPhoto(context: Context, uri: Uri, lutId: String?): String? {
+    suspend fun importPhoto(context: Context, uri: Uri, lutId: String?, photoId: String? = null): String? {
         return withContext(Dispatchers.IO) {
             try {
-                val photoId = UUID.randomUUID().toString()
+                val photoId = photoId ?: UUID.randomUUID().toString()
                 val photoDir = getPhotoDir(context, photoId)
                 val photoFile = File(photoDir, PHOTO_FILE)
                 val dngFile = File(photoDir, DNG_FILE)
@@ -1262,9 +1321,11 @@ object PhotoManager {
 
 
                     // 3. 处理 RAW 以生成 JPEG 预览
-                    val processedBitmap = RawDemosaicProcessor.getInstance().process(context,
+                    val processedBitmap = RawDemosaicProcessor.getInstance().process(
+                        context,
                         dngFile.absolutePath, null, null, 0,
-                        sharpeningValue = 0.4f)
+                        sharpeningValue = 0.4f
+                    )
 
                     if (processedBitmap != null) {
                         // 保存为 original.jpg
@@ -1329,9 +1390,11 @@ object PhotoManager {
                 val metadata = loadMetadata(context, photoId)
 
                 // 3. 处理 RAW 以生成 JPEG 预览
-                val processedBitmap = RawDemosaicProcessor.getInstance().process(context,
+                val processedBitmap = RawDemosaicProcessor.getInstance().process(
+                    context,
                     dngFile.absolutePath, metadata?.ratio, metadata?.cropRegion, 0,
-                    sharpeningValue = 0.4f)
+                    sharpeningValue = 0.4f
+                )
 
                 if (processedBitmap != null) {
                     // 保存为 original.jpg
@@ -1380,7 +1443,7 @@ object PhotoManager {
             if (bitmap != null) {
                 val rotatedBitmap = rotateImageIfRequired(bitmap, orientation)
                 FileOutputStream(photoFile).use { out ->
-                    rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                    rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 100, out)
                 }
                 val newExif = ExifInterface(photoFile)
                 newExif.setAttribute(

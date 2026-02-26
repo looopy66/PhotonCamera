@@ -926,10 +926,10 @@ class LutRenderer : GLSurfaceView.Renderer {
             Matrix.scaleM(mvpMatrix, 0, scaleX, scaleY, 1f)
         }
 
-        PLog.d(
-            TAG,
-            "MVP matrix updated: viewport=${viewportWidth}x${viewportHeight}, preview=${previewWidth}x${previewHeight}"
-        )
+//        PLog.d(
+//            TAG,
+//            "MVP matrix updated: viewport=${viewportWidth}x${viewportHeight}, preview=${previewWidth}x${previewHeight}"
+//        )
     }
 
     private fun updateCaptureSize() {
@@ -946,7 +946,7 @@ class LutRenderer : GLSurfaceView.Renderer {
             captureHeight = maxCaptureSize
             captureWidth = (maxCaptureSize * actualWidth / actualHeight)
         }
-        PLog.d(TAG, "Update capture size: ${captureWidth}x${captureHeight}, totalRotation: $totalRotation")
+//        PLog.d(TAG, "Update capture size: ${captureWidth}x${captureHeight}, totalRotation: $totalRotation")
     }
 
     /**

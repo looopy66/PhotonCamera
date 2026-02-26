@@ -50,7 +50,8 @@ object MotionPhotoWriter {
         videoPath: String,
         outputPath: String,
         presentationTimestampUs: Long = 0,
-        context: Context? = null
+        context: Context? = null,
+        livePhotoCreator: LivePhotoCreator? = null
     ): Boolean {
         try {
             val jpegFile = File(jpegPath)
@@ -59,7 +60,7 @@ object MotionPhotoWriter {
             if (!jpegFile.exists()) return false
             if (!videoFile.exists()) return false
 
-            val creator = getCreator(context)
+            val creator = livePhotoCreator ?: getCreator(context)
             
             return creator.create(jpegPath, videoPath, outputPath, presentationTimestampUs)
 
@@ -181,22 +182,8 @@ object MotionPhotoWriter {
         return false
     }
 
-    private fun isVivoPhoto(filePath: String): Boolean {
-        // Vivo files end with magic bytes and a "vcameralbum!" string
-        // We check the last 100 bytes for "vcameralbum!" or "vivo{"
-        try {
-            val file = File(filePath)
-            if (file.length() < 100) return false
-            FileInputStream(file).use { fis ->
-                fis.skip(file.length() - 100)
-                val buffer = ByteArray(100)
-                fis.read(buffer)
-                val content = String(buffer, StandardCharsets.US_ASCII)
-                return content.contains("vcameralbum!") || content.contains("vivo{")
-            }
-        } catch (e: Exception) {
-            return false
-        }
+    fun isVivoPhoto(filePath: String): Boolean {
+        return VivoLivePhotoCreator.isVivoLivePhoto(filePath)
     }
 
     /**

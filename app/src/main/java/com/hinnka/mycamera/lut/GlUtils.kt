@@ -88,7 +88,7 @@ object GlUtils {
         val textureId = textureIds[0]
         
         if (textureId == 0) {
-            PLog.e(TAG, "Failed to generate 3D texture")
+//            PLog.e(TAG, "Failed to generate 3D texture")
             return 0
         }
         

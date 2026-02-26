@@ -19,7 +19,7 @@ import kotlin.math.log2
  * 保存 LUT、边框水印、编辑信息和拍摄参数，用于非破坏性编辑和边框水印渲染
  */
 data class PhotoMetadata(
-    val version: Int = 8,  // 升级版本以支持细节处理参数
+    val version: Int = 9,  // 升级版本以支持细节处理参数
     // 编辑配置
     val lutId: String? = null,
     // 色彩配方配置
@@ -55,7 +55,8 @@ data class PhotoMetadata(
     // Live Photo 演示时间戳 (us)
     val presentationTimestampUs: Long? = null,
     // DRO 模式
-    val droMode: String? = null
+    val droMode: String? = null,
+    val software: String? = null
 ) {
     /**
      * 将元数据转换为 CaptureInfo，用于写入 EXIF
@@ -71,7 +72,8 @@ data class PhotoMetadata(
             aperture = aperture?.substringAfter("/")?.toFloatOrNull(),
             focalLength = focalLength?.substringBefore("mm")?.toFloatOrNull(),
             focalLength35mm = focalLength35mm?.substringBefore("mm")?.toIntOrNull(),
-            exposureTime = parseExposureTime(shutterSpeed)
+            exposureTime = parseExposureTime(shutterSpeed),
+            software = software ?: "PhotonCamera"
         )
     }
 
@@ -173,6 +175,7 @@ data class PhotoMetadata(
             put("presentationTimestampUs", presentationTimestampUs ?: JSONObject.NULL)
             // DRO 模式
             put("droMode", droMode ?: JSONObject.NULL)
+            put("software", software ?: JSONObject.NULL)
         }.toString(2)
     }
 
@@ -257,7 +260,8 @@ data class PhotoMetadata(
                     },
                     exportedUris = exportedUris,
                     presentationTimestampUs = if (obj.isNull("presentationTimestampUs")) null else obj.optLong("presentationTimestampUs"),
-                    droMode = if (obj.isNull("droMode")) null else obj.optString("droMode")
+                    droMode = if (obj.isNull("droMode")) null else obj.optString("droMode"),
+                    software = if (obj.isNull("software")) null else obj.optString("software")
                 )
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to parse JSON", e)
@@ -329,6 +333,8 @@ data class PhotoMetadata(
                         }
                     }
 
+                    val software = exif.getAttribute(ExifInterface.TAG_SOFTWARE)
+
                     PhotoMetadata(
                         deviceModel = model,
                         brand = make?.replaceFirstChar { it.uppercase() },
@@ -340,6 +346,7 @@ data class PhotoMetadata(
                         aperture = aperture,
                         width = width,
                         height = height,
+                        software = software,
                         isImported = true
                     )
                 } ?: createDefault(0, 0)
