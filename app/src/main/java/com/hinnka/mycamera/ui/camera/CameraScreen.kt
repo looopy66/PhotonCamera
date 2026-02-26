@@ -56,7 +56,6 @@ import com.hinnka.mycamera.ui.components.LutControlPanel
 import com.hinnka.mycamera.ui.components.PaymentDialog
 import com.hinnka.mycamera.ui.components.rememberBackgroundPainter
 import com.hinnka.mycamera.utils.OrientationObserver
-import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlin.math.abs
@@ -93,7 +92,7 @@ fun CameraScreen(
     val useMultiFrame by viewModel.useMultiFrame.collectAsState()
     val useSuperResolution by viewModel.useSuperResolution.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
-    val ghostMode by viewModel.ghostMode.collectAsState()
+    val phantomMode by viewModel.phantomMode.collectAsState()
 
     // 标记相机是否已打开
     var cameraOpened by remember { mutableStateOf(false) }
@@ -143,8 +142,8 @@ fun CameraScreen(
             } else if (hasOverlay && hasFiles) {
                 // All permissions granted
                 isGhostPermissionFlowActive = false
-                if (!ghostMode) {
-                    viewModel.toggleGhostMode()
+                if (!phantomMode) {
+                    viewModel.togglePhantomMode()
                 }
             } else if (!hasOverlay) {
                 // If overlay is still missing after returning, user might have cancelled
@@ -240,7 +239,7 @@ fun CameraScreen(
                             )
                         } else {
                             isGhostPermissionFlowActive = false
-                            viewModel.toggleGhostMode()
+                            viewModel.togglePhantomMode()
                         }
                     }
                 ) {
@@ -557,12 +556,12 @@ fun CameraScreen(
                 activePanel = ActivePanel.NONE
                 onFilterManagementClick()
             },
-            ghostMode = ghostMode,
-            onGhostModeToggle = {
+            phantomMode = phantomMode,
+            onPhantomModeToggle = {
                 if (it && (!Settings.canDrawOverlays(context) || !Environment.isExternalStorageManager())) {
                     showGhostPermissionDialog = true
                 } else {
-                    viewModel.toggleGhostMode()
+                    viewModel.togglePhantomMode()
                 }
             },
             onMoreSettingsClick = {

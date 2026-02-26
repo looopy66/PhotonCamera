@@ -1,4 +1,4 @@
-package com.hinnka.mycamera.ghost
+package com.hinnka.mycamera.phantom
 
 import android.content.Context
 import android.content.Intent
@@ -6,6 +6,7 @@ import android.database.ContentObserver
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.net.Uri
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
@@ -26,7 +27,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Filter
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -77,9 +77,10 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import kotlin.use
 
-class GhostService(val context: Context) : LifecycleOwner, SavedStateRegistryOwner {
+class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryOwner {
 
     private companion object {
         const val TAG = "GhostService"
@@ -88,6 +89,7 @@ class GhostService(val context: Context) : LifecycleOwner, SavedStateRegistryOwn
 
     data class ProcessingInfo(
         val uri: Uri,
+        val path: String,
         val photoId: String,
         val thumbnail: Bitmap? = null,
         val size: Long
@@ -111,18 +113,19 @@ class GhostService(val context: Context) : LifecycleOwner, SavedStateRegistryOwn
 
     private val userPreferencesRepository = UserPreferencesRepository(context)
 
-    private val processPhotoTaskMap = mutableMapOf<Uri, Deferred<*>>()
+    private val processPhotoTaskMap = mutableMapOf<String, Deferred<*>>()
 
     private var processingInfo: ProcessingInfo? by mutableStateOf(null)
 
     private val contentObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean, uri: Uri?) {
             super.onChange(selfChange, uri)
-            val uri = uri ?: return
+            uri ?: return
             if (selfChange) return
 
             val projection = arrayOf(
                 OpenableColumns.DISPLAY_NAME,
+                MediaStore.MediaColumns.DATA,
                 MediaStore.MediaColumns.SIZE,
                 MediaStore.MediaColumns.IS_PENDING,
                 MediaStore.MediaColumns.IS_TRASHED,
@@ -136,28 +139,38 @@ class GhostService(val context: Context) : LifecycleOwner, SavedStateRegistryOwn
                     val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                     val pendingIndex = cursor.getColumnIndex(MediaStore.Images.Media.IS_PENDING)
                     val sizeIndex = cursor.getColumnIndex(MediaStore.MediaColumns.SIZE)
+                    val dataIndex = cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
                     val isTrashedIndex = cursor.getColumnIndex(MediaStore.MediaColumns.IS_TRASHED)
                     val relativePathIndex = cursor.getColumnIndex(MediaStore.MediaColumns.RELATIVE_PATH)
 
                     val name = if (nameIndex != -1) cursor.getString(nameIndex) else "Unknown"
                     val isPending = if (pendingIndex != -1) cursor.getInt(pendingIndex) else 0
                     val size = if (sizeIndex != -1) cursor.getLong(sizeIndex) else 0L
+                    val data = if (dataIndex != -1) cursor.getString(dataIndex) else ""
                     val isTrashed = if (isTrashedIndex != -1) cursor.getInt(isTrashedIndex) else 0
                     val relativePath = if (relativePathIndex != -1) cursor.getString(relativePathIndex) else ""
 
                     if (isPending != 0) return
                     if (isTrashed != 0) return
                     if (size <= MIN_IMPORT_SIZE) return
-                    if (processingInfo?.uri == uri && processingInfo?.size == size) return
                     if (!relativePath.contains("DCIM/Camera", ignoreCase = true)) return
 
-                    PLog.d(TAG, "Content changed: $name, size: $size, relativePath: $relativePath")
-                    processPhotoTaskMap[uri]?.cancel()
-                    processPhotoTaskMap[uri] = lifecycleScope.async {
+                    val path = data.ifEmpty {
+                        val dir = File(Environment.getExternalStorageDirectory(), relativePath)
+                        File(dir, name).absolutePath
+                    }
+                    PLog.d(TAG, "Content changed detected: path=$path size=$size")
+                    processPhotoTaskMap[path]?.cancel()
+                    processPhotoTaskMap[path] = lifecycleScope.async {
                         delay(200L)
                         if (isActive) {
-                            photoProcessTask(uri)
-                            processPhotoTaskMap.remove(uri)
+                            // 在延迟后再次检查，此时上一个任务可能已经更新了 processingInfo
+                            if (processingInfo?.path == path && processingInfo?.size == size) {
+                                PLog.d(TAG, "Ignore change for $path as it matches current state (size $size)")
+                                return@async
+                            }
+                            photoProcessTask(uri, path)
+                            processPhotoTaskMap.remove(path)
                         }
                     }
                 }
@@ -223,7 +236,7 @@ class GhostService(val context: Context) : LifecycleOwner, SavedStateRegistryOwn
         }
     }
 
-    private suspend fun photoProcessTask(uri: Uri) = withContext(Dispatchers.IO) {
+    private suspend fun photoProcessTask(uri: Uri, path: String) = withContext(Dispatchers.IO) {
         val userPreferencesRepository = ContentRepository.getInstance(context).userPreferencesRepository
         val availableLutList = ContentRepository.getInstance(context).getAvailableLuts()
         val photoProcessor = ContentRepository.getInstance(context).photoProcessor
@@ -237,7 +250,11 @@ class GhostService(val context: Context) : LifecycleOwner, SavedStateRegistryOwn
             return@withContext
         }
         if (!isActive) return@withContext
-        this@GhostService.processingInfo = PhotoManager.updateExternalPhoto(context, photoId, uri, photoProcessor, metadata)
+        val result = PhotoManager.updateExternalPhoto(context, photoId, uri, path, photoProcessor, metadata)
+        if (result != null) {
+            this@PhantomService.processingInfo = result
+//            PLog.d(TAG, "Processing info updated: $result")
+        }
         delay(200L)
     }
 
@@ -272,7 +289,7 @@ class GhostService(val context: Context) : LifecycleOwner, SavedStateRegistryOwn
 
                 Row(
                     modifier = Modifier
-                        .padding(8.dp)
+                        .padding(4.dp)
                         .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(24.dp))
                         .padding(4.dp)
                         .pointerInput(Unit) {
@@ -338,7 +355,7 @@ class GhostService(val context: Context) : LifecycleOwner, SavedStateRegistryOwn
                         Spacer(modifier = Modifier.width(8.dp))
                         IconButton(onClick = {
                             scope.launch {
-                                userPreferencesRepository.saveGhostMode(false)
+                                userPreferencesRepository.savePhantomMode(false)
                                 stop()
                             }
                         }) {

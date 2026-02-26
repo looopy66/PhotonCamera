@@ -7,9 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Masks
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -39,8 +37,8 @@ fun CameraTopSheet(
     availableNrLevels: IntArray,
     onNRLevelChange: (Int) -> Unit,
     onFilterManageClick: () -> Unit,
-    ghostMode: Boolean,
-    onGhostModeToggle: (Boolean) -> Unit,
+    phantomMode: Boolean,
+    onPhantomModeToggle: (Boolean) -> Unit,
     onMoreSettingsClick: () -> Unit,
     useMultiFrame: Boolean,
     onMultiFrameToggle: (Boolean) -> Unit,
@@ -96,7 +94,7 @@ fun CameraTopSheet(
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             // Display settings section (Grid & Level)
             Row(
@@ -183,8 +181,8 @@ fun CameraTopSheet(
 
                 QuickSettingToggle(
                     title = stringResource(R.string.ghost_mode),
-                    checked = ghostMode,
-                    onCheckedChange = onGhostModeToggle,
+                    checked = phantomMode,
+                    onCheckedChange = onPhantomModeToggle,
                     modifier = Modifier.weight(1f)
                 )
 
@@ -204,7 +202,7 @@ fun CameraTopSheet(
                 )*/
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             // More Settings Button
             Surface(
@@ -215,7 +213,7 @@ fun CameraTopSheet(
             ) {
                 Row(
                     modifier = Modifier
-                        .padding(16.dp),
+                        .padding(16.dp, 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Box(
@@ -296,9 +294,9 @@ fun QuickSettingButton(
 ) {
     Box(
         modifier = modifier
-            .height(56.dp)
+            .height(48.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(Color.White.copy(alpha = 0.05f))
+            .background(Color.White.copy(alpha = 0.15f))
             .clickable { onClick() }
             .padding(horizontal = 16.dp),
         contentAlignment = Alignment.CenterStart

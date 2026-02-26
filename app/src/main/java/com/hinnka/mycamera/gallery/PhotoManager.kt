@@ -11,11 +11,10 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
-import android.util.Log
 import androidx.core.graphics.createBitmap
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
-import com.hinnka.mycamera.ghost.GhostService
+import com.hinnka.mycamera.phantom.PhantomService
 import com.hinnka.mycamera.livephoto.GoogleLivePhotoCreator
 import com.hinnka.mycamera.livephoto.MotionPhotoWriter
 import com.hinnka.mycamera.livephoto.VivoLivePhotoCreator
@@ -260,124 +259,127 @@ object PhotoManager {
         context: Context,
         id: String,
         uri: Uri,
+        path: String,
         photoProcessor: PhotoProcessor,
         metadata: PhotoMetadata,
-    ): GhostService.ProcessingInfo? {
-        return withContext(Dispatchers.IO) {
-            val tempExportFile = File(context.cacheDir, "temp_export_${System.nanoTime()}.jpg")
-            try {
-                // 读取照片
-                val processedBitmap = photoProcessor.process(
-                    context, id, metadata,
-                    0f, 0f, 0f
-                ) ?: return@withContext null
+    ): PhantomService.ProcessingInfo? {
+        val tempExportFile = File(context.cacheDir, "temp_export_${System.nanoTime()}.jpg")
+        try {
+            // 读取照片
+            val processedBitmap = photoProcessor.process(
+                context, id, metadata,
+                0f, 0f, 0f
+            ) ?: return null
 
-                val videoFile = File(getPhotoDir(context, id), VIDEO_FILE)
-                val photoFile = getPhotoFile(context, id)
-
-                FileOutputStream(tempExportFile).use { outputStream ->
-                    processedBitmap.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
-                }
-
-                ExifWriter.writeExif(
-                    tempExportFile, metadata.toCaptureInfo().copy(
-                        imageWidth = processedBitmap.width,
-                        imageHeight = processedBitmap.height
-                    )
-                )
+            val videoFile = File(getPhotoDir(context, id), VIDEO_FILE)
+            val photoFile = getPhotoFile(context, id)
 
 
-                var size = 0L
-
-                if (videoFile.exists()) {
-                    val tempMotionPhotoFile = File(context.cacheDir, "temp_motion_${System.nanoTime()}.jpg")
-                    try {
-                        PLog.d(
-                            TAG,
-                            "Attempting to create Motion Photo for export: JPEG=${tempExportFile.length()}, Video=${videoFile.length()}"
-                        )
-
-                        val creator = if (Build.MANUFACTURER.lowercase().contains("vivo") && videoFile.exists()) {
-                            // Vivo Live Photo 照片中没有内嵌视频文件，存在视频文件说明非 Vivo Live Photo
-                            // 而是 Google Live Photo，需要特殊处理
-                            GoogleLivePhotoCreator()
-                        } else null
-
-                        // 重新从磁盘加载最新元数据，以获取可能刚写回的 presentationTimestampUs
-                        val latestMetadata = loadMetadata(context, id) ?: metadata
-                        val success = MotionPhotoWriter.write(
-                            tempExportFile.absolutePath,
-                            videoFile.absolutePath,
-                            tempMotionPhotoFile.absolutePath,
-                            latestMetadata.presentationTimestampUs ?: 0L,
-                            context,
-                            creator
-                        )
-
-                        PLog.d(TAG, "MotionPhotoWriter result: $success")
-
-                        context.contentResolver.openOutputStream(uri, "wt")?.use { outputStream ->
-                            if (success) {
-                                size = tempMotionPhotoFile.length()
-                                tempMotionPhotoFile.inputStream().use { input -> input.copyTo(outputStream) }
-                                PLog.d(
-                                    TAG,
-                                    "Exported Live Photo successfully: ${tempMotionPhotoFile.length()} bytes"
-                                )
-                            } else {
-                                size = tempExportFile.length()
-                                // Fallback to normal JPEG (with EXIF)
-                                PLog.w(TAG, "Motion Photo synthesis failed, falling back to JPEG")
-                                tempExportFile.inputStream().use { input -> input.copyTo(outputStream) }
-                            }
-                        }
-                    } finally {
-                        tempMotionPhotoFile.delete()
-                    }
-                } else if (VivoLivePhotoCreator.isVivoPhoto(photoFile.absolutePath)) {
-                    // 如果是 Vivo Photo，特殊处理
-                    val vivoMetadata = VivoLivePhotoCreator.extractVivoMetadata(photoFile.absolutePath)
-                    context.contentResolver.openOutputStream(uri, "wt")?.use { outputStream ->
-                        tempExportFile.inputStream().use { input -> input.copyTo(outputStream) }
-                        if (vivoMetadata != null) {
-                            outputStream.write(vivoMetadata)
-                        }
-                        size = tempExportFile.length() + (vivoMetadata?.size?.toLong() ?: 0L)
-                    }
-                } else {
-                    // 3b. Normal Export: Copy Temp File (with EXIF) to MediaStore
-                    context.contentResolver.openOutputStream(uri, "wt")?.use { outputStream ->
-                        size = tempExportFile.length()
-                        tempExportFile.inputStream().use { input -> input.copyTo(outputStream) }
-                    }
-                }
-
-                val contentValues = ContentValues().apply {
-                    put(MediaStore.Images.Media.DATE_MODIFIED, System.currentTimeMillis() / 1000)
-                }
-                context.contentResolver.update(uri, contentValues, null, null)
-
-                // Save exported URI to metadata
-                val currentMetadata = loadMetadata(context, id) ?: metadata
-                val updatedMetadata = currentMetadata.copy(
-                    exportedUris = currentMetadata.exportedUris + uri.toString()
-                )
-                saveMetadata(context, id, updatedMetadata)
-                PLog.d(TAG, "Exported URI saved: $uri for photo $id")
-
-                val thumbnail = ThumbnailUtils.extractThumbnail(processedBitmap, 512, 512)
-                GhostService.ProcessingInfo(
-                    uri = uri,
-                    photoId = id,
-                    thumbnail = thumbnail,
-                    size = size
-                )
-            } catch (e: Exception) {
-                PLog.e(TAG, "Failed to export photo", e)
-                null
-            } finally {
-                tempExportFile.delete()
+            FileOutputStream(tempExportFile).use { outputStream ->
+                processedBitmap.compress(Bitmap.CompressFormat.JPEG, 97, outputStream)
             }
+
+            PLog.d(TAG, "updateExternalPhoto: $path ${photoFile.length()} ${tempExportFile.length()}")
+
+            ExifWriter.writeExif(
+                tempExportFile, metadata.toCaptureInfo().copy(
+                    imageWidth = processedBitmap.width,
+                    imageHeight = processedBitmap.height
+                )
+            )
+
+
+            var size = 0L
+
+            if (videoFile.exists()) {
+                val tempMotionPhotoFile = File(context.cacheDir, "temp_motion_${System.nanoTime()}.jpg")
+                try {
+                    PLog.d(
+                        TAG,
+                        "Attempting to create Motion Photo for export: JPEG=${tempExportFile.length()}, Video=${videoFile.length()}"
+                    )
+
+                    val creator = if (Build.MANUFACTURER.lowercase().contains("vivo") && videoFile.exists()) {
+                        // Vivo Live Photo 照片中没有内嵌视频文件，存在视频文件说明非 Vivo Live Photo
+                        // 而是 Google Live Photo，需要特殊处理
+                        GoogleLivePhotoCreator()
+                    } else null
+
+                    // 重新从磁盘加载最新元数据，以获取可能刚写回的 presentationTimestampUs
+                    val latestMetadata = loadMetadata(context, id) ?: metadata
+                    val success = MotionPhotoWriter.write(
+                        tempExportFile.absolutePath,
+                        videoFile.absolutePath,
+                        tempMotionPhotoFile.absolutePath,
+                        latestMetadata.presentationTimestampUs ?: 0L,
+                        context,
+                        creator
+                    )
+
+                    PLog.d(TAG, "MotionPhotoWriter result: $success")
+
+                    context.contentResolver.openOutputStream(uri, "wt")?.use { outputStream ->
+                        if (success) {
+                            size = tempMotionPhotoFile.length()
+                            tempMotionPhotoFile.inputStream().use { input -> input.copyTo(outputStream) }
+                            PLog.d(
+                                TAG,
+                                "Exported Live Photo successfully: ${tempMotionPhotoFile.length()} bytes"
+                            )
+                        } else {
+                            size = tempExportFile.length()
+                            // Fallback to normal JPEG (with EXIF)
+                            PLog.w(TAG, "Motion Photo synthesis failed, falling back to JPEG")
+                            tempExportFile.inputStream().use { input -> input.copyTo(outputStream) }
+                        }
+                    }
+                } finally {
+                    tempMotionPhotoFile.delete()
+                }
+            } else if (VivoLivePhotoCreator.isVivoPhoto(photoFile.absolutePath)) {
+                // 如果是 Vivo Photo，特殊处理
+                val vivoMetadata = VivoLivePhotoCreator.extractVivoMetadata(photoFile.absolutePath)
+                context.contentResolver.openOutputStream(uri, "wt")?.use { outputStream ->
+                    tempExportFile.inputStream().use { input -> input.copyTo(outputStream) }
+                    if (vivoMetadata != null) {
+                        outputStream.write(vivoMetadata)
+                    }
+                    size = tempExportFile.length() + (vivoMetadata?.size?.toLong() ?: 0L)
+                }
+            } else {
+                // 3b. Normal Export: Copy Temp File (with EXIF) to MediaStore
+                context.contentResolver.openOutputStream(uri, "wt")?.use { outputStream ->
+                    size = tempExportFile.length()
+                    tempExportFile.inputStream().use { input -> input.copyTo(outputStream) }
+                }
+            }
+
+            val contentValues = ContentValues().apply {
+                put(MediaStore.Images.Media.DATE_MODIFIED, System.currentTimeMillis() / 1000)
+            }
+            context.contentResolver.update(uri, contentValues, null, null)
+
+            // Save exported URI to metadata
+            val currentMetadata = loadMetadata(context, id) ?: metadata
+            val updatedMetadata = currentMetadata.copy(
+                exportedUris = currentMetadata.exportedUris + uri.toString()
+            )
+            saveMetadata(context, id, updatedMetadata)
+            PLog.d(TAG, "Exported URI saved: $uri for photo $id")
+
+            val thumbnail = ThumbnailUtils.extractThumbnail(processedBitmap, 512, 512)
+            return PhantomService.ProcessingInfo(
+                uri = uri,
+                photoId = id,
+                path = path,
+                thumbnail = thumbnail,
+                size = size
+            )
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to export photo", e)
+            return null
+        } finally {
+            tempExportFile.delete()
         }
     }
 

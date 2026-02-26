@@ -5,7 +5,6 @@ import android.content.pm.PackageManager
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -54,11 +53,8 @@ import com.hinnka.mycamera.utils.BuglyHelper
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
-import androidx.core.net.toUri
 import androidx.lifecycle.lifecycleScope
-import com.hinnka.mycamera.ghost.GhostService
 import com.hinnka.mycamera.utils.PLog
-import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 
 /**
@@ -116,12 +112,12 @@ class MainActivity : ComponentActivity() {
         }
 
         lifecycleScope.launch {
-            cameraViewModel.ghostMode.collect { ghostMode ->
-                PLog.d("MainActivity", "ghostMode: $ghostMode")
-                if (ghostMode) {
-                    MyCameraApplication.ghostService.start()
+            cameraViewModel.phantomMode.collect { phantomMode ->
+                PLog.d("MainActivity", "phantomMode: $phantomMode")
+                if (phantomMode) {
+                    MyCameraApplication.phantomService.start()
                 } else {
-                    MyCameraApplication.ghostService.stop()
+                    MyCameraApplication.phantomService.stop()
                 }
             }
         }

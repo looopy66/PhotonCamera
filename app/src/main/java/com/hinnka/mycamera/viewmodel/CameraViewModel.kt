@@ -2,13 +2,11 @@ package com.hinnka.mycamera.viewmodel
 
 import android.app.Application
 import android.content.Context
-import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.net.Uri
-import androidx.activity.result.ActivityResultLauncher
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -17,14 +15,10 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hinnka.mycamera.camera.*
 import com.hinnka.mycamera.data.ContentRepository
-import com.hinnka.mycamera.data.UserPreferencesRepository
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
-import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.gallery.PhotoManager
 import com.hinnka.mycamera.gallery.PhotoMetadata
-import com.hinnka.mycamera.gallery.PhotoProcessor
-import com.hinnka.mycamera.ghost.GhostService
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.model.ColorRecipeParams
@@ -177,8 +171,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .map { it.useP010 }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    val ghostMode: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.ghostMode }
+    val phantomMode: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.phantomMode }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     // 软件处理参数 Flow
@@ -1757,10 +1751,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun toggleGhostMode() {
-        val newMode = !ghostMode.value
+    fun togglePhantomMode() {
+        val newMode = !phantomMode.value
         viewModelScope.launch {
-            userPreferencesRepository.saveGhostMode(newMode)
+            userPreferencesRepository.savePhantomMode(newMode)
         }
     }
 }
