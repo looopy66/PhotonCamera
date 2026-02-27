@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.ui.gallery
 
 import android.app.Activity
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -31,8 +32,12 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.BurstMode
 import androidx.compose.material3.*
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -51,6 +56,7 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.gallery.PhotoData
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.theme.AccentOrange
+import com.hinnka.mycamera.viewmodel.GalleryTab
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 
 /**
@@ -64,17 +70,28 @@ fun GalleryScreen(
     onPhotoClick: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val photos by viewModel.photos.collectAsState()
+    val photos by viewModel.currentPhotos.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
+    val isSystemLoadingMore by viewModel.isSystemLoadingMore.collectAsState()
     val isSharing by viewModel.isSharing.collectAsState()
     val isSelectionMode = viewModel.isSelectionMode
     val selectedPhotos = viewModel.selectedPhotos
+    val selectedTab = viewModel.selectedTab
+    val hasPermission = viewModel.hasGalleryPermission
 
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetMultipleContents()
     ) { uris ->
         if (uris.isNotEmpty()) {
             viewModel.importPhotos(uris)
+        }
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            viewModel.checkGalleryPermission()
         }
     }
 
@@ -107,10 +124,24 @@ fun GalleryScreen(
 
     var showDeleteDialog by remember { mutableStateOf(false) }
 
+    // 监听生命周期，onResume 时刷新列表
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.loadCurrentTabData()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     // 延迟加载照片列表，避免与跳转动画冲突导致卡顿
     LaunchedEffect(Unit) {
         kotlinx.coroutines.delay(500) // 等待跳转动画完成
-        viewModel.loadPhotos()
+        viewModel.loadCurrentTabData()
     }
 
     Scaffold(
@@ -124,10 +155,41 @@ fun GalleryScreen(
                             color = Color.White
                         )
                     } else {
-                        Text(
-                            text = stringResource(R.string.gallery),
-                            color = Color.White
-                        )
+                        TabRow(
+                            selectedTabIndex = selectedTab.ordinal,
+                            containerColor = Color.Transparent,
+                            contentColor = Color.White,
+                            indicator = { tabPositions ->
+                                TabRowDefaults.SecondaryIndicator(
+                                    Modifier.tabIndicatorOffset(tabPositions[selectedTab.ordinal]),
+                                    color = AccentOrange
+                                )
+                            },
+                            divider = {}
+                        ) {
+                            Tab(
+                                selected = selectedTab == GalleryTab.PHOTON,
+                                onClick = { viewModel.selectTab(GalleryTab.PHOTON) },
+                                text = {
+                                    Text(
+                                        text = stringResource(R.string.gallery_photon),
+                                        fontSize = 14.sp,
+                                        fontWeight = if (selectedTab == GalleryTab.PHOTON) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                }
+                            )
+                            Tab(
+                                selected = selectedTab == GalleryTab.SYSTEM,
+                                onClick = { viewModel.selectTab(GalleryTab.SYSTEM) },
+                                text = {
+                                    Text(
+                                        text = stringResource(R.string.gallery_system),
+                                        fontSize = 14.sp,
+                                        fontWeight = if (selectedTab == GalleryTab.SYSTEM) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                }
+                            )
+                        }
                     }
                 },
                 navigationIcon = {
@@ -243,11 +305,38 @@ fun GalleryScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            if (isLoading) {
+            if (isLoading && photos.isEmpty()) {
                 CircularProgressIndicator(
                     color = AccentOrange,
                     modifier = Modifier.align(Alignment.Center)
                 )
+            } else if (selectedTab == GalleryTab.SYSTEM && !hasPermission) {
+                // 权限缺失提示
+                Column(
+                    modifier = Modifier.align(Alignment.Center).padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = stringResource(R.string.permission_required_gallery),
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 16.sp,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = {
+                            val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                android.Manifest.permission.READ_MEDIA_IMAGES
+                            } else {
+                                android.Manifest.permission.READ_EXTERNAL_STORAGE
+                            }
+                            permissionLauncher.launch(permission)
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentOrange)
+                    ) {
+                        Text(stringResource(R.string.grant_permission))
+                    }
+                }
             } else if (photos.isEmpty()) {
                 // 空状态
                 Column(
@@ -262,6 +351,7 @@ fun GalleryScreen(
                     )
                 }
             } else {
+                val currentPhotos = photos
                 // 照片网格
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
@@ -269,10 +359,10 @@ fun GalleryScreen(
                     modifier = Modifier.fillMaxSize()
                 ) {
                     items(
-                        items = photos,
+                        items = currentPhotos,
                         key = { it.id }
                     ) { photo ->
-                        val index = photos.indexOf(photo)
+                        val index = currentPhotos.indexOf(photo)
                         PhotoGridItem(
                             photo = photo,
                             viewModel = viewModel,
@@ -293,6 +383,30 @@ fun GalleryScreen(
                                 viewModel.togglePhotoSelection(photo)
                             }
                         )
+
+                        // 触底加载更多 (仅限系统相册)
+                        if (selectedTab == GalleryTab.SYSTEM && photo == currentPhotos.lastOrNull()) {
+                            LaunchedEffect(Unit) {
+                                viewModel.loadSystemPhotos(reset = false)
+                            }
+                        }
+                    }
+
+                    if (selectedTab == GalleryTab.SYSTEM && isSystemLoadingMore) {
+                        item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    color = AccentOrange,
+                                    modifier = Modifier.size(24.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -311,25 +425,27 @@ fun GalleryScreen(
                     Text(
                         text = stringResource(R.string.delete_multiple_confirm, selectedPhotos.size)
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.clickable { deleteExported = !deleteExported }
-                    ) {
-                        Checkbox(
-                            checked = deleteExported,
-                            onCheckedChange = { deleteExported = it },
-                            colors = CheckboxDefaults.colors(
-                                checkedColor = Color(0xFFFF6B35),
-                                uncheckedColor = Color.White.copy(alpha = 0.6f)
+                    if (viewModel.selectedTab == GalleryTab.PHOTON) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.clickable { deleteExported = !deleteExported }
+                        ) {
+                            Checkbox(
+                                checked = deleteExported,
+                                onCheckedChange = { deleteExported = it },
+                                colors = CheckboxDefaults.colors(
+                                    checkedColor = Color(0xFFFF6B35),
+                                    uncheckedColor = Color.White.copy(alpha = 0.6f)
+                                )
                             )
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = stringResource(R.string.delete_exported_photos),
-                            color = Color.White.copy(alpha = 0.9f),
-                            fontSize = 14.sp
-                        )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = stringResource(R.string.delete_exported_photos),
+                                color = Color.White.copy(alpha = 0.9f),
+                                fontSize = 14.sp
+                            )
+                        }
                     }
                 }
             },

@@ -14,6 +14,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
@@ -35,6 +36,13 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.*
 import kotlin.math.max
+
+/**
+ * 相册 Tab
+ */
+enum class GalleryTab {
+    PHOTON, SYSTEM
+}
 
 /**
  * 相册 ViewModel
@@ -85,13 +93,46 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     // 水印编辑弹窗状态
     var showWatermarkSheet by mutableStateOf(false)
 
+    // 当前选中的 Tab
+    var selectedTab by mutableStateOf(GalleryTab.PHOTON)
+        private set
+
     // 照片列表
     private val _photos = MutableStateFlow<List<PhotoData>>(emptyList())
-    val photos: StateFlow<List<PhotoData>> = _photos.asStateFlow()
+    val photos = _photos.asStateFlow()
+    private val _systemPhotos = MutableStateFlow<List<PhotoData>>(emptyList())
+    val systemPhotos = _systemPhotos.asStateFlow()
+    val currentPhotos = combine(photos, systemPhotos, snapshotFlow { selectedTab }) { p, s, tab ->
+        if (tab == GalleryTab.PHOTON) {
+            p
+        } else {
+            // Map system photos to their internal associated copies if they exist
+            s.map { systemPhoto ->
+                val systemUriString = systemPhoto.uri.toString()
+                p.find {
+                    isSameSystemUri(it.metadata?.sourceUri, systemUriString) ||
+                            it.metadata?.exportedUris?.any { exportedUri ->
+                                isSameSystemUri(exportedUri, systemUriString)
+                            } == true
+                } ?: systemPhoto
+            }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // 加载状态
+    private var systemOffset = 0
+    private val pageSize = 50
+    var hasMoreSystemPhotos by mutableStateOf(true)
+        private set
+
     private val _isLoading = MutableStateFlow(false)
-    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+    val isLoading = _isLoading.asStateFlow()
+
+    private val _isSystemLoadingMore = MutableStateFlow(false)
+    val isSystemLoadingMore: StateFlow<Boolean> = _isSystemLoadingMore.asStateFlow()
+
+    // 权限状态
+    var hasGalleryPermission by mutableStateOf(false)
+        private set
 
     // 分享状态
     private val _isSharing = MutableStateFlow(false)
@@ -131,6 +172,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     var editLutConfig: LutConfig? by mutableStateOf(null)
         private set
+
+    // 系统相册删除
+    var systemDeletePendingIntent by mutableStateOf<android.app.PendingIntent?>(null)
+        private set
+    private var pendingDeleteSystemPhoto: PhotoData? = null
 
     // 当前照片的元数据
     var currentPhotoMetadata: PhotoMetadata? by mutableStateOf(null)
@@ -185,6 +231,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     init {
         loadPhotos()
 
+        // 检查系统相册权限
+        checkGalleryPermission()
+
         // 订阅 ContentRepository 的 StateFlow，结合用户自定义排序
         viewModelScope.launch {
             contentRepository.availableLuts.combine(
@@ -218,6 +267,82 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
+     * 加载当前选中的 Tab 内容
+     */
+    fun loadCurrentTabData() {
+        // 始终刷新内部照片元数据，以确保系统相册关联（sourceUri/exportedUris）是最新的
+        loadPhotos()
+
+        if (selectedTab == GalleryTab.SYSTEM) {
+            loadSystemPhotos(reset = true)
+        }
+    }
+
+    /**
+     * 切换 Tab
+     */
+    fun selectTab(tab: GalleryTab) {
+        if (selectedTab != tab) {
+            selectedTab = tab
+            if (tab == GalleryTab.SYSTEM && _systemPhotos.value.isEmpty()) {
+                loadSystemPhotos(reset = true)
+            }
+        }
+    }
+
+    /**
+     * 检查并更新权限状态
+     */
+    fun checkGalleryPermission() {
+        val context = getApplication<Application>()
+        hasGalleryPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.checkSelfPermission(android.Manifest.permission.READ_MEDIA_IMAGES) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        } else {
+            context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        if (hasGalleryPermission && selectedTab == GalleryTab.SYSTEM && _systemPhotos.value.isEmpty()) {
+            loadSystemPhotos(reset = true)
+        }
+    }
+
+    /**
+     * 加载系统照片
+     */
+    fun loadSystemPhotos(reset: Boolean = false) {
+        if (!hasGalleryPermission) return
+        if (!reset && (!hasMoreSystemPhotos || _isSystemLoadingMore.value)) return
+
+        viewModelScope.launch {
+            if (reset) {
+                if (_systemPhotos.value.isEmpty()) {
+                    _isLoading.value = true
+                }
+                systemOffset = 0
+                hasMoreSystemPhotos = true
+            } else {
+                _isSystemLoadingMore.value = true
+            }
+
+            try {
+                val newPhotos = repository.getSystemPhotos(systemOffset, pageSize)
+                if (reset) {
+                    _systemPhotos.value = newPhotos
+                } else {
+                    _systemPhotos.value += newPhotos
+                }
+
+                systemOffset += newPhotos.size
+                hasMoreSystemPhotos = newPhotos.size >= pageSize
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to load system photos", e)
+            } finally {
+                _isLoading.value = false
+                _isSystemLoadingMore.value = false
+            }
+        }
+    }
+
+    /**
      * 加载照片列表
      */
     fun loadPhotos() {
@@ -238,7 +363,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val context = getApplication<Application>()
 
                 // 3. Eagerly load metadata for the first ~30 items (visible area)
-                val topItemsToLoad = mergedList.take(30).filter { it.metadata == null }
+                // Always refresh metadata for the first 30 items to ensure recent exports/mappings are picked up
+                val topItemsToLoad = mergedList.take(30)
                 val topItemsLoaded = if (topItemsToLoad.isNotEmpty()) {
                     withContext(Dispatchers.IO) {
                         topItemsToLoad.map { photo ->
@@ -374,7 +500,18 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val photo = getCurrentPhoto() ?: return
         viewModelScope.launch {
             val context = getApplication<Application>()
-            currentPhotoMetadata = PhotoManager.loadMetadata(context, photo.id)
+
+            // 如果是系统相册，尝试通过 sourceUri 关联已导入的光子相册照片
+            if (selectedTab == GalleryTab.SYSTEM) {
+                val associatedPhoto = _photos.value.find { it.metadata?.sourceUri == photo.uri.toString() }
+                if (associatedPhoto != null) {
+                    currentPhotoMetadata = associatedPhoto.metadata
+                } else {
+                    currentPhotoMetadata = PhotoMetadata.fromUri(context, photo.uri)
+                }
+            } else {
+                currentPhotoMetadata = PhotoManager.loadMetadata(context, photo.id)
+            }
 
             // 更新编辑状态
             currentPhotoMetadata?.let { metadata ->
@@ -455,7 +592,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 设置当前查看的照片
      */
     fun setCurrentPhoto(index: Int) {
-        currentPhotoIndex = index.coerceIn(0, (_photos.value.size - 1).coerceAtLeast(0))
+        currentPhotoIndex = index.coerceIn(0, (currentPhotos.value.size - 1).coerceAtLeast(0))
         loadCurrentPhotoMetadata()
     }
 
@@ -463,7 +600,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 获取当前照片
      */
     fun getCurrentPhoto(): PhotoData? {
-        return _photos.value.getOrNull(currentPhotoIndex)
+        return currentPhotos.value.getOrNull(currentPhotoIndex)
     }
 
     /**
@@ -486,6 +623,20 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 4. 如果没有导出的照片，或者在 Android 10 及以下，直接删除照片
      */
     fun requestDeletePhoto(photo: PhotoData, deleteExported: Boolean = true) {
+        if (selectedTab == GalleryTab.SYSTEM) {
+            // 系统相册删除
+            val pendingIntent = PhotoManager.createSystemDeleteRequest(getApplication(), photo.uri)
+            if (pendingIntent != null) {
+                pendingDeleteSystemPhoto = photo
+                systemDeletePendingIntent = pendingIntent
+                PLog.d(TAG, "Set system delete pending intent for photo ${photo.id}")
+            } else {
+                // TODO: Handle Android 10- or direct deletion if needed, but usually createSystemDeleteRequest covers API 30+
+                PLog.w(TAG, "Failed to create system delete request for ${photo.id}")
+            }
+            return
+        }
+
         if (!deleteExported) {
             // 不删除系统相册照片，直接删除应用内部照片
             deletePhotoOnlyInternal(photo)
@@ -537,6 +688,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun clearDeleteRequest() {
         pendingDeletePhoto = null
         deletePendingIntent = null
+        pendingDeleteSystemPhoto = null
+        systemDeletePendingIntent = null
     }
 
     /**
@@ -586,6 +739,25 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
+     * 系统相册照片删除确认后的回调
+     */
+    fun deleteSystemPhotoAfterConfirmation(onComplete: (Boolean) -> Unit = {}) {
+        val photo = pendingDeleteSystemPhoto ?: return
+        viewModelScope.launch {
+            // 系统照片已经被 MediaStore 删除，我们只需要刷新列表
+            loadSystemPhotos(reset = true)
+
+            // 调整索引
+            if (currentPhotoIndex >= currentPhotos.value.size) {
+                currentPhotoIndex = (currentPhotos.value.size - 1).coerceAtLeast(0)
+            }
+
+            clearDeleteRequest()
+            onComplete(true)
+        }
+    }
+
+    /**
      * 删除当前照片
      */
     fun deleteCurrentPhoto() {
@@ -621,6 +793,30 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun deleteSelectedPhotos(deleteExported: Boolean = true) {
         val toDelete = selectedPhotos.toList()
         if (toDelete.isEmpty()) return
+
+        if (selectedTab == GalleryTab.SYSTEM) {
+            // 系统相册批量删除
+            viewModelScope.launch {
+                val context = getApplication<Application>()
+                val uris = toDelete.map { photo ->
+                    // 如果是本地关联的照片，优先取 sourceUri；否则直接取 photo.uri
+                    photo.metadata?.sourceUri?.let { Uri.parse(it) } ?: photo.uri
+                }
+
+                try {
+                    val pendingIntent = MediaStore.createDeleteRequest(
+                        context.contentResolver,
+                        uris
+                    )
+                    pendingDeletePhotos = toDelete
+                    batchDeletePendingIntent = pendingIntent
+                    PLog.d(TAG, "Set system batch delete pending intent for ${toDelete.size} photos")
+                } catch (e: Exception) {
+                    PLog.e(TAG, "Failed to create system batch delete request", e)
+                }
+            }
+            return
+        }
 
         if (!deleteExported) {
             // 不删除系统相册照片，直接删除应用内部照片
@@ -716,23 +912,29 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         if (photos.isEmpty()) return
 
         viewModelScope.launch {
-            val context = getApplication<Application>()
-            var deletedCount = 0
+            if (selectedTab == GalleryTab.SYSTEM) {
+                // 系统相册刷新
+                loadSystemPhotos(reset = true)
+            } else {
+                // 原有的内部照片删除逻辑
+                val context = getApplication<Application>()
+                var deletedCount = 0
 
-            withContext(Dispatchers.IO) {
-                photos.forEach { photo ->
-                    val success = PhotoManager.deletePhotoOnly(context, photo.id)
-                    if (success) {
-                        deletedCount++
+                withContext(Dispatchers.IO) {
+                    photos.forEach { photo ->
+                        val success = PhotoManager.deletePhotoOnly(context, photo.id)
+                        if (success) {
+                            deletedCount++
+                        }
                     }
                 }
+                loadPhotos()
+                PLog.d(TAG, "Batch deleted $deletedCount internal photos after confirmation")
             }
 
             exitSelectionMode()
-            loadPhotos()
             clearBatchDeleteRequest()
-            onComplete(deletedCount)
-            PLog.d(TAG, "Batch deleted $deletedCount photos after confirmation")
+            onComplete(photos.size)
         }
     }
 
@@ -949,7 +1151,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /**
      * 获取应用 LUT 和边框后的预览 Bitmap
      */
-    suspend fun getPreviewBitmap(photo: PhotoData, useGlobalEdit: Boolean = false, showOrigin: Boolean = false, bitmap: Bitmap? = null): Bitmap? {
+    suspend fun getPreviewBitmap(
+        photo: PhotoData,
+        useGlobalEdit: Boolean = false,
+        showOrigin: Boolean = false,
+        bitmap: Bitmap? = null
+    ): Bitmap? {
         return withContext(Dispatchers.IO) {
             try {
                 val context = getApplication<Application>()
@@ -959,7 +1166,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val finalNR: Float
                 val finalCNR: Float
 
-                val metadata = photo.metadata ?: PhotoManager.loadMetadata(getApplication(), photo.id) ?: PhotoMetadata()
+                val metadata =
+                    photo.metadata ?: PhotoManager.loadMetadata(getApplication(), photo.id) ?: PhotoMetadata()
 
                 if (useGlobalEdit) {
                     finalMetadata = (currentPhotoMetadata ?: metadata).copy(
@@ -982,7 +1190,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         ?: (if (finalMetadata.isImported) 0f else chromaNoiseReduction.value)
                 }
 
-                val bitmap = bitmap ?: PhotoManager.loadBitmap(context, photo.id, 4096) ?: return@withContext null
+                val bitmap = bitmap ?: if (selectedTab == GalleryTab.PHOTON) {
+                    PhotoManager.loadBitmap(context, photo.id, 4096)
+                } else {
+                    PhotoManager.loadBitmap(context, photo.uri, 4096)
+                } ?: return@withContext null
 
                 if (showOrigin) {
                     bitmap
@@ -1020,31 +1232,57 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             try {
                 val context = getApplication<Application>()
+
+                // 处理系统相册照片：自动导入并关联
+                val targetPhotoId = if (selectedTab == GalleryTab.SYSTEM) {
+                    // 检查是否已经导入过
+                    val existing = _photos.value.find { it.metadata?.sourceUri == photo.uri.toString() }
+                    existing?.id ?: PhotoManager.importPhoto(
+                        context,
+                        photo.uri,
+                        editLutId.value,
+                        sourceUri = photo.uri.toString()
+                    )
+                } else {
+                    photo.id
+                }
+
+                if (targetPhotoId == null) {
+                    onComplete(false)
+                    return@launch
+                }
+
                 val metadata = (currentPhotoMetadata ?: PhotoMetadata()).copy(
                     lutId = editLutId.value,
                     frameId = editFrameId.value,
                     colorRecipeParams = editLutRecipeParams.value,
                     sharpening = editSharpening.value,
                     noiseReduction = editNoiseReduction.value,
-                    chromaNoiseReduction = editChromaNoiseReduction.value
+                    chromaNoiseReduction = editChromaNoiseReduction.value,
+                    sourceUri = if (selectedTab == GalleryTab.SYSTEM) photo.uri.toString() else currentPhotoMetadata?.sourceUri
                 )
-                val success = PhotoManager.saveMetadata(context, photo.id, metadata)
+                val success = PhotoManager.saveMetadata(context, targetPhotoId, metadata)
 
                 if (success) {
                     currentPhotoMetadata = metadata
 
-                    // 更新 photos 列表中对应照片的 metadata，触发 UI 刷新
-                    val updatedPhotos = _photos.value.map { p ->
-                        if (p.id == photo.id) {
-                            p.copy(metadata = metadata)
-                        } else {
-                            p
+                    // 如果是新导入的，刷相册列表
+                    if (selectedTab == GalleryTab.SYSTEM) {
+                        loadPhotos()
+                    } else {
+                        // 更新 photos 列表中对应照片的 metadata，触发 UI 刷新
+                        val updatedPhotos = _photos.value.map { p ->
+                            if (p.id == targetPhotoId) {
+                                p.copy(metadata = metadata)
+                            } else {
+                                p
+                            }
                         }
+                        _photos.value = updatedPhotos
                     }
-                    _photos.value = updatedPhotos
 
                     // 同步更新 latestPhoto
-                    if (_latestPhoto.value?.id == photo.id) {
+                    if (_latestPhoto.value?.id == targetPhotoId) {
                         _latestPhoto.value = _latestPhoto.value?.copy(metadata = metadata)
                     }
 
@@ -1063,7 +1301,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     fun refreshRawPreview(photo: PhotoData, onComplete: (Boolean) -> Unit = {}) {
         if (refreshingPhotos.contains(photo.id)) return
-        
+
         viewModelScope.launch {
             refreshingPhotos.add(photo.id)
             try {
@@ -1072,7 +1310,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 if (result != null) {
                     // 更新刷新密钥以强制 UI 重新加载
                     photoRefreshKeys[photo.id] = System.currentTimeMillis()
-                    
+
                     // 触发列表更新
                     val updatedPhotos = _photos.value.map { p ->
                         if (p.id == photo.id) {
@@ -1095,13 +1333,20 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /**
      * 导出照片到公共目录（带 LUT 烘焙）
      */
-    fun exportPhoto(photo: PhotoData, bitmap: Bitmap? = null, suffix: String? = null, onComplete: (Boolean) -> Unit = {}) {
+    fun exportPhoto(
+        photo: PhotoData,
+        bitmap: Bitmap? = null,
+        suffix: String? = null,
+        onComplete: (Boolean) -> Unit = {}
+    ) {
         viewModelScope.launch {
             val metadata = PhotoManager.loadMetadata(getApplication(), photo.id) ?: photo.metadata ?: PhotoMetadata()
             val context = getApplication<Application>()
-            PhotoManager.exportPhoto(context, photo.id, bitmap, contentRepository.photoProcessor, metadata,
+            PhotoManager.exportPhoto(
+                context, photo.id, bitmap, contentRepository.photoProcessor, metadata,
                 sharpening.value, noiseReduction.value,
-                chromaNoiseReduction.value, photoQuality.firstOrNull() ?: 95, suffix) { success ->
+                chromaNoiseReduction.value, photoQuality.firstOrNull() ?: 95, suffix
+            ) { success ->
                 if (success) {
                     exitEditMode()
                     loadPhotos()
@@ -1154,7 +1399,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 var successCount = 0
 
                 withContext(Dispatchers.IO) {
-                    val lutId = defaultLutId.firstOrNull() ?: contentRepository.getAvailableLuts().firstOrNull { it.isDefault }?.id
+                    val lutId = defaultLutId.firstOrNull() ?: contentRepository.getAvailableLuts()
+                        .firstOrNull { it.isDefault }?.id
                     uris.forEach { uri ->
                         val photoId = PhotoManager.importPhoto(context, uri, lutId)
                         if (photoId != null) {
@@ -1212,6 +1458,30 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
             PLog.d(TAG, "Custom content refreshed via ContentRepository")
         }
+    }
+
+    private fun isSameSystemUri(uri1: String?, uri2: String?): Boolean {
+        if (uri1 == null || uri2 == null) return uri1 == uri2
+        if (uri1 == uri2) return true
+
+        // Try to compare by MediaStore ID if both are MediaStore URIs
+        try {
+            val u1 = Uri.parse(uri1)
+            val u2 = Uri.parse(uri2)
+
+            val isMediaStore1 = u1.authority?.contains("media") == true
+            val isMediaStore2 = u2.authority?.contains("media") == true
+
+            if (isMediaStore1 && isMediaStore2) {
+                val id1 = u1.lastPathSegment
+                val id2 = u2.lastPathSegment
+                return id1 != null && id1 == id2
+            }
+        } catch (e: Exception) {
+            // Fallback to string comparison (already done above)
+        }
+
+        return false
     }
 
     /**

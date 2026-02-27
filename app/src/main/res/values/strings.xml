@@ -37,6 +37,9 @@
 
     <!-- Gallery -->
     <string name="gallery">Gallery</string>
+    <string name="gallery_photon">Photon</string>
+    <string name="gallery_system">System</string>
+    <string name="permission_required_gallery">Media permission is required to access system gallery</string>
     <string name="photo_detail">Photo Detail</string>
     <string name="share">Share</string>
     <string name="delete">Delete</string>

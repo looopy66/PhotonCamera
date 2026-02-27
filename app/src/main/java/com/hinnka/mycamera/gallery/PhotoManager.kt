@@ -383,7 +383,7 @@ object PhotoManager {
         }
     }
 
-    suspend fun exportDng(context: Context, data: ByteArray, metadata: PhotoMetadata) =
+    suspend fun exportDng(context: Context, photoId: String, data: ByteArray, metadata: PhotoMetadata) =
         withContext(Dispatchers.IO) {
             try {
                 val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
@@ -409,15 +409,12 @@ object PhotoManager {
                     }
                     PLog.d(TAG, "DNG exported: $uri")
 
-                    val photoId = getPhotoIds(context).firstOrNull()
-                    if (photoId != null) {
-                        val currentMetadata = loadMetadata(context, photoId) ?: metadata
-                        val updatedMetadata = currentMetadata.copy(
-                            exportedUris = currentMetadata.exportedUris + uri.toString()
-                        )
-                        saveMetadata(context, photoId, updatedMetadata)
-                        PLog.d(TAG, "Exported URI saved: $uri")
-                    }
+                    val currentMetadata = loadMetadata(context, photoId) ?: metadata
+                    val updatedMetadata = currentMetadata.copy(
+                        exportedUris = currentMetadata.exportedUris + uri.toString()
+                    )
+                    saveMetadata(context, photoId, updatedMetadata)
+                    PLog.d(TAG, "Exported URI saved: $uri")
                 }
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to export DNG", e)
@@ -609,7 +606,7 @@ object PhotoManager {
                 it.write(array)
             }
             if (shouldAutoSave) {
-                exportDng(context, array, metadata)
+                exportDng(context, photoId, array, metadata)
             }
 
             val bitmap = RawDemosaicProcessor.getInstance().process(
@@ -1128,6 +1125,16 @@ object PhotoManager {
     }
 
     /**
+     * 为直接传入的系统 URI 创建删除请求（用于 Android 11+）
+     */
+    fun createSystemDeleteRequest(context: Context, uri: Uri): PendingIntent? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return null
+        }
+        return MediaStore.createDeleteRequest(context.contentResolver, listOf(uri))
+    }
+
+    /**
      * 创建删除系统相册照片的请求（弹出确认对话框）
      *
      * 仅适用于 Android 11+ (API 30+)
@@ -1251,7 +1258,11 @@ object PhotoManager {
         if (!photoFile.exists()) {
             return null
         }
-        val source = ImageDecoder.createSource(photoFile)
+        return loadBitmap(context, Uri.fromFile(photoFile), maxEdge)
+    }
+
+    fun loadBitmap(context: Context, uri: Uri, maxEdge: Int? = null): Bitmap? {
+        val source = ImageDecoder.createSource(context.contentResolver, uri)
         return runCatching {
             ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
                 decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
@@ -1286,7 +1297,13 @@ object PhotoManager {
     /**
      * 从系统相册导入照片
      */
-    suspend fun importPhoto(context: Context, uri: Uri, lutId: String?, photoId: String? = null): String? {
+    suspend fun importPhoto(
+        context: Context,
+        uri: Uri,
+        lutId: String?,
+        photoId: String? = null,
+        sourceUri: String? = null
+    ): String? {
         return withContext(Dispatchers.IO) {
             try {
                 val photoId = photoId ?: UUID.randomUUID().toString()
@@ -1299,7 +1316,9 @@ object PhotoManager {
 
                 // 2. 读取元数据以获取旋转信息
                 val metadata = PhotoMetadata.fromUri(context, uri).copy(
-                    lutId = lutId
+                    lutId = lutId,
+                    sourceUri = sourceUri ?: metadataFile.takeIf { it.exists() }
+                        ?.let { PhotoMetadata.fromJson(it.readText())?.sourceUri }
                 )
 
                 // 1. 检测是否为 RAW 文件

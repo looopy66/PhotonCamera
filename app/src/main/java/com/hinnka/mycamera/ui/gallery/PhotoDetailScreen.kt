@@ -63,6 +63,7 @@ import androidx.core.view.isVisible
 import androidx.media3.ui.AspectRatioFrameLayout
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.viewmodel.GalleryTab
 import java.io.File
 
 /**
@@ -79,7 +80,7 @@ fun PhotoDetailScreen(
     onViewBurst: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    val photos by viewModel.photos.collectAsState()
+    val photos by viewModel.currentPhotos.collectAsState()
     val context = LocalContext.current
 
     var showDeleteDialog by remember { mutableStateOf(false) }
@@ -96,12 +97,26 @@ fun PhotoDetailScreen(
         if (result.resultCode == Activity.RESULT_OK) {
             // User confirmed deletion, delete internal photo
             viewModel.deletePhotoAfterConfirmation { success ->
-                if (success && photos.isEmpty()) {
+                if (success) {
                     onBack()
                 }
             }
         } else {
             // User cancelled deletion
+            viewModel.clearDeleteRequest()
+        }
+    }
+
+    val systemDeletePhotoLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            viewModel.deleteSystemPhotoAfterConfirmation { success ->
+                if (success) {
+                    onBack()
+                }
+            }
+        } else {
             viewModel.clearDeleteRequest()
         }
     }
@@ -115,6 +130,18 @@ fun PhotoDetailScreen(
                 )
             } catch (e: Exception) {
                 // Failed to launch, clear the request
+                viewModel.clearDeleteRequest()
+            }
+        }
+    }
+
+    LaunchedEffect(viewModel.systemDeletePendingIntent) {
+        viewModel.systemDeletePendingIntent?.let { pendingIntent ->
+            try {
+                systemDeletePhotoLauncher.launch(
+                    IntentSenderRequest.Builder(pendingIntent.intentSender).build()
+                )
+            } catch (e: Exception) {
                 viewModel.clearDeleteRequest()
             }
         }
@@ -286,24 +313,26 @@ fun PhotoDetailScreen(
                     }
 
                     // 导出
-                    IconButton(
-                        onClick = { currentPhoto?.let { showExportDialog = true } },
-                        modifier = Modifier
-                            .size(56.dp)
-                            .background(Color.White.copy(alpha = 0.1f), CircleShape)
-                    ) {
-                        if (isSaving) {
-                            CircularProgressIndicator(
-                                color = Color.White,
-                                modifier = Modifier.size(24.dp),
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Default.Output,
-                                contentDescription = stringResource(R.string.export),
-                                tint = AccentOrange
-                            )
+                    if (viewModel.selectedTab == GalleryTab.PHOTON || currentPhoto?.metadata?.sourceUri != null) {
+                        IconButton(
+                            onClick = { currentPhoto?.let { showExportDialog = true } },
+                            modifier = Modifier
+                                .size(56.dp)
+                                .background(Color.White.copy(alpha = 0.1f), CircleShape)
+                        ) {
+                            if (isSaving) {
+                                CircularProgressIndicator(
+                                    color = Color.White,
+                                    modifier = Modifier.size(24.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Output,
+                                    contentDescription = stringResource(R.string.export),
+                                    tint = AccentOrange
+                                )
+                            }
                         }
                     }
 
@@ -465,25 +494,27 @@ fun PhotoDetailScreen(
             text = {
                 Column {
                     Text(stringResource(R.string.delete_confirm))
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.clickable { deleteExported = !deleteExported }
-                    ) {
-                        Checkbox(
-                            checked = deleteExported,
-                            onCheckedChange = { deleteExported = it },
-                            colors = CheckboxDefaults.colors(
-                                checkedColor = Color(0xFFFF6B35),
-                                uncheckedColor = Color.White.copy(alpha = 0.6f)
+                    if (viewModel.selectedTab == GalleryTab.PHOTON) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.clickable { deleteExported = !deleteExported }
+                        ) {
+                            Checkbox(
+                                checked = deleteExported,
+                                onCheckedChange = { deleteExported = it },
+                                colors = CheckboxDefaults.colors(
+                                    checkedColor = Color(0xFFFF6B35),
+                                    uncheckedColor = Color.White.copy(alpha = 0.6f)
+                                )
                             )
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = stringResource(R.string.delete_exported_photos),
-                            color = Color.White.copy(alpha = 0.9f),
-                            fontSize = 14.sp
-                        )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = stringResource(R.string.delete_exported_photos),
+                                color = Color.White.copy(alpha = 0.9f),
+                                fontSize = 14.sp
+                            )
+                        }
                     }
                 }
             },

@@ -19,7 +19,7 @@ import kotlin.math.log2
  * 保存 LUT、边框水印、编辑信息和拍摄参数，用于非破坏性编辑和边框水印渲染
  */
 data class PhotoMetadata(
-    val version: Int = 9,  // 升级版本以支持细节处理参数
+    val version: Int = 10,  // Added sourceUri
     // 编辑配置
     val lutId: String? = null,
     // 色彩配方配置
@@ -48,6 +48,7 @@ data class PhotoMetadata(
     val aperture: String? = null,
     val exposureBias: Float? = null,
     val isImported: Boolean = false,
+    val sourceUri: String? = null, // 原始系统相册 URI (用于关联)
     // 边框水印自定义
     val customProperties: Map<String, String> = emptyMap(),
     // 导出到系统相册的 URI 列表
@@ -95,13 +96,14 @@ data class PhotoMetadata(
         }
     }
 
-    val lv: Float get() {
-        val aperture = aperture?.substringAfter("/")?.toFloatOrNull() ?: return 0f
-        val shutterSpeed = parseExposureTime(shutterSpeed)?.let { it * 1f / 1_000_000_000L } ?: return 0f
-        val iso = iso ?: return 0f
-        val ev = log2((aperture * aperture) / shutterSpeed)
-        return ev - log2(iso / 100f)
-    }
+    val lv: Float
+        get() {
+            val aperture = aperture?.substringAfter("/")?.toFloatOrNull() ?: return 0f
+            val shutterSpeed = parseExposureTime(shutterSpeed)?.let { it * 1f / 1_000_000_000L } ?: return 0f
+            val iso = iso ?: return 0f
+            val ev = log2((aperture * aperture) / shutterSpeed)
+            return ev - log2(iso / 100f)
+        }
 
     /**
      * 分辨率字符串 (用于边框水印显示)
@@ -142,7 +144,8 @@ data class PhotoMetadata(
             put("width", width)
             put("height", height)
             put("ratio", ratio?.getDisplayName() ?: JSONObject.NULL)
-            put("cropRegion", if (cropRegion != null) {
+            put(
+                "cropRegion", if (cropRegion != null) {
                 JSONObject().apply {
                     put("left", cropRegion.left)
                     put("top", cropRegion.top)
@@ -165,6 +168,7 @@ data class PhotoMetadata(
             put("aperture", aperture ?: JSONObject.NULL)
             put("exposureBias", exposureBias ?: JSONObject.NULL)
             put("isImported", isImported)
+            put("sourceUri", sourceUri ?: JSONObject.NULL)
             // 边框水印自定义
             val customPropsObj = JSONObject()
             customProperties.forEach { (k, v) -> customPropsObj.put(k, v) }
@@ -252,6 +256,7 @@ data class PhotoMetadata(
                     aperture = if (obj.isNull("aperture")) null else obj.optString("aperture"),
                     exposureBias = if (obj.isNull("exposureBias")) null else obj.optDouble("exposureBias").toFloat(),
                     isImported = obj.optBoolean("isImported", false),
+                    sourceUri = if (obj.isNull("sourceUri")) null else obj.optString("sourceUri"),
                     customProperties = mutableMapOf<String, String>().apply {
                         val customPropsObj = obj.optJSONObject("customProperties")
                         customPropsObj?.keys()?.forEach { key ->
