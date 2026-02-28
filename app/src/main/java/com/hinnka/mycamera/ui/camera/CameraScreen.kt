@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.CameraUtils
@@ -157,6 +158,7 @@ fun CameraScreen(
     LaunchedEffect(Unit) {
         viewModel.imageSavedEvent.collect {
             galleryViewModel.refreshLatestPhoto()
+            MyCameraApplication.updateWidgets(context)
         }
     }
 
@@ -247,6 +249,7 @@ fun CameraScreen(
                         } else {
                             isGhostPermissionFlowActive = false
                             viewModel.togglePhantomMode()
+                            viewModel.addPhantomShortcut()
                         }
                     }
                 ) {

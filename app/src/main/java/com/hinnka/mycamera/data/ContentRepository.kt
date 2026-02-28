@@ -4,6 +4,7 @@ import android.content.Context
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.frame.FrameManager
 import com.hinnka.mycamera.frame.FrameRenderer
+import com.hinnka.mycamera.gallery.GalleryRepository
 import com.hinnka.mycamera.gallery.PhotoProcessor
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutInfo
@@ -60,6 +61,8 @@ class ContentRepository private constructor(context: Context) {
 
     // 用户偏好设置仓库
     val userPreferencesRepository = UserPreferencesRepository(appContext)
+
+    val galleryRepository = GalleryRepository(appContext)
 
     /**
      * 初始化内容

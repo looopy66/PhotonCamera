@@ -89,11 +89,8 @@ class MainActivity : ComponentActivity() {
     private val cameraViewModel: CameraViewModel by viewModels()
     private val galleryViewModel: GalleryViewModel by viewModels()
 
-    private val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+    private val permissions =
         arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
-    } else {
-        arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
-    }
 
     private var hasPermissions by mutableStateOf(false)
     private var pendingRoute by mutableStateOf<String?>(null)

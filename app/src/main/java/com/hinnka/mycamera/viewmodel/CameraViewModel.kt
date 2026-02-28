@@ -1,7 +1,10 @@
 package com.hinnka.mycamera.viewmodel
 
 import android.app.Application
+import android.app.PendingIntent
 import android.content.Context
+import android.content.pm.ShortcutInfo
+import android.content.pm.ShortcutManager
 import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
@@ -1778,6 +1781,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setLaunchCameraOnPhantomMode(launch: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.saveLaunchCameraOnPhantomMode(launch)
+        }
+    }
+
+    fun addPhantomShortcut() {
+        val context = getApplication<Application>()
+        val shortcutManager = context.getSystemService(ShortcutManager::class.java)
+
+        if (shortcutManager.isRequestPinShortcutSupported) {
+            val pinShortcutInfo = ShortcutInfo.Builder(context, "phantom_toggle").build()
+            val pinnedShortcutCallbackIntent = shortcutManager.createShortcutResultIntent(pinShortcutInfo)
+            val successCallback = PendingIntent.getBroadcast(context,0,
+                pinnedShortcutCallbackIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            shortcutManager.requestPinShortcut(pinShortcutInfo,
+                successCallback.intentSender)
         }
     }
 }

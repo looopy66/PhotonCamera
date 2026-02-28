@@ -2,6 +2,7 @@ package com.hinnka.mycamera
 
 import android.annotation.SuppressLint
 import android.app.Application
+import android.content.Context
 import android.content.Intent
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.phantom.PhantomService
@@ -31,6 +32,7 @@ class MyCameraApplication : Application() {
                         phantomService.stop()
                     }
                     updateShortcuts(phantomMode)
+                    updateWidgets(this@MyCameraApplication)
                 }
         }
     }
@@ -52,5 +54,19 @@ class MyCameraApplication : Application() {
 
         @SuppressLint("StaticFieldLeak")
         lateinit var phantomService: PhantomService
+
+        fun updateWidgets(context: Context) {
+            val appWidgetManager = android.appwidget.AppWidgetManager.getInstance(context)
+            val componentName =
+                android.content.ComponentName(context, com.hinnka.mycamera.phantom.PhantomWidgetProvider::class.java)
+            val appWidgetIds = appWidgetManager.getAppWidgetIds(componentName)
+            if (appWidgetIds.isNotEmpty()) {
+                val intent = Intent(context, com.hinnka.mycamera.phantom.PhantomWidgetProvider::class.java).apply {
+                    action = android.appwidget.AppWidgetManager.ACTION_APPWIDGET_UPDATE
+                    putExtra(android.appwidget.AppWidgetManager.EXTRA_APPWIDGET_IDS, appWidgetIds)
+                }
+                context.sendBroadcast(intent)
+            }
+        }
     }
 }

@@ -64,6 +64,7 @@ import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.hinnka.mycamera.MainActivity
+import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.Routes
 import com.hinnka.mycamera.data.ContentRepository
@@ -272,6 +273,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         val result = PhotoManager.updateExternalPhoto(context, photoId, uri, path, photoProcessor, metadata)
         if (result != null) {
             this@PhantomService.processingInfo = result
+            MyCameraApplication.updateWidgets(context)
 //            PLog.d(TAG, "Processing info updated: $result")
         }
         delay(200L)

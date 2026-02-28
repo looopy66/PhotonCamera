@@ -54,10 +54,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         private const val TAG = "GalleryViewModel"
     }
 
-    private val repository = GalleryRepository(application)
 
     // 内容仓库（单例，与 CameraViewModel 共享）
     private val contentRepository = ContentRepository.getInstance(application)
+
+    private val repository = contentRepository.galleryRepository
 
     // 用户偏好设置仓库
     private val userPreferencesRepository = contentRepository.userPreferencesRepository
