@@ -15,7 +15,9 @@ import com.hinnka.mycamera.MainActivity
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.gallery.PhotoData
+import com.hinnka.mycamera.gallery.PhotoManager
 import com.hinnka.mycamera.utils.DeviceUtil
+import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -26,6 +28,8 @@ import kotlinx.coroutines.withContext
 class PhantomWidgetProvider : AppWidgetProvider() {
 
     companion object {
+        private const val TAG = "PhantomWidgetProvider"
+
         private const val ACTION_TOGGLE_PHANTOM = "com.hinnka.mycamera.phantom.ACTION_TOGGLE_PHANTOM"
         private const val ACTION_OPEN_APP = "com.hinnka.mycamera.phantom.ACTION_OPEN_APP"
         private const val ACTION_OPEN_FILTERS = "com.hinnka.mycamera.phantom.ACTION_OPEN_FILTERS"
@@ -42,7 +46,9 @@ class PhantomWidgetProvider : AppWidgetProvider() {
         providerScope.launch {
             val phantomMode = userPreferencesRepository.userPreferences.first().phantomMode
             val latestPhoto = withContext(Dispatchers.IO) {
-                galleryRepository.getLatestPhoto()
+                galleryRepository.getLatestPhoto()?.apply {
+                    metadata = PhotoManager.loadMetadata(context, id)
+                }
             }
             for (appWidgetId in appWidgetIds) {
                 updateAppWidget(context, appWidgetManager, appWidgetId, phantomMode, latestPhoto)
@@ -164,6 +170,8 @@ class PhantomWidgetProvider : AppWidgetProvider() {
         views.setOnClickPendingIntent(R.id.btn_frames, getPendingSelfIntent(context, ACTION_OPEN_FRAMES))
         views.setOnClickPendingIntent(R.id.btn_recent_header, getPendingSelfIntent(context, ACTION_OPEN_GALLERY))
 
+        // PLog.d(TAG, "updateAppWidget: $appWidgetId $latestPhoto")
+
         // Update Recent Photos
         if (latestPhoto != null) {
             providerScope.launch {
@@ -171,8 +179,14 @@ class PhantomWidgetProvider : AppWidgetProvider() {
                     try {
                         val contextResolver = context.contentResolver
                         val inputStream = contextResolver.openInputStream(latestPhoto.thumbnailUri)
-                        android.graphics.BitmapFactory.decodeStream(inputStream)
+                        val input = android.graphics.BitmapFactory.decodeStream(inputStream)
+                        latestPhoto.metadata?.let {
+                            ContentRepository.getInstance(context).photoProcessor.processBitmap(
+                                input, it,
+                            )
+                        }
                     } catch (e: Exception) {
+                        PLog.e(TAG, "Failed to process photo", e)
                         null
                     }
                 }

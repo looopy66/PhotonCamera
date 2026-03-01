@@ -264,7 +264,7 @@ class LutRenderer : GLSurfaceView.Renderer {
      * Surface 尺寸变化时调用
      */
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
-        PLog.d(TAG, "onSurfaceChanged: ${width}x${height}")
+        // PLog.d(TAG, "onSurfaceChanged: ${width}x${height}")
 
         viewportWidth = width
         viewportHeight = height

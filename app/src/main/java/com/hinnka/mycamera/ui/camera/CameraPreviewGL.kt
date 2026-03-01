@@ -81,6 +81,8 @@ fun CameraPreviewGL(
 
         // 标记是否已经通知过 SurfaceTexture
         var surfaceTextureNotified by remember { mutableStateOf(false) }
+        // 标记 Surface 是否已经准备好
+        var surfaceAvailable by remember { mutableStateOf(false) }
 
         Box(
             modifier = Modifier
@@ -109,6 +111,7 @@ fun CameraPreviewGL(
                     // 更新闭包捕获的状态
                     glSurfaceView.onSurfaceReady = { _ ->
                         // SurfaceTexture 已经准备好，可以开始预览
+                        surfaceAvailable = true
                         glSurfaceView.getSurfaceTexture()?.let { surfaceTexture ->
                             glSurfaceView.setPreviewSize(previewSize.width, previewSize.height)
                             // 取消从这里回调，统一在 update 中处理
@@ -116,6 +119,7 @@ fun CameraPreviewGL(
                     }
 
                     glSurfaceView.onSurfaceDestroyed = {
+                        surfaceAvailable = false
                         surfaceTextureNotified = false
                         onSurfaceDestroyed()
                     }
@@ -136,7 +140,7 @@ fun CameraPreviewGL(
                     // 我们只需更新 glSurfaceView 的参数，不需要重新打开相机，否则会打断正在开启的相机。
                     // 因此，只要 surfaceTextureNotified 为 true，就不会再触发 onSurfaceTextureReady。
                     // 如果需要重新打开相机，由外部自己掌控，这里只负责 GL 的同步。
-                    if (viewWidth > 0 && viewHeight > 0) {
+                    if (viewWidth > 0 && viewHeight > 0 && surfaceAvailable) {
                         glSurfaceView.getSurfaceTexture()?.let { surfaceTexture ->
                             glSurfaceView.setPreviewSize(previewSize.width, previewSize.height)
                             if (!surfaceTextureNotified) {

@@ -42,14 +42,22 @@ class MyCameraApplication : Application() {
 
     private fun updateShortcuts(isActive: Boolean) {
         val shortcutManager = getSystemService(android.content.pm.ShortcutManager::class.java)
-        val shortcut = android.content.pm.ShortcutInfo.Builder(this, "phantom_toggle")
+        val phantomShortcut = android.content.pm.ShortcutInfo.Builder(this, "phantom_toggle")
             .setShortLabel(getString(if (isActive) R.string.close_ghost_mode else R.string.ghost_mode))
-            .setIcon(android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_camera_shortcut))
+            .setIcon(android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_camera))
             .setIntent(Intent(this, PhantomShortcutActivity::class.java).apply {
                 action = Intent.ACTION_VIEW
             })
             .build()
-        shortcutManager.dynamicShortcuts = listOf(shortcut)
+        val lutShortcut = android.content.pm.ShortcutInfo.Builder(this, "lut_manage")
+            .setShortLabel(getString(R.string.filter_management_title))
+            .setIcon(android.graphics.drawable.Icon.createWithResource(this, R.drawable.auto_awesome_color))
+            .setIntent(Intent(this, MainActivity::class.java).apply {
+                action = Intent.ACTION_VIEW
+                putExtra("route", Routes.FILTER_MANAGEMENT)
+            })
+            .build()
+        shortcutManager.dynamicShortcuts = listOf(phantomShortcut, lutShortcut)
     }
 
     companion object {

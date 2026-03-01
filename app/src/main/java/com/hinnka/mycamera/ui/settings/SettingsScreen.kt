@@ -77,6 +77,7 @@ import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.components.LogViewerDialog
 import com.hinnka.mycamera.ui.components.SliderSettingItem
 import com.hinnka.mycamera.ui.components.rememberBackgroundPainter
+import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import kotlin.math.roundToInt
 
@@ -552,40 +553,42 @@ fun SettingsScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            if (DeviceUtil.isChinaFlavor) {
+                Spacer(modifier = Modifier.height(24.dp))
 
-            // 幻影模式设置
-            SettingsSection(title = stringResource(R.string.ghost_mode)) {
-                SwitchSettingItem(
-                    title = stringResource(R.string.ghost_mode),
-                    description = stringResource(R.string.ghost_mode_dialog_description),
-                    checked = phantomMode,
-                    onCheckedChange = { viewModel.togglePhantomMode() }
-                )
+                // 幻影模式设置
+                SettingsSection(title = stringResource(R.string.ghost_mode)) {
+                    SwitchSettingItem(
+                        title = stringResource(R.string.ghost_mode),
+                        description = stringResource(R.string.ghost_mode_dialog_description),
+                        checked = phantomMode,
+                        onCheckedChange = { viewModel.togglePhantomMode() }
+                    )
 
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
+                    HorizontalDivider(
+                        color = Color.White.copy(alpha = 0.1f),
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
 
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_phantom_button_hidden),
-                    description = stringResource(R.string.settings_phantom_button_hidden_description),
-                    checked = phantomButtonHidden,
-                    onCheckedChange = { viewModel.setPhantomButtonHidden(it) }
-                )
+                    SwitchSettingItem(
+                        title = stringResource(R.string.settings_phantom_button_hidden),
+                        description = stringResource(R.string.settings_phantom_button_hidden_description),
+                        checked = phantomButtonHidden,
+                        onCheckedChange = { viewModel.setPhantomButtonHidden(it) }
+                    )
 
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
+                    HorizontalDivider(
+                        color = Color.White.copy(alpha = 0.1f),
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
 
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_launch_camera_on_phantom_mode),
-                    description = stringResource(R.string.settings_launch_camera_on_phantom_mode_description),
-                    checked = launchCameraOnPhantomMode,
-                    onCheckedChange = { viewModel.setLaunchCameraOnPhantomMode(it) }
-                )
+                    SwitchSettingItem(
+                        title = stringResource(R.string.settings_launch_camera_on_phantom_mode),
+                        description = stringResource(R.string.settings_launch_camera_on_phantom_mode_description),
+                        checked = launchCameraOnPhantomMode,
+                        onCheckedChange = { viewModel.setLaunchCameraOnPhantomMode(it) }
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(24.dp))
