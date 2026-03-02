@@ -6,4 +6,4 @@
 
 * UI: Jetpack Compose
 * 使用 Camera2 API, 不做向下兼容
-* minSdk 29
+* minSdk 30
