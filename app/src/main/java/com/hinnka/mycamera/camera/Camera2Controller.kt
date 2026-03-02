@@ -2,6 +2,7 @@ package com.hinnka.mycamera.camera
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.ColorSpace
 import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
@@ -504,6 +505,15 @@ class Camera2Controller(private val context: Context) {
             } else {
                 ImageFormat.YUV_420_888
             }
+
+            val isP3Supported = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                cachedCharacteristics?.get(CameraCharacteristics.REQUEST_AVAILABLE_COLOR_SPACE_PROFILES)
+                    ?.getSupportedColorSpaces(captureFormat)
+                    ?.contains(android.graphics.ColorSpace.Named.DISPLAY_P3) == true
+            } else false
+
+            _state.value = _state.value.copy(isP3Supported = isP3Supported)
+
             PLog.d(
                 TAG,
                 "拍照尺寸: ${captureSize.width}x${captureSize.height}, 预览尺寸: ${previewSize.width}x${previewSize.height}, 格式: ${
@@ -783,6 +793,10 @@ class Camera2Controller(private val context: Context) {
                     }
                 }
             )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && _state.value.isP3Supported) {
+                PLog.i(TAG, "Configuring Display P3 color space for output")
+                sessionConfig.setColorSpace(android.graphics.ColorSpace.Named.DISPLAY_P3)
+            }
             device.createCaptureSession(sessionConfig)
 
         } catch (e: Exception) {
@@ -2253,7 +2267,8 @@ class Camera2Controller(private val context: Context) {
             imageHeight = imageHeight,
             captureTime = System.currentTimeMillis(),
             latitude = latitude,
-            longitude = longitude
+            longitude = longitude,
+            colorSpace = if (_state.value.isP3Supported) ColorSpace.Named.DISPLAY_P3 else ColorSpace.Named.SRGB
         )
     }
 

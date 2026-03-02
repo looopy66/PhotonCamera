@@ -125,6 +125,8 @@ object PhotoManager {
                     sharpeningValue, noiseReductionValue, chromaNoiseReductionValue
                 ) ?: return@withContext
 
+                PLog.d(TAG, "processedBitmap = ${processedBitmap.colorSpace?.name}")
+
                 // 保存到指定目录
                 val date = metadata.dateTaken ?: System.currentTimeMillis()
 
@@ -534,9 +536,9 @@ object PhotoManager {
             val metadata = loadMetadata(context, photoId) ?: return@withContext
 
             // 创建预览用的 Bitmap
-            var previewBitmap = createBitmap(metadata.width, metadata.height)
+            var previewBitmap = createBitmap(metadata.width, metadata.height, colorSpace = ColorSpace.get(metadata.colorSpace))
 
-            PLog.d(TAG, "saveYuvPhoto: ${metadata.width} ${metadata.height}")
+            PLog.d(TAG, "saveYuvPhoto: ${metadata.width} ${metadata.height} ${metadata.colorSpace.name}")
 
             // YUV 格式：使用 native 处理（包含旋转和裁切）并直接保存为 FP16 JXL
             val success = image.use {

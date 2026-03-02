@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.camera
 
+import android.graphics.ColorSpace
 import android.os.Build
 import com.hinnka.mycamera.utils.DeviceUtil
 
@@ -38,7 +39,10 @@ data class CaptureInfo(
     // GPS（可选）
     val latitude: Double? = null,
     val longitude: Double? = null,
-    val altitude: Double? = null
+    val altitude: Double? = null,
+
+    // 色彩空间
+    val colorSpace: ColorSpace.Named = ColorSpace.Named.SRGB,
 ) {
     /**
      * 格式化曝光时间为可读字符串

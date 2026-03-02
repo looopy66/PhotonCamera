@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.gallery
 
 import android.content.Context
+import android.graphics.ColorSpace
 import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
@@ -62,7 +63,8 @@ data class PhotoMetadata(
     // DRO 模式
     val droMode: String? = null,
     val software: String? = null,
-    val isMirrored: Boolean = false
+    val isMirrored: Boolean = false,
+    val colorSpace: ColorSpace.Named = ColorSpace.Named.SRGB
 ) {
     /**
      * 将元数据转换为 CaptureInfo，用于写入 EXIF
@@ -154,15 +156,15 @@ data class PhotoMetadata(
             put("ratio", ratio?.getDisplayName() ?: JSONObject.NULL)
             put(
                 "cropRegion", if (cropRegion != null) {
-                JSONObject().apply {
-                    put("left", cropRegion.left)
-                    put("top", cropRegion.top)
-                    put("right", cropRegion.right)
-                    put("bottom", cropRegion.bottom)
-                }
-            } else {
-                JSONObject.NULL
-            })
+                    JSONObject().apply {
+                        put("left", cropRegion.left)
+                        put("top", cropRegion.top)
+                        put("right", cropRegion.right)
+                        put("bottom", cropRegion.bottom)
+                    }
+                } else {
+                    JSONObject.NULL
+                })
             put("rotation", rotation)
             // 拍摄信息
             put("deviceModel", deviceModel ?: JSONObject.NULL)
@@ -192,6 +194,7 @@ data class PhotoMetadata(
             put("droMode", droMode ?: JSONObject.NULL)
             put("software", software ?: JSONObject.NULL)
             put("isMirrored", isMirrored)
+            put("colorSpace", colorSpace.name)
         }.toString(2)
     }
 
@@ -282,7 +285,12 @@ data class PhotoMetadata(
                     presentationTimestampUs = if (obj.isNull("presentationTimestampUs")) null else obj.optLong("presentationTimestampUs"),
                     droMode = if (obj.isNull("droMode")) null else obj.optString("droMode"),
                     software = if (obj.isNull("software")) null else obj.optString("software"),
-                    isMirrored = obj.optBoolean("isMirrored", false)
+                    isMirrored = obj.optBoolean("isMirrored", false),
+                    colorSpace = (if (obj.isNull("colorSpace")) null else obj.optString("colorSpace"))?.let {
+                        ColorSpace.Named.valueOf(
+                            it
+                        )
+                    } ?: ColorSpace.Named.SRGB,
                 )
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to parse JSON", e)
@@ -356,6 +364,12 @@ data class PhotoMetadata(
 
                     val software = exif.getAttribute(ExifInterface.TAG_SOFTWARE)
 
+                    val latLong = exif.latLong
+                    val latitude = latLong?.get(0)
+                    val longitude = latLong?.get(1)
+                    val altitude = exif.getAltitude(0.0)
+                        .takeIf { it != 0.0 || exif.getAttribute(ExifInterface.TAG_GPS_ALTITUDE) != null }
+
                     PhotoMetadata(
                         deviceModel = model,
                         brand = make?.replaceFirstChar { it.uppercase() },
@@ -367,6 +381,9 @@ data class PhotoMetadata(
                         aperture = aperture,
                         width = width,
                         height = height,
+                        latitude = latitude,
+                        longitude = longitude,
+                        altitude = altitude,
                         software = software,
                         isImported = true
                     )

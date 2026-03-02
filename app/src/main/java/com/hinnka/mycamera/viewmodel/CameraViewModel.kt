@@ -1431,7 +1431,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 aperture = captureInfo.formatAperture(),
                 exposureBias = state.value.exposureBias,
                 droMode = droModeString,
-                isMirrored = shouldMirror
+                isMirrored = shouldMirror,
+                colorSpace = captureInfo.colorSpace
             )
 
             val livePhotoVideoDeferred = if (useLivePhoto.value) {
@@ -1553,7 +1554,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 aperture = captureInfo.formatAperture(),
                 exposureBias = state.value.exposureBias,
                 droMode = droModeString,
-                isMirrored = shouldMirror
+                isMirrored = shouldMirror,
+                colorSpace = captureInfo.colorSpace
             )
 
             val livePhotoVideoDeferred = if (useLivePhoto.value) {
@@ -1661,7 +1663,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             focalLength = captureInfo.formatFocalLength(),
             focalLength35mm = captureInfo.formatFocalLength35mm(),
             aperture = captureInfo.formatAperture(),
-            isMirrored = shouldMirror
+            isMirrored = shouldMirror,
+            colorSpace = captureInfo.colorSpace
         )
 
         PhotoManager.preparePhoto(

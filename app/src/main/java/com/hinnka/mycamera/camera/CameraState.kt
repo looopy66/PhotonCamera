@@ -189,6 +189,7 @@ data class CameraState(
     val burstCapturing: Boolean = false,
     val latitude: Double? = null,
     val longitude: Double? = null,
+    val isP3Supported: Boolean = false,
 ) {
     /**
      * 是否全自动曝光

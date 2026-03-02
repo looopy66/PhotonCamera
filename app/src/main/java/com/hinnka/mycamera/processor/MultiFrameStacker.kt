@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.processor
 
 import android.graphics.Bitmap
+import android.graphics.ColorSpace
 import android.hardware.camera2.CameraCharacteristics
 import android.media.Image
 import android.util.Log
@@ -119,7 +120,8 @@ object MultiFrameStacker {
             val dimensions = BitmapUtils.calculateProcessedRect(width, height, aspectRatio, null, rotation)
             val targetW = dimensions.width() * scale
             val targetH = dimensions.height() * scale
-            val previewBitmap = createBitmap(targetW, targetH)
+            val previewBitmap = createBitmap(targetW, targetH,
+                colorSpace = ColorSpace.get(ColorSpace.Named.DISPLAY_P3))
 
             processStackNative(
                 stackerPtr,

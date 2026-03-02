@@ -23,6 +23,7 @@ import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.sqrt
 import android.opengl.Matrix as GlMatrix
+import androidx.core.graphics.createBitmap
 
 /**
  * RAW 图像解马赛克处理器
@@ -1803,7 +1804,8 @@ class RawDemosaicProcessor {
             GLES30.GL_MAP_READ_BIT
         ) as? ByteBuffer
 
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGBA_F16)
+        val bitmap = createBitmap(width, height, Bitmap.Config.RGBA_F16,
+            colorSpace = android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.DISPLAY_P3))
 
         if (mappedBuffer != null) {
             bitmap.copyPixelsFromBuffer(mappedBuffer)

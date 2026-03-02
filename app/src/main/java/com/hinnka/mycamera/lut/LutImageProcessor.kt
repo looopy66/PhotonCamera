@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.lut
 
 import android.graphics.Bitmap
+import android.graphics.ColorSpace
 import android.opengl.EGL14
 import android.opengl.EGLConfig
 import android.opengl.EGLContext
@@ -17,6 +18,7 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import java.nio.ShortBuffer
 import java.util.concurrent.Executors
+import androidx.core.graphics.createBitmap
 
 /**
  * LUT 图片处理器
@@ -196,7 +198,7 @@ class LutImageProcessor {
         if (!isInitialized) {
             if (!initialize()) {
                 // 创建一个空白 Bitmap 返回
-                return@withContext Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                return@withContext createBitmap(width, height)
             }
         }
 
@@ -243,6 +245,7 @@ class LutImageProcessor {
         val outputBitmap = performRender(
             width, height,
             if (noiseReduction > 0 || chromaNoiseReduction > 0) nlmPassTexId[1] else imageTextureId,
+            ColorSpace.get(ColorSpace.Named.DISPLAY_P3),
             lutConfig,
             colorRecipeEnabled,
             exposure, contrast, saturation, temperature, tint, fade,
@@ -324,6 +327,7 @@ class LutImageProcessor {
         val outputBitmap = performRender(
             width, height,
             if (noiseReduction > 0 || chromaNoiseReduction > 0) nlmPassTexId[1] else imageTextureId,
+            ColorSpace.get(ColorSpace.Named.DISPLAY_P3),
             lutConfig,
             colorRecipeEnabled,
             exposure, contrast, saturation, temperature, tint, fade,
@@ -341,6 +345,7 @@ class LutImageProcessor {
         width: Int,
         height: Int,
         inputTextureId: Int,
+        inputColorSpace: ColorSpace,
         lutConfig: LutConfig?,
         colorRecipeEnabled: Boolean,
         exposure: Float,
@@ -463,7 +468,7 @@ class LutImageProcessor {
         ) as? ByteBuffer
 
         // 创建临时 Bitmap
-        val tempBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val tempBitmap = createBitmap(width, height, colorSpace = inputColorSpace)
 
         if (mappedBuffer != null) {
             // 直接使用映射的内存，不需要 allocateDirect，不需要 put 拷贝
