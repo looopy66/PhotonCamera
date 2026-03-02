@@ -338,4 +338,10 @@
     <string name="settings_launch_camera_on_phantom_mode_description">通过快捷设置或应用快捷方式开启幻影模式时，自动启动系统相机。</string>
     <string name="color_space">色彩空间</string>
     <string name="advanced_options">高级选项</string>
+
+    <string name="settings_widget_theme">小组件主题</string>
+    <string name="settings_widget_theme_description">设置桌面小组件的配色方案</string>
+    <string name="settings_widget_theme_system">跟随系统</string>
+    <string name="settings_widget_theme_light">浅色</string>
+    <string name="settings_widget_theme_dark">深色</string>
 </resources>

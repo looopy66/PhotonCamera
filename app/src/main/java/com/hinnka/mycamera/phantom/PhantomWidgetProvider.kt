@@ -24,6 +24,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.hinnka.mycamera.data.WidgetTheme
+import android.content.res.Configuration
+import androidx.core.content.ContextCompat
 
 class PhantomWidgetProvider : AppWidgetProvider() {
 
@@ -41,17 +44,18 @@ class PhantomWidgetProvider : AppWidgetProvider() {
 
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
         val contentRepository = ContentRepository.getInstance(context)
-        val userPreferencesRepository = contentRepository.userPreferencesRepository
         val galleryRepository = contentRepository.galleryRepository
         providerScope.launch {
-            val phantomMode = userPreferencesRepository.userPreferences.first().phantomMode
+            val prefs = contentRepository.userPreferencesRepository.userPreferences.first()
+            val phantomMode = prefs.phantomMode
+            val widgetTheme = prefs.widgetTheme
             val latestPhoto = withContext(Dispatchers.IO) {
                 galleryRepository.getLatestPhoto()?.apply {
                     metadata = PhotoManager.loadMetadata(context, id)
                 }
             }
             for (appWidgetId in appWidgetIds) {
-                updateAppWidget(context, appWidgetManager, appWidgetId, phantomMode, latestPhoto)
+                updateAppWidget(context, appWidgetManager, appWidgetId, phantomMode, latestPhoto, widgetTheme)
             }
         }
     }
@@ -132,12 +136,14 @@ class PhantomWidgetProvider : AppWidgetProvider() {
         val userPreferencesRepository = ContentRepository.getInstance(context).userPreferencesRepository
         val galleryRepository = ContentRepository.getInstance(context).galleryRepository
         providerScope.launch {
-            val phantomMode = userPreferencesRepository.userPreferences.first().phantomMode
+            val prefs = userPreferencesRepository.userPreferences.first()
+            val phantomMode = prefs.phantomMode
+            val widgetTheme = prefs.widgetTheme
             val latestPhoto = withContext(Dispatchers.IO) {
                 galleryRepository.getLatestPhoto()
             }
             for (appWidgetId in appWidgetIds) {
-                updateAppWidget(context, appWidgetManager, appWidgetId, phantomMode, latestPhoto)
+                updateAppWidget(context, appWidgetManager, appWidgetId, phantomMode, latestPhoto, widgetTheme)
             }
         }
     }
@@ -147,9 +153,46 @@ class PhantomWidgetProvider : AppWidgetProvider() {
         appWidgetManager: AppWidgetManager,
         appWidgetId: Int,
         isActive: Boolean,
-        latestPhoto: PhotoData?
+        latestPhoto: PhotoData?,
+        widgetTheme: WidgetTheme
     ) {
         val views = RemoteViews(context.packageName, R.layout.phantom_widget)
+
+        val isDark = when (widgetTheme) {
+            WidgetTheme.FOLLOW_SYSTEM -> (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+            WidgetTheme.DARK -> true
+            WidgetTheme.LIGHT -> false
+        }
+
+        // Apply theme colors
+        val bgRes = if (isDark) R.drawable.widget_background_dark else R.drawable.widget_background_light
+        val captureBtnRes = if (isDark) R.drawable.btn_capture_bg_dark else R.drawable.btn_capture_bg_light
+        val secondaryBtnRes = if (isDark) R.drawable.btn_secondary_bg_dark else R.drawable.btn_secondary_bg_light
+        val primaryText = ContextCompat.getColor(
+            context,
+            if (isDark) R.color.widget_text_primary_dark else R.color.widget_text_primary_light
+        )
+        val secondaryText = ContextCompat.getColor(
+            context,
+            if (isDark) R.color.widget_text_secondary_dark else R.color.widget_text_secondary_light
+        )
+
+        views.setInt(R.id.root, "setBackgroundResource", bgRes)
+        views.setInt(R.id.btn_app, "setBackgroundResource", captureBtnRes)
+        views.setInt(R.id.btn_filters, "setBackgroundResource", secondaryBtnRes)
+        views.setInt(R.id.btn_frames, "setBackgroundResource", secondaryBtnRes)
+        views.setInt(R.id.btn_phantom, "setBackgroundResource", secondaryBtnRes)
+        views.setInt(R.id.photo_1, "setBackgroundResource", secondaryBtnRes)
+
+        views.setTextColor(R.id.app_name_text, primaryText)
+        views.setTextColor(R.id.recent_text, secondaryText)
+        // views.setInt(R.id.ic_camera, "setColorFilter", primaryText)
+        views.setInt(R.id.ic_filters, "setColorFilter", primaryText)
+        views.setInt(R.id.ic_frames, "setColorFilter", primaryText)
+        views.setInt(R.id.phantom_icon_off, "setColorFilter", primaryText)
+        // phantom_icon (active) is always accent color, recent_arrow is accent
+        views.setInt(R.id.recent_arrow, "setColorFilter", ContextCompat.getColor(context, R.color.widget_recent_accent))
+        views.setInt(R.id.phantom_icon, "setColorFilter", ContextCompat.getColor(context, R.color.widget_accent))
 
         if (DeviceUtil.isChinaFlavor) {
             views.setViewVisibility(R.id.btn_frames, View.GONE)

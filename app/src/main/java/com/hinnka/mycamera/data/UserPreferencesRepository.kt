@@ -27,6 +27,12 @@ enum class VolumeKeyAction {
     ZOOM
 }
 
+enum class WidgetTheme {
+    FOLLOW_SYSTEM,
+    LIGHT,
+    DARK
+}
+
 /**
  * 用户偏好设置数据类
  */
@@ -71,6 +77,7 @@ data class UserPreferences(
     val phantomButtonHidden: Boolean = false,
     val launchCameraOnPhantomMode: Boolean = false,
     val mirrorFrontCamera: Boolean = true,
+    val widgetTheme: WidgetTheme = WidgetTheme.FOLLOW_SYSTEM,
 )
 
 /**
@@ -128,6 +135,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val PHANTOM_BUTTON_HIDDEN = booleanPreferencesKey("phantom_button_hidden")
         private val LAUNCH_CAMERA_ON_PHANTOM_MODE = booleanPreferencesKey("launch_camera_on_phantom_mode")
         private val MIRROR_FRONT_CAMERA = booleanPreferencesKey("mirror_front_camera")
+        private val WIDGET_THEME = stringPreferencesKey("widget_theme")
     }
 
     /**
@@ -179,6 +187,7 @@ class UserPreferencesRepository(private val context: Context) {
                 phantomButtonHidden = preferences[PHANTOM_BUTTON_HIDDEN] ?: false,
                 launchCameraOnPhantomMode = preferences[LAUNCH_CAMERA_ON_PHANTOM_MODE] ?: false,
                 mirrorFrontCamera = preferences[MIRROR_FRONT_CAMERA] ?: true,
+                widgetTheme = WidgetTheme.valueOf(preferences[WIDGET_THEME] ?: WidgetTheme.FOLLOW_SYSTEM.name),
             )
         }
 
@@ -596,6 +605,15 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveMirrorFrontCamera(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[MIRROR_FRONT_CAMERA] = enabled
+        }
+    }
+
+    /**
+     * 保存 Widget 主题
+     */
+    suspend fun saveWidgetTheme(theme: WidgetTheme) {
+        context.dataStore.edit { preferences ->
+            preferences[WIDGET_THEME] = theme.name
         }
     }
 }

@@ -3,6 +3,7 @@ package com.hinnka.mycamera.viewmodel
 import android.app.Application
 import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
 import android.graphics.Bitmap
@@ -26,6 +27,7 @@ import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.SafeImage
+import com.hinnka.mycamera.phantom.PhantomWidgetProvider
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.LogCurve
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
@@ -187,6 +189,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     val mirrorFrontCamera: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.mirrorFrontCamera }
+    val widgetTheme: StateFlow<com.hinnka.mycamera.data.WidgetTheme> = userPreferencesRepository.userPreferences
+        .map { it.widgetTheme }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, com.hinnka.mycamera.data.WidgetTheme.FOLLOW_SYSTEM)
 
     // 软件处理参数 Flow
     val sharpening: Flow<Float> = userPreferencesRepository.userPreferences.map { it.sharpening }
@@ -1798,12 +1803,38 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             userPreferencesRepository.saveLaunchCameraOnPhantomMode(launch)
         }
     }
+
     /**
      * 设置是否启用自拍镜像
      */
     fun setMirrorFrontCamera(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.saveMirrorFrontCamera(enabled)
+        }
+    }
+
+    /**
+     * 设置 Widget 主题
+     */
+    fun setWidgetTheme(theme: com.hinnka.mycamera.data.WidgetTheme) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveWidgetTheme(theme)
+            // 通知 Widget 更新
+            val intent = Intent(
+                getApplication<Application>(),
+                PhantomWidgetProvider::class.java
+            ).apply {
+                action = android.appwidget.AppWidgetManager.ACTION_APPWIDGET_UPDATE
+                val ids = android.appwidget.AppWidgetManager.getInstance(getApplication())
+                    .getAppWidgetIds(
+                        android.content.ComponentName(
+                            getApplication(),
+                            com.hinnka.mycamera.phantom.PhantomWidgetProvider::class.java
+                        )
+                    )
+                putExtra(android.appwidget.AppWidgetManager.EXTRA_APPWIDGET_IDS, ids)
+            }
+            getApplication<Application>().sendBroadcast(intent)
         }
     }
 }

@@ -122,6 +122,7 @@ fun SettingsScreen(
     val phantomButtonHidden by viewModel.phantomButtonHidden.collectAsState()
     val launchCameraOnPhantomMode by viewModel.launchCameraOnPhantomMode.collectAsState()
     val mirrorFrontCamera by viewModel.mirrorFrontCamera.collectAsState(initial = true)
+    val widgetTheme by viewModel.widgetTheme.collectAsState()
 
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -602,6 +603,23 @@ fun SettingsScreen(
                         onCheckedChange = { viewModel.setLaunchCameraOnPhantomMode(it) }
                     )
                 }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Widget 设置
+            SettingsSection(title = stringResource(R.string.settings_widget_theme)) {
+                QualityLevelSetting(
+                    title = stringResource(R.string.settings_widget_theme),
+                    description = stringResource(R.string.settings_widget_theme_description),
+                    levels = listOf(
+                        com.hinnka.mycamera.data.WidgetTheme.FOLLOW_SYSTEM to stringResource(R.string.settings_widget_theme_system),
+                        com.hinnka.mycamera.data.WidgetTheme.LIGHT to stringResource(R.string.settings_widget_theme_light),
+                        com.hinnka.mycamera.data.WidgetTheme.DARK to stringResource(R.string.settings_widget_theme_dark)
+                    ),
+                    currentLevel = widgetTheme,
+                    onLevelSelected = { viewModel.setWidgetTheme(it) }
+                )
             }
 
             Spacer(modifier = Modifier.height(24.dp))
