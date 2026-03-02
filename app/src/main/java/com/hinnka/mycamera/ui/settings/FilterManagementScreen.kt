@@ -10,6 +10,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -408,7 +410,7 @@ fun FilterManagementScreen(
         Column(modifier = Modifier.weight(1f)) {
             // 修正 Tab 越界（如果分类消失了）
             val currentTabIndex = if (selectedTabIndex >= categories.size) 0 else selectedTabIndex
-            
+
             LaunchedEffect(categories.size) {
                 if (selectedTabIndex >= categories.size) {
                     selectedTabIndex = 0
@@ -680,7 +682,7 @@ fun FilterManagementScreen(
                     )
                 },
                 text = {
-                    Column {
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                         OutlinedTextField(
                             value = categoryText,
                             onValueChange = { categoryText = it },
@@ -791,7 +793,7 @@ fun FilterManagementScreen(
                 },
                 title = { Text(stringResource(R.string.import_to_category)) },
                 text = {
-                    Column {
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                         OutlinedTextField(
                             value = categoryText,
                             onValueChange = { categoryText = it },
@@ -974,7 +976,12 @@ fun FilterManagementScreen(
                                 urisToImport.forEachIndexed { index, uri ->
                                     importProgress = Pair(index + 1, urisToImport.size)
                                     val result = withContext(Dispatchers.IO) {
-                                        customImportManager.importLut(uri, category = targetCategory, colorSpace = colorSpace, curve = curveToUse)
+                                        customImportManager.importLut(
+                                            uri,
+                                            category = targetCategory,
+                                            colorSpace = colorSpace,
+                                            curve = curveToUse
+                                        )
                                     }
                                     if (result != null) {
                                         successCount++

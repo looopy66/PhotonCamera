@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -46,11 +47,18 @@ fun GalleryThumbnail(
         contentAlignment = Alignment.Center
     ) {
         if (latestPhoto != null) {
+            val transformation = remember(latestPhoto) {
+                viewModel.getPhotoTransformation(latestPhoto)
+            }
             AsyncImage(
                 model = ImageRequest.Builder(context)
                     .data(latestPhoto.thumbnailUri)
                     .crossfade(true)
-                    .transformations(viewModel.getPhotoTransformation(latestPhoto))
+                    .apply {
+                        if (transformation != null) {
+                            transformations(transformation)
+                        }
+                    }
                     .build(),
                 contentDescription = "Gallery",
                 contentScale = ContentScale.Crop,

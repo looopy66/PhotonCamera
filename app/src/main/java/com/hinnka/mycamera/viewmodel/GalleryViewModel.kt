@@ -107,15 +107,18 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         if (tab == GalleryTab.PHOTON) {
             p
         } else {
+            // Optimize lookup by creating a map of sourceUri to PhotoData
+            val photonMap = mutableMapOf<String, PhotoData>()
+            p.forEach { photo ->
+                photo.metadata?.sourceUri?.let { photonMap[it] = photo }
+                photo.metadata?.exportedUris?.forEach { exportedUri ->
+                    photonMap[exportedUri] = photo
+                }
+            }
+
             // Map system photos to their internal associated copies if they exist
             s.map { systemPhoto ->
-                val systemUriString = systemPhoto.uri.toString()
-                p.find {
-                    it.metadata?.sourceUri == systemUriString ||
-                            it.metadata?.exportedUris?.any { exportedUri ->
-                                exportedUri == systemUriString
-                            } == true
-                } ?: systemPhoto
+                photonMap[systemPhoto.uri.toString()] ?: systemPhoto
             }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -1136,8 +1139,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /**
      * 获取指定照片的完整转换器（LUT + 边框）
      */
-    fun getPhotoTransformation(photo: PhotoData): PhotoTransformation {
-        val metadata = photo.metadata ?: PhotoMetadata()
+    fun getPhotoTransformation(photo: PhotoData): PhotoTransformation? {
+        val metadata = photo.metadata ?: return null
 
         // 使用照片自己的 metadata 中保存的处理参数，如果没有则使用全局设置
         // 导入的照片默认不应用处理（除非用户编辑过）

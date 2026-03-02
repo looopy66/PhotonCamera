@@ -363,7 +363,8 @@ fun GalleryScreen(
                 ) {
                     items(
                         items = currentPhotos,
-                        key = { it.id }
+                        key = { it.id },
+                        contentType = { "photo" }
                     ) { photo ->
                         val index = currentPhotos.indexOf(photo)
                         PhotoGridItem(
@@ -502,12 +503,24 @@ private fun PhotoGridItem(
             .autoRotate()
     ) {
         // 照片缩略图
-        AsyncImage(
-            model = ImageRequest.Builder(context)
+        val transformation = remember(photo, viewModel.selectedTab) {
+            viewModel.getPhotoTransformation(photo)
+        }
+        val imageRequest = remember(photo.thumbnailUri, transformation) {
+            ImageRequest.Builder(context)
                 .data(photo.thumbnailUri)
                 .crossfade(true)
-                .transformations(viewModel.getPhotoTransformation(photo))
-                .build(),
+                .apply {
+                    if (transformation != null) {
+                        transformations(transformation)
+                    }
+                }
+                .size(512) // 限制缩略图大小，提高加载速度
+                .build()
+        }
+
+        AsyncImage(
+            model = imageRequest,
             contentDescription = photo.displayName,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
