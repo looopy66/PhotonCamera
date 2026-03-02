@@ -144,6 +144,8 @@
     <string name="settings_volume_key_action_zoom">Focal Switch</string>
     <string name="settings_auto_save">Auto Save</string>
     <string name="settings_auto_save_description">Automatically save photos after capture</string>
+    <string name="settings_save_location">Save Location</string>
+    <string name="settings_save_location_description">Save location info (GPS) in photo metadata</string>
     <string name="settings_nr_level">Noise Reduction Level</string>
     <string name="settings_nr_level_description">Adjust the hardware noise reduction mode. "Off" helps preserve details when using software processing.</string>
     <string name="settings_nr_level_off">Off</string>

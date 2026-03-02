@@ -2189,7 +2189,9 @@ class Camera2Controller(private val context: Context) {
     fun rebuildCaptureInfo(
         result: TotalCaptureResult?,
         imageWidth: Int,
-        imageHeight: Int
+        imageHeight: Int,
+        latitude: Double? = null,
+        longitude: Double? = null
     ): CaptureInfo {
         val cameraId = _state.value.currentCameraId
         val zoomRatio = _state.value.zoomRatio
@@ -2250,6 +2252,8 @@ class Camera2Controller(private val context: Context) {
             imageWidth = imageWidth,
             imageHeight = imageHeight,
             captureTime = System.currentTimeMillis(),
+            latitude = latitude,
+            longitude = longitude
         )
     }
 
@@ -2349,7 +2353,7 @@ class Camera2Controller(private val context: Context) {
             // PLog.d(TAG, "Matching Image and CaptureResult found for timestamp ${image.timestamp}")
 
             // 构建 CaptureInfo
-            val captureInfo = rebuildCaptureInfo(result, width, height)
+            val captureInfo = rebuildCaptureInfo(result, width, height, _state.value.latitude, _state.value.longitude)
 
             // 传递完整的 Image 对象、CaptureInfo、CameraCharacteristics 和 CaptureResult
             val callback = onImageCaptured
@@ -2387,6 +2391,11 @@ class Camera2Controller(private val context: Context) {
 
     fun setUseP010(enabled: Boolean) {
         _state.value = _state.value.copy(useP010 = enabled)
+    }
+
+    fun setLocation(latitude: Double?, longitude: Double?) {
+        PLog.d(TAG, "setLocation: $latitude, $longitude")
+        _state.value = _state.value.copy(latitude = latitude, longitude = longitude)
     }
 
     /**

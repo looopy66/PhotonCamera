@@ -78,6 +78,7 @@ data class UserPreferences(
     val launchCameraOnPhantomMode: Boolean = false,
     val mirrorFrontCamera: Boolean = true,
     val widgetTheme: WidgetTheme = WidgetTheme.FOLLOW_SYSTEM,
+    val saveLocation: Boolean = false,
 )
 
 /**
@@ -136,6 +137,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val LAUNCH_CAMERA_ON_PHANTOM_MODE = booleanPreferencesKey("launch_camera_on_phantom_mode")
         private val MIRROR_FRONT_CAMERA = booleanPreferencesKey("mirror_front_camera")
         private val WIDGET_THEME = stringPreferencesKey("widget_theme")
+        private val SAVE_LOCATION = booleanPreferencesKey("save_location")
     }
 
     /**
@@ -188,6 +190,7 @@ class UserPreferencesRepository(private val context: Context) {
                 launchCameraOnPhantomMode = preferences[LAUNCH_CAMERA_ON_PHANTOM_MODE] ?: false,
                 mirrorFrontCamera = preferences[MIRROR_FRONT_CAMERA] ?: true,
                 widgetTheme = WidgetTheme.valueOf(preferences[WIDGET_THEME] ?: WidgetTheme.FOLLOW_SYSTEM.name),
+                saveLocation = preferences[SAVE_LOCATION] ?: false,
             )
         }
 
@@ -614,6 +617,15 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveWidgetTheme(theme: WidgetTheme) {
         context.dataStore.edit { preferences ->
             preferences[WIDGET_THEME] = theme.name
+        }
+    }
+
+    /**
+     * 保存是否记录地理位置
+     */
+    suspend fun saveSaveLocation(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[SAVE_LOCATION] = enabled
         }
     }
 }

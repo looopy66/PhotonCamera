@@ -41,6 +41,10 @@ data class PhotoMetadata(
     val brand: String? = null,
     val dateTaken: Long? = null,
     val location: String? = null,
+    // GPS（可选）
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val altitude: Double? = null,
     val iso: Int? = null,
     val shutterSpeed: String? = null,
     val focalLength: String? = null,
@@ -75,7 +79,10 @@ data class PhotoMetadata(
             focalLength = focalLength?.substringBefore("mm")?.toFloatOrNull(),
             focalLength35mm = focalLength35mm?.substringBefore("mm")?.toIntOrNull(),
             exposureTime = parseExposureTime(shutterSpeed),
-            software = software ?: "PhotonCamera"
+            software = software ?: "PhotonCamera",
+            latitude = latitude,
+            longitude = longitude,
+            altitude = altitude
         )
     }
 
@@ -162,6 +169,9 @@ data class PhotoMetadata(
             put("brand", brand ?: JSONObject.NULL)
             put("dateTaken", dateTaken ?: JSONObject.NULL)
             put("location", location ?: JSONObject.NULL)
+            put("latitude", latitude ?: JSONObject.NULL)
+            put("longitude", longitude ?: JSONObject.NULL)
+            put("altitude", altitude ?: JSONObject.NULL)
             put("iso", iso ?: JSONObject.NULL)
             put("shutterSpeed", shutterSpeed ?: JSONObject.NULL)
             put("focalLength", focalLength ?: JSONObject.NULL)
@@ -251,6 +261,9 @@ data class PhotoMetadata(
                     brand = if (obj.isNull("brand")) null else obj.optString("brand"),
                     dateTaken = if (obj.isNull("dateTaken")) null else obj.optLong("dateTaken"),
                     location = if (obj.isNull("location")) null else obj.optString("location"),
+                    latitude = if (obj.isNull("latitude")) null else obj.optDouble("latitude"),
+                    longitude = if (obj.isNull("longitude")) null else obj.optDouble("longitude"),
+                    altitude = if (obj.isNull("altitude")) null else obj.optDouble("altitude"),
                     iso = if (obj.isNull("iso")) null else obj.optInt("iso"),
                     shutterSpeed = if (obj.isNull("shutterSpeed")) null else obj.optString("shutterSpeed"),
                     focalLength = if (obj.isNull("focalLength")) null else obj.optString("focalLength"),

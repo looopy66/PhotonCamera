@@ -68,6 +68,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     // 震动辅助类
     private val vibrationHelper = VibrationHelper(application)
 
+    private val locationManager = LocationManager(application)
+
     val state: StateFlow<CameraState> = cameraController.state
     val livePhotoRecorder get() = cameraController.livePhotoRecorder
 
@@ -137,6 +139,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val photoQuality: Flow<Int> = userPreferencesRepository.userPreferences.map { it.photoQuality }
 
     val defaultFocalLength: Flow<Float> = userPreferencesRepository.userPreferences.map { it.defaultFocalLength }
+    val userPreferences: StateFlow<com.hinnka.mycamera.data.UserPreferences> = userPreferencesRepository.userPreferences
+        .stateIn(viewModelScope, SharingStarted.Eagerly, com.hinnka.mycamera.data.UserPreferences())
     val useMultiFrame: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useMultiFrame }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -192,6 +196,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val widgetTheme: StateFlow<com.hinnka.mycamera.data.WidgetTheme> = userPreferencesRepository.userPreferences
         .map { it.widgetTheme }
         .stateIn(viewModelScope, SharingStarted.Eagerly, com.hinnka.mycamera.data.WidgetTheme.FOLLOW_SYSTEM)
+    val saveLocationEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.saveLocation }
 
     // 软件处理参数 Flow
     val sharpening: Flow<Float> = userPreferencesRepository.userPreferences.map { it.sharpening }
@@ -434,10 +439,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    /**
-     * 拍照（带延时拍摄支持）
-     */
     fun capture() {
+        if (userPreferences.value.saveLocation) {
+            val location = locationManager.getCurrentLocation()
+            cameraController.setLocation(location?.latitude, location?.longitude)
+        } else {
+            cameraController.setLocation(null, null)
+        }
+
         val timerSeconds = state.value.timerSeconds
 
         // 检查 VIP 权限
@@ -796,6 +805,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setApplyUltraHDR(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.saveApplyUltraHDR(enabled)
+        }
+    }
+
+    fun setSaveLocation(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveSaveLocation(enabled)
         }
     }
 
@@ -1404,8 +1419,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 ratio = aspectRatio,
                 rotation = rotation,
                 deviceModel = captureInfo.model,
-                brand = captureInfo.make.replaceFirstChar { it.uppercase() },
+                brand = captureInfo.make,
                 dateTaken = captureInfo.captureTime,
+                latitude = captureInfo.latitude,
+                longitude = captureInfo.longitude,
+                altitude = captureInfo.altitude,
                 iso = captureInfo.iso,
                 shutterSpeed = captureInfo.formatExposureTime(),
                 focalLength = captureInfo.formatFocalLength(),
@@ -1523,8 +1541,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 ratio = aspectRatio,
                 rotation = rotation,
                 deviceModel = captureInfo.model,
-                brand = captureInfo.make.replaceFirstChar { it.uppercase() },
+                brand = captureInfo.make,
                 dateTaken = captureInfo.captureTime,
+                latitude = captureInfo.latitude,
+                longitude = captureInfo.longitude,
+                altitude = captureInfo.altitude,
                 iso = captureInfo.iso,
                 shutterSpeed = captureInfo.formatExposureTime(),
                 focalLength = captureInfo.formatFocalLength(),
@@ -1630,8 +1651,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             ratio = aspectRatio,
             rotation = rotation,
             deviceModel = captureInfo.model,
-            brand = captureInfo.make.replaceFirstChar { it.uppercase() },
+            brand = captureInfo.make,
             dateTaken = captureInfo.captureTime,
+            latitude = captureInfo.latitude,
+            longitude = captureInfo.longitude,
+            altitude = captureInfo.altitude,
             iso = captureInfo.iso,
             shutterSpeed = captureInfo.formatExposureTime(),
             focalLength = captureInfo.formatFocalLength(),

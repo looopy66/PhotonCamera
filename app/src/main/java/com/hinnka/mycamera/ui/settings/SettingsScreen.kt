@@ -123,8 +123,18 @@ fun SettingsScreen(
     val launchCameraOnPhantomMode by viewModel.launchCameraOnPhantomMode.collectAsState()
     val mirrorFrontCamera by viewModel.mirrorFrontCamera.collectAsState(initial = true)
     val widgetTheme by viewModel.widgetTheme.collectAsState()
+    val saveLocation by viewModel.saveLocationEnabled.collectAsState(initial = false)
 
     val context = androidx.compose.ui.platform.LocalContext.current
+
+    val locationPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted = permissions.values.all { it }
+        if (granted) {
+            viewModel.setSaveLocation(true)
+        }
+    }
 
     // 日志查看器弹窗状态
     var showLogViewerDialog by remember { mutableStateOf(false) }
@@ -506,6 +516,42 @@ fun SettingsScreen(
                     description = stringResource(R.string.settings_auto_save_description),
                     checked = autoSaveAfterCapture,
                     onCheckedChange = { viewModel.setAutoSaveAfterCapture(it) }
+                )
+
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+
+                SwitchSettingItem(
+                    title = stringResource(R.string.settings_save_location),
+                    description = stringResource(R.string.settings_save_location_description),
+                    checked = saveLocation,
+                    onCheckedChange = { checked ->
+                        if (checked) {
+                            val fineLocation = androidx.core.content.ContextCompat.checkSelfPermission(
+                                context,
+                                android.Manifest.permission.ACCESS_FINE_LOCATION
+                            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                            val coarseLocation = androidx.core.content.ContextCompat.checkSelfPermission(
+                                context,
+                                android.Manifest.permission.ACCESS_COARSE_LOCATION
+                            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+                            if (fineLocation || coarseLocation) {
+                                viewModel.setSaveLocation(true)
+                            } else {
+                                locationPermissionLauncher.launch(
+                                    arrayOf(
+                                        android.Manifest.permission.ACCESS_FINE_LOCATION,
+                                        android.Manifest.permission.ACCESS_COARSE_LOCATION
+                                    )
+                                )
+                            }
+                        } else {
+                            viewModel.setSaveLocation(false)
+                        }
+                    }
                 )
 
                 HorizontalDivider(

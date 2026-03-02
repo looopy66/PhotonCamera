@@ -142,6 +142,8 @@
     <string name="settings_volume_key_action_zoom">焦距切换</string>
     <string name="settings_auto_save">拍摄后自动保存</string>
     <string name="settings_auto_save_description">拍摄后自动保存照片，否则需要手动确认</string>
+    <string name="settings_save_location">保存地理位置</string>
+    <string name="settings_save_location_description">开启后在照片 EXIF 信息中记录经纬度</string>
     <string name="settings_nr_level">降噪等级</string>
     <string name="settings_nr_level_description">调整系统硬件降噪模式。“关闭”常用于配合软件算法以获得更多细节。</string>
     <string name="settings_nr_level_off">关闭</string>
