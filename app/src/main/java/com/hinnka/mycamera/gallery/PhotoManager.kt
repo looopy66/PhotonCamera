@@ -14,10 +14,12 @@ import android.provider.MediaStore
 import androidx.core.graphics.createBitmap
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.phantom.PhantomService
 import com.hinnka.mycamera.livephoto.GoogleLivePhotoCreator
 import com.hinnka.mycamera.livephoto.MotionPhotoWriter
 import com.hinnka.mycamera.livephoto.VivoLivePhotoCreator
+import com.hinnka.mycamera.lut.LutManager
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.processor.MultiFrameStacker
 import com.hinnka.mycamera.raw.MeteringSystem
@@ -34,6 +36,7 @@ import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.plus
 import kotlin.use
 
 /**
@@ -124,7 +127,13 @@ object PhotoManager {
 
                 // 保存到指定目录
                 val date = metadata.dateTaken ?: System.currentTimeMillis()
-                val withSuffix = suffix?.let { "_$it" } ?: "_${metadata.exportedUris.size + 1}"
+
+                val lutName = metadata.lutId?.let { ContentRepository.getInstance(context).lutManager.getLutInfo(it)?.getName() }
+                var withSuffix = suffix?.let { "_$it" } ?: ""
+                lutName?.let {
+                    withSuffix += ".$lutName"
+                }
+
                 val filename =
                     "PhotonCamera_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(date))}$withSuffix.jpg"
                 val contentValues = ContentValues().apply {
@@ -279,8 +288,6 @@ object PhotoManager {
                 processedBitmap.compress(Bitmap.CompressFormat.JPEG, 97, outputStream)
             }
 
-            PLog.d(TAG, "updateExternalPhoto: $path ${photoFile.length()} ${tempExportFile.length()}")
-
             ExifWriter.writeExif(
                 tempExportFile, metadata.toCaptureInfo().copy(
                     imageWidth = processedBitmap.width,
@@ -365,7 +372,7 @@ object PhotoManager {
                 exportedUris = currentMetadata.exportedUris + uri.toString()
             )
             saveMetadata(context, id, updatedMetadata)
-            PLog.d(TAG, "Exported URI saved: $uri for photo $id")
+            PLog.d(TAG, "Exported URI saved: $uri $path for photo $id")
 
             val thumbnail = ThumbnailUtils.extractThumbnail(processedBitmap, 512, 512)
             return PhantomService.ProcessingInfo(
