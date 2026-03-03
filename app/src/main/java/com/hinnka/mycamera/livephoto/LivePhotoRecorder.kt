@@ -158,8 +158,9 @@ class LivePhotoRecorder(
 
             if (!isRunning) return@launch
 
-            lutRenderer?.let { renderer ->
-                renderer.renderFrame(textureId, matrix, timestampNs / 1000)
+            try {
+                lutRenderer?.renderFrame(textureId, matrix, timestampNs / 1000)
+            } catch (e: Exception) {
             }
         }
     }
