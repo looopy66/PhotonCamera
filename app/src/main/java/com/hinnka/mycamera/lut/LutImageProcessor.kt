@@ -391,7 +391,7 @@ class LutImageProcessor {
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLutEnabled"), if (lutConfig != null) 1 else 0)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLutCurve"), lutConfig?.curve?.ordinal ?: 0)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLutColorSpace"), lutConfig?.colorSpace?.ordinal ?: 0)
-        
+
         val inputColorSpaceId = if (inputColorSpace == ColorSpace.get(ColorSpace.Named.DISPLAY_P3)) 1 else 0
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uInputColorSpace"), inputColorSpaceId)
 
@@ -701,14 +701,30 @@ class LutImageProcessor {
         val cf = IntArray(1)
         GLES30.glGenTextures(1, ct, 0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, ct[0])
-        GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, width, height, 0, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null)
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D,
+            0,
+            GLES30.GL_RGBA16F,
+            width,
+            height,
+            0,
+            GLES30.GL_RGBA,
+            GLES30.GL_HALF_FLOAT,
+            null
+        )
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glGenFramebuffers(1, cf, 0)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, cf[0])
-        GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, ct[0], 0)
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER,
+            GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D,
+            ct[0],
+            0
+        )
         nlmChromaTexId = ct[0]
         nlmChromaFboId = cf[0]
 
@@ -723,14 +739,30 @@ class LutImageProcessor {
             val f = IntArray(1)
             GLES30.glGenTextures(1, t, 0)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, t[0])
-            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, width, height, 0, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null)
+            GLES30.glTexImage2D(
+                GLES30.GL_TEXTURE_2D,
+                0,
+                GLES30.GL_RGBA16F,
+                width,
+                height,
+                0,
+                GLES30.GL_RGBA,
+                GLES30.GL_HALF_FLOAT,
+                null
+            )
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
             GLES30.glGenFramebuffers(1, f, 0)
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, f[0])
-            GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, t[0], 0)
+            GLES30.glFramebufferTexture2D(
+                GLES30.GL_FRAMEBUFFER,
+                GLES30.GL_COLOR_ATTACHMENT0,
+                GLES30.GL_TEXTURE_2D,
+                t[0],
+                0
+            )
             nlmPassTexId[i] = t[0]
             nlmPassFboId[i] = f[0]
 
@@ -742,7 +774,13 @@ class LutImageProcessor {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
 
-    private fun renderNLMDenoise(sourceTextureId: Int, width: Int, height: Int, noiseReduction: Float, chromaNoiseReduction: Float) {
+    private fun renderNLMDenoise(
+        sourceTextureId: Int,
+        width: Int,
+        height: Int,
+        noiseReduction: Float,
+        chromaNoiseReduction: Float
+    ) {
         setupNLMFramebuffers(width, height)
 
         if (nlmChromaProgram == 0 || nlmPassHProgram == 0 || nlmPassVProgram == 0) return
@@ -764,7 +802,13 @@ class LutImageProcessor {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmChromaProgram, "uInputTexture"), 0)
         GLES30.glUniform2f(GLES30.glGetUniformLocation(nlmChromaProgram, "uTexelSize"), texelW, texelH)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(nlmChromaProgram, "uMVPMatrix"), 1, false, identityMatrix, 0)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(nlmChromaProgram, "uMVPMatrix"),
+            1,
+            false,
+            identityMatrix,
+            0
+        )
         GLES30.glUniform1f(GLES30.glGetUniformLocation(nlmChromaProgram, "uH"), ch)
         drawQuad(nlmChromaProgram)
 
@@ -776,7 +820,13 @@ class LutImageProcessor {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, nlmChromaTexId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmPassHProgram, "uInputTexture"), 0)
         GLES30.glUniform2f(GLES30.glGetUniformLocation(nlmPassHProgram, "uTexelSize"), texelW, texelH)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(nlmPassHProgram, "uMVPMatrix"), 1, false, identityMatrix, 0)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(nlmPassHProgram, "uMVPMatrix"),
+            1,
+            false,
+            identityMatrix,
+            0
+        )
         GLES30.glUniform1f(GLES30.glGetUniformLocation(nlmPassHProgram, "uH"), h)
         drawQuad(nlmPassHProgram)
 
@@ -791,7 +841,13 @@ class LutImageProcessor {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, nlmPassTexId[0])
         GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmPassVProgram, "uBlurTexture"), 1)
         GLES30.glUniform2f(GLES30.glGetUniformLocation(nlmPassVProgram, "uTexelSize"), texelW, texelH)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(nlmPassVProgram, "uMVPMatrix"), 1, false, identityMatrix, 0)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(nlmPassVProgram, "uMVPMatrix"),
+            1,
+            false,
+            identityMatrix,
+            0
+        )
         GLES30.glUniform1f(GLES30.glGetUniformLocation(nlmPassVProgram, "uH"), h)
         drawQuad(nlmPassVProgram)
 
@@ -991,18 +1047,23 @@ class LutImageProcessor {
             
             // 辅助函数：亮度计算
             float getLuma(vec3 color) {
-                return dot(color, vec3(0.2126, 0.7152, 0.0722));
+                vec3 weights = (uInputColorSpace == 1) ? vec3(0.2290, 0.6917, 0.0793) : vec3(0.2126, 0.7152, 0.0722);
+                return dot(color, weights);
             }
 
             float log10(float x) { return log(x) * 0.4342944819; }
             vec3 log10(vec3 x) { return log(x) * 0.4342944819; }
 
             vec3 linearToSrgb(vec3 l) {
-                return mix(l * 12.92, 1.055 * pow(l, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, l));
+                vec3 absL = abs(l);
+                vec3 result = mix(absL * 12.92, 1.055 * pow(absL, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, absL));
+                return sign(l) * result;
             }
 
             vec3 srgbToLinear(vec3 c) {
-                return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
+                vec3 absC = abs(c);
+                vec3 result = mix(absC / 12.92, pow((absC + 0.055) / 1.055, vec3(2.4)), step(0.04045, absC));
+                return sign(c) * result;
             }
 
             vec3 applyLutCurve(vec3 l, int curveType) {
@@ -1092,7 +1153,7 @@ class LutImageProcessor {
                     color.rgb *= pow(2.0, uExposure);
 
                     // 2. 高光/阴影调整（分区调整，基于亮度 mask）
-                    float luma = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
+                    float luma = getLuma(color.rgb);
                     float highlightMask = smoothstep(0.5, 1.0, luma);
                     float shadowMask = smoothstep(0.5, 0.0, luma);
                     float highlightFactor;
@@ -1119,7 +1180,7 @@ class LutImageProcessor {
                     color.g += uTint * 0.05;
 
                     // 5. 饱和度（基于 Luma 的快速算法）
-                    float gray = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
+                    float gray = getLuma(color.rgb);
                     color.rgb = mix(vec3(gray), color.rgb, uSaturation);
 
                     // 6. 色彩增强（Vibrance - 选择性增强蓝色/红橙色）
@@ -1162,7 +1223,7 @@ class LutImageProcessor {
                     // 8. 留银冲洗（Bleach Bypass - 胶片银盐保留效果）
                     if (uBleachBypass > 0.0) {
                         // 保留部分银盐：降低饱和度
-                        float luma = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
+                        float luma = getLuma(color.rgb);
                         vec3 desaturated = mix(color.rgb, vec3(luma), 0.6);
                         
                         // 增强对比度
@@ -1205,7 +1266,7 @@ class LutImageProcessor {
                         noise = (noise - 0.5) * 2.0;
                         
                         // 根据亮度自适应调整颗粒强度
-                        float luma = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
+                        float luma = getLuma(color.rgb);
                         float grainMask = 1.0 - abs(luma - 0.5) * 2.0;
                         grainMask = grainMask * 0.5 + 0.5;
                         
@@ -1219,29 +1280,33 @@ class LutImageProcessor {
                 }
 
                 // === LUT 处理（在色彩配方之后） ===
+                // 假定 LUT 始终为 sRGB 色彩空间进行计算，进行管线优化：
+                // 省略了 applyLutColorSpace 以及避免了多次线性和非线性空间的来回切换。
                 if (uLutEnabled && uLutIntensity > 0.0) {
                     bool isP3 = (uInputColorSpace == 1);
+                    vec3 linearInput = srgbToLinear(color.rgb);
+                    
                     if (isP3) {
-                         // P3 -> sRGB (Linear 转换)
-                         vec3 linearP3 = srgbToLinear(color.rgb);
-                         // P3 to sRGB inverse matrix
-                         color.rgb = linearToSrgb(mat3(1.22486, -0.04205, -0.01974, -0.22471, 1.04192, -0.07865, 0.00000, 0.00013, 1.09837) * linearP3);
+                         // 直接将 P3 转为 sRGB 线性空间，避免直接套用非线性转换
+                         linearInput = mat3(1.22486, -0.04205, -0.01974, -0.22471, 1.04192, -0.07865, 0.00000, 0.00013, 1.09837) * linearInput;
                     }
 
-                    vec3 linearRGB = srgbToLinear(color.rgb);
-                    vec3 colorSpaceRGB = applyLutColorSpace(linearRGB, uLutColorSpace);
-                    vec3 lutInColor = applyLutCurve(colorSpaceRGB, uLutCurve);
+                    // 假定 LUT 为 sRGB 空间，直接用它的专属曲线适配
+                    vec3 lutInColor = applyLutCurve(linearInput, uLutCurve);
+                    
                     float scale = (uLutSize - 1.0) / uLutSize;
                     float offset = 1.0 / (2.0 * uLutSize);
                     vec3 lutCoord = lutInColor * scale + offset;
                     vec4 lutColor = texture(uLutTexture, lutCoord);
-                    color.rgb = mix(color.rgb, lutColor.rgb, uLutIntensity);
+
+                    // 在非线性 sRGB 空间进行混合
+                    vec3 srgbColor = linearToSrgb(linearInput);
+                    color.rgb = mix(srgbColor, lutColor.rgb, uLutIntensity);
 
                     if (isP3) {
-                        // sRGB -> P3 (Linear 转换)
-                        vec3 linearSrgb = srgbToLinear(color.rgb);
-                        // sRGB to P3 matrix (与 applyLutColorSpace 中 case 1 一致)
-                        color.rgb = linearToSrgb(mat3(0.875905, 0.035332, 0.016382, 0.122070, 0.964542, 0.063767, 0.002025, 0.000126, 0.919851) * linearSrgb);
+                        // 混合完成后的 sRGB 颜色转回 P3
+                        vec3 linearSrgbOut = srgbToLinear(color.rgb);
+                        color.rgb = linearToSrgb(mat3(0.875905, 0.035332, 0.016382, 0.122070, 0.964542, 0.063767, 0.002025, 0.000126, 0.919851) * linearSrgbOut);
                     }
                 }
                 
