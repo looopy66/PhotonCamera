@@ -53,6 +53,7 @@ fun ColorRecipePanel(
         R.string.recipe_tab_light,
         R.string.recipe_tab_color,
         R.string.recipe_tab_texture,
+        R.string.recipe_tab_lens,
     )
     val parameterGroups = listOf(
         listOf(
@@ -72,7 +73,10 @@ fun ColorRecipePanel(
             RecipeParam.FILM_GRAIN,
             RecipeParam.FADE,
             RecipeParam.BLEACH_BYPASS,
-            RecipeParam.HALATION
+        ),
+        listOf(
+            RecipeParam.HALATION,
+            RecipeParam.CHROMATIC_ABERRATION
         )
     )
 
@@ -336,7 +340,8 @@ private fun formatParamValue(param: RecipeParam, value: Float): String {
         RecipeParam.FADE,
         RecipeParam.FILM_GRAIN,
         RecipeParam.BLEACH_BYPASS,
-        RecipeParam.HALATION -> String.format("%.2f", value)
+        RecipeParam.HALATION,
+        RecipeParam.CHROMATIC_ABERRATION -> String.format("%.2f", value)
 
         RecipeParam.LUT_INTENSITY -> String.format("%.2f", value)
     }
@@ -360,6 +365,7 @@ private fun getParamColor(param: RecipeParam): Color {
         RecipeParam.VIGNETTE -> Color(0xFF795548) // 棕色
         RecipeParam.BLEACH_BYPASS -> Color(0xFF00BCD4) // 青色
         RecipeParam.HALATION -> Color(0xFFFF7043) // 暖橙色（光晕）
+        RecipeParam.CHROMATIC_ABERRATION -> Color(0xFFAB47BC) // 紫色（色散）
         RecipeParam.LUT_INTENSITY -> Color(0xFF9E9E9E) // 灰色
     }
 }

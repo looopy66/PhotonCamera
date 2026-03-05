@@ -168,6 +168,7 @@ fun CameraPreviewGL(
                             filmGrain = colorRecipeParams.filmGrain,
                             vignette = colorRecipeParams.vignette,
                             bleachBypass = colorRecipeParams.bleachBypass,
+                            chromaticAberration = colorRecipeParams.chromaticAberration,
                             lutIntensity = colorRecipeParams.lutIntensity,
                         )
                     } else {

@@ -228,6 +228,7 @@ class LutImageProcessor {
         val vignette = colorRecipeParams?.vignette ?: 0f
         val bleachBypass = colorRecipeParams?.bleachBypass ?: 0f
         val halation = colorRecipeParams?.halation ?: 0f
+        val chromaticAberration = colorRecipeParams?.chromaticAberration ?: 0f
         val intensity = colorRecipeParams?.lutIntensity ?: 1f
 
         // 后期处理参数
@@ -270,7 +271,7 @@ class LutImageProcessor {
             colorRecipeEnabled,
             exposure, contrast, saturation, temperature, tint, fade,
             vibrance, highlights, shadows, filmGrain, vignette, bleachBypass,
-            halation,
+            halation, chromaticAberration,
             intensity, sharpening
             // GL_RGBA16 已自动归一化，使用标准 shader
         )
@@ -317,6 +318,7 @@ class LutImageProcessor {
         val vignette = colorRecipeParams?.vignette ?: 0f
         val bleachBypass = colorRecipeParams?.bleachBypass ?: 0f
         val halation = colorRecipeParams?.halation ?: 0f
+        val chromaticAberration = colorRecipeParams?.chromaticAberration ?: 0f
         val intensity = colorRecipeParams?.lutIntensity ?: 1f
 
         // 后期处理参数（仅在软件处理模式下生效）
@@ -362,7 +364,7 @@ class LutImageProcessor {
             colorRecipeEnabled,
             exposure, contrast, saturation, temperature, tint, fade,
             vibrance, highlights, shadows, filmGrain, vignette, bleachBypass,
-            halation,
+            halation, chromaticAberration,
             intensity, sharpening
         )
 
@@ -392,6 +394,7 @@ class LutImageProcessor {
         vignette: Float,
         bleachBypass: Float,
         halation: Float,
+        chromaticAberration: Float,
         intensity: Float,
         sharpening: Float
     ): Bitmap {
@@ -452,6 +455,9 @@ class LutImageProcessor {
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, hdfTexId[1])
             GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uHdfTexture"), 2)
         }
+
+        // 设置色散参数
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uChromaticAberration"), chromaticAberration)
 
         // 设置后期处理参数
         GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uSharpening"), sharpening)
@@ -1214,6 +1220,9 @@ class LutImageProcessor {
             uniform float uHalation;      // 0.0 ~ 1.0 (光晕强度)
             uniform sampler2D uHdfTexture; // 光晕合成纹理
             
+            // 色散效果
+            uniform float uChromaticAberration; // 0.0 ~ 1.0 (色散强度)
+            
             // 后期处理参数
             uniform float uSharpening;
             uniform vec2 uTexelSize;
@@ -1318,7 +1327,23 @@ class LutImageProcessor {
             }
 
             void main() {
-                vec4 color = sampleImage(vTexCoord);
+                // 采样图像 (应用色散效果)
+                vec4 color;
+                if (uChromaticAberration > 0.0) {
+                    vec2 center = vec2(0.5);
+                    vec2 dir = vTexCoord - center;
+                    float dist = length(dir);
+                    float offset = dist * dist * uChromaticAberration * 0.03;
+                    vec2 rUV = vTexCoord + dir * offset;
+                    vec2 bUV = vTexCoord - dir * offset;
+                    float r = sampleImage(rUV).r;
+                    float g = sampleImage(vTexCoord).g;
+                    float b = sampleImage(bUV).b;
+                    float a = sampleImage(vTexCoord).a;
+                    color = vec4(r, g, b, a);
+                } else {
+                    color = sampleImage(vTexCoord);
+                }
 
                 // === 色彩配方处理（按专业后期流程顺序） ===
                 if (uColorRecipeEnabled) {

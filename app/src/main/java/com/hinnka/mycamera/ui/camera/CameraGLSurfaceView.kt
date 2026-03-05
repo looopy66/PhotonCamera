@@ -173,6 +173,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         filmGrain: Float,
         vignette: Float,
         bleachBypass: Float,
+        chromaticAberration: Float,
         lutIntensity: Float,
     ) {
         renderer.exposure = exposure
@@ -187,6 +188,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         renderer.filmGrain = filmGrain
         renderer.vignette = vignette
         renderer.bleachBypass = bleachBypass
+        renderer.chromaticAberration = chromaticAberration
         renderer.lutIntensity = lutIntensity
         requestRender()
     }

@@ -135,6 +135,7 @@ object Shaders {
     uniform float uFilmGrain;     // 0.0 ~ 1.0 (颗粒强度)
     uniform float uVignette;      // -1.0 ~ +1.0 (晕影，负值暗角，正值亮角)
     uniform float uBleachBypass;  // 0.0 ~ 1.0 (留银冲洗强度)
+    uniform float uChromaticAberration; // 0.0 ~ 1.0 (色散强度)
 
     const vec3 W = vec3(0.2126, 0.7152, 0.0722);
 
@@ -205,11 +206,28 @@ object Shaders {
 
     void main()
     {
-        // 从相机纹理采样原始颜色
-        vec4 color = texture(uCameraTexture, vTexCoord);
+        // 从相机纹理采样原始颜色 (应用色散效果)
+        vec4 color;
+        if (uChromaticAberration > 0.001) {
+            // 色散：沿径向偏移 R/B 通道，边缘更强
+            vec2 center = vec2(0.5);
+            vec2 dir = vTexCoord - center;
+            float dist = length(dir);
+            // 偏移量 = 距离中心的平方 * 强度，模拟真实镜头的二次方色散
+            float offset = dist * dist * uChromaticAberration * 0.03;
+            vec2 rUV = vTexCoord + dir * offset;
+            vec2 bUV = vTexCoord - dir * offset;
+            float r = texture(uCameraTexture, rUV).r;
+            float g = texture(uCameraTexture, vTexCoord).g;
+            float b = texture(uCameraTexture, bUV).b;
+            float a = texture(uCameraTexture, vTexCoord).a;
+            color = vec4(r, g, b, a);
+        } else {
+            color = texture(uCameraTexture, vTexCoord);
+        }
 
         // Early exit 优化：无任何调整时直接输出
-        if (!uColorRecipeEnabled && !uLutEnabled) {
+        if (!uColorRecipeEnabled && !uLutEnabled && uChromaticAberration <= 0.001) {
             fragColor = color;
             return;
         }

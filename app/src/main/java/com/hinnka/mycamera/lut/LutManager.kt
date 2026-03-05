@@ -49,6 +49,7 @@ class LutManager(private val context: Context) {
         private fun vignetteKey(lutId: String) = floatPreferencesKey("${lutId}_vignette")
         private fun bleachBypassKey(lutId: String) = floatPreferencesKey("${lutId}_bleachBypass")
         private fun halationKey(lutId: String) = floatPreferencesKey("${lutId}_halation")
+        private fun chromaticAberrationKey(lutId: String) = floatPreferencesKey("${lutId}_chromaticAberration")
         private fun lutIntensityKey(lutId: String) = floatPreferencesKey("${lutId}_lutIntensity")
         private fun remarksKey(lutId: String) =
             androidx.datastore.preferences.core.stringPreferencesKey("${lutId}_remarks")
@@ -82,6 +83,7 @@ class LutManager(private val context: Context) {
                 vignette = preferences[vignetteKey(lutId)] ?: 0f,
                 bleachBypass = preferences[bleachBypassKey(lutId)] ?: 0f,
                 halation = preferences[halationKey(lutId)] ?: 0f,
+                chromaticAberration = preferences[chromaticAberrationKey(lutId)] ?: 0f,
                 lutIntensity = preferences[lutIntensityKey(lutId)] ?: 1f,
                 remarks = preferences[remarksKey(lutId)] ?: ""
             )
@@ -221,6 +223,7 @@ class LutManager(private val context: Context) {
             preferences[vignetteKey(lutId)] = params.vignette
             preferences[bleachBypassKey(lutId)] = params.bleachBypass
             preferences[halationKey(lutId)] = params.halation
+            preferences[chromaticAberrationKey(lutId)] = params.chromaticAberration
             preferences[lutIntensityKey(lutId)] = params.lutIntensity
             preferences[remarksKey(lutId)] = params.remarks
         }
@@ -249,6 +252,7 @@ class LutManager(private val context: Context) {
                 vignette = preferences[vignetteKey(lutId)] ?: 0f,
                 bleachBypass = preferences[bleachBypassKey(lutId)] ?: 0f,
                 halation = preferences[halationKey(lutId)] ?: 0f,
+                chromaticAberration = preferences[chromaticAberrationKey(lutId)] ?: 0f,
                 lutIntensity = preferences[lutIntensityKey(lutId)] ?: 1f,
                 remarks = preferences[remarksKey(lutId)] ?: ""
             )
@@ -285,6 +289,7 @@ class LutManager(private val context: Context) {
             preferences.remove(vignetteKey(lutId))
             preferences.remove(bleachBypassKey(lutId))
             preferences.remove(halationKey(lutId))
+            preferences.remove(chromaticAberrationKey(lutId))
             preferences.remove(lutIntensityKey(lutId))
             preferences.remove(remarksKey(lutId))
         }

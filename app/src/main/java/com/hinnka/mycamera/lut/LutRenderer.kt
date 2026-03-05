@@ -96,6 +96,7 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var uFilmGrainLocation: Int = 0
     private var uVignetteLocation: Int = 0
     private var uBleachBypassLocation: Int = 0
+    private var uChromaticAberrationLocation: Int = 0
 
     // Attribute 位置
     private var aPositionLocation: Int = 0
@@ -175,6 +176,9 @@ class LutRenderer : GLSurfaceView.Renderer {
 
     @Volatile
     var bleachBypass: Float = 0f // 0.0 ~ 1.0
+
+    @Volatile
+    var chromaticAberration: Float = 0f // 0.0 ~ 1.0
 
     // 渲染尺寸
     private var viewportWidth: Int = 0
@@ -490,6 +494,9 @@ class LutRenderer : GLSurfaceView.Renderer {
             GLES30.glUniform1f(uBleachBypassLocation, bleachBypass)
         }
 
+        // 色散效果独立于色彩配方，始终更新
+        GLES30.glUniform1f(uChromaticAberrationLocation, chromaticAberration)
+
         // 绑定顶点缓冲
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)
         GLES30.glEnableVertexAttribArray(aPositionLocation)
@@ -591,6 +598,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         uFilmGrainLocation = GLES30.glGetUniformLocation(programId, "uFilmGrain")
         uVignetteLocation = GLES30.glGetUniformLocation(programId, "uVignette")
         uBleachBypassLocation = GLES30.glGetUniformLocation(programId, "uBleachBypass")
+        uChromaticAberrationLocation = GLES30.glGetUniformLocation(programId, "uChromaticAberration")
 
         // Attribute 位置
         aPositionLocation = GLES30.glGetAttribLocation(programId, "aPosition")
@@ -1264,7 +1272,8 @@ class LutRenderer : GLSurfaceView.Renderer {
             fade = fade,
             filmGrain = filmGrain,
             vignette = vignette,
-            bleachBypass = bleachBypass
+            bleachBypass = bleachBypass,
+            chromaticAberration = chromaticAberration
         )
     }
 }

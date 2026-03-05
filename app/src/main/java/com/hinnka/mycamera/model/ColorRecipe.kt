@@ -21,6 +21,7 @@ data class ColorRecipeParams(
     val vignette: Float = 0f,       // -1.0 ~ +1.0 (晕影，负值暗角，正值亮角)
     val bleachBypass: Float = 0f,   // 0.0 ~ 1.0 (留银冲洗强度，0为无效果)
     val halation: Float = 0f,       // 0.0 ~ 1.0 (光晕/高光扩散强度，0为无效果，模拟 GR3 HDF)
+    val chromaticAberration: Float = 0f, // 0.0 ~ 1.0 (色散/边缘溢色强度，0为无效果)
     val lutIntensity: Float = 1f,   // 0.0 ~ 1.0 (LUT强度，1为完全应用)
     val remarks: String = "",       // 用户备注
 ) {
@@ -41,6 +42,7 @@ data class ColorRecipeParams(
                 vignette == 0f &&
                 bleachBypass == 0f &&
                 halation == 0f &&
+                chromaticAberration == 0f &&
                 remarks.isEmpty()
     }
 
@@ -61,6 +63,7 @@ data class ColorRecipeParams(
                 vignette == other.vignette &&
                 bleachBypass == other.bleachBypass &&
                 halation == other.halation &&
+                chromaticAberration == other.chromaticAberration &&
                 lutIntensity == other.lutIntensity &&
                 remarks == other.remarks
     }
@@ -97,6 +100,7 @@ enum class RecipeParam(
     VIGNETTE(R.string.recipe_param_vignette, -1.0f, 1.0f, 0f),
     BLEACH_BYPASS(R.string.recipe_param_bleach_bypass, 0.0f, 1.0f, 0f),
     HALATION(R.string.recipe_param_halation, 0.0f, 1.0f, 0f),
+    CHROMATIC_ABERRATION(R.string.recipe_param_chromatic_aberration, 0.0f, 1.0f, 0f),
     LUT_INTENSITY(R.string.recipe_param_lut_intensity, 0.0f, 1.0f, 1f);
 
     /**
@@ -124,6 +128,7 @@ enum class RecipeParam(
             VIGNETTE -> params.vignette
             BLEACH_BYPASS -> params.bleachBypass
             HALATION -> params.halation
+            CHROMATIC_ABERRATION -> params.chromaticAberration
             LUT_INTENSITY -> params.lutIntensity
         }
     }
@@ -147,6 +152,7 @@ enum class RecipeParam(
             VIGNETTE -> params.copy(vignette = clampedValue)
             BLEACH_BYPASS -> params.copy(bleachBypass = clampedValue)
             HALATION -> params.copy(halation = clampedValue)
+            CHROMATIC_ABERRATION -> params.copy(chromaticAberration = clampedValue)
             LUT_INTENSITY -> params.copy(lutIntensity = clampedValue)
         }
     }

@@ -223,7 +223,8 @@
     <string name="recipe_param_film_grain">Grain</string>
     <string name="recipe_param_vignette">Vignette</string>
     <string name="recipe_param_bleach_bypass">Bleach Bypass</string>
-    <string name="recipe_param_halation">Halation</string>
+    <string name="recipe_param_halation">HDF</string>
+    <string name="recipe_param_chromatic_aberration">CA</string>
     <string name="recipe_param_lut_intensity">LUT</string>
 
     <!-- Color Recipe Tabs -->
@@ -231,6 +232,7 @@
     <string name="recipe_tab_color">Color</string>
     <string name="recipe_tab_light">Light</string>
     <string name="recipe_tab_texture">Texture</string>
+    <string name="recipe_tab_lens">Atmosphere</string>
     <string name="recipe_tab_post">Post</string>
     <string name="recipe_tab_remarks">Notes</string>
     <string name="recipe_placeholder_remarks">Tap to add notes…</string>
