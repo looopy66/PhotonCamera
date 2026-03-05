@@ -242,6 +242,7 @@ fun NavigationHost(
                                 navController.navigate(Routes.GALLERY)
                                 val latestPhoto = galleryViewModel.latestPhoto.value
                                 if (latestPhoto != null && System.currentTimeMillis() - latestPhoto.dateAdded < 3 * 60 * 1000) {
+                                    galleryViewModel.setCurrentPhotoById(latestPhoto.id)
                                     navController.navigate(Routes.photoDetail(photoId = latestPhoto.id))
                                 }
                             },
@@ -276,6 +277,7 @@ fun NavigationHost(
                             navController.navigate(Routes.GALLERY)
                             val latestPhoto = galleryViewModel.latestPhoto.value
                             if (latestPhoto != null && System.currentTimeMillis() - latestPhoto.dateAdded < 3 * 60 * 1000) {
+                                galleryViewModel.setCurrentPhotoById(latestPhoto.id)
                                 navController.navigate(Routes.photoDetail(photoId = latestPhoto.id))
                             }
                         },

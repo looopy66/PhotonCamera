@@ -324,6 +324,7 @@ fun PhotoDetailScreen(
                     // 编辑
                     IconButton(
                         onClick = {
+                            viewModel.setCurrentPhoto(pagerState.currentPage)
                             viewModel.enterEditMode()
                             onEdit()
                         },

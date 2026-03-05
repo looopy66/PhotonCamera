@@ -685,14 +685,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 设置当前查看的照片索引
      */
     fun setCurrentPhoto(index: Int) {
-        val newIndex = index.coerceIn(0, (currentPhotos.value.size - 1).coerceAtLeast(0))
-        val indexChanged = currentPhotoIndex != newIndex
-        currentPhotoIndex = newIndex
-
-        // 即使索引没变（如点击第一张图进入详情），如果元数据为空也需要加载
-        if (indexChanged || currentPhotoMetadata == null) {
-            loadCurrentPhotoMetadata()
-        }
+        currentPhotoIndex = index.coerceIn(0, (currentPhotos.value.size - 1).coerceAtLeast(0))
+        loadCurrentPhotoMetadata()
     }
 
     /**
