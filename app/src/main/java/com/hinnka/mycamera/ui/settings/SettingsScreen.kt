@@ -48,12 +48,18 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.TabRowDefaults
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -82,6 +88,10 @@ import com.hinnka.mycamera.ui.components.rememberBackgroundPainter
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import kotlin.math.roundToInt
+
+enum class SettingsTab {
+    GENERAL, IMAGING, PHANTOM, ABOUT
+}
 
 /**
  * 设置页面
@@ -133,6 +143,8 @@ fun SettingsScreen(
     val availableOpenAIModels by viewModel.availableOpenAIModels.collectAsState()
     val isFetchingAIModels by viewModel.isFetchingAIModels.collectAsState()
     val phantomSaveAsNew by viewModel.phantomSaveAsNew.collectAsState()
+
+    var selectedTab by remember { mutableStateOf(SettingsTab.GENERAL) }
 
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -194,6 +206,48 @@ fun SettingsScreen(
             )
         )
 
+        // Tab 选择器
+        val tabs = remember {
+            mutableStateListOf<Pair<SettingsTab, String>>().apply {
+                add(SettingsTab.GENERAL to "常用")
+                add(SettingsTab.IMAGING to "影像")
+                if (DeviceUtil.isChinaFlavor) {
+                    add(SettingsTab.PHANTOM to "幻影")
+                }
+                add(SettingsTab.ABOUT to "关于")
+            }
+        }
+        val selectedTabIndex = tabs.indexOfFirst { it.first == selectedTab }.coerceAtLeast(0)
+
+        TabRow(
+            selectedTabIndex = selectedTabIndex,
+            containerColor = Color.Transparent,
+            contentColor = Color.White,
+            divider = {},
+            indicator = { tabPositions ->
+                if (selectedTabIndex < tabPositions.size) {
+                    TabRowDefaults.SecondaryIndicator(
+                        modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
+                        color = Color(0xFFFF6B35)
+                    )
+                }
+            }
+        ) {
+            tabs.forEach { (tab, label) ->
+                Tab(
+                    selected = selectedTab == tab,
+                    onClick = { selectedTab = tab },
+                    text = {
+                        Text(
+                            text = label,
+                            fontSize = 14.sp,
+                            fontWeight = if (selectedTab == tab) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
+                )
+            }
+        }
+
         // 设置项列表
         Column(
             modifier = Modifier
@@ -201,619 +255,605 @@ fun SettingsScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp)
         ) {
-            Spacer(modifier = Modifier.height(8.dp))
-
-            if (!isPurchased) {
-                PremiumCard(
-                    onClick = {
-                        val activity = context.findActivity()
-                        if (activity != null) {
-                            viewModel.purchase(activity)
-                        }
-                    }
-                )
-                Spacer(modifier = Modifier.height(24.dp))
-            }
-
-            // 拍摄设置
-            val currentCameraInfo = state.getCurrentCameraInfo()
-            /*if (currentCameraInfo?.supportsRaw == true) {
-                SettingsSection(title = stringResource(R.string.settings_section_capture)) {
-                    SwitchSettingItem(
-                        title = stringResource(R.string.settings_use_raw),
-                        description = stringResource(R.string.settings_use_raw_description),
-                        checked = useRaw,
-                        onCheckedChange = { viewModel.setUseRaw(it) }
-                    )
-                }
-                Spacer(modifier = Modifier.height(24.dp))
-            }*/
-
-            // 内容管理设置
-            SettingsSection(title = stringResource(R.string.settings_section_management)) {
-                // 背景设置
-                BackgroundSetting(
-                    viewModel = viewModel,
-                    modifier = Modifier.padding(bottom = 16.dp)
-                )
-
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-
-                NavigationSettingItem(
-                    title = stringResource(R.string.settings_filter_management),
-                    description = stringResource(R.string.settings_filter_management_description),
-                    onClick = onFilterManagementClick
-                )
-
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-
-                NavigationSettingItem(
-                    title = stringResource(R.string.settings_frame_management),
-                    description = stringResource(R.string.settings_frame_management_description),
-                    onClick = onFrameManagementClick
-                )
-
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_use_built_in_ai),
-                    description = stringResource(R.string.settings_use_built_in_ai_desc),
-                    checked = useBuiltInAiService,
-                    onCheckedChange = { viewModel.setUseBuiltInAiService(it) }
-                )
-
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-
-                if (!useBuiltInAiService) {
-                    TextInputSettingItem(
-                        title = stringResource(R.string.settings_openai_api_key),
-                        description = stringResource(R.string.settings_openai_api_key_desc),
-                        value = openAIApiKey ?: "",
-                        onValueChange = { viewModel.setOpenAIApiKey(it) }
-                    )
-
-                    HorizontalDivider(
-                        color = Color.White.copy(alpha = 0.1f),
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-
-                    TextInputSettingItem(
-                        title = stringResource(R.string.settings_openai_base_url),
-                        description = stringResource(R.string.settings_openai_base_url_desc),
-                        value = openAIUrl ?: "",
-                        onValueChange = { viewModel.setOpenAIUrl(it) }
-                    )
-
-                    HorizontalDivider(
-                        color = Color.White.copy(alpha = 0.1f),
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-                }
-
-                DropdownSettingItem(
-                    title = stringResource(R.string.settings_ai_model),
-                    description = stringResource(R.string.settings_ai_model_desc),
-                    value = if (useBuiltInAiService) com.hinnka.mycamera.lut.creator.OpenAIApiClient.BUILT_IN_MODEL else openAIModel
-                        ?: "",
-                    options = if (useBuiltInAiService) listOf(com.hinnka.mycamera.lut.creator.OpenAIApiClient.BUILT_IN_MODEL) else availableOpenAIModels,
-                    isLoading = isFetchingAIModels,
-                    enabled = !useBuiltInAiService,
-                    onExpanded = { viewModel.fetchAvailableAIModels() },
-                    onOptionSelected = { viewModel.setOpenAIModel(it) }
-                )
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // 相机校正设置
-            val currentCameraId = state.currentCameraId
-            val cameraOrientationOffset by viewModel.getCameraOrientationOffset(currentCameraId)
-                .collectAsState(initial = 0)
-            val cameraName = currentCameraInfo?.let { info ->
-                val prefix = when (info.lensFacing) {
-                    android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK -> stringResource(R.string.rear_camera)
-                    android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT -> stringResource(R.string.front_camera)
-                    else -> stringResource(R.string.camera)
-                }
-                "$prefix ${info.cameraId}"
-            } ?: stringResource(R.string.current_camera)
-
-            SettingsSection(
-                title = stringResource(R.string.settings_section_calibration),
-                isExpandable = true,
-                isExpanded = calibrationExpanded,
-                onToggleExpand = { calibrationExpanded = !calibrationExpanded }
-            ) {
-                QualityLevelSetting(
-                    title = stringResource(R.string.settings_camera_orientation) + " ($cameraName)",
-                    description = stringResource(R.string.settings_camera_orientation_description),
-                    levels = listOf(
-                        0 to stringResource(R.string.settings_orientation_normal),
-                        90 to stringResource(R.string.settings_orientation_90),
-                        180 to stringResource(R.string.settings_orientation_180),
-                        270 to stringResource(R.string.settings_orientation_270)
-                    ),
-                    currentLevel = cameraOrientationOffset,
-                    onLevelSelected = { viewModel.setCameraOrientationOffset(currentCameraId, it) }
-                )
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // 影像处理设置
-            SettingsSection(title = stringResource(R.string.settings_section_image_processing)) {
-                QualityLevelSetting(
-                    title = stringResource(R.string.settings_nr_level),
-                    description = stringResource(R.string.settings_nr_level_description),
-                    levels = listOf(
-                        0 to stringResource(R.string.settings_nr_level_off),
-                        1 to stringResource(R.string.settings_nr_level_fast),
-                        2 to stringResource(R.string.settings_nr_level_high_quality),
-                        3 to stringResource(R.string.settings_nr_level_minimal),
-                        4 to stringResource(R.string.settings_nr_level_zsl)
-                    ),
-                    currentLevel = nrLevel,
-                    onLevelSelected = { viewModel.setNRLevel(it) }
-                )
-
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 12.dp)
-                )
-
-                QualityLevelSetting(
-                    title = stringResource(R.string.settings_edge_level),
-                    description = stringResource(R.string.settings_edge_level_description),
-                    levels = listOf(
-                        0 to stringResource(R.string.settings_nr_level_off),
-                        1 to stringResource(R.string.settings_nr_level_fast),
-                        2 to stringResource(R.string.settings_nr_level_high_quality),
-                        3 to stringResource(R.string.settings_nr_level_zsl)
-                    ),
-                    currentLevel = edgeLevel,
-                    onLevelSelected = { viewModel.setEdgeLevel(it) }
-                )
-
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 12.dp)
-                )
-
-                QualityLevelSetting(
-                    title = stringResource(R.string.settings_photo_quality),
-                    description = stringResource(R.string.settings_photo_quality_description),
-                    levels = listOf(
-                        90 to "90",
-                        95 to "95",
-                        100 to "100"
-                    ),
-                    currentLevel = photoQuality,
-                    onLevelSelected = { viewModel.setPhotoQuality(it) }
-                )
-
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 12.dp)
-                )
-
-                QualityLevelSetting(
-                    title = stringResource(R.string.settings_dro_mode),
-                    description = stringResource(R.string.settings_dro_mode_description),
-                    levels = listOf(
-                        "OFF" to stringResource(R.string.settings_dro_off),
-                        "LOW" to stringResource(R.string.settings_dro_low),
-                        "HIGH" to stringResource(R.string.settings_dro_high)
-                    ),
-                    currentLevel = droMode,
-                    onLevelSelected = { viewModel.setDroMode(it) }
-                )
-
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 12.dp)
-                )
-
-                QualityLevelSetting(
-                    title = stringResource(R.string.settings_color_space),
-                    description = stringResource(R.string.settings_color_space_description),
-                    levels = ColorSpace.entries.map { it to it.name },
-                    currentLevel = colorSpace,
-                    onLevelSelected = { viewModel.setColorSpace(it) }
-                )
-
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 12.dp)
-                )
-
-                QualityLevelSetting(
-                    title = stringResource(R.string.settings_log_curve),
-                    description = stringResource(R.string.settings_log_curve_description),
-                    levels = LogCurve.entries.map { it to it.name },
-                    currentLevel = logCurve,
-                    onLevelSelected = { viewModel.setLogCurve(it) }
-                )
-
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 12.dp)
-                )
-
-                QualityLevelSetting(
-                    title = stringResource(R.string.settings_raw_restore_lut),
-                    description = stringResource(R.string.settings_raw_restore_lut_description),
-                    levels = availableRawLutMap,
-                    currentLevel = rawLut,
-                    onLevelSelected = { viewModel.setRawLut(logCurve, it) }
-                )
-
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 12.dp)
-                )
-
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_apply_ultra_hdr),
-                    description = stringResource(R.string.settings_apply_ultra_hdr_description),
-                    checked = applyUltraHDR,
-                    onCheckedChange = { viewModel.setApplyUltraHDR(it) }
-                )
-
-                if (state.isP010Supported) {
-                    HorizontalDivider(
-                        color = Color.White.copy(alpha = 0.1f),
-                        modifier = Modifier.padding(vertical = 12.dp)
-                    )
-
-                    SwitchSettingItem(
-                        title = stringResource(R.string.settings_use_p010),
-                        description = stringResource(R.string.settings_use_p010_description),
-                        checked = useP010,
-                        onCheckedChange = { viewModel.setUseP010(it) }
-                    )
-                }
-            }
-
             Spacer(modifier = Modifier.height(16.dp))
 
-            // 软件细节微调 (Fine Tuning Sliders)
-            SettingsSection(
-                title = stringResource(R.string.settings_section_software_processing),
-                description = stringResource(R.string.settings_detail_enhancement_description),
-                isExpandable = true,
-                isExpanded = softwareProcessingExpanded,
-                onToggleExpand = { softwareProcessingExpanded = !softwareProcessingExpanded }
-            ) {
-                SliderSettingItem(
-                    title = stringResource(R.string.settings_sharpening),
-                    description = stringResource(R.string.settings_sharpening_description),
-                    value = sharpening,
-                    valueRange = 0f..1f,
-                    onValueChange = { viewModel.setSharpening(it) }
-                )
+            when (selectedTab) {
+                SettingsTab.GENERAL -> {
+                    if (!isPurchased) {
+                        PremiumCard(
+                            onClick = {
+                                val activity = context.findActivity()
+                                if (activity != null) {
+                                    viewModel.purchase(activity)
+                                }
+                            }
+                        )
+                        Spacer(modifier = Modifier.height(24.dp))
+                    }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                    // 内容管理设置
+                    SettingsSection(title = stringResource(R.string.settings_section_management)) {
+                        // 背景设置
+                        BackgroundSetting(
+                            viewModel = viewModel,
+                            modifier = Modifier.padding(bottom = 16.dp)
+                        )
 
-                SliderSettingItem(
-                    title = stringResource(R.string.settings_noise_reduction),
-                    description = stringResource(R.string.settings_noise_reduction_description),
-                    value = noiseReduction,
-                    valueRange = 0f..1f,
-                    onValueChange = { viewModel.setNoiseReduction(it) }
-                )
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
 
-                Spacer(modifier = Modifier.height(12.dp))
+                        NavigationSettingItem(
+                            title = stringResource(R.string.settings_filter_management),
+                            description = stringResource(R.string.settings_filter_management_description),
+                            onClick = onFilterManagementClick
+                        )
 
-                SliderSettingItem(
-                    title = stringResource(R.string.settings_chroma_noise_reduction),
-                    description = stringResource(R.string.settings_chroma_noise_reduction_description),
-                    value = chromaNoiseReduction,
-                    valueRange = 0f..1f,
-                    onValueChange = { viewModel.setChromaNoiseReduction(it) }
-                )
-            }
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
 
-            Spacer(modifier = Modifier.height(24.dp))
+                        NavigationSettingItem(
+                            title = stringResource(R.string.settings_frame_management),
+                            description = stringResource(R.string.settings_frame_management_description),
+                            onClick = onFrameManagementClick
+                        )
+                    }
 
-            // 拍摄设置（开关项）
-            SettingsSection(title = stringResource(R.string.settings_section_operation)) {
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_shutter_sound),
-                    description = stringResource(R.string.settings_shutter_sound_description),
-                    checked = shutterSoundEnabled,
-                    onCheckedChange = { viewModel.setShutterSoundEnabled(it) }
-                )
+                    Spacer(modifier = Modifier.height(24.dp))
 
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
+                    // 拍摄操作设置
+                    SettingsSection(title = stringResource(R.string.settings_section_operation)) {
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_shutter_sound),
+                            description = stringResource(R.string.settings_shutter_sound_description),
+                            checked = shutterSoundEnabled,
+                            onCheckedChange = { viewModel.setShutterSoundEnabled(it) }
+                        )
 
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_mirror_front_camera),
-                    description = stringResource(R.string.settings_mirror_front_camera_description),
-                    checked = mirrorFrontCamera,
-                    onCheckedChange = { viewModel.setMirrorFrontCamera(it) }
-                )
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
 
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_mirror_front_camera),
+                            description = stringResource(R.string.settings_mirror_front_camera_description),
+                            checked = mirrorFrontCamera,
+                            onCheckedChange = { viewModel.setMirrorFrontCamera(it) }
+                        )
 
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_vibration),
-                    description = stringResource(R.string.settings_vibration_description),
-                    checked = vibrationEnabled,
-                    onCheckedChange = { viewModel.setVibrationEnabled(it) }
-                )
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
 
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_vibration),
+                            description = stringResource(R.string.settings_vibration_description),
+                            checked = vibrationEnabled,
+                            onCheckedChange = { viewModel.setVibrationEnabled(it) }
+                        )
 
-                VolumeKeyActionSetting(
-                    action = volumeKeyAction,
-                    onActionSelected = { viewModel.setVolumeKeyAction(it) }
-                )
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
 
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
+                        VolumeKeyActionSetting(
+                            action = volumeKeyAction,
+                            onActionSelected = { viewModel.setVolumeKeyAction(it) }
+                        )
 
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_auto_save),
-                    description = stringResource(R.string.settings_auto_save_description),
-                    checked = autoSaveAfterCapture,
-                    onCheckedChange = { viewModel.setAutoSaveAfterCapture(it) }
-                )
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
 
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_auto_save),
+                            description = stringResource(R.string.settings_auto_save_description),
+                            checked = autoSaveAfterCapture,
+                            onCheckedChange = { viewModel.setAutoSaveAfterCapture(it) }
+                        )
 
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_save_location),
-                    description = stringResource(R.string.settings_save_location_description),
-                    checked = saveLocation,
-                    onCheckedChange = { checked ->
-                        if (checked) {
-                            val fineLocation = androidx.core.content.ContextCompat.checkSelfPermission(
-                                context,
-                                android.Manifest.permission.ACCESS_FINE_LOCATION
-                            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-                            val coarseLocation = androidx.core.content.ContextCompat.checkSelfPermission(
-                                context,
-                                android.Manifest.permission.ACCESS_COARSE_LOCATION
-                            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
 
-                            if (fineLocation || coarseLocation) {
-                                viewModel.setSaveLocation(true)
-                            } else {
-                                locationPermissionLauncher.launch(
-                                    arrayOf(
-                                        android.Manifest.permission.ACCESS_FINE_LOCATION,
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_save_location),
+                            description = stringResource(R.string.settings_save_location_description),
+                            checked = saveLocation,
+                            onCheckedChange = { checked ->
+                                if (checked) {
+                                    val fineLocation = androidx.core.content.ContextCompat.checkSelfPermission(
+                                        context,
+                                        android.Manifest.permission.ACCESS_FINE_LOCATION
+                                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                                    val coarseLocation = androidx.core.content.ContextCompat.checkSelfPermission(
+                                        context,
                                         android.Manifest.permission.ACCESS_COARSE_LOCATION
-                                    )
+                                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+                                    if (fineLocation || coarseLocation) {
+                                        viewModel.setSaveLocation(true)
+                                    } else {
+                                        locationPermissionLauncher.launch(
+                                            arrayOf(
+                                                android.Manifest.permission.ACCESS_FINE_LOCATION,
+                                                android.Manifest.permission.ACCESS_COARSE_LOCATION
+                                            )
+                                        )
+                                    }
+                                } else {
+                                    viewModel.setSaveLocation(false)
+                                }
+                            }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        DefaultFocalLengthSetting(
+                            viewModel = viewModel,
+                            currentFocalLength = defaultFocalLength,
+                            onFocalLengthSelected = { viewModel.setDefaultFocalLength(it) }
+                        )
+                    }
+                }
+
+                SettingsTab.IMAGING -> {
+                    // AI 服务设置
+                    SettingsSection(title = stringResource(R.string.lut_creator_title)) {
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_use_built_in_ai),
+                            description = stringResource(R.string.settings_use_built_in_ai_desc),
+                            checked = useBuiltInAiService,
+                            onCheckedChange = { viewModel.setUseBuiltInAiService(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        if (!useBuiltInAiService) {
+                            TextInputSettingItem(
+                                title = stringResource(R.string.settings_openai_api_key),
+                                description = stringResource(R.string.settings_openai_api_key_desc),
+                                value = openAIApiKey ?: "",
+                                onValueChange = { viewModel.setOpenAIApiKey(it) }
+                            )
+
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+
+                            TextInputSettingItem(
+                                title = stringResource(R.string.settings_openai_base_url),
+                                description = stringResource(R.string.settings_openai_base_url_desc),
+                                value = openAIUrl ?: "",
+                                onValueChange = { viewModel.setOpenAIUrl(it) }
+                            )
+
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        }
+
+                        DropdownSettingItem(
+                            title = stringResource(R.string.settings_ai_model),
+                            description = stringResource(R.string.settings_ai_model_desc),
+                            value = if (useBuiltInAiService) com.hinnka.mycamera.lut.creator.OpenAIApiClient.BUILT_IN_MODEL else openAIModel
+                                ?: "",
+                            options = if (useBuiltInAiService) listOf(com.hinnka.mycamera.lut.creator.OpenAIApiClient.BUILT_IN_MODEL) else availableOpenAIModels,
+                            isLoading = isFetchingAIModels,
+                            enabled = !useBuiltInAiService,
+                            onExpanded = { viewModel.fetchAvailableAIModels() },
+                            onOptionSelected = { viewModel.setOpenAIModel(it) }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    // 影像处理设置
+                    SettingsSection(title = stringResource(R.string.settings_section_image_processing)) {
+                        QualityLevelSetting(
+                            title = stringResource(R.string.settings_nr_level),
+                            description = stringResource(R.string.settings_nr_level_description),
+                            levels = listOf(
+                                0 to stringResource(R.string.settings_nr_level_off),
+                                1 to stringResource(R.string.settings_nr_level_fast),
+                                2 to stringResource(R.string.settings_nr_level_high_quality),
+                                3 to stringResource(R.string.settings_nr_level_minimal),
+                                4 to stringResource(R.string.settings_nr_level_zsl)
+                            ),
+                            currentLevel = nrLevel,
+                            onLevelSelected = { viewModel.setNRLevel(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        QualityLevelSetting(
+                            title = stringResource(R.string.settings_edge_level),
+                            description = stringResource(R.string.settings_edge_level_description),
+                            levels = listOf(
+                                0 to stringResource(R.string.settings_nr_level_off),
+                                1 to stringResource(R.string.settings_nr_level_fast),
+                                2 to stringResource(R.string.settings_nr_level_high_quality),
+                                3 to stringResource(R.string.settings_nr_level_zsl)
+                            ),
+                            currentLevel = edgeLevel,
+                            onLevelSelected = { viewModel.setEdgeLevel(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        QualityLevelSetting(
+                            title = stringResource(R.string.settings_photo_quality),
+                            description = stringResource(R.string.settings_photo_quality_description),
+                            levels = listOf(
+                                90 to "90",
+                                95 to "95",
+                                100 to "100"
+                            ),
+                            currentLevel = photoQuality,
+                            onLevelSelected = { viewModel.setPhotoQuality(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        QualityLevelSetting(
+                            title = stringResource(R.string.settings_multi_frame_count),
+                            description = stringResource(R.string.settings_multi_frame_count_description),
+                            levels = listOf(
+                                4 to "4",
+                                8 to "8",
+                                12 to "12",
+                                16 to "16",
+                            ),
+                            currentLevel = multiFrameCount,
+                            onLevelSelected = { viewModel.setMultiFrameCount(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_use_gpu_acceleration),
+                            description = stringResource(R.string.settings_use_gpu_acceleration_description),
+                            checked = useGpuAcceleration,
+                            onCheckedChange = { viewModel.setUseGpuAcceleration(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_use_live_photo),
+                            description = stringResource(R.string.settings_use_live_photo_description),
+                            checked = useLivePhoto,
+                            onCheckedChange = { viewModel.setUseLivePhoto(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        QualityLevelSetting(
+                            title = stringResource(R.string.settings_dro_mode),
+                            description = stringResource(R.string.settings_dro_mode_description),
+                            levels = listOf(
+                                "OFF" to stringResource(R.string.settings_dro_off),
+                                "LOW" to stringResource(R.string.settings_dro_low),
+                                "HIGH" to stringResource(R.string.settings_dro_high)
+                            ),
+                            currentLevel = droMode,
+                            onLevelSelected = { viewModel.setDroMode(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        QualityLevelSetting(
+                            title = stringResource(R.string.settings_color_space),
+                            description = stringResource(R.string.settings_color_space_description),
+                            levels = ColorSpace.entries.map { it to it.name },
+                            currentLevel = colorSpace,
+                            onLevelSelected = { viewModel.setColorSpace(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        QualityLevelSetting(
+                            title = stringResource(R.string.settings_log_curve),
+                            description = stringResource(R.string.settings_log_curve_description),
+                            levels = LogCurve.entries.map { it to it.name },
+                            currentLevel = logCurve,
+                            onLevelSelected = { viewModel.setLogCurve(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        QualityLevelSetting(
+                            title = stringResource(R.string.settings_raw_restore_lut),
+                            description = stringResource(R.string.settings_raw_restore_lut_description),
+                            levels = availableRawLutMap,
+                            currentLevel = rawLut,
+                            onLevelSelected = { viewModel.setRawLut(logCurve, it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_apply_ultra_hdr),
+                            description = stringResource(R.string.settings_apply_ultra_hdr_description),
+                            checked = applyUltraHDR,
+                            onCheckedChange = { viewModel.setApplyUltraHDR(it) }
+                        )
+
+                        if (state.isP010Supported) {
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 12.dp)
+                            )
+
+                            SwitchSettingItem(
+                                title = stringResource(R.string.settings_use_p010),
+                                description = stringResource(R.string.settings_use_p010_description),
+                                checked = useP010,
+                                onCheckedChange = { viewModel.setUseP010(it) }
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    // 软件细节微调
+                    SettingsSection(
+                        title = stringResource(R.string.settings_section_software_processing),
+                        description = stringResource(R.string.settings_detail_enhancement_description),
+                        isExpandable = true,
+                        isExpanded = softwareProcessingExpanded,
+                        onToggleExpand = { softwareProcessingExpanded = !softwareProcessingExpanded }
+                    ) {
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_sharpening),
+                            description = stringResource(R.string.settings_sharpening_description),
+                            value = sharpening,
+                            valueRange = 0f..1f,
+                            onValueChange = { viewModel.setSharpening(it) }
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_noise_reduction),
+                            description = stringResource(R.string.settings_noise_reduction_description),
+                            value = noiseReduction,
+                            valueRange = 0f..1f,
+                            onValueChange = { viewModel.setNoiseReduction(it) }
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_chroma_noise_reduction),
+                            description = stringResource(R.string.settings_chroma_noise_reduction_description),
+                            value = chromaNoiseReduction,
+                            valueRange = 0f..1f,
+                            onValueChange = { viewModel.setChromaNoiseReduction(it) }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    // 相机校正设置
+                    val currentCameraId = state.currentCameraId
+                    val cameraOrientationOffset by viewModel.getCameraOrientationOffset(currentCameraId)
+                        .collectAsState(initial = 0)
+                    val cameraName = state.getCurrentCameraInfo()?.let { info ->
+                        val prefix = when (info.lensFacing) {
+                            android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK -> stringResource(R.string.rear_camera)
+                            android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT -> stringResource(R.string.front_camera)
+                            else -> stringResource(R.string.camera)
+                        }
+                        "$prefix ${info.cameraId}"
+                    } ?: stringResource(R.string.current_camera)
+
+                    SettingsSection(
+                        title = stringResource(R.string.settings_section_calibration),
+                        isExpandable = true,
+                        isExpanded = calibrationExpanded,
+                        onToggleExpand = { calibrationExpanded = !calibrationExpanded }
+                    ) {
+                        QualityLevelSetting(
+                            title = stringResource(R.string.settings_camera_orientation) + " ($cameraName)",
+                            description = stringResource(R.string.settings_camera_orientation_description),
+                            levels = listOf(
+                                0 to stringResource(R.string.settings_orientation_normal),
+                                90 to stringResource(R.string.settings_orientation_90),
+                                180 to stringResource(R.string.settings_orientation_180),
+                                270 to stringResource(R.string.settings_orientation_270)
+                            ),
+                            currentLevel = cameraOrientationOffset,
+                            onLevelSelected = { viewModel.setCameraOrientationOffset(currentCameraId, it) }
+                        )
+                    }
+                }
+
+                SettingsTab.PHANTOM -> {
+                    if (DeviceUtil.isChinaFlavor) {
+                        // 幻影模式设置
+                        SettingsSection(title = stringResource(R.string.ghost_mode)) {
+                            SwitchSettingItem(
+                                title = stringResource(R.string.ghost_mode),
+                                description = stringResource(R.string.ghost_mode_dialog_description),
+                                checked = phantomMode,
+                                onCheckedChange = { viewModel.togglePhantomMode() }
+                            )
+
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+
+                            SwitchSettingItem(
+                                title = stringResource(R.string.settings_phantom_button_hidden),
+                                description = stringResource(R.string.settings_phantom_button_hidden_description),
+                                checked = phantomButtonHidden,
+                                onCheckedChange = { viewModel.setPhantomButtonHidden(it) }
+                            )
+
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+
+                            SwitchSettingItem(
+                                title = stringResource(R.string.settings_launch_camera_on_phantom_mode),
+                                description = stringResource(R.string.settings_launch_camera_on_phantom_mode_description),
+                                checked = launchCameraOnPhantomMode,
+                                onCheckedChange = { viewModel.setLaunchCameraOnPhantomMode(it) }
+                            )
+
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+
+                            SwitchSettingItem(
+                                title = stringResource(R.string.settings_phantom_save_as_new),
+                                description = stringResource(R.string.settings_phantom_save_as_new_description),
+                                checked = phantomSaveAsNew,
+                                onCheckedChange = { viewModel.setPhantomSaveAsNew(it) }
+                            )
+                        }
+                    }
+                }
+
+                SettingsTab.ABOUT -> {
+                    // Widget 设置
+                    SettingsSection(title = stringResource(R.string.settings_widget_theme)) {
+                        QualityLevelSetting(
+                            title = stringResource(R.string.settings_widget_theme),
+                            description = stringResource(R.string.settings_widget_theme_description),
+                            levels = listOf(
+                                com.hinnka.mycamera.data.WidgetTheme.FOLLOW_SYSTEM to stringResource(R.string.settings_widget_theme_system),
+                                com.hinnka.mycamera.data.WidgetTheme.LIGHT to stringResource(R.string.settings_widget_theme_light),
+                                com.hinnka.mycamera.data.WidgetTheme.DARK to stringResource(R.string.settings_widget_theme_dark)
+                            ),
+                            currentLevel = widgetTheme,
+                            onLevelSelected = { viewModel.setWidgetTheme(it) }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    // 开发者选项
+                    SettingsSection(title = stringResource(R.string.settings_section_developer)) {
+                        // 日志收集按钮
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showLogViewerDialog = true }
+                                .padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(R.string.settings_log_viewer),
+                                    color = Color.White,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Normal
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = stringResource(R.string.settings_log_viewer_description),
+                                    color = Color.White.copy(alpha = 0.6f),
+                                    fontSize = 13.sp,
+                                    lineHeight = 18.sp
                                 )
                             }
-                        } else {
-                            viewModel.setSaveLocation(false)
-                        }
-                    }
-                )
 
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
+                            Spacer(modifier = Modifier.width(16.dp))
 
-                QualityLevelSetting(
-                    title = stringResource(R.string.settings_multi_frame_count),
-                    description = stringResource(R.string.settings_multi_frame_count_description),
-                    levels = listOf(
-                        4 to "4",
-                        8 to "8",
-                        12 to "12",
-                        16 to "16",
-                    ),
-                    currentLevel = multiFrameCount,
-                    onLevelSelected = { viewModel.setMultiFrameCount(it) }
-                )
-
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_use_gpu_acceleration),
-                    description = stringResource(R.string.settings_use_gpu_acceleration_description),
-                    checked = useGpuAcceleration,
-                    onCheckedChange = { viewModel.setUseGpuAcceleration(it) }
-                )
-
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_use_live_photo),
-                    description = stringResource(R.string.settings_use_live_photo_description),
-                    checked = useLivePhoto,
-                    onCheckedChange = { viewModel.setUseLivePhoto(it) }
-                )
-
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 12.dp)
-                )
-
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.1f),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-
-                DefaultFocalLengthSetting(
-                    viewModel = viewModel,
-                    currentFocalLength = defaultFocalLength,
-                    onFocalLengthSelected = { viewModel.setDefaultFocalLength(it) }
-                )
-            }
-
-            if (DeviceUtil.isChinaFlavor) {
-                Spacer(modifier = Modifier.height(24.dp))
-
-                // 幻影模式设置
-                SettingsSection(title = stringResource(R.string.ghost_mode)) {
-                    SwitchSettingItem(
-                        title = stringResource(R.string.ghost_mode),
-                        description = stringResource(R.string.ghost_mode_dialog_description),
-                        checked = phantomMode,
-                        onCheckedChange = { viewModel.togglePhantomMode() }
-                    )
-
-                    HorizontalDivider(
-                        color = Color.White.copy(alpha = 0.1f),
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-
-                    SwitchSettingItem(
-                        title = stringResource(R.string.settings_phantom_button_hidden),
-                        description = stringResource(R.string.settings_phantom_button_hidden_description),
-                        checked = phantomButtonHidden,
-                        onCheckedChange = { viewModel.setPhantomButtonHidden(it) }
-                    )
-
-                    HorizontalDivider(
-                        color = Color.White.copy(alpha = 0.1f),
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-
-                    SwitchSettingItem(
-                        title = stringResource(R.string.settings_launch_camera_on_phantom_mode),
-                        description = stringResource(R.string.settings_launch_camera_on_phantom_mode_description),
-                        checked = launchCameraOnPhantomMode,
-                        onCheckedChange = { viewModel.setLaunchCameraOnPhantomMode(it) }
-                    )
-
-                    HorizontalDivider(
-                        color = Color.White.copy(alpha = 0.1f),
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-
-                    SwitchSettingItem(
-                        title = stringResource(R.string.settings_phantom_save_as_new),
-                        description = stringResource(R.string.settings_phantom_save_as_new_description),
-                        checked = phantomSaveAsNew,
-                        onCheckedChange = { viewModel.setPhantomSaveAsNew(it) }
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Widget 设置
-            SettingsSection(title = stringResource(R.string.settings_widget_theme)) {
-                QualityLevelSetting(
-                    title = stringResource(R.string.settings_widget_theme),
-                    description = stringResource(R.string.settings_widget_theme_description),
-                    levels = listOf(
-                        com.hinnka.mycamera.data.WidgetTheme.FOLLOW_SYSTEM to stringResource(R.string.settings_widget_theme_system),
-                        com.hinnka.mycamera.data.WidgetTheme.LIGHT to stringResource(R.string.settings_widget_theme_light),
-                        com.hinnka.mycamera.data.WidgetTheme.DARK to stringResource(R.string.settings_widget_theme_dark)
-                    ),
-                    currentLevel = widgetTheme,
-                    onLevelSelected = { viewModel.setWidgetTheme(it) }
-                )
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // 开发者选项
-            SettingsSection(title = stringResource(R.string.settings_section_developer)) {
-                // 日志收集按钮
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showLogViewerDialog = true }
-                        .padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = stringResource(R.string.settings_log_viewer),
-                            color = Color.White,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Normal
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = stringResource(R.string.settings_log_viewer_description),
-                            color = Color.White.copy(alpha = 0.6f),
-                            fontSize = 13.sp,
-                            lineHeight = 18.sp
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(16.dp))
-
-                    Icon(
-                        imageVector = Icons.Default.Article,
-                        contentDescription = stringResource(R.string.logs),
-                        tint = Color.White.copy(alpha = 0.6f)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // 关于
-            SettingsSection(title = stringResource(R.string.settings_section_about)) {
-                NavigationSettingItem(
-                    title = stringResource(R.string.settings_donation),
-                    description = stringResource(R.string.settings_donation_description),
-                    onClick = {
-                        val qrCodeUrl = "https://qr.alipay.com/fkx103287mz2sqvs1esdh30"
-                        val alipayUrl = "alipays://platformapi/startapp?saId=10000007&clientVersion=3.7.0.0718&qrcode=${
-                            java.net.URLEncoder.encode(
-                                qrCodeUrl,
-                                "UTF-8"
+                            Icon(
+                                imageVector = Icons.Default.Article,
+                                contentDescription = stringResource(R.string.logs),
+                                tint = Color.White.copy(alpha = 0.6f)
                             )
-                        }"
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(alipayUrl))
-                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        try {
-                            context.startActivity(intent)
-                        } catch (e: Exception) {
-                            // 如果没安装支付宝，则尝试用浏览器打开
-                            val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse(qrCodeUrl))
-                            webIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            try {
-                                context.startActivity(webIntent)
-                            } catch (e2: Exception) {
-                                // 处理浏览器也没有的情况（极少见）
-                            }
                         }
                     }
-                )
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    // 关于
+                    SettingsSection(title = stringResource(R.string.settings_section_about)) {
+                        NavigationSettingItem(
+                            title = stringResource(R.string.settings_donation),
+                            description = stringResource(R.string.settings_donation_description),
+                            onClick = {
+                                val qrCodeUrl = "https://qr.alipay.com/fkx103287mz2sqvs1esdh30"
+                                val alipayUrl =
+                                    "alipays://platformapi/startapp?saId=10000007&clientVersion=3.7.0.0718&qrcode=${
+                                        java.net.URLEncoder.encode(
+                                            qrCodeUrl,
+                                            "UTF-8"
+                                        )
+                                    }"
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(alipayUrl))
+                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                try {
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    // 如果没安装支付宝，则尝试用浏览器打开
+                                    val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse(qrCodeUrl))
+                                    webIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    try {
+                                        context.startActivity(webIntent)
+                                    } catch (e2: Exception) {
+                                        // 处理浏览器也没有的情况（极少见）
+                                    }
+                                }
+                            }
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(32.dp))
