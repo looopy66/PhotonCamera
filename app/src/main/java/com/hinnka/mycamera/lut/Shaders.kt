@@ -24,6 +24,7 @@ object Shaders {
         
         // 输出到片元着色器
         out vec2 vTexCoord;
+        out vec2 vRawCoord; // 原始坐标用于色散计算
         
         // MVP 变换矩阵（用于 center crop 缩放）
         uniform mat4 uMVPMatrix;
@@ -36,6 +37,7 @@ object Shaders {
             gl_Position = uMVPMatrix * aPosition;
             // 应用 SurfaceTexture 变换矩阵
             vTexCoord = (uSTMatrix * vec4(aTexCoord, 0.0, 1.0)).xy;
+            vRawCoord = aTexCoord;
         }
     """.trimIndent()
 
@@ -78,6 +80,91 @@ object Shaders {
         }
     """.trimIndent()
 
+    /** 简单顶点着色器（HDF 后处理 Pass 专用，无 MVP/ST 矩阵） */
+    val SIMPLE_VERTEX_SHADER = """
+        #version 300 es
+        in vec4 aPosition;
+        in vec2 aTexCoord;
+        out vec2 vTexCoord;
+        void main() {
+            gl_Position = aPosition;
+            vTexCoord = aTexCoord;
+        }
+    """.trimIndent()
+
+    /** HDF Pass 1: 高光提取 + 水平高斯模糊 (实时预览) */
+    val HDF_PREVIEW_EXTRACT_BLUR_H = """
+        #version 300 es
+        precision highp float;
+        in vec2 vTexCoord;
+        out vec4 fragColor;
+        uniform sampler2D uInputTexture;
+        uniform vec2 uTexelSize;
+        uniform float uThreshold;
+        uniform float uStrength;
+        void main() {
+            vec3 color = texture(uInputTexture, vTexCoord).rgb;
+            float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+            float extractionVal = mix(luma, max(color.r, max(color.g, color.b)), 0.6);
+            float highlightMask = smoothstep(uThreshold - 0.1, uThreshold + 0.25, extractionVal);
+            float midMask = smoothstep(uThreshold - 0.5, uThreshold, extractionVal) * 0.4;
+            float mask = (highlightMask + midMask * uStrength);
+            vec3 sum = color * mask * 0.204164;
+            float blurOffsets[4] = float[](1.407333, 3.294215, 5.176470, 7.058823);
+            float blurWeights[4] = float[](0.304005, 0.093910, 0.010416, 0.000005);
+            for (int i = 0; i < 4; i++) {
+                float off = blurOffsets[i] * uTexelSize.x * 2.0;
+                sum += texture(uInputTexture, vTexCoord + vec2(off, 0.0)).rgb * blurWeights[i];
+                sum += texture(uInputTexture, vTexCoord - vec2(off, 0.0)).rgb * blurWeights[i];
+            }
+            fragColor = vec4(sum, 1.0);
+        }
+    """.trimIndent()
+
+    /** HDF Pass 2: 垂直高斯模糊 */
+    val HDF_PREVIEW_BLUR_V = """
+        #version 300 es
+        precision highp float;
+        in vec2 vTexCoord;
+        out vec4 fragColor;
+        uniform sampler2D uInputTexture;
+        uniform vec2 uTexelSize;
+        void main() {
+            vec3 sum = texture(uInputTexture, vTexCoord).rgb * 0.204164;
+            float blurOffsets[4] = float[](1.407333, 3.294215, 5.176470, 7.058823);
+            float blurWeights[4] = float[](0.304005, 0.093910, 0.010416, 0.000005);
+            for (int i = 0; i < 4; i++) {
+                float off = blurOffsets[i] * uTexelSize.y * 2.0;
+                sum += texture(uInputTexture, vTexCoord + vec2(0.0, off)).rgb * blurWeights[i];
+                sum += texture(uInputTexture, vTexCoord - vec2(0.0, off)).rgb * blurWeights[i];
+            }
+            fragColor = vec4(sum, 1.0);
+        }
+    """.trimIndent()
+
+    /** HDF 合成：原图 + 模糊光晕 Screen 叠加 */
+    val HDF_PREVIEW_COMPOSITE = """
+        #version 300 es
+        precision highp float;
+        in vec2 vTexCoord;
+        out vec4 fragColor;
+        uniform sampler2D uOriginalTexture;
+        uniform sampler2D uBloomTexture;
+        uniform float uHalation;
+        void main() {
+            vec4 color = texture(uOriginalTexture, vTexCoord);
+            vec3 bloom = texture(uBloomTexture, vTexCoord).rgb;
+            float bLuma = dot(bloom, vec3(0.2126, 0.7152, 0.0722));
+            bloom = mix(vec3(bLuma), bloom, 1.6);
+            vec3 bloomEffect = bloom * uHalation * 1.4;
+            color.rgb = vec3(1.0) - (vec3(1.0) - color.rgb) * (vec3(1.0) - bloomEffect);
+            float mist = bLuma * uHalation * 0.15;
+            color.rgb += mist;
+            color.rgb = (color.rgb - 0.5) * (1.0 - uHalation * 0.08) + 0.5;
+            fragColor = clamp(color, 0.0, 1.0);
+        }
+    """.trimIndent()
+
     /**
      * 片元着色器 - 带色彩配方和 3D LUT 支持
      *
@@ -96,6 +183,7 @@ object Shaders {
 
     // 从顶点着色器接收的纹理坐标
     in vec2 vTexCoord;
+    in vec2 vRawCoord; // 原始坐标（用于色散等空间相关效果）
 
     // 输出颜色
     out vec4 fragColor;
@@ -115,6 +203,7 @@ object Shaders {
 
     // 色彩配方控制
     uniform bool uColorRecipeEnabled;
+    uniform mat4 uSTMatrix; // 传递矩阵到片元用于 CA 偏移采样
 
     // 色彩配方参数（阶段1：核心3参数）
     uniform float uExposure;      // -2.0 ~ +2.0 (EV)
@@ -209,17 +298,19 @@ object Shaders {
         // 从相机纹理采样原始颜色 (应用色散效果)
         vec4 color;
         if (uChromaticAberration > 0.001) {
-            // 色散：沿径向偏移 R/B 通道，边缘更强
+            // 色散：基于 vRawCoord（0.0~1.0 原始平面）计算偏移
             vec2 center = vec2(0.5);
-            vec2 dir = vTexCoord - center;
+            vec2 dir = vRawCoord - center;
             float dist = length(dir);
-            // 偏移量 = 距离中心的平方 * 强度，模拟真实镜头的二次方色散
-            float offset = dist * dist * uChromaticAberration * 0.03;
-            vec2 rUV = vTexCoord + dir * offset;
-            vec2 bUV = vTexCoord - dir * offset;
-            float r = texture(uCameraTexture, rUV).r;
+            float offset = pow(dist, 1.5) * uChromaticAberration * 0.08;
+            
+            // 关键：基于原始坐标偏移后，必须通过 uSTMatrix 转换回实际采样坐标
+            vec2 rCoord = (uSTMatrix * vec4(vRawCoord + dir * offset, 0.0, 1.0)).xy;
+            vec2 bCoord = (uSTMatrix * vec4(vRawCoord - dir * offset, 0.0, 1.0)).xy;
+            
+            float r = texture(uCameraTexture, rCoord).r;
             float g = texture(uCameraTexture, vTexCoord).g;
-            float b = texture(uCameraTexture, bUV).b;
+            float b = texture(uCameraTexture, bCoord).b;
             float a = texture(uCameraTexture, vTexCoord).a;
             color = vec4(r, g, b, a);
         } else {

@@ -1333,7 +1333,7 @@ class LutImageProcessor {
                     vec2 center = vec2(0.5);
                     vec2 dir = vTexCoord - center;
                     float dist = length(dir);
-                    float offset = dist * dist * uChromaticAberration * 0.03;
+                    float offset = pow(dist, 1.5) * uChromaticAberration * 0.08;
                     vec2 rUV = vTexCoord + dir * offset;
                     vec2 bUV = vTexCoord - dir * offset;
                     float r = sampleImage(rUV).r;

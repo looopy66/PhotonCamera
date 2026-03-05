@@ -97,6 +97,16 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var uVignetteLocation: Int = 0
     private var uBleachBypassLocation: Int = 0
     private var uChromaticAberrationLocation: Int = 0
+    private var uSTMatrixFragLocation: Int = 0
+
+    // HDF 实时预览资源
+    private var hdfExtractBlurHProgram: Int = 0
+    private var hdfBlurVProgram: Int = 0
+    private var hdfCompositeProgram: Int = 0
+    private var hdfTexId = IntArray(2)
+    private var hdfFboId = IntArray(2)
+    private var hdfWidth: Int = 0
+    private var hdfHeight: Int = 0
 
     // Attribute 位置
     private var aPositionLocation: Int = 0
@@ -179,6 +189,9 @@ class LutRenderer : GLSurfaceView.Renderer {
 
     @Volatile
     var chromaticAberration: Float = 0f // 0.0 ~ 1.0
+
+    @Volatile
+    var halation: Float = 0f // 0.0 ~ 1.0
 
     // 渲染尺寸
     private var viewportWidth: Int = 0
@@ -341,49 +354,56 @@ class LutRenderer : GLSurfaceView.Renderer {
         }
 
         val recorder = livePhotoRecorder
-        // 只有在录制 Live Photo 时才走 FBO 流程，为了获取处理后的 2D 纹理
-        if (recorder != null && fboId != 0 && fboTextureId != 0) {
-            // 1. 渲染到 FBO (OES -> FBO, 应用 LUT)
+        val hdfEnabled = halation > 0.001f
+        val needsFbo = (recorder != null || hdfEnabled) && fboId != 0 && fboTextureId != 0
+
+        if (needsFbo) {
+            // 1. 渲染主着色器到 FBO (色彩配方 + LUT + CA)
             drawInternal(fboId, viewportWidth, viewportHeight)
 
-            // 确保 FBO 内容已刷入显存 (对于多上下文共享纹理非常重要)
-            GLES30.glFlush()
-
-            val applyRotation = getApplyRotation()
-            val isSwapped = applyRotation % 180 != 0
-            val targetWidth = if (isSwapped) viewportHeight else viewportWidth
-            val targetHeight = if (isSwapped) viewportWidth else viewportHeight
-
-            // 为 Live Photo 计算所需的旋转矩阵
-            // 因为输入是 GL_TEXTURE_2D 且已经通过 stMatrix 纠正过传感器方向，
-            // 只需要应用 deviceRotation 相关的增量旋转。
-            val rotationMatrix = FloatArray(16)
-            Matrix.setIdentityM(rotationMatrix, 0)
-            if (applyRotation != 0) {
-                // 旋转纹理坐标。在 OpenGL 中，顺时针旋转图像等同于逆时针旋转纹理坐标。
-                // 逆时针旋转在 Matrix.rotateM 中使用正角度。
-                Matrix.translateM(rotationMatrix, 0, 0.5f, 0.5f, 0f)
-                Matrix.rotateM(rotationMatrix, 0, applyRotation.toFloat(), 0f, 0f, 1f)
-                Matrix.translateM(rotationMatrix, 0, -0.5f, -0.5f, 0f)
+            // 2. HDF 多 Pass 处理
+            var outputTexId = fboTextureId
+            if (hdfEnabled) {
+                renderHdfPreviewBlur(fboTextureId, viewportWidth, viewportHeight)
             }
 
-            // 2. 为 Live Photo 提供预览帧 (使用 FBO 纹理, GL_TEXTURE_2D)
-            recorder.onPreviewFrame(
-                textureId = fboTextureId,
-                transformMatrix = rotationMatrix,
-                width = targetWidth,
-                height = targetHeight,
-                timestampNs = surfaceTexture?.timestamp ?: 0L,
-                lutConfig = currentLutConfig,
-                params = getCurrentRecipeParams(),
-                sharedContext = EGL14.eglGetCurrentContext(),
-                sharedDisplay = EGL14.eglGetCurrentDisplay()
-            )
+            // 确保 FBO 内容已刷入显存
+            GLES30.glFlush()
 
-            // 3. 将 FBO 绘制到屏幕
-            drawFboToScreen(0, viewportWidth, viewportHeight)
+            // 3. Live Photo 录制
+            if (recorder != null) {
+                val applyRotation = getApplyRotation()
+                val isSwapped = applyRotation % 180 != 0
+                val targetWidth = if (isSwapped) viewportHeight else viewportWidth
+                val targetHeight = if (isSwapped) viewportWidth else viewportHeight
+                val rotationMatrix = FloatArray(16)
+                Matrix.setIdentityM(rotationMatrix, 0)
+                if (applyRotation != 0) {
+                    Matrix.translateM(rotationMatrix, 0, 0.5f, 0.5f, 0f)
+                    Matrix.rotateM(rotationMatrix, 0, applyRotation.toFloat(), 0f, 0f, 1f)
+                    Matrix.translateM(rotationMatrix, 0, -0.5f, -0.5f, 0f)
+                }
+                recorder.onPreviewFrame(
+                    textureId = outputTexId,
+                    transformMatrix = rotationMatrix,
+                    width = targetWidth,
+                    height = targetHeight,
+                    timestampNs = surfaceTexture?.timestamp ?: 0L,
+                    lutConfig = currentLutConfig,
+                    params = getCurrentRecipeParams(),
+                    sharedContext = EGL14.eglGetCurrentContext(),
+                    sharedDisplay = EGL14.eglGetCurrentDisplay()
+                )
+            }
+
+            // 4. 显示到屏幕
+            if (hdfEnabled) {
+                drawHdfComposite(0, viewportWidth, viewportHeight)
+            } else {
+                drawFboToScreen(0, viewportWidth, viewportHeight)
+            }
         } else {
-            // 直接渲染到屏幕，省去一次 FBO 绘制和一次 Copy 绘制，大幅提升预览帧率并降低功耗
+            // 直接渲染到屏幕
             drawInternal(0, viewportWidth, viewportHeight)
         }
     }
@@ -470,6 +490,7 @@ class LutRenderer : GLSurfaceView.Renderer {
 
         // 设置其他 Uniforms
         GLES30.glUniformMatrix4fv(uSTMatrixLocation, 1, false, stMatrix, 0)
+        GLES30.glUniformMatrix4fv(uSTMatrixFragLocation, 1, false, stMatrix, 0)
         GLES30.glUniform1f(uLutSizeLocation, lutSize)
         GLES30.glUniform1f(uLutIntensityLocation, lutIntensity)
         GLES30.glUniform1i(uLutEnabledLocation, if (lutEnabled && lutTextureId != 0) 1 else 0)
@@ -599,6 +620,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         uVignetteLocation = GLES30.glGetUniformLocation(programId, "uVignette")
         uBleachBypassLocation = GLES30.glGetUniformLocation(programId, "uBleachBypass")
         uChromaticAberrationLocation = GLES30.glGetUniformLocation(programId, "uChromaticAberration")
+        uSTMatrixFragLocation = GLES30.glGetUniformLocation(programId, "uSTMatrix")
 
         // Attribute 位置
         aPositionLocation = GLES30.glGetAttribLocation(programId, "aPosition")
@@ -621,6 +643,143 @@ class LutRenderer : GLSurfaceView.Renderer {
             aCopyTexCoordLoc = GLES30.glGetAttribLocation(copyProgramId, "aTexCoord")
         }
 //        PLog.d(TAG, "Shader program created: $programId")
+        // === 初始化 HDF 实时预览着色器 ===
+        initHdfPrograms()
+    }
+
+    private fun initHdfPrograms() {
+        val simpleVs = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, Shaders.SIMPLE_VERTEX_SHADER)
+        // Extract + Blur H
+        val extractFs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.HDF_PREVIEW_EXTRACT_BLUR_H)
+        hdfExtractBlurHProgram = GlUtils.linkProgram(simpleVs, extractFs)
+        GLES30.glDeleteShader(extractFs)
+        // Blur V
+        val blurVFs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.HDF_PREVIEW_BLUR_V)
+        hdfBlurVProgram = GlUtils.linkProgram(simpleVs, blurVFs)
+        GLES30.glDeleteShader(blurVFs)
+        // Composite
+        val compositeFs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.HDF_PREVIEW_COMPOSITE)
+        hdfCompositeProgram = GlUtils.linkProgram(simpleVs, compositeFs)
+        GLES30.glDeleteShader(compositeFs)
+        GLES30.glDeleteShader(simpleVs)
+        if (hdfExtractBlurHProgram == 0 || hdfBlurVProgram == 0 || hdfCompositeProgram == 0) {
+            PLog.e(TAG, "Failed to link HDF preview programs")
+        }
+    }
+
+    private fun setupHdfFbos(width: Int, height: Int) {
+        val dsW = width / 4
+        val dsH = height / 4
+        if (hdfWidth == dsW && hdfHeight == dsH && hdfTexId[0] != 0) return
+        hdfWidth = dsW
+        hdfHeight = dsH
+        for (i in 0..1) {
+            if (hdfTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(hdfTexId[i]), 0)
+            if (hdfFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(hdfFboId[i]), 0)
+            val t = IntArray(1);
+            val f = IntArray(1)
+            GLES30.glGenTextures(1, t, 0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, t[0])
+            GLES30.glTexImage2D(
+                GLES30.GL_TEXTURE_2D,
+                0,
+                GLES30.GL_RGBA,
+                dsW,
+                dsH,
+                0,
+                GLES30.GL_RGBA,
+                GLES30.GL_UNSIGNED_BYTE,
+                null
+            )
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glGenFramebuffers(1, f, 0)
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, f[0])
+            GLES30.glFramebufferTexture2D(
+                GLES30.GL_FRAMEBUFFER,
+                GLES30.GL_COLOR_ATTACHMENT0,
+                GLES30.GL_TEXTURE_2D,
+                t[0],
+                0
+            )
+            hdfTexId[i] = t[0]; hdfFboId[i] = f[0]
+        }
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+    }
+
+    private fun renderHdfPreviewBlur(sourceTexId: Int, width: Int, height: Int) {
+        setupHdfFbos(width, height)
+        if (hdfExtractBlurHProgram == 0 || hdfBlurVProgram == 0) return
+        val dsW = width / 4;
+        val dsH = height / 4
+        val texelW = 1.0f / dsW;
+        val texelH = 1.0f / dsH
+        val threshold = 0.9f - halation * 0.3f
+        // Pass 1: Extract + Horizontal Blur
+        GLES30.glUseProgram(hdfExtractBlurHProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, hdfFboId[0])
+        GLES30.glViewport(0, 0, dsW, dsH)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTexId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(hdfExtractBlurHProgram, "uInputTexture"), 0)
+        GLES30.glUniform2f(GLES30.glGetUniformLocation(hdfExtractBlurHProgram, "uTexelSize"), texelW, texelH)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(hdfExtractBlurHProgram, "uThreshold"), threshold)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(hdfExtractBlurHProgram, "uStrength"), halation)
+        drawSimpleQuad(hdfExtractBlurHProgram)
+        // Pass 2: Vertical Blur
+        GLES30.glUseProgram(hdfBlurVProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, hdfFboId[1])
+        GLES30.glViewport(0, 0, dsW, dsH)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, hdfTexId[0])
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(hdfBlurVProgram, "uInputTexture"), 0)
+        GLES30.glUniform2f(GLES30.glGetUniformLocation(hdfBlurVProgram, "uTexelSize"), texelW, texelH)
+        drawSimpleQuad(hdfBlurVProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+    }
+
+    private fun drawHdfComposite(targetFboId: Int, width: Int, height: Int) {
+        if (hdfCompositeProgram == 0) return
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+        GLES30.glUseProgram(hdfCompositeProgram)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, fboTextureId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(hdfCompositeProgram, "uOriginalTexture"), 0)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, hdfTexId[1])
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(hdfCompositeProgram, "uBloomTexture"), 1)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(hdfCompositeProgram, "uHalation"), halation)
+        drawSimpleQuad(hdfCompositeProgram)
+        // 捕获预览帧/测光
+        if (targetFboId == 0 && shouldCapturePreview) {
+            shouldCapturePreview = false
+            capturePreviewFrameInternal()
+        }
+        if (targetFboId == 0 && meteringEnabled) {
+            runMeteringInternal()
+        }
+    }
+
+    /** 使用 VBO 绘制全屏四边形（用于 HDF Pass，使用 SIMPLE_VERTEX_SHADER） */
+    private fun drawSimpleQuad(program: Int) {
+        val posLoc = GLES30.glGetAttribLocation(program, "aPosition")
+        val texLoc = GLES30.glGetAttribLocation(program, "aTexCoord")
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)
+        GLES30.glEnableVertexAttribArray(posLoc)
+        GLES30.glVertexAttribPointer(posLoc, POSITION_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, texCoordBufferId)
+        GLES30.glEnableVertexAttribArray(texLoc)
+        GLES30.glVertexAttribPointer(texLoc, TEXTURE_COORD_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, indexBufferId)
+        GLES30.glDrawElements(GLES30.GL_TRIANGLES, Shaders.DRAW_ORDER.size, GLES30.GL_UNSIGNED_SHORT, 0)
+        GLES30.glDisableVertexAttribArray(posLoc)
+        GLES30.glDisableVertexAttribArray(texLoc)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
     }
 
     private fun initPassthroughProgram() {
@@ -1201,6 +1360,18 @@ class LutRenderer : GLSurfaceView.Renderer {
             lutTextureId = 0
         }
 
+        // 释放 HDF 实时预览资源
+        if (hdfExtractBlurHProgram != 0) GLES30.glDeleteProgram(hdfExtractBlurHProgram)
+        if (hdfBlurVProgram != 0) GLES30.glDeleteProgram(hdfBlurVProgram)
+        if (hdfCompositeProgram != 0) GLES30.glDeleteProgram(hdfCompositeProgram)
+        hdfExtractBlurHProgram = 0; hdfBlurVProgram = 0; hdfCompositeProgram = 0
+        for (i in 0..1) {
+            if (hdfTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(hdfTexId[i]), 0)
+            if (hdfFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(hdfFboId[i]), 0)
+        }
+        hdfTexId = IntArray(2); hdfFboId = IntArray(2)
+        hdfWidth = 0; hdfHeight = 0
+
         // 删除缓冲
         if (vertexBufferId != 0) {
             GLES30.glDeleteBuffers(1, intArrayOf(vertexBufferId), 0)
@@ -1273,7 +1444,8 @@ class LutRenderer : GLSurfaceView.Renderer {
             filmGrain = filmGrain,
             vignette = vignette,
             bleachBypass = bleachBypass,
-            chromaticAberration = chromaticAberration
+            chromaticAberration = chromaticAberration,
+            halation = halation
         )
     }
 }
