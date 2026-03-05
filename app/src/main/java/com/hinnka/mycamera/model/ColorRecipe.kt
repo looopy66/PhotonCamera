@@ -22,6 +22,7 @@ data class ColorRecipeParams(
     val bleachBypass: Float = 0f,   // 0.0 ~ 1.0 (留银冲洗强度，0为无效果)
     val halation: Float = 0f,       // 0.0 ~ 1.0 (光晕/高光扩散强度，0为无效果，模拟 GR3 HDF)
     val lutIntensity: Float = 1f,   // 0.0 ~ 1.0 (LUT强度，1为完全应用)
+    val remarks: String = "",       // 用户备注
 ) {
     /**
      * 检查参数是否为默认值（无任何调整）
@@ -39,7 +40,8 @@ data class ColorRecipeParams(
                 filmGrain == 0f &&
                 vignette == 0f &&
                 bleachBypass == 0f &&
-                halation == 0f
+                halation == 0f &&
+                remarks.isEmpty()
     }
 
     /**
@@ -59,7 +61,8 @@ data class ColorRecipeParams(
                 vignette == other.vignette &&
                 bleachBypass == other.bleachBypass &&
                 halation == other.halation &&
-                lutIntensity == other.lutIntensity
+                lutIntensity == other.lutIntensity &&
+                remarks == other.remarks
     }
 
     companion object {

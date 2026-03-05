@@ -50,6 +50,8 @@ class LutManager(private val context: Context) {
         private fun bleachBypassKey(lutId: String) = floatPreferencesKey("${lutId}_bleachBypass")
         private fun halationKey(lutId: String) = floatPreferencesKey("${lutId}_halation")
         private fun lutIntensityKey(lutId: String) = floatPreferencesKey("${lutId}_lutIntensity")
+        private fun remarksKey(lutId: String) =
+            androidx.datastore.preferences.core.stringPreferencesKey("${lutId}_remarks")
     }
 
     // LUT 缓存
@@ -80,7 +82,8 @@ class LutManager(private val context: Context) {
                 vignette = preferences[vignetteKey(lutId)] ?: 0f,
                 bleachBypass = preferences[bleachBypassKey(lutId)] ?: 0f,
                 halation = preferences[halationKey(lutId)] ?: 0f,
-                lutIntensity = preferences[lutIntensityKey(lutId)] ?: 1f
+                lutIntensity = preferences[lutIntensityKey(lutId)] ?: 1f,
+                remarks = preferences[remarksKey(lutId)] ?: ""
             )
         }
     }
@@ -219,6 +222,7 @@ class LutManager(private val context: Context) {
             preferences[bleachBypassKey(lutId)] = params.bleachBypass
             preferences[halationKey(lutId)] = params.halation
             preferences[lutIntensityKey(lutId)] = params.lutIntensity
+            preferences[remarksKey(lutId)] = params.remarks
         }
         PLog.d(TAG, "Color recipe params saved for LUT [$lutId]: $params")
     }
@@ -245,7 +249,8 @@ class LutManager(private val context: Context) {
                 vignette = preferences[vignetteKey(lutId)] ?: 0f,
                 bleachBypass = preferences[bleachBypassKey(lutId)] ?: 0f,
                 halation = preferences[halationKey(lutId)] ?: 0f,
-                lutIntensity = preferences[lutIntensityKey(lutId)] ?: 1f
+                lutIntensity = preferences[lutIntensityKey(lutId)] ?: 1f,
+                remarks = preferences[remarksKey(lutId)] ?: ""
             )
         }.firstOrNull() ?: ColorRecipeParams.DEFAULT
     }
@@ -281,6 +286,7 @@ class LutManager(private val context: Context) {
             preferences.remove(bleachBypassKey(lutId))
             preferences.remove(halationKey(lutId))
             preferences.remove(lutIntensityKey(lutId))
+            preferences.remove(remarksKey(lutId))
         }
         PLog.d(TAG, "Color recipe params deleted for LUT [$lutId]")
     }

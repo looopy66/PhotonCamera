@@ -29,6 +29,7 @@ import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.RawProcessor
 import com.hinnka.mycamera.utils.YuvProcessor
+import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.*
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -105,9 +106,8 @@ object PhotoManager {
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
         suffix: String? = null,
-        onComplete: (Boolean) -> Unit = {}
-    ) {
-        withContext(Dispatchers.IO) {
+    ): Boolean {
+        return withContext(Dispatchers.IO) {
             val tempExportFile = File(context.cacheDir, "temp_export_${System.nanoTime()}.jpg")
             try {
                 // 读取照片
@@ -119,7 +119,7 @@ object PhotoManager {
                 } ?: photoProcessor.process(
                     context, id, metadata,
                     sharpeningValue, noiseReductionValue, chromaNoiseReductionValue
-                ) ?: return@withContext
+                ) ?: return@withContext false
 
                 PLog.d(TAG, "processedBitmap = ${processedBitmap.colorSpace?.name}")
 
@@ -242,21 +242,18 @@ object PhotoManager {
                     )
                     saveMetadata(context, id, updatedMetadata)
                     PLog.d(TAG, "Exported URI saved: $uri for photo $id")
+
+                    return@withContext true
                 }
 
                 processedBitmap.recycle()
-                withContext(Dispatchers.Main) {
-                    onComplete(uri != null)
-                }
-
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to export photo", e)
-                withContext(Dispatchers.Main) {
-                    onComplete(false)
-                }
             } finally {
                 tempExportFile.delete()
             }
+
+            false
         }
     }
 

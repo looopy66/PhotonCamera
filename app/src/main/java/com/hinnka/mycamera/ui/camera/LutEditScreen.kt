@@ -54,6 +54,16 @@ fun LutEditBottomSheet(
                 .fillMaxWidth()
                 .navigationBarsPadding()
         ) {
+            // 备注栏 (最上面单独起一行)
+            com.hinnka.mycamera.ui.components.ColorRecipeRemarksBar(
+                remarks = editingParams.remarks,
+                onRemarksChange = {
+                    editingParams = editingParams.copy(remarks = it)
+                    viewModel.saveLutColorRecipe(lutId, editingParams)
+                },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+
             LutIntensitySlider(
                 intensity = editingParams.lutIntensity,
                 onIntensityChange = {

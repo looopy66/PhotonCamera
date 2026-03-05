@@ -227,6 +227,8 @@
     <string name="recipe_tab_light">亮度</string>
     <string name="recipe_tab_texture">效果</string>
     <string name="recipe_tab_post">细节</string>
+    <string name="recipe_tab_remarks">备注</string>
+    <string name="recipe_placeholder_remarks">点击添加备注信息…</string>
 
     <!-- Post-Processing Parameters (Capture/Edit only) -->
     <string name="recipe_param_sharpening">锐化</string>

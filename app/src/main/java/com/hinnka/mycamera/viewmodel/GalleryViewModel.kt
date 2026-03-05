@@ -1444,6 +1444,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         context,
                         photo.uri,
                         editLutId.value,
+                        photo.uri.lastPathSegment,
                         sourceUri = photo.uri.toString()
                     )
                 } else {
@@ -1545,20 +1546,23 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         onComplete: (Boolean) -> Unit = {}
     ) {
         viewModelScope.launch {
-            val metadata = PhotoManager.loadMetadata(getApplication(), photo.id) ?: photo.metadata
+            var photoId = photo.id
+            if (selectedTab == GalleryTab.SYSTEM) {
+                photoId = _photos.value.find { it.metadata?.sourceUri == photo.uri.toString() }?.id ?: photoId
+            }
+            val metadata = PhotoManager.loadMetadata(getApplication(), photoId) ?: photo.metadata
             ?: PhotoMetadata()
             val context = getApplication<Application>()
-            PhotoManager.exportPhoto(
-                context, photo.id, bitmap, contentRepository.photoProcessor, metadata,
+            val success = PhotoManager.exportPhoto(
+                context, photoId, bitmap, contentRepository.photoProcessor, metadata,
                 sharpening.value, noiseReduction.value,
                 chromaNoiseReduction.value, photoQuality.firstOrNull() ?: 95, suffix
-            ) { success ->
-                if (success) {
-                    exitEditMode()
-                    loadPhotos()
-                }
-                onComplete(success)
+            )
+            if (success) {
+                exitEditMode()
+                loadPhotos()
             }
+            onComplete(success)
         }
     }
 
