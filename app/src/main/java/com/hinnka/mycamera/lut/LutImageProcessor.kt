@@ -62,11 +62,8 @@ class LutImageProcessor {
     // HDF (Highlight Diffusion) 光晕效果资源
     private var hdfExtractBlurHProgram = 0
     private var hdfBlurVProgram = 0
-    private var hdfCompositeProgram = 0
-    private var hdfTexId = IntArray(2)      // ping-pong 纹理 (1/4 分辨率)
-    private var hdfFboId = IntArray(2)      // ping-pong FBO
-    private var hdfCompositeTexId = 0       // 全分辨率合成输出纹理
-    private var hdfCompositeFboId = 0       // 全分辨率合成 FBO
+    private var hdfTexId = IntArray(2)      // 1/4 分辨率模糊纹理
+    private var hdfFboId = IntArray(2)      // 1/4 分辨率模糊 FBO
     private var hdfWidth = 0
     private var hdfHeight = 0
 
@@ -452,7 +449,7 @@ class LutImageProcessor {
         GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uHalation"), halation)
         if (halation > 0f) {
             GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, hdfCompositeTexId)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, hdfTexId[1])
             GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uHdfTexture"), 2)
         }
 
@@ -739,12 +736,11 @@ class LutImageProcessor {
         val vShader = compileShader(GLES30.GL_VERTEX_SHADER, IMAGE_VERTEX_SHADER)
         hdfExtractBlurHProgram = createProgram(vShader, HDF_EXTRACT_BLUR_H_SHADER)
         hdfBlurVProgram = createProgram(vShader, HDF_BLUR_V_SHADER)
-        hdfCompositeProgram = createProgram(vShader, HDF_COMPOSITE_SHADER)
         GLES30.glDeleteShader(vShader)
 
         PLog.d(
             TAG,
-            "HDF programs initialized: ExtractH=$hdfExtractBlurHProgram BlurV=$hdfBlurVProgram Composite=$hdfCompositeProgram"
+            "HDF programs initialized: ExtractH=$hdfExtractBlurHProgram BlurV=$hdfBlurVProgram"
         )
     }
 
@@ -936,8 +932,6 @@ class LutImageProcessor {
             if (hdfTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(hdfTexId[i]), 0)
             if (hdfFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(hdfFboId[i]), 0)
         }
-        if (hdfCompositeTexId != 0) GLES30.glDeleteTextures(1, intArrayOf(hdfCompositeTexId), 0)
-        if (hdfCompositeFboId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(hdfCompositeFboId), 0)
 
         // 创建 1/4 分辨率 ping-pong FBO
         for (i in 0..1) {
@@ -964,29 +958,6 @@ class LutImageProcessor {
             hdfFboId[i] = f[0]
         }
 
-        // 创建全分辨率合成 FBO
-        val ct = IntArray(1)
-        val cf = IntArray(1)
-        GLES30.glGenTextures(1, ct, 0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, ct[0])
-        GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F,
-            width, height, 0,
-            GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null
-        )
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glGenFramebuffers(1, cf, 0)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, cf[0])
-        GLES30.glFramebufferTexture2D(
-            GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
-            GLES30.GL_TEXTURE_2D, ct[0], 0
-        )
-        hdfCompositeTexId = ct[0]
-        hdfCompositeFboId = cf[0]
-
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
 
@@ -1001,7 +972,7 @@ class LutImageProcessor {
         halation: Float
     ) {
         setupHDFFramebuffers(width, height)
-        if (hdfExtractBlurHProgram == 0 || hdfBlurVProgram == 0 || hdfCompositeProgram == 0) return
+        if (hdfExtractBlurHProgram == 0 || hdfBlurVProgram == 0) return
 
         val dsW = width / 4
         val dsH = height / 4
@@ -1011,7 +982,7 @@ class LutImageProcessor {
         val identityMatrix = FloatArray(16)
         android.opengl.Matrix.setIdentityM(identityMatrix, 0)
 
-        val threshold = 0.95f - halation * 0.25f
+        val threshold = 0.9f - halation * 0.3f
 
         // Pass 1: 提取高光 + 水平高斯模糊 (1/4 分辨率)
         GLES30.glUseProgram(hdfExtractBlurHProgram)
@@ -1040,22 +1011,6 @@ class LutImageProcessor {
             GLES30.glGetUniformLocation(hdfBlurVProgram, "uMVPMatrix"), 1, false, identityMatrix, 0
         )
         drawQuad(hdfBlurVProgram)
-
-        // Pass 3: 全分辨率合成 (Screen blend)
-        GLES30.glUseProgram(hdfCompositeProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, hdfCompositeFboId)
-        GLES30.glViewport(0, 0, width, height)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(hdfCompositeProgram, "uOriginalTexture"), 0)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, hdfTexId[1])
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(hdfCompositeProgram, "uBloomTexture"), 1)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(hdfCompositeProgram, "uStrength"), halation)
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(hdfCompositeProgram, "uMVPMatrix"), 1, false, identityMatrix, 0
-        )
-        drawQuad(hdfCompositeProgram)
 
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         checkGlError("renderHDFBlur")
@@ -1192,13 +1147,10 @@ class LutImageProcessor {
         // 释放 HDF 资源
         if (hdfExtractBlurHProgram != 0) GLES30.glDeleteProgram(hdfExtractBlurHProgram)
         if (hdfBlurVProgram != 0) GLES30.glDeleteProgram(hdfBlurVProgram)
-        if (hdfCompositeProgram != 0) GLES30.glDeleteProgram(hdfCompositeProgram)
         for (i in 0..1) {
             if (hdfTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(hdfTexId[i]), 0)
             if (hdfFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(hdfFboId[i]), 0)
         }
-        if (hdfCompositeTexId != 0) GLES30.glDeleteTextures(1, intArrayOf(hdfCompositeTexId), 0)
-        if (hdfCompositeFboId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(hdfCompositeFboId), 0)
 
         EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
         EGL14.eglDestroySurface(eglDisplay, eglSurface)
@@ -1502,8 +1454,25 @@ class LutImageProcessor {
 
                 // === HDF 光晕效果（在色彩配方之后，LUT 之前） ===
                 if (uHalation > 0.0) {
-                    vec3 hdfColor = texture(uHdfTexture, vTexCoord).rgb;
-                    color.rgb = hdfColor;
+                    vec3 bloom = texture(uHdfTexture, vTexCoord).rgb;
+                    
+                    // 1. 色彩色散处理：增强饱和度同时避免过度饱和导致的伪影
+                    float bLuma = dot(bloom, vec3(0.2126, 0.7152, 0.0722));
+                    bloom = mix(vec3(bLuma), bloom, 1.6); 
+                    
+                    // 2. 模拟物理滤镜的扩散扩散感
+                    // 使用更科学的系数平衡明度与扩散面积
+                    vec3 bloomEffect = bloom * uHalation * 1.4;
+                    
+                    // 3. 混合原图：Screen 叠加
+                    color.rgb = vec3(1.0) - (vec3(1.0) - color.rgb) * (vec3(1.0) - bloomEffect);
+                    
+                    // 4. 改良的氛围感：只在光晕周围抬升灰度，模拟镜头内部散射
+                    float mist = bLuma * uHalation * 0.15;
+                    color.rgb += mist;
+                    
+                    // 5. 稍微削减对比度以获得“电影感”
+                    color.rgb = (color.rgb - 0.5) * (1.0 - uHalation * 0.08) + 0.5;
                 }
 
                 // === LUT 处理（在色彩配方之后） ===
@@ -1583,41 +1552,28 @@ class LutImageProcessor {
             uniform float uStrength;
             
             void main() {
-                // 从全分辨率采样（自动降采样，因为 FBO 是 1/4 分辨率）
                 vec3 color = texture(uInputTexture, vTexCoord).rgb;
                 
-                // 计算亮度
+                // 1. 高度柔化的色彩分析
                 float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+                float extractionVal = mix(luma, max(color.r, max(color.g, color.b)), 0.6);
                 
-                // 柔和的高光提取：使用 smoothstep 而非硬阈值
-                // 模拟理光 HDF 的物理滤镜特性：所有光线都会被扩散，但高光区域最明显
-                float highlightMask = smoothstep(uThreshold, uThreshold + 0.3, luma);
-                // 混合一些中间调以获得更自然的扩散
-                float midMask = smoothstep(uThreshold - 0.2, uThreshold, luma) * 0.3;
-                float mask = highlightMask + midMask * uStrength;
+                // 极其平滑的提取曲线，彻底消除“硬核”边缘
+                float highlightMask = smoothstep(uThreshold - 0.1, uThreshold + 0.25, extractionVal);
+                float midMask = smoothstep(uThreshold - 0.5, uThreshold, extractionVal) * 0.4;
+                float mask = (highlightMask + midMask * uStrength);
                 
                 vec3 highlight = color * mask;
                 
-                // 饱和度补偿：增强提取出的高光的色彩，使扩散出来的光晕不至于太苍白
-                float hLuma = dot(highlight, vec3(0.2126, 0.7152, 0.0722));
-                highlight = mix(vec3(hLuma), highlight, 1.5); // 1.5倍饱和度增强
-                
-                // 13-tap 水平高斯模糊 (sigma ≈ 4.0)
-                float weights[7] = float[](0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216, 0.0020, 0.0001);
+                // 改良后的 9-tap 线性采样：使用 2.0 步进而非 2.2，确保像素完美对齐
+                float weights[5] = float[](0.204164, 0.304005, 0.093910, 0.010416, 0.000005);
+                float offsets[5] = float[](0.0, 1.407333, 3.294215, 5.176470, 7.058823);
                 
                 vec3 sum = highlight * weights[0];
-                for (int i = 1; i < 7; i++) {
-                    float offset = float(i) * uTexelSize.x * 5.0;
-                    
-                    vec3 colP = texture(uInputTexture, vTexCoord + vec2(offset, 0.0)).rgb;
-                    float lumaP = dot(colP, vec3(0.2126, 0.7152, 0.0722));
-                    float maskP = smoothstep(uThreshold - 0.2, uThreshold + 0.3, lumaP);
-                    sum += colP * maskP * weights[i];
-                    
-                    vec3 colM = texture(uInputTexture, vTexCoord - vec2(offset, 0.0)).rgb;
-                    float lumaM = dot(colM, vec3(0.2126, 0.7152, 0.0722));
-                    float maskM = smoothstep(uThreshold - 0.2, uThreshold + 0.3, lumaM);
-                    sum += colM * maskM * weights[i];
+                for (int i = 1; i < 5; i++) {
+                    float offset = offsets[i] * uTexelSize.x * 2.0; // 锁定为 2.0，消除伪影
+                    sum += texture(uInputTexture, vTexCoord + vec2(offset, 0.0)).rgb * weights[i];
+                    sum += texture(uInputTexture, vTexCoord - vec2(offset, 0.0)).rgb * weights[i];
                 }
                 
                 fragColor = vec4(sum, 1.0);
@@ -1638,58 +1594,18 @@ class LutImageProcessor {
             uniform vec2 uTexelSize;
             
             void main() {
-                // 13-tap 垂直高斯模糊，同样增加步进
-                float weights[7] = float[](0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216, 0.0020, 0.0001);
+                // 使用严格对齐的垂直线性模糊
+                float weights[5] = float[](0.204164, 0.304005, 0.093910, 0.010416, 0.000005);
+                float offsets[5] = float[](0.0, 1.407333, 3.294215, 5.176470, 7.058823);
                 
                 vec3 sum = texture(uInputTexture, vTexCoord).rgb * weights[0];
-                for (int i = 1; i < 7; i++) {
-                    float offset = float(i) * uTexelSize.y * 2.5;
+                for (int i = 1; i < 5; i++) {
+                    float offset = offsets[i] * uTexelSize.y * 2.0;
                     sum += texture(uInputTexture, vTexCoord + vec2(0.0, offset)).rgb * weights[i];
                     sum += texture(uInputTexture, vTexCoord - vec2(0.0, offset)).rgb * weights[i];
                 }
                 
                 fragColor = vec4(sum, 1.0);
-            }
-        """.trimIndent()
-
-        /**
-         * Pass 3: 合成（Screen 混合）
-         * 将模糊的高光以 Screen 混合模式叠加回原图
-         * Screen: result = 1 - (1 - base) * (1 - bloom)
-         * 这给出柔和的光晕效果，类似物理滤镜的光扩散
-         */
-        private val HDF_COMPOSITE_SHADER = """
-            #version 300 es
-            precision highp float;
-            
-            in vec2 vTexCoord;
-            out vec4 fragColor;
-            
-            uniform sampler2D uOriginalTexture;
-            uniform sampler2D uBloomTexture;
-            uniform float uStrength;
-            
-            void main() {
-                vec3 original = texture(uOriginalTexture, vTexCoord).rgb;
-                vec3 bloom = texture(uBloomTexture, vTexCoord).rgb;
-                
-                // 对光晕部分再次进行饱和度微调
-                float bLuma = dot(bloom, vec3(0.2126, 0.7152, 0.0722));
-                bloom = mix(vec3(bLuma), bloom, 1.2); 
-                
-                // 1. 模拟物理滤镜的光散失
-                vec3 attenuated = original * (1.0 - uStrength * 0.1);
-                
-                // 2. 使用平衡的混合模式
-                // Screen blend: result = 1 - (1 - a) * (1 - b)
-                vec3 screenBlend = vec3(1.0) - (vec3(1.0) - attenuated) * (vec3(1.0) - bloom * uStrength);
-                
-                // 3. 柔化对比度与暗部处理
-                float contrastReduction = 1.0 - uStrength * 0.05;
-                vec3 result = (screenBlend - 0.5) * contrastReduction + 0.5;
-                
-                // 4. 再次确保高光位不会出现由于增加光晕导致的突兀色偏
-                fragColor = vec4(clamp(result, 0.0, 1.0), texture(uOriginalTexture, vTexCoord).a);
             }
         """.trimIndent()
     }

@@ -90,7 +90,8 @@ class OpenAIApiClient(
                             put(
                                 "content",
                                 "You are a master cinematic colorist and digital imaging technician. Your objective is to analyze the provided reference image(s) and precisely extract their unique color grading, film emulation characteristics, and lighting atmosphere into a rigid JSON 'LutRecipe' format.\n\n" +
-                                        "You must fully reverse-engineer the image's look and feel, mapping its aesthetic to the following parameters. Return ONLY valid JSON matching this exact schema (no markdown blocks like ```json):\n" +
+                                        "CRITICAL PHILOSOPHY: Prioritize a natural, aesthetic, and balanced look. Your adjustments should be gentle and sophisticated. Avoid aggressive or extreme parameter values that lead to drastic shifts in color or tone. The final result must feel like a professional film print, not a heavy digital filter. Subtle, nuanced adjustments are far more effective than heavy-handed ones.\n\n" +
+                                        "You must reverse-engineer the image's aesthetic essence while keeping the adjustments refined and harmonious. Return ONLY valid JSON matching this exact schema (no markdown blocks like ```json):\n" +
                                         "{\n" +
                                         "  \"colorFeatures\": {\n" +
                                         "    \"tone\": { \"exposure\": 0.0, \"contrast\": 0.0, \"saturation\": 1.0, \"highlights\": 0.0, \"shadows\": 0.0, \"whitePoint\": 0.0, \"blackPoint\": 0.0 },\n" +
@@ -102,7 +103,7 @@ class OpenAIApiClient(
                                         "}\n\n" +
                                         "=== PARAMETER DEFINITIONS & STRICT RANGES ===\n" +
                                         "1. TONE & BALANCE [-1.0 to 1.0 for most, 0.0 to 2.0 for saturation]:\n" +
-                                        "   - exposure: Global Exposure Value (EV) compensation. -1.0 decreases exposure by 1 stop (50% light), 1.0 increases by 1 stop (200% light).\n" +
+                                        "   - exposure: Global Exposure Value (EV) compensation. -1.0 decreases exposure by 1 stop (50% light), 1.0 increases by 1 stop (200% light). Use sparingly (±0.3 range preferred).\n" +
                                         "   - contrast: Macro contrast adjustment. Positive values create a non-linear S-curve to increase punch; negative values flatten the tone mapping.\n" +
                                         "   - saturation: Global color intensity multiplier [0.0 to 2.0]. 1.0 is neutral, 0.0 is grayscale.\n" +
                                         "   - highlights: Recovery/compression of the highlights. Negative values darken the brightest areas to recover details; positive values brighten them.\n" +
@@ -114,18 +115,18 @@ class OpenAIApiClient(
                                         "   * Note: Use either WP/BP or Curves to map black/white levels; avoid double-processing to prevent extreme contrast loss.\n\n" +
                                         "2. SPLIT TONING (Cinematic Color Grading):\n" +
                                         "   - hue: Exact color wheel angle [0.0 to 360.0]. (e.g., 210 for teal shadows, 45 for orange highlights).\n" +
-                                        "   - saturation: Intensity of the color tint [0.0 to 1.0]. Keep shadows/highlights vibrant (0.1-0.3) for cinematic looks. STRONGLY MINIMIZE midtones saturation (0.0 to 0.05) to preserve natural skin tones and avoid an unnatural global color cast.\n\n" +
+                                        "   - saturation: Intensity of the color tint [0.0 to 1.0]. Keep shadows/highlights subtle (0.05-0.15) for refined cinematic looks. STRONGLY MINIMIZE midtones saturation (0.0 to 0.03) to preserve natural skin tones and avoid an unnatural global color cast.\n\n" +
                                         "3. HSL SHIFTS:\n" +
-                                        "   - hShift (Hue): Fraction of a full color wheel rotation [-1.0 to 1.0]. 1.0 = 360°. (e.g., 0.1 skews slightly towards neighbors).\n" +
-                                        "   - sScale (Saturation): Multiplier for color intensity [0.0 to 2.0]. 1.0 is neutral, 0.0 is grayscale.\n" +
+                                        "   - hShift (Hue): Fraction of a full color wheel rotation [-1.0 to 1.0]. 1.0 = 360°.\n" +
+                                        "   - sScale (Saturation): Multiplier for color intensity [0.0 to 2.0]. 1.0 is neutral.\n" +
                                         "   - lScale (Lightness): Multiplier for color brightness [0.0 to 2.0]. 1.0 is neutral.\n" +
                                         "   * PREFERENCE: Prioritize HSL adjustments over global white balance (Temperature/Tint) to capture specific film-like color signatures without destroying the overall color integrity.\n" +
-                                        "   * INFERENCE: Identify specific scene elements (e.g., the exact blue/cyan of the sky, the green/yellow of foliage, or skin tones). Reverse-engineer the color offsets by comparing these observed colors to standard real-world expectations. Determine the precise HSL shifts for each hue bucket to replicate these characteristic transformations.\n\n" +
+                                        "   * INFERENCE: Identify specific scene elements. Reverse-engineer the color offsets by comparing these observed colors to standard real-world expectations. Determine the precise HSL shifts for each hue bucket to replicate these characteristic transformations subtly.\n\n" +
                                         "4. CURVES (Spline Points):\n" +
                                         "   - Arrays of exactly 2D [x, y] coordinates mapping input to output [0.0 to 1.0].\n" +
-                                        "   - luma: The master contrast/fade curve. For a classic faded film look, start with [[0.0, 0.15], [0.5, 0.5], [1.0, 0.95]].\n" +
-                                        "   - rgb: Individual color channel curves for advanced cross-processing.\n\n" +
-                                        "CRITICAL: ALL values must strictly adhere to these mathematical float ratios. NEVER use integer percentages (like 15.0 or -20.0) except for 'hue' degrees. Exceeding [-1.0, 1.0] for ratios or [0.0, 1.0] for curves will crash the rendering engine. Ensure all parameters collaborate harmoniously; avoid compounding shifts (e.g., overlapping Tint, Split Toning, and HSL shifts) that result in severe color clipping or unnatural color bias."
+                                        "   - luma: The master contrast/fade curve. Avoid extreme 'S' shapes; prioritize smooth, natural transitions.\n" +
+                                        "   - rgb: Individual color channel curves for advanced cross-processing. Use minimal points to ensure smooth gradients.\n\n" +
+                                        "CRITICAL: ALL values must strictly adhere to these mathematical float ratios. NEVER use integer percentages (like 15.0 or -20.0). Exceeding [-1.0, 1.0] for ratios or [0.0, 1.0] for curves will crash the rendering engine. BE GENTLE: Ensure all parameters collaborate harmoniously; avoid compounding shifts (e.g., overlapping Tint, Split Toning, and HSL shifts) that result in severe color clipping or unnatural color bias. Prefer subtle, high-quality adjustments over drastic transformations."
                             )
                         }
                         val userMessage = JSONObject().apply {
