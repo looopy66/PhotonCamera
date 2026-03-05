@@ -53,7 +53,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     companion object {
         private const val TAG = "GalleryViewModel"
-        private const val PREVIEW_CACHE_SIZE = 5 // 缓存 5 张预览图
     }
 
 
@@ -121,6 +120,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             s.map { systemPhoto ->
                 photonMap[systemPhoto.uri.toString()]?.let { photonPhoto ->
                     systemPhoto.copy(
+                        uri = photonPhoto.uri,
                         metadata = photonPhoto.metadata,
                         thumbnailUri = photonPhoto.thumbnailUri,
                         isMotionPhoto = systemPhoto.isMotionPhoto || photonPhoto.isMotionPhoto,
@@ -1136,22 +1136,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /**
      * 进入编辑模式
      */
-    fun enterEditMode(photo: PhotoData? = null) {
-        val targetPhoto = photo ?: getCurrentPhoto()
-        PLog.d(TAG, "Entering edit mode for photo: ${targetPhoto?.id}, current index: $currentPhotoIndex")
-        targetPhoto?.let {
-            setCurrentPhotoById(it.id)
+    fun enterEditMode() {
+        val targetPhoto = getCurrentPhoto() ?: return
 
-            // 如果元数据还没加载，先尝试从 photo 对象或磁盘加载
-            if (currentPhotoMetadataId != it.id) {
-                val context = getApplication<Application>()
-                val metadata = it.metadata ?: runBlocking {
-                    withContext(Dispatchers.IO) {
-                        PhotoManager.loadMetadata(context, it.id)
-                    }
+        if (currentPhotoMetadata == null || currentPhotoMetadataId != targetPhoto.id) {
+            val context = getApplication<Application>()
+            val metadata = targetPhoto.metadata ?: runBlocking {
+                withContext(Dispatchers.IO) {
+                    PhotoManager.loadMetadata(context, targetPhoto.id)
                 }
-                applyMetadataToEditState(metadata)
             }
+            applyMetadataToEditState(metadata)
         }
 
         isEditing = true
@@ -1439,7 +1434,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val targetPhotoId = if (selectedTab == GalleryTab.SYSTEM) {
                     // 检查是否已经导入过
                     val existing =
-                        _photos.value.find { it.metadata?.sourceUri == photo.uri.toString() }
+                        _photos.value.find { it.uri == photo.uri }
                     existing?.id ?: PhotoManager.importPhoto(
                         context,
                         photo.uri,
@@ -1456,15 +1451,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     return@launch
                 }
 
-                val metadata = (currentPhotoMetadata ?: PhotoMetadata()).copy(
+                val metadata = currentPhotoMetadata?.copy(
                     lutId = editLutId.value,
                     frameId = editFrameId.value,
                     colorRecipeParams = editLutRecipeParams.value,
                     sharpening = editSharpening.value,
                     noiseReduction = editNoiseReduction.value,
                     chromaNoiseReduction = editChromaNoiseReduction.value,
-                    sourceUri = if (selectedTab == GalleryTab.SYSTEM) photo.uri.toString() else currentPhotoMetadata?.sourceUri
-                )
+                ) ?: run {
+                    onComplete(false)
+                    return@launch
+                }
                 val success = PhotoManager.saveMetadata(context, targetPhotoId, metadata)
 
                 if (success) {

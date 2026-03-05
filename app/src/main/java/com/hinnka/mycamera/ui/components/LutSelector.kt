@@ -29,6 +29,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import coil.size.Size
+import coil.transform.Transformation
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.lut.LutInfo
@@ -88,7 +92,7 @@ fun LutSelector(
             val selectedIndex = filteredLuts.indexOfFirst { it.id == lutId }
             if (selectedIndex >= 2) {
                 coroutineScope.launch {
-                    scrollState.animateScrollToItem(selectedIndex - 2)
+                    scrollState.scrollToItem(selectedIndex - 2)
                 }
             }
         }
@@ -202,28 +206,6 @@ private fun LutItem(
         Color.Gray.copy(alpha = 0.5f)
     }
 
-    var bitmap by remember(previewBitmap) { mutableStateOf(previewBitmap) }
-
-    LaunchedEffect(previewBitmap) {
-        val contentRepository = ContentRepository.getInstance(context)
-        val lutConfig = withContext(Dispatchers.IO) {
-            contentRepository.lutManager.loadLut(id)
-        }
-
-        if (lutConfig != null) {
-            val colorRecipeParams = contentRepository.lutManager.loadColorRecipeParams(id)
-            // LUT 预览生成：禁用软件处理（预览图小，不需要降噪/锐化）
-            bitmap = previewBitmap?.let {
-                contentRepository.imageProcessor.applyLut(
-                    bitmap = it,
-                    lutConfig = lutConfig,
-                    colorRecipeParams = colorRecipeParams
-                    // 预览不需要软件处理
-                )
-            }
-        }
-    }
-
     Column(
         modifier = modifier
             .width(60.dp)
@@ -247,7 +229,7 @@ private fun LutItem(
                 .then(
                     if (isNone) {
                         Modifier.background(Color.DarkGray)
-                    } else if (bitmap != null) {
+                    } else if (previewBitmap != null) {
                         // 显示真实预览图
                         Modifier
                     } else {
@@ -266,10 +248,44 @@ private fun LutItem(
             contentAlignment = Alignment.Center
         ) {
             // 显示预览图片
-            if (!isNone && bitmap != null) {
-                Image(
-                    bitmap = bitmap!!.asImageBitmap(),
-                    contentDescription = null,
+            if (!isNone && previewBitmap != null) {
+                // 照片缩略图
+                val transformation = remember(id, previewBitmap) {
+                    object : Transformation {
+                        override val cacheKey: String = "previewTransformation_${previewBitmap.hashCode()}_$id"
+                        val contentRepository = ContentRepository.getInstance(context)
+
+                        override suspend fun transform(
+                            input: Bitmap,
+                            size: Size
+                        ): Bitmap {
+                            val lutConfig = withContext(Dispatchers.IO) {
+                                contentRepository.lutManager.loadLut(id)
+                            }
+                            if (lutConfig != null) {
+                                val colorRecipeParams = contentRepository.lutManager.loadColorRecipeParams(id)
+                                return contentRepository.imageProcessor.applyLut(
+                                    bitmap = input,
+                                    lutConfig = lutConfig,
+                                    colorRecipeParams = colorRecipeParams
+                                )
+                            }
+                            return input
+                        }
+
+                    }
+                }
+                val imageRequest = remember(previewBitmap, transformation) {
+                    ImageRequest.Builder(context)
+                        .data(previewBitmap)
+                        .crossfade(true)
+                        .transformations(transformation)
+                        .build()
+                }
+
+                AsyncImage(
+                    model = imageRequest,
+                    contentDescription = name,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
                 )

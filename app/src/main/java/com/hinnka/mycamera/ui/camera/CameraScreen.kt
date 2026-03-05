@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.viewModelScope
 import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.CameraState
@@ -59,6 +60,9 @@ import com.hinnka.mycamera.ui.components.rememberBackgroundPainter
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.roundToInt
@@ -141,18 +145,20 @@ fun CameraScreen(
                         ("package:${context.packageName}").toUri()
                     )
                 )
-            } else if (hasOverlay && hasFiles) {
+            } else if (hasOverlay) {
                 // All permissions granted
                 isGhostPermissionFlowActive = false
                 if (!phantomMode) {
                     viewModel.togglePhantomMode()
                 }
-            } else if (!hasOverlay) {
+            } else {
                 // If overlay is still missing after returning, user might have cancelled
                 // We stop the automatic flow to avoid getting stuck
                 isGhostPermissionFlowActive = false
             }
         }
+
+        viewModel.updateLut()
     }
 
     // 监听照片保存完成事件，立即刷新缩略图

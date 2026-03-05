@@ -82,7 +82,8 @@ data class UserPreferences(
     val openAIApiKey: String? = null,
     val openAIBaseUrl: String? = null,
     val openAIModel: String? = null,
-    val useBuiltInAiService: Boolean = false
+    val useBuiltInAiService: Boolean = false,
+    val phantomSaveAsNew: Boolean = false
 )
 
 /**
@@ -146,6 +147,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val OPENAI_BASE_URL = stringPreferencesKey("openai_base_url")
         private val OPENAI_MODEL = stringPreferencesKey("openai_model")
         private val USE_BUILT_IN_AI_SERVICE = booleanPreferencesKey("use_built_in_ai_service")
+        private val PHANTOM_SAVE_AS_NEW = booleanPreferencesKey("phantom_save_as_new")
     }
 
     /**
@@ -202,7 +204,8 @@ class UserPreferencesRepository(private val context: Context) {
                 openAIApiKey = preferences[OPENAI_API_KEY],
                 openAIBaseUrl = preferences[OPENAI_BASE_URL],
                 openAIModel = preferences[OPENAI_MODEL],
-                useBuiltInAiService = preferences[USE_BUILT_IN_AI_SERVICE] ?: false
+                useBuiltInAiService = preferences[USE_BUILT_IN_AI_SERVICE] ?: false,
+                phantomSaveAsNew = preferences[PHANTOM_SAVE_AS_NEW] ?: false
             )
         }
 
@@ -674,6 +677,15 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveUseBuiltInAiService(use: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[USE_BUILT_IN_AI_SERVICE] = use
+        }
+    }
+
+    /**
+     * 保存幻影模式是否另存新图
+     */
+    suspend fun savePhantomSaveAsNew(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[PHANTOM_SAVE_AS_NEW] = enabled
         }
     }
 }

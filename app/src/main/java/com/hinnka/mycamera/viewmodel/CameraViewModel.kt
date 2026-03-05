@@ -193,6 +193,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val launchCameraOnPhantomMode: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.launchCameraOnPhantomMode }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val phantomSaveAsNew: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.phantomSaveAsNew }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     val mirrorFrontCamera: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.mirrorFrontCamera }
     val widgetTheme = userPreferencesRepository.userPreferences.map { it.widgetTheme }
@@ -813,6 +816,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 保存到用户偏好设置
         viewModelScope.launch {
             userPreferencesRepository.saveLutConfig(lutId)
+        }
+    }
+
+    fun updateLut() {
+        viewModelScope.launch {
+            val newLutId = userPreferencesRepository.userPreferences.map { it.lutId }.firstOrNull() ?: return@launch
+            if (currentLutId.value != newLutId) {
+                setLut(newLutId)
+            }
         }
     }
 
@@ -1910,6 +1922,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setLaunchCameraOnPhantomMode(launch: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.saveLaunchCameraOnPhantomMode(launch)
+        }
+    }
+
+    fun setPhantomSaveAsNew(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.savePhantomSaveAsNew(enabled)
         }
     }
 

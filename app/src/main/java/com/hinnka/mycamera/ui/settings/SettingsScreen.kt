@@ -132,6 +132,7 @@ fun SettingsScreen(
     val openAIModel by viewModel.openAIModel.collectAsState()
     val availableOpenAIModels by viewModel.availableOpenAIModels.collectAsState()
     val isFetchingAIModels by viewModel.isFetchingAIModels.collectAsState()
+    val phantomSaveAsNew by viewModel.phantomSaveAsNew.collectAsState()
 
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -710,6 +711,18 @@ fun SettingsScreen(
                         description = stringResource(R.string.settings_launch_camera_on_phantom_mode_description),
                         checked = launchCameraOnPhantomMode,
                         onCheckedChange = { viewModel.setLaunchCameraOnPhantomMode(it) }
+                    )
+
+                    HorizontalDivider(
+                        color = Color.White.copy(alpha = 0.1f),
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+
+                    SwitchSettingItem(
+                        title = stringResource(R.string.settings_phantom_save_as_new),
+                        description = stringResource(R.string.settings_phantom_save_as_new_description),
+                        checked = phantomSaveAsNew,
+                        onCheckedChange = { viewModel.setPhantomSaveAsNew(it) }
                     )
                 }
             }

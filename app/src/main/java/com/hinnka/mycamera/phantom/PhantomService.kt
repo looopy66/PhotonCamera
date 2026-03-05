@@ -1,11 +1,14 @@
 package com.hinnka.mycamera.phantom
 
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.database.ContentObserver
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
+import android.media.ThumbnailUtils
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
@@ -16,20 +19,36 @@ import android.view.Gravity
 import android.view.WindowManager
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.Divider
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Recomposer
 import androidx.compose.runtime.collectAsState
@@ -51,7 +70,10 @@ import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.platform.compositionContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
@@ -69,7 +91,13 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.Routes
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.data.UserPreferencesRepository
+import com.hinnka.mycamera.gallery.ExifWriter
 import com.hinnka.mycamera.gallery.PhotoManager
+import com.hinnka.mycamera.gallery.PhotoManager.loadMetadata
+import com.hinnka.mycamera.gallery.PhotoManager.saveMetadata
+import com.hinnka.mycamera.livephoto.GoogleLivePhotoCreator
+import com.hinnka.mycamera.livephoto.MotionPhotoWriter
+import com.hinnka.mycamera.livephoto.VivoLivePhotoCreator
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -81,6 +109,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
+import kotlin.io.copyTo
+import kotlin.io.inputStream
 import kotlin.use
 
 class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryOwner {
@@ -92,7 +123,8 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
 
     data class ProcessingInfo(
         val uri: Uri,
-        val path: String,
+        val name: String,
+        val relativePath: String,
         val photoId: String,
         val thumbnail: Bitmap? = null,
         val size: Long
@@ -120,6 +152,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
 
     private var processingInfo: ProcessingInfo? by mutableStateOf(null)
     private var expanded by mutableStateOf(false)
+    private var showFilterPicker by mutableStateOf(false)
 
     private val contentObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean, uri: Uri?) {
@@ -145,14 +178,16 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                     val sizeIndex = cursor.getColumnIndex(MediaStore.MediaColumns.SIZE)
                     val dataIndex = cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
                     val isTrashedIndex = cursor.getColumnIndex(MediaStore.MediaColumns.IS_TRASHED)
-                    val relativePathIndex = cursor.getColumnIndex(MediaStore.MediaColumns.RELATIVE_PATH)
+                    val relativePathIndex =
+                        cursor.getColumnIndex(MediaStore.MediaColumns.RELATIVE_PATH)
 
                     val name = if (nameIndex != -1) cursor.getString(nameIndex) else "Unknown"
                     val isPending = if (pendingIndex != -1) cursor.getInt(pendingIndex) else 0
                     val size = if (sizeIndex != -1) cursor.getLong(sizeIndex) else 0L
                     val data = if (dataIndex != -1) cursor.getString(dataIndex) else ""
                     val isTrashed = if (isTrashedIndex != -1) cursor.getInt(isTrashedIndex) else 0
-                    val relativePath = if (relativePathIndex != -1) cursor.getString(relativePathIndex) else ""
+                    val relativePath =
+                        if (relativePathIndex != -1) cursor.getString(relativePathIndex) else ""
 
                     if (isPending != 0) return
                     if (isTrashed != 0) return
@@ -173,11 +208,18 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                         delay(200L)
                         if (isActive) {
                             // 在延迟后再次检查，此时上一个任务可能已经更新了 processingInfo
-                            if (processingInfo?.path == path && processingInfo?.size == size) {
-                                PLog.d(TAG, "Ignore change for $path as it matches current state (size $size)")
+                            if (
+                                processingInfo?.relativePath == relativePath
+                                && processingInfo?.name == name
+                                && processingInfo?.size == size
+                            ) {
+                                PLog.d(
+                                    TAG,
+                                    "Ignore change for $path as it matches current state (size $size)"
+                                )
                                 return@async
                             }
-                            photoProcessTask(uri, path)
+                            photoProcessTask(uri, name, relativePath)
                             processPhotoTaskMap.remove(path)
                         }
                     }
@@ -215,14 +257,18 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         }
 
         lifecycleScope.launch {
-            userPreferencesRepository.userPreferences.map { it.phantomButtonHidden }.collect { hidden ->
-                if (isWindowShown) {
-                    updateWindowParams(hidden)
-                    composeView?.let { windowManager.updateViewLayout(it, windowParams) }
-                } else if (!ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
-                    showFloatingWindow()
+            userPreferencesRepository.userPreferences.map { it.phantomButtonHidden }
+                .collect { hidden ->
+                    if (isWindowShown) {
+                        updateWindowParams(hidden)
+                        composeView?.let { windowManager.updateViewLayout(it, windowParams) }
+                    } else if (!ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(
+                            Lifecycle.State.STARTED
+                        )
+                    ) {
+                        showFloatingWindow()
+                    }
                 }
-            }
         }
     }
 
@@ -260,26 +306,193 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         }
     }
 
-    private suspend fun photoProcessTask(uri: Uri, path: String) = withContext(Dispatchers.IO) {
-        val userPreferencesRepository = ContentRepository.getInstance(context).userPreferencesRepository
+    private suspend fun photoProcessTask(
+        uri: Uri,
+        name: String,
+        relativePath: String
+    ) = withContext(Dispatchers.IO) {
+        val userPreferencesRepository =
+            ContentRepository.getInstance(context).userPreferencesRepository
         val availableLutList = ContentRepository.getInstance(context).getAvailableLuts()
         val photoProcessor = ContentRepository.getInstance(context).photoProcessor
-        val lutId = userPreferencesRepository.userPreferences.map { it.lutId }.firstOrNull()
-            ?: availableLutList.firstOrNull { it.isDefault }?.id
+        val preferences = userPreferencesRepository.userPreferences.firstOrNull()
+        val lutId = preferences?.lutId ?: availableLutList.firstOrNull { it.isDefault }?.id
+        val saveAsNew = preferences?.phantomSaveAsNew ?: false
         val existingPhotoId = if (processingInfo?.uri == uri) processingInfo?.photoId else null
-        val photoId = PhotoManager.importPhoto(context, uri, lutId, existingPhotoId, uri.toString()) ?: run {
-            return@withContext
-        }
+        val photoId =
+            PhotoManager.importPhoto(context, uri, lutId, existingPhotoId, uri.toString()) ?: run {
+                return@withContext
+            }
         val metadata = PhotoManager.loadMetadata(context, photoId) ?: run {
             return@withContext
         }
         if (!isActive) return@withContext
-        val result = PhotoManager.updateExternalPhoto(context, photoId, uri, path, photoProcessor, metadata)
-        if (result != null) {
-            this@PhantomService.processingInfo = result
-            MyCameraApplication.updateWidgets(context)
-//            PLog.d(TAG, "Processing info updated: $result")
+
+        val tempExportFile = File(context.cacheDir, "temp_export_${System.nanoTime()}.jpg")
+        try {
+            // 读取照片
+            val processedBitmap = photoProcessor.process(
+                context, photoId, metadata,
+                0f, 0f, 0f
+            ) ?: return@withContext
+
+            PLog.d(TAG, "processedBitmap = ${processedBitmap.colorSpace?.name}")
+
+            val videoFile = PhotoManager.getVideoFile(context, photoId)
+            val photoFile = PhotoManager.getPhotoFile(context, photoId)
+
+            FileOutputStream(tempExportFile).use { outputStream ->
+                processedBitmap.compress(Bitmap.CompressFormat.JPEG, 97, outputStream)
+            }
+
+            ExifWriter.writeExif(
+                tempExportFile, metadata.toCaptureInfo().copy(
+                    imageWidth = processedBitmap.width,
+                    imageHeight = processedBitmap.height
+                )
+            )
+
+            var size = 0L
+            var filename = name
+
+            val writeUri = if (saveAsNew) {
+                val lutName =
+                    metadata.lutId?.let { ContentRepository.getInstance(context).lutManager.getLutInfo(it)?.getName() }
+                var withSuffix = ""
+                lutName?.let {
+                    withSuffix += ".$lutName"
+                }
+
+                filename = name.replace(".jpg", "$withSuffix.jpg")
+
+                this@PhantomService.processingInfo = ProcessingInfo(
+                    uri = uri,
+                    photoId = photoId,
+                    name = filename,
+                    relativePath = relativePath,
+                    size = size
+                )
+
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                    put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                }
+                context.contentResolver.insert(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    contentValues
+                ) ?: uri
+            } else {
+                uri
+            }
+
+            if (videoFile.exists()) {
+                val tempMotionPhotoFile = File(context.cacheDir, "temp_motion_${System.nanoTime()}.jpg")
+                try {
+                    PLog.d(
+                        TAG,
+                        "Attempting to create Motion Photo for export: JPEG=${tempExportFile.length()}, Video=${videoFile.length()}"
+                    )
+
+                    val creator = if (Build.MANUFACTURER.lowercase().contains("vivo") && videoFile.exists()) {
+                        // Vivo Live Photo 照片中没有内嵌视频文件，存在视频文件说明非 Vivo Live Photo
+                        // 而是 Google Live Photo，需要特殊处理
+                        GoogleLivePhotoCreator()
+                    } else null
+
+                    // 重新从磁盘加载最新元数据，以获取可能刚写回的 presentationTimestampUs
+                    val latestMetadata = loadMetadata(context, photoId) ?: metadata
+                    val success = MotionPhotoWriter.write(
+                        tempExportFile.absolutePath,
+                        videoFile.absolutePath,
+                        tempMotionPhotoFile.absolutePath,
+                        latestMetadata.presentationTimestampUs ?: 0L,
+                        context,
+                        creator
+                    )
+
+                    size = if (success) tempMotionPhotoFile.length() else tempExportFile.length()
+
+                    this@PhantomService.processingInfo = ProcessingInfo(
+                        uri = writeUri,
+                        photoId = photoId,
+                        name = filename,
+                        relativePath = relativePath,
+                        size = size
+                    )
+
+                    context.contentResolver.openOutputStream(writeUri, "wt")?.use { outputStream ->
+                        if (success) {
+                            tempMotionPhotoFile.inputStream().use { input -> input.copyTo(outputStream) }
+                            PLog.d(
+                                TAG,
+                                "Exported Live Photo successfully: ${tempMotionPhotoFile.length()} bytes"
+                            )
+                        } else {
+                            // Fallback to normal JPEG (with EXIF)
+                            PLog.w(TAG, "Motion Photo synthesis failed, falling back to JPEG")
+                            tempExportFile.inputStream().use { input -> input.copyTo(outputStream) }
+                        }
+                    }
+                } finally {
+                    tempMotionPhotoFile.delete()
+                }
+            } else if (VivoLivePhotoCreator.isVivoPhoto(photoFile.absolutePath)) {
+                // 如果是 Vivo Photo，特殊处理
+                val vivoMetadata = VivoLivePhotoCreator.extractVivoMetadata(photoFile.absolutePath)
+                size = tempExportFile.length() + (vivoMetadata?.size?.toLong() ?: 0L)
+
+                this@PhantomService.processingInfo = ProcessingInfo(
+                    uri = writeUri,
+                    photoId = photoId,
+                    name = filename,
+                    relativePath = relativePath,
+                    size = size
+                )
+                context.contentResolver.openOutputStream(writeUri, "wt")?.use { outputStream ->
+                    tempExportFile.inputStream().use { input -> input.copyTo(outputStream) }
+                    if (vivoMetadata != null) {
+                        outputStream.write(vivoMetadata)
+                    }
+                }
+            } else {
+                size = tempExportFile.length()
+                this@PhantomService.processingInfo = ProcessingInfo(
+                    uri = writeUri,
+                    photoId = photoId,
+                    name = filename,
+                    relativePath = relativePath,
+                    size = size
+                )
+                // 3b. Normal Export: Copy Temp File (with EXIF) to MediaStore
+                context.contentResolver.openOutputStream(writeUri, "wt")?.use { outputStream ->
+                    tempExportFile.inputStream().use { input -> input.copyTo(outputStream) }
+                }
+            }
+
+            // Save exported URI to metadata
+            val currentMetadata = loadMetadata(context, photoId) ?: metadata
+            val updatedMetadata = currentMetadata.copy(
+                exportedUris = currentMetadata.exportedUris + writeUri.toString()
+            )
+            saveMetadata(context, photoId, updatedMetadata)
+            PLog.d(TAG, "Exported URI saved: $writeUri $name for photo $photoId")
+
+            val thumbnail = ThumbnailUtils.extractThumbnail(processedBitmap, 512, 512)
+            this@PhantomService.processingInfo = ProcessingInfo(
+                uri = writeUri,
+                photoId = photoId,
+                name = filename,
+                relativePath = relativePath,
+                thumbnail = thumbnail,
+                size = size
+            )
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to export photo", e)
+        } finally {
+            tempExportFile.delete()
         }
+        MyCameraApplication.updateWidgets(context)
         delay(200L)
     }
 
@@ -307,8 +520,12 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         } else {
             windowParams.width = WindowManager.LayoutParams.WRAP_CONTENT
             windowParams.height = WindowManager.LayoutParams.WRAP_CONTENT
-            windowParams.flags = windowParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+            windowParams.flags =
+                windowParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
             windowParams.alpha = 1f
+        }
+        if (showFilterPicker) {
+            windowParams.height = (context.resources.displayMetrics.heightPixels * 0.6f).toInt()
         }
     }
 
@@ -325,8 +542,8 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
 
                 val scope = rememberCoroutineScope()
                 val processingInfo = this@PhantomService.processingInfo
-                LaunchedEffect(expanded, processingInfo) {
-                    if (expanded) {
+                LaunchedEffect(expanded, processingInfo, showFilterPicker) {
+                    if (expanded && !showFilterPicker) {
                         delay(2000L)
                         expanded = false
                     }
@@ -342,7 +559,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                 }
                             }
                         }
-                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(24.dp))
+                        .background(Color(0xFF1A1C1E).copy(alpha = 0.8f), RoundedCornerShape(24.dp))
                         .padding(4.dp)
                         .pointerInput(Unit) {
                             detectDragGestures(
@@ -365,7 +582,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                     ).apply {
                                         flags = Intent.FLAG_ACTIVITY_NEW_TASK
                                         if (processingInfo?.thumbnail != null) {
-                                            val photoId = processingInfo?.photoId
+                                            val photoId = processingInfo.photoId
                                             putExtra("photoId", photoId)
                                             putExtra("route", Routes.photoDetail(photoId = photoId))
                                         }
@@ -374,50 +591,175 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                         },
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (processingInfo?.thumbnail != null) {
-                        Image(
-                            bitmap = processingInfo!!.thumbnail!!.asImageBitmap(),
-                            contentDescription = stringResource(R.string.app_name),
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                        )
-                    } else {
-                        Image(
-                            painter = painterResource(id = R.mipmap.ic_launcher_round),
-                            contentDescription = stringResource(R.string.app_name),
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                        )
+                    if (!showFilterPicker) {
+                        if (processingInfo?.thumbnail != null) {
+                            Image(
+                                bitmap = processingInfo.thumbnail.asImageBitmap(),
+                                contentDescription = stringResource(R.string.app_name),
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                            )
+                        } else {
+                            Image(
+                                painter = painterResource(id = R.mipmap.ic_launcher_round),
+                                contentDescription = stringResource(R.string.app_name),
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                            )
+                        }
                     }
 
                     if (expanded) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        IconButton(onClick = {
-                            context.startActivity(
-                                Intent(context, MainActivity::class.java).apply {
-                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                    putExtra("route", Routes.FILTER_MANAGEMENT)
-                                })
-                        }) {
-                            Icon(
-                                imageVector = Icons.Default.AutoAwesome,
-                                contentDescription = "LUT",
-                                tint = Color.White
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        IconButton(onClick = {
-                            scope.launch {
-                                userPreferencesRepository.savePhantomMode(false)
+                        if (showFilterPicker) {
+                            val availableLuts by ContentRepository.getInstance(context).availableLuts.collectAsState()
+                            val currentLutIdFlow = remember {
+                                userPreferencesRepository.userPreferences.map { it.lutId }
                             }
-                        }) {
-                            Icon(
-                                imageVector = Icons.Default.Stop,
-                                contentDescription = "Stop",
-                                tint = Color.Red
-                            )
+                            val currentLutId by currentLutIdFlow.collectAsState(initial = null)
+                            val listState = rememberLazyListState()
+
+                            Column(
+                                modifier = Modifier
+                                    .width(220.dp)
+                                    .heightIn(max = 450.dp)
+                                    .padding(8.dp)
+                            ) {
+                                // Header
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.AutoAwesome,
+                                        contentDescription = null,
+                                        tint = Color(0xFFFF6B35),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = stringResource(R.string.filter_management_title),
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.titleMedium.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 15.sp
+                                        ),
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    IconButton(
+                                        onClick = {
+                                            showFilterPicker = false
+                                            updateWindowParams(false)
+                                            composeView?.let { windowManager.updateViewLayout(it, windowParams) }
+                                        },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "Close",
+                                            tint = Color.White.copy(alpha = 0.5f),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(bottom = 8.dp),
+                                    color = Color.White.copy(alpha = 0.1f)
+                                )
+
+                                LazyColumn(
+                                    state = listState,
+                                    modifier = Modifier
+                                        .weight(1f, fill = false)
+                                        .fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    items(availableLuts) { lut ->
+                                        val isSelected = lut.id == currentLutId
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(
+                                                    if (isSelected) Color(0xFFFF6B35).copy(alpha = 0.15f)
+                                                    else Color.White.copy(alpha = 0.05f)
+                                                )
+                                                .border(
+                                                    width = 1.dp,
+                                                    color = if (isSelected) Color(0xFFFF6B35).copy(alpha = 0.5f)
+                                                    else Color.Transparent,
+                                                    shape = RoundedCornerShape(12.dp)
+                                                )
+                                                .clickable {
+                                                    scope.launch {
+                                                        userPreferencesRepository.saveLutConfig(lut.id)
+                                                        showFilterPicker = false
+                                                        updateWindowParams(false)
+                                                        composeView?.let {
+                                                            windowManager.updateViewLayout(
+                                                                it,
+                                                                windowParams
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = lut.getName(),
+                                                color = if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.9f),
+                                                style = MaterialTheme.typography.bodyMedium.copy(
+                                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                    fontSize = 14.sp
+                                                ),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            if (isSelected) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = null,
+                                                    tint = Color(0xFFFF6B35),
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            IconButton(onClick = {
+                                showFilterPicker = true
+                                updateWindowParams(false)
+                                composeView?.let {
+                                    windowManager.updateViewLayout(it, windowParams)
+                                }
+                            }) {
+                                Icon(
+                                    imageVector = Icons.Default.AutoAwesome,
+                                    contentDescription = "LUT",
+                                    tint = Color.White
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            IconButton(onClick = {
+                                scope.launch {
+                                    userPreferencesRepository.savePhantomMode(false)
+                                }
+                            }) {
+                                Icon(
+                                    imageVector = Icons.Default.Stop,
+                                    contentDescription = "Stop",
+                                    tint = Color.Red
+                                )
+                            }
                         }
                     }
                 }
@@ -440,7 +782,8 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         if (isWindowShown) return
 
         lifecycleScope.launch {
-            val hidden = userPreferencesRepository.userPreferences.map { it.phantomButtonHidden }.firstOrNull() ?: false
+            val hidden = userPreferencesRepository.userPreferences.map { it.phantomButtonHidden }
+                .firstOrNull() ?: false
             updateWindowParams(hidden)
 
             // 关键：将状态标记与实际 addView 放在同一个调度周期或确保同步
@@ -471,6 +814,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             }
             isWindowShown = false
             expanded = false
+            showFilterPicker = false
         }
     }
 
