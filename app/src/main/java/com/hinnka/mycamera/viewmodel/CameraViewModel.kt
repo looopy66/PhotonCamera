@@ -862,6 +862,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setUseBuiltInAiService(use: Boolean) {
+        if (use && !isPurchased.value) {
+            showPaymentDialog = true
+            return
+        }
         viewModelScope.launch {
             userPreferencesRepository.saveUseBuiltInAiService(use)
         }

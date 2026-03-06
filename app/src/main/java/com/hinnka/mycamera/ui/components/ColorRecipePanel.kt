@@ -45,6 +45,7 @@ import com.hinnka.mycamera.model.RecipeParam
 fun ColorRecipePanel(
     currentParams: ColorRecipeParams,
     onParamChange: (RecipeParam, Float) -> Unit,
+    onRemarksChange: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var selectedTabIndex by remember { mutableIntStateOf(0) }
@@ -54,6 +55,7 @@ fun ColorRecipePanel(
         R.string.recipe_tab_color,
         R.string.recipe_tab_texture,
         R.string.recipe_tab_lens,
+        R.string.recipe_tab_remarks,
     )
     val parameterGroups = listOf(
         listOf(
@@ -113,7 +115,7 @@ fun ColorRecipePanel(
                     ) {
                         Text(
                             text = stringResource(title),
-                            fontSize = 12.sp,
+                            fontSize = 11.sp,
                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                             color = if (isSelected) Color.White else Color.White.copy(alpha = 0.6f)
                         )
@@ -124,8 +126,8 @@ fun ColorRecipePanel(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // 当前选中的参数组
-        Column(
+        // 当前选中的内容
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(
@@ -133,21 +135,35 @@ fun ColorRecipePanel(
                     RoundedCornerShape(8.dp)
                 )
                 .padding(8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+            contentAlignment = Alignment.TopCenter
         ) {
-            parameterGroups[selectedTabIndex].forEach { param ->
-                key(param) {
-                    ColorRecipeSlider(
-                        param = param,
-                        value = param.getValue(currentParams),
-                        onValueChange = { newValue ->
-                            onParamChange(param, newValue)
-                        },
-                        onDoubleTap = {
-                            onParamChange(param, param.defaultValue)
+            if (selectedTabIndex < parameterGroups.size) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    parameterGroups[selectedTabIndex].forEach { param ->
+                        key(param) {
+                            ColorRecipeSlider(
+                                param = param,
+                                value = param.getValue(currentParams),
+                                onValueChange = { newValue ->
+                                    onParamChange(param, newValue)
+                                },
+                                onDoubleTap = {
+                                    onParamChange(param, param.defaultValue)
+                                }
+                            )
                         }
-                    )
+                    }
                 }
+            } else {
+                // 备注 Tab
+                ColorRecipeRemarksBar(
+                    remarks = currentParams.remarks,
+                    onRemarksChange = onRemarksChange,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
     }
@@ -162,105 +178,36 @@ fun ColorRecipeRemarksBar(
     onRemarksChange: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var isEditing by remember { mutableStateOf(false) }
     var text by remember(remarks) { mutableStateOf(remarks) }
-    val focusRequester = remember { FocusRequester() }
-    val focusManager = LocalFocusManager.current
 
-    LaunchedEffect(isEditing) {
-        if (isEditing) {
-            focusRequester.requestFocus()
-        }
-    }
-
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(Color.White.copy(alpha = 0.05f)) // 极简半透明白
-            .border(
-                width = 0.5.dp,
-                color = if (isEditing) Color(0xFFFFD700).copy(alpha = 0.5f) else Color.White.copy(alpha = 0.1f),
-                shape = RoundedCornerShape(12.dp)
-            )
-            .clickable(enabled = !isEditing) { isEditing = true }
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // 左侧提示图标
-        Icon(
-            imageVector = Icons.Default.Edit,
-            contentDescription = null,
-            tint = Color.White.copy(alpha = 0.3f),
-            modifier = Modifier.size(14.dp)
-        )
-
-        Spacer(modifier = Modifier.width(10.dp))
-
-        Box(modifier = Modifier.weight(1f)) {
-            if (isEditing) {
-                BasicTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(focusRequester),
-                    textStyle = TextStyle(
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium
-                    ),
-                    cursorBrush = SolidColor(Color.White),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(
-                        onDone = {
-                            onRemarksChange(text)
-                            isEditing = false
-                            focusManager.clearFocus()
-                        }
-                    ),
-                    decorationBox = { innerTextField ->
-                        if (text.isEmpty()) {
-                            Text(
-                                text = stringResource(R.string.recipe_placeholder_remarks),
-                                color = Color.White.copy(alpha = 0.25f),
-                                fontSize = 13.sp
-                            )
-                        }
-                        innerTextField()
-                    }
-                )
-            } else {
+    BasicTextField(
+        value = text,
+        onValueChange = {
+            text = it
+            onRemarksChange(it) // 实时保存
+        },
+        modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 300.dp),
+        textStyle = TextStyle(
+            color = Color.White,
+            fontSize = 11.sp,
+            lineHeight = 15.sp,
+        ),
+        cursorBrush = SolidColor(Color.White),
+        keyboardOptions = KeyboardOptions(
+            imeAction = ImeAction.Default // 允许换行
+        ),
+        decorationBox = { innerTextField ->
+            if (text.isEmpty()) {
                 Text(
-                    text = if (remarks.isEmpty()) stringResource(R.string.recipe_placeholder_remarks) else remarks,
-                    color = if (remarks.isEmpty()) Color.White.copy(alpha = 0.3f) else Color.White,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    text = stringResource(R.string.recipe_placeholder_remarks),
+                    color = Color.White.copy(alpha = 0.25f),
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
                 )
             }
+            innerTextField()
         }
-
-        // 状态切换按钮
-        IconButton(
-            onClick = {
-                if (isEditing) {
-                    onRemarksChange(text)
-                    focusManager.clearFocus()
-                }
-                isEditing = !isEditing
-            },
-            modifier = Modifier.size(20.dp)
-        ) {
-            Icon(
-                imageVector = if (isEditing) Icons.Default.Check else Icons.Default.Edit,
-                contentDescription = null,
-                tint = if (isEditing) Color(0xFFFFD700) else Color.White.copy(alpha = 0.5f),
-                modifier = Modifier.size(16.dp)
-            )
-        }
-    }
+    )
 }
 
 /**

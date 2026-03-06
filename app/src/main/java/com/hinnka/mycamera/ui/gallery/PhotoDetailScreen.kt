@@ -340,7 +340,7 @@ fun PhotoDetailScreen(
                     }
 
                     // 导出
-                    if (viewModel.selectedTab == GalleryTab.PHOTON || currentPhoto?.metadata?.sourceUri != null) {
+                    if (viewModel.selectedTab == GalleryTab.PHOTON || currentPhoto?.relatedPhoto != null) {
                         IconButton(
                             onClick = { currentPhoto?.let { showExportDialog = true } },
                             modifier = Modifier
@@ -700,8 +700,8 @@ private fun ZoomableImage(
         contentAlignment = Alignment.Center
     ) {
         // 使用 hashCode() 代替 toJson() 序列化，避免 composition 时做 JSON 序列化
-        val metadataHash = remember(photo.metadata) {
-            photo.metadata?.hashCode() ?: 0
+        val metadataHash = remember(photo.metadata, photo.relatedPhoto?.metadata) {
+            photo.metadata?.hashCode() ?: photo.relatedPhoto?.metadata?.hashCode() ?: 0
         }
 
         var bitmap by remember { mutableStateOf<Bitmap?>(null) }

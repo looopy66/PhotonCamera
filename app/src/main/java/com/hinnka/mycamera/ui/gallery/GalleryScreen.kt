@@ -623,7 +623,7 @@ private fun PhotoGridItem(
         }
 
         // 关联标记 (System Tab 专用，表示该照片在 App 内有对应版本)
-        if (viewModel.selectedTab == GalleryTab.SYSTEM && photo.metadata != null) {
+        if (viewModel.selectedTab == GalleryTab.SYSTEM && photo.relatedPhoto != null) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)

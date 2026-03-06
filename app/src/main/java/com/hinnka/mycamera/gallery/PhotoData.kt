@@ -16,7 +16,8 @@ data class PhotoData(
     val height: Int = 0,
     var isMotionPhoto: Boolean = false,
     var isBurstPhoto: Boolean = false,
-    var metadata: PhotoMetadata? = null
+    var metadata: PhotoMetadata? = null,
+    var relatedPhoto: PhotoData? = null
 ) {
     /**
      * 格式化的拍摄时间

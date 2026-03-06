@@ -342,27 +342,6 @@ private fun LutItem(
                     )
                 }
             }
-
-            // 自定义标识
-            if (isCustom) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .background(
-                            color = Color(0xFF4CAF50),  // 绿色表示自定义
-                            shape = RoundedCornerShape(bottomEnd = 4.dp)
-                        )
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                ) {
-                    Text(
-                        text = stringResource(R.string.custom_tag),
-                        color = Color.White,
-                        fontSize = 8.sp,
-                        fontWeight = FontWeight.Bold,
-                        lineHeight = 8.sp
-                    )
-                }
-            }
         }
 
         Spacer(modifier = Modifier.height(4.dp))

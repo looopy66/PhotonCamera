@@ -384,4 +384,8 @@
     <string name="settings_ai_model_select">Select a model…</string>
     <string name="settings_ai_model_fetching">Fetching…</string>
     <string name="settings_ai_model_empty">No models found</string>
+    <string name="general">General</string>
+    <string name="imaging">Imaging</string>
+    <string name="phantom">Phantom</string>
+    <string name="about">About</string>
 </resources>

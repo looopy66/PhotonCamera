@@ -2,6 +2,10 @@ package com.hinnka.mycamera.ui.settings
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Environment
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -37,6 +41,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FilterNone
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -48,11 +53,12 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -76,6 +82,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.net.toUri
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
@@ -83,6 +92,7 @@ import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.LogCurve
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.components.LogViewerDialog
+import com.hinnka.mycamera.ui.components.PaymentDialog
 import com.hinnka.mycamera.ui.components.SliderSettingItem
 import com.hinnka.mycamera.ui.components.rememberBackgroundPainter
 import com.hinnka.mycamera.utils.DeviceUtil
@@ -162,14 +172,138 @@ fun SettingsScreen(
     var softwareProcessingExpanded by remember { mutableStateOf(false) }
     var calibrationExpanded by remember { mutableStateOf(false) }
     var availableRawLutMap by remember { mutableStateOf(listOf<Pair<String, String>>()) }
+    var showGhostPermissionDialog by remember { mutableStateOf(false) }
+    var isGhostPermissionFlowActive by remember { mutableStateOf(false) }
 
     val noneStr = stringResource(R.string.none)
+
+    val ghostLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult(),
+        onResult = { _ ->
+            // Results are handled via the ON_RESUME lifecycle effect to avoid self-reference issues
+        }
+    )
 
     LaunchedEffect(logCurve) {
         availableRawLutMap = listOf("none" to noneStr) + viewModel.getAvailableRawLutList(context, logCurve)
             .map {
                 it to it.substringBeforeLast(".")
             }
+    }
+
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        if (isGhostPermissionFlowActive) {
+            val hasOverlay = Settings.canDrawOverlays(context)
+            val hasFiles = Environment.isExternalStorageManager()
+
+            if (hasOverlay && !hasFiles) {
+                // Overlay granted, now request files
+                ghostLauncher.launch(
+                    Intent(
+                        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                        ("package:${context.packageName}").toUri()
+                    )
+                )
+            } else if (hasOverlay) {
+                // All permissions granted
+                isGhostPermissionFlowActive = false
+                if (!phantomMode) {
+                    viewModel.togglePhantomMode()
+                }
+            } else {
+                // If overlay is still missing after returning, user might have cancelled
+                // We stop the automatic flow to avoid getting stuck
+                isGhostPermissionFlowActive = false
+            }
+        }
+    }
+
+    LaunchedEffect(viewModel.showGhostPermissions) {
+        if (viewModel.showGhostPermissions) {
+            showGhostPermissionDialog = true
+            viewModel.showGhostPermissions = false
+        }
+    }
+
+    if (viewModel.showPaymentDialog) {
+        val activity = context.findActivity()
+        PaymentDialog(
+            onDismiss = { viewModel.showPaymentDialog = false },
+            onPurchase = {
+                if (activity != null) {
+                    viewModel.purchase(activity)
+                }
+                viewModel.showPaymentDialog = false
+            }
+        )
+    }
+
+    if (showGhostPermissionDialog) {
+        AlertDialog(
+            onDismissRequest = { showGhostPermissionDialog = false },
+            title = {
+                Text(
+                    text = stringResource(R.string.ghost_mode_dialog_title),
+                    style = MaterialTheme.typography.titleLarge
+                )
+            },
+            text = {
+                Column {
+                    Text(
+                        text = stringResource(R.string.ghost_mode_dialog_description),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = stringResource(R.string.ghost_mode_permissions_required),
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(R.string.ghost_mode_overlay_permission),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = stringResource(R.string.ghost_mode_file_permission),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showGhostPermissionDialog = false
+                        isGhostPermissionFlowActive = true
+                        if (!Settings.canDrawOverlays(context)) {
+                            ghostLauncher.launch(
+                                Intent(
+                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    ("package:${context.packageName}").toUri()
+                                )
+                            )
+                        } else if (!Environment.isExternalStorageManager()) {
+                            ghostLauncher.launch(
+                                Intent(
+                                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                    ("package:${context.packageName}").toUri()
+                                )
+                            )
+                        } else {
+                            isGhostPermissionFlowActive = false
+                            viewModel.togglePhantomMode()
+                        }
+                    }
+                ) {
+                    Text(stringResource(R.string.ghost_mode_dialog_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showGhostPermissionDialog = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
     }
 
     val backgroundPainter = rememberBackgroundPainter(viewModel)
@@ -206,15 +340,20 @@ fun SettingsScreen(
             )
         )
 
+        val general = stringResource(R.string.general)
+        val imaging = stringResource(R.string.imaging)
+        val phantom = stringResource(R.string.phantom)
+        val about = stringResource(R.string.about)
+
         // Tab 选择器
         val tabs = remember {
             mutableStateListOf<Pair<SettingsTab, String>>().apply {
-                add(SettingsTab.GENERAL to "常用")
-                add(SettingsTab.IMAGING to "影像")
+                add(SettingsTab.GENERAL to general)
+                add(SettingsTab.IMAGING to imaging)
                 if (DeviceUtil.isChinaFlavor) {
-                    add(SettingsTab.PHANTOM to "幻影")
+                    add(SettingsTab.PHANTOM to phantom)
                 }
-                add(SettingsTab.ABOUT to "关于")
+                add(SettingsTab.ABOUT to about)
             }
         }
         val selectedTabIndex = tabs.indexOfFirst { it.first == selectedTab }.coerceAtLeast(0)
@@ -723,7 +862,13 @@ fun SettingsScreen(
                                 title = stringResource(R.string.ghost_mode),
                                 description = stringResource(R.string.ghost_mode_dialog_description),
                                 checked = phantomMode,
-                                onCheckedChange = { viewModel.togglePhantomMode() }
+                                onCheckedChange = {
+                                    if (it && (!Settings.canDrawOverlays(context) || !Environment.isExternalStorageManager())) {
+                                        showGhostPermissionDialog = true
+                                    } else {
+                                        viewModel.togglePhantomMode()
+                                    }
+                                }
                             )
 
                             HorizontalDivider(
@@ -1528,7 +1673,8 @@ fun <T> QualityLevelSetting(
             levels.forEach { (level, label) ->
                 val isSelected = currentLevel == level
                 Box(
-                    modifier = Modifier.height(36.dp)
+                    modifier = Modifier
+                        .height(36.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(
                             if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.1f)
@@ -1542,7 +1688,9 @@ fun <T> QualityLevelSetting(
                         fontSize = 12.sp,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                         textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 4.dp).widthIn(min = 44.dp)
+                        modifier = Modifier
+                            .padding(horizontal = 4.dp)
+                            .widthIn(min = 44.dp)
                     )
                 }
             }

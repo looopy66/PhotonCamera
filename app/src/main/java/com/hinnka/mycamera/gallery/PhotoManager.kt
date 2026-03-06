@@ -1309,7 +1309,6 @@ object PhotoManager {
         uri: Uri,
         lutId: String?,
         photoId: String? = null,
-        sourceUri: String? = null
     ): String? {
         return withContext(Dispatchers.IO) {
             try {
@@ -1320,12 +1319,20 @@ object PhotoManager {
                 val metadataFile = File(photoDir, METADATA_FILE)
                 val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
 
+                if (photoFile.exists()) {
+                    val bakPhotoFile = File(photoDir, "original.${photoFile.lastModified()}.jpg")
+                    photoFile.renameTo(bakPhotoFile)
+                }
+
+                if (dngFile.exists()) {
+                    val bakPhotoFile = File(photoDir, "original.${photoFile.lastModified()}.dng")
+                    dngFile.renameTo(bakPhotoFile)
+                }
 
                 // 2. 读取元数据以获取旋转信息
                 val metadata = PhotoMetadata.fromUri(context, uri).copy(
                     lutId = lutId,
-                    sourceUri = sourceUri ?: metadataFile.takeIf { it.exists() }
-                        ?.let { PhotoMetadata.fromJson(it.readText())?.sourceUri }
+                    sourceUri = uri.toString()
                 )
 
                 // 1. 检测是否为 RAW 文件

@@ -164,6 +164,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                 OpenableColumns.DISPLAY_NAME,
                 MediaStore.MediaColumns.DATA,
                 MediaStore.MediaColumns.SIZE,
+                MediaStore.MediaColumns.DATE_TAKEN,
                 MediaStore.MediaColumns.IS_PENDING,
                 MediaStore.MediaColumns.IS_TRASHED,
                 MediaStore.MediaColumns.RELATIVE_PATH,
@@ -176,6 +177,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                     val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                     val pendingIndex = cursor.getColumnIndex(MediaStore.Images.Media.IS_PENDING)
                     val sizeIndex = cursor.getColumnIndex(MediaStore.MediaColumns.SIZE)
+                    val dateTakenIndex = cursor.getColumnIndex(MediaStore.MediaColumns.DATE_TAKEN)
                     val dataIndex = cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
                     val isTrashedIndex = cursor.getColumnIndex(MediaStore.MediaColumns.IS_TRASHED)
                     val relativePathIndex =
@@ -184,6 +186,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                     val name = if (nameIndex != -1) cursor.getString(nameIndex) else "Unknown"
                     val isPending = if (pendingIndex != -1) cursor.getInt(pendingIndex) else 0
                     val size = if (sizeIndex != -1) cursor.getLong(sizeIndex) else 0L
+                    val dateTaken = if (dateTakenIndex != -1) cursor.getLong(dateTakenIndex) else 0L
                     val data = if (dataIndex != -1) cursor.getString(dataIndex) else ""
                     val isTrashed = if (isTrashedIndex != -1) cursor.getInt(isTrashedIndex) else 0
                     val relativePath =
@@ -192,6 +195,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                     if (isPending != 0) return
                     if (isTrashed != 0) return
                     if (size <= MIN_IMPORT_SIZE) return
+                    if (dateTaken < System.currentTimeMillis() - 300 * 1000L) return
                     if (!relativePath.contains(
                             "DCIM/Camera",
                             ignoreCase = true
@@ -320,7 +324,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         val saveAsNew = preferences?.phantomSaveAsNew ?: false
         val existingPhotoId = if (processingInfo?.uri == uri) processingInfo?.photoId else null
         val photoId =
-            PhotoManager.importPhoto(context, uri, lutId, existingPhotoId, uri.toString()) ?: run {
+            PhotoManager.importPhoto(context, uri, lutId, existingPhotoId) ?: run {
                 return@withContext
             }
         val metadata = PhotoManager.loadMetadata(context, photoId) ?: run {
