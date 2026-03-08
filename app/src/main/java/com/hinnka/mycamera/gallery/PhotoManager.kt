@@ -117,7 +117,8 @@ object PhotoManager {
                 val processedBitmap = bitmap?.let {
                     photoProcessor.processBitmap(
                         context, id, bitmap, metadata,
-                        sharpeningValue, noiseReductionValue, chromaNoiseReductionValue
+                        sharpeningValue, noiseReductionValue, chromaNoiseReductionValue,
+                        true
                     )
                 } ?: photoProcessor.process(
                     context, id, metadata,
@@ -388,6 +389,23 @@ object PhotoManager {
         }
     }
 
+    suspend fun generateBokehPhoto(context: Context, photoId: String, metadata: PhotoMetadata, bitmap: Bitmap) {
+        val aperture = metadata.computationalAperture
+        val focusPointX = metadata.focusPointX
+        val focusPointY = metadata.focusPointX
+        val bokeh = aperture?.let {
+            ContentRepository.getInstance(context).depthBokehProcessor.applyHighQualityBokeh(
+                context,
+                photoId,
+                bitmap,
+                focusPointX,
+                focusPointY,
+                it
+            )
+        }
+        bokeh?.let { bokeh -> saveBokehPhoto(context, photoId, bokeh) }
+    }
+
     suspend fun saveYuvPhoto(
         context: Context,
         photoId: String,
@@ -434,6 +452,7 @@ object PhotoManager {
                     previewBitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
                 }
                 tempFile.renameTo(photoFile)
+                generateBokehPhoto(context, photoId, metadata, previewBitmap)
                 if (shouldAutoSave) {
                     exportPhoto(
                         context,

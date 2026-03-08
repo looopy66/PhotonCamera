@@ -69,7 +69,8 @@ class PhotoProcessor(
                 metadata,
                 sharpening,
                 noiseReduction,
-                chromaNoiseReduction
+                chromaNoiseReduction,
+                true
             )
         }
         return null
@@ -184,7 +185,6 @@ class PhotoProcessor(
         metadata.computationalAperture?.let { aperture ->
             result = depthBokehProcessor.applyHighQualityBokeh(context, photoId, result,
                 metadata.focusPointX, metadata.focusPointY, aperture)
-            photoId?.let { photoId -> PhotoManager.saveBokehPhoto(context, photoId, result) }
         }
 
         result = applyFrame(result, metadata)
@@ -221,6 +221,14 @@ class PhotoProcessor(
         val lutConfig = metadata.lutId?.let { lutManager.loadLut(it) }
         val colorRecipeParams = metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
 
+        if (useComputationalAperture) {
+            metadata.computationalAperture?.let { aperture ->
+                result = depthBokehProcessor.applyHighQualityBokeh(context, photoId, result,
+                    metadata.focusPointX, metadata.focusPointY, aperture)
+                photoId?.let { photoId -> PhotoManager.saveBokehPhoto(context, photoId, result) }
+            }
+        }
+
         // 1. 应用 LUT
         result = lutImageProcessor.applyLut(
             result,
@@ -230,14 +238,6 @@ class PhotoProcessor(
             finalNoiseReduction,
             finalChromaNoiseReduction
         )
-
-        if (useComputationalAperture) {
-            metadata.computationalAperture?.let { aperture ->
-                result = depthBokehProcessor.applyHighQualityBokeh(context, photoId, result,
-                    metadata.focusPointX, metadata.focusPointY, aperture)
-                photoId?.let { photoId -> PhotoManager.saveBokehPhoto(context, photoId, result) }
-            }
-        }
 
         result = applyFrame(result, metadata)
 

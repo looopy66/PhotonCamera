@@ -274,6 +274,9 @@ class LutRenderer : GLSurfaceView.Renderer {
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         PLog.d(TAG, "onSurfaceCreated")
 
+        // Context lost or new, reset all resource IDs and cached state
+        resetGlResourceState()
+
         // 设置清屏颜色
         GLES30.glClearColor(0f, 0f, 0f, 1f)
 
@@ -311,8 +314,8 @@ class LutRenderer : GLSurfaceView.Renderer {
         // 标记 Surface 已创建
         surfaceReady = true
 
-        // 如果有待处理的 LUT 配置，现在处理它
-        pendingLutConfig?.let { config ->
+        // 如果有 LUT 配置，现在设置它（恢复由于 Context 丢失失效的纹理）
+        (pendingLutConfig ?: currentLutConfig)?.let { config ->
             pendingLutConfig = null
             setLutInternal(config)
         }
@@ -321,6 +324,51 @@ class LutRenderer : GLSurfaceView.Renderer {
         surfaceTexture?.let { onSurfaceTextureAvailable?.invoke(it) }
 
         GlUtils.checkGlError("onSurfaceCreated")
+    }
+
+    /**
+     * 重置所有 GL 资源 ID 和缓存状态。
+     * 当 GL Context 被重新创建时（例如 App 切回前台），旧的资源 ID 已失效。
+     * 重置状态可确保在后续渲染中按需重新创建有效资源。
+     */
+    private fun resetGlResourceState() {
+        programId = 0
+        cameraTextureId = 0
+        lutTextureId = 0
+        vertexBufferId = 0
+        texCoordBufferId = 0
+        indexBufferId = 0
+        pboId = 0
+        meteringPboId = 0
+        meteringFboId = 0
+        meteringTextureId = 0
+        captureFboId = 0
+        captureTextureId = 0
+        passthroughProgramId = 0
+        depthInputFboId = 0
+        depthInputTextureId = 0
+        depthInputPboId = 0
+        fboId = 0
+        fboTextureId = 0
+        copyProgramId = 0
+        hdfExtractBlurHProgram = 0
+        hdfBlurVProgram = 0
+        hdfCompositeProgram = 0
+        hdfTexId = IntArray(2)
+        hdfFboId = IntArray(2)
+        hdfWidth = 0
+        hdfHeight = 0
+        bokehProgramId = 0
+        depthTextureId = 0
+        lastDepthMap = null
+        bokehFboId = 0
+        bokehTextureId = 0
+        bokehFboWidth = 0
+        bokehFboHeight = 0
+        lastCaptureWidth = 0
+        lastCaptureHeight = 0
+        viewportWidth = 0
+        viewportHeight = 0
     }
 
     /**
@@ -335,7 +383,6 @@ class LutRenderer : GLSurfaceView.Renderer {
         GLES30.glViewport(0, 0, width, height)
 
         initFbo(width, height)
-        initBokehFbo(width, height)
         initMeteringFbo()
         initDepthInputFbo()
 
@@ -391,6 +438,8 @@ class LutRenderer : GLSurfaceView.Renderer {
      * 绘制帧
      */
     override fun onDrawFrame(gl: GL10?) {
+        if (viewportWidth <= 0 || viewportHeight <= 0) return
+
         // 更新 SurfaceTexture
         synchronized(frameSyncObject) {
             if (frameAvailable) {
@@ -1687,6 +1736,9 @@ class LutRenderer : GLSurfaceView.Renderer {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, bokehFboId)
         GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, bokehTextureId, 0)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+
+        bokehFboWidth = width
+        bokehFboHeight = height
     }
 
     private fun updateDepthTexture() {
