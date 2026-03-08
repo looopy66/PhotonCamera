@@ -100,6 +100,15 @@
       },
       "path": "ricoh_yellow.plut",
       "isVip": true
+    },
+    {
+      "id": "fl3",
+      "name": {
+        "en": "FL3",
+        "zh": "FL3"
+      },
+      "path": "fl3.plut",
+      "isVip": true
     }
   ]
 }

@@ -595,12 +595,13 @@ fun PhotoEditScreen(
                         } else if (editTab == 1) {
                             Spacer(modifier = Modifier.height(16.dp))
                             // 细节处理调整 (锐化, 降噪, 杂色降噪)
+                            val aperture = editComputationalAperture
                             SliderSettingItem(
                                 title = stringResource(R.string.virtual_aperture),
                                 value = editComputationalAperture ?: 2.8f,
                                 valueRange = 1.0f..16.0f,
                                 onValueChange = { viewModel.setComputationalAperture(it) },
-                                toggleValue = editComputationalAperture != null,
+                                toggleValue = aperture != null && aperture > 0f,
                                 onToggleChange = { checked ->
                                     if (checked) {
                                         viewModel.setComputationalAperture(2.8f)

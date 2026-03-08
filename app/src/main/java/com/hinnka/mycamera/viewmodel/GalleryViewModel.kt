@@ -78,6 +78,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val photoQuality: Flow<Int> = userPreferencesRepository.userPreferences.map { it.photoQuality }
 
     val defaultLutId: Flow<String?> = userPreferencesRepository.userPreferences.map { it.lutId }
+    val defaultVirtualAperture: StateFlow<Float> = userPreferencesRepository.userPreferences.map { it.defaultVirtualAperture }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
 
     // 计费管理器
     private val billingManager = com.hinnka.mycamera.billing.BillingManagerImpl(application)
@@ -251,7 +253,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             val focusPointX = editFocusPointX.value
             val focusPointY = editFocusPointY.value
             val photoData = getCurrentPhoto() ?: return@launch
-            val bitmap = PhotoManager.loadOriginalBitmap(context, photoData.id) ?: return@launch
+            val bitmap = PhotoManager.loadOriginalBitmap(context, photoData.id)
+                ?: PhotoManager.loadBitmap(context, photoData.uri) ?: return@launch
             if (!isActive) return@launch
             val bokeh = aperture?.let {
                 contentRepository.depthBokehProcessor.applyHighQualityBokeh(
@@ -1164,7 +1167,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editSharpening.value = sharpening.value
             editNoiseReduction.value = noiseReduction.value
             editChromaNoiseReduction.value = chromaNoiseReduction.value
-
             editComputationalAperture.value = null
             editFocusPointX.value = null
             editFocusPointY.value = null
@@ -1374,7 +1376,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val currentBitmap = bitmap ?: if (selectedTab == GalleryTab.PHOTON) {
                     PhotoManager.loadBitmap(context, photo.id, 4096)
                 } else {
-                    PhotoManager.loadBitmap(context, photo.uri, 4096)
+                    PhotoManager.loadBitmap(context, photo.id, 4096)
+                        ?: PhotoManager.loadBitmap(context, photo.uri, 4096)
                 } ?: return@withContext null
 
                 previewBitmapCache.put(previewCacheKey(photo, finalMetadata, true), currentBitmap)
@@ -1608,8 +1611,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 withContext(Dispatchers.IO) {
                     val lutId = defaultLutId.firstOrNull() ?: contentRepository.getAvailableLuts()
                         .firstOrNull { it.isDefault }?.id
+                    val computationalAperture = defaultVirtualAperture.firstOrNull()?.let { if (it > 0f) it else null }
                     uris.forEach { uri ->
-                        val photoId = PhotoManager.importPhoto(context, uri, lutId)
+                        val photoId = PhotoManager.importPhoto(context, uri, lutId, computationalAperture)
                         if (photoId != null) {
                             successCount++
                         }

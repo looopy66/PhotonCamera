@@ -330,9 +330,10 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         val preferences = userPreferencesRepository.userPreferences.firstOrNull()
         val lutId = preferences?.lutId ?: availableLutList.firstOrNull { it.isDefault }?.id
         val saveAsNew = preferences?.phantomSaveAsNew ?: false
+        val computationalAperture = preferences?.defaultVirtualAperture?.let { if (it > 0f) it else null }
         val existingPhotoId = if (processingInfo?.uri == uri) processingInfo?.photoId else null
         val photoId =
-            PhotoManager.importPhoto(context, uri, lutId, existingPhotoId) ?: run {
+            PhotoManager.importPhoto(context, uri, lutId, computationalAperture, existingPhotoId) ?: run {
                 return@withContext
             }
         val metadata = PhotoManager.loadMetadata(context, photoId) ?: run {

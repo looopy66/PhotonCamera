@@ -447,6 +447,7 @@ private fun getScaleValues(parameter: CameraParameter, minValue: Float, maxValue
             listOf(
                 minValue,
                 1f,
+                1.2f,
                 1.4f,
                 1.8f,
                 2f,

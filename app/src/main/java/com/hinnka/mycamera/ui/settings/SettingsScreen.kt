@@ -153,6 +153,7 @@ fun SettingsScreen(
     val availableOpenAIModels by viewModel.availableOpenAIModels.collectAsState()
     val isFetchingAIModels by viewModel.isFetchingAIModels.collectAsState()
     val phantomSaveAsNew by viewModel.phantomSaveAsNew.collectAsState()
+    val defaultVirtualAperture by viewModel.defaultVirtualAperture.collectAsState(initial = 0f)
 
     var selectedTab by remember { mutableStateOf(SettingsTab.GENERAL) }
 
@@ -543,6 +544,21 @@ fun SettingsScreen(
                             viewModel = viewModel,
                             currentFocalLength = defaultFocalLength,
                             onFocalLengthSelected = { viewModel.setDefaultFocalLength(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        QualityLevelSetting(
+                            title = stringResource(R.string.settings_default_virtual_aperture),
+                            description = stringResource(R.string.settings_default_virtual_aperture_description),
+                            levels = listOf(0f to stringResource(R.string.settings_nr_level_off)) + listOf(
+                                1.0f, 1.2f, 1.4f, 1.8f, 2.0f, 2.8f, 4.0f, 5.6f, 8.0f, 11f, 16f
+                            ).map { it to "f/${if (it % 1f == 0f) it.toInt() else it}" },
+                            currentLevel = defaultVirtualAperture,
+                            onLevelSelected = { viewModel.setDefaultVirtualAperture(it) }
                         )
                     }
                 }

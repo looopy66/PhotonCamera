@@ -196,6 +196,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val phantomSaveAsNew: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.phantomSaveAsNew }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val defaultVirtualAperture: Flow<Float> =
+        userPreferencesRepository.userPreferences.map { it.defaultVirtualAperture }
 
     val mirrorFrontCamera: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.mirrorFrontCamera }
     val widgetTheme = userPreferencesRepository.userPreferences.map { it.widgetTheme }
@@ -398,6 +400,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setUseMultiFrame(prefs.useMultiFrame, prefs.multiFrameCount)
                 cameraController.setUseSuperResolution(prefs.useSuperResolution)
                 cameraController.setUseLivePhoto(prefs.useLivePhoto)
+
+                // 应用保存的虚拟光圈
+                if (prefs.defaultVirtualAperture > 0f) {
+                    setVirtualApertureAuto(true)
+                    setAperture(prefs.defaultVirtualAperture)
+                }
             } else {
                 // 如果没有任何偏好设置，使用配置文件中的默认 LUT（第一个）
                 val defaultLut = availableLutList.firstOrNull { it.isDefault }
@@ -1985,6 +1993,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setPhantomSaveAsNew(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.savePhantomSaveAsNew(enabled)
+        }
+    }
+
+    fun setDefaultVirtualAperture(aperture: Float) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveDefaultVirtualAperture(aperture)
         }
     }
 

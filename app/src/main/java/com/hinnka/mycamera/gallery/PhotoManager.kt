@@ -390,20 +390,19 @@ object PhotoManager {
     }
 
     suspend fun generateBokehPhoto(context: Context, photoId: String, metadata: PhotoMetadata, bitmap: Bitmap) {
-        val aperture = metadata.computationalAperture
+        val aperture = metadata.computationalAperture ?: return
+        if (aperture <= 0f) return
         val focusPointX = metadata.focusPointX
-        val focusPointY = metadata.focusPointX
-        val bokeh = aperture?.let {
-            ContentRepository.getInstance(context).depthBokehProcessor.applyHighQualityBokeh(
-                context,
-                photoId,
-                bitmap,
-                focusPointX,
-                focusPointY,
-                it
-            )
-        }
-        bokeh?.let { bokeh -> saveBokehPhoto(context, photoId, bokeh) }
+        val focusPointY = metadata.focusPointY
+        val bokeh = ContentRepository.getInstance(context).depthBokehProcessor.applyHighQualityBokeh(
+            context,
+            photoId,
+            bitmap,
+            focusPointX,
+            focusPointY,
+            aperture
+        )
+        saveBokehPhoto(context, photoId, bokeh)
     }
 
     suspend fun saveYuvPhoto(
@@ -1249,13 +1248,13 @@ object PhotoManager {
     }
 
     fun loadBitmap(context: Context, photoId: String, maxEdge: Int? = null): Bitmap? {
-        val photoFile = getPhotoFile(context, photoId)
         val bokehFile = getBokehFile(context, photoId)
-        if (!photoFile.exists()) {
-            return null
-        }
         if (bokehFile.exists()) {
             return loadBitmap(context, Uri.fromFile(bokehFile), maxEdge)
+        }
+        val photoFile = getPhotoFile(context, photoId)
+        if (!photoFile.exists()) {
+            return null
         }
         return loadBitmap(context, Uri.fromFile(photoFile), maxEdge)
     }
@@ -1353,6 +1352,7 @@ object PhotoManager {
         context: Context,
         uri: Uri,
         lutId: String?,
+        computationalAperture: Float? = null,
         photoId: String? = null,
     ): String? {
         return withContext(Dispatchers.IO) {
@@ -1377,6 +1377,7 @@ object PhotoManager {
                 // 2. 读取元数据以获取旋转信息
                 val metadata = PhotoMetadata.fromUri(context, uri).copy(
                     lutId = lutId,
+                    computationalAperture = computationalAperture,
                     sourceUri = uri.toString()
                 )
 
@@ -1423,6 +1424,9 @@ object PhotoManager {
                             rotation = 0,
                         )
                         metadataFile.writeText(updatedMetadata.toJson())
+                        if (updatedMetadata.computationalAperture != null) {
+                            generateBokehPhoto(context, photoId, updatedMetadata, processedBitmap)
+                        }
 
                         processedBitmap.recycle()
                     } else {
@@ -1434,6 +1438,13 @@ object PhotoManager {
                     // --- 常规 JPEG 处理逻辑 ---
                     // 传递元数据确保旋转信息被正确处理
                     tempImportJpeg(uri, context, metadata, photoFile, metadataFile, thumbnailFile)
+                    if (metadata.computationalAperture != null) {
+                        val bitmap = BitmapFactory.decodeFile(photoFile.absolutePath)
+                        if (bitmap != null) {
+                            generateBokehPhoto(context, photoId, metadata, bitmap)
+                            bitmap.recycle()
+                        }
+                    }
                 }
 
                 // Check for Motion Photo after import

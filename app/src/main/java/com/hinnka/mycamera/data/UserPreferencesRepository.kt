@@ -83,7 +83,8 @@ data class UserPreferences(
     val openAIBaseUrl: String? = null,
     val openAIModel: String? = null,
     val useBuiltInAiService: Boolean = false,
-    val phantomSaveAsNew: Boolean = false
+    val phantomSaveAsNew: Boolean = false,
+    val defaultVirtualAperture: Float = 0f // 默认虚化光圈，0表示关闭
 )
 
 /**
@@ -148,6 +149,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val OPENAI_MODEL = stringPreferencesKey("openai_model")
         private val USE_BUILT_IN_AI_SERVICE = booleanPreferencesKey("use_built_in_ai_service")
         private val PHANTOM_SAVE_AS_NEW = booleanPreferencesKey("phantom_save_as_new")
+        private val DEFAULT_VIRTUAL_APERTURE = floatPreferencesKey("default_virtual_aperture")
     }
 
     /**
@@ -205,7 +207,8 @@ class UserPreferencesRepository(private val context: Context) {
                 openAIBaseUrl = preferences[OPENAI_BASE_URL],
                 openAIModel = preferences[OPENAI_MODEL],
                 useBuiltInAiService = preferences[USE_BUILT_IN_AI_SERVICE] ?: false,
-                phantomSaveAsNew = preferences[PHANTOM_SAVE_AS_NEW] ?: false
+                phantomSaveAsNew = preferences[PHANTOM_SAVE_AS_NEW] ?: false,
+                defaultVirtualAperture = preferences[DEFAULT_VIRTUAL_APERTURE] ?: 0f
             )
         }
 
@@ -686,6 +689,15 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun savePhantomSaveAsNew(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[PHANTOM_SAVE_AS_NEW] = enabled
+        }
+    }
+
+    /**
+     * 保存默认虚拟光圈
+     */
+    suspend fun saveDefaultVirtualAperture(aperture: Float) {
+        context.dataStore.edit { preferences ->
+            preferences[DEFAULT_VIRTUAL_APERTURE] = aperture
         }
     }
 }
