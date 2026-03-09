@@ -390,8 +390,7 @@ object PhotoManager {
     }
 
     suspend fun generateBokehPhoto(context: Context, photoId: String, metadata: PhotoMetadata, bitmap: Bitmap) {
-        val aperture = metadata.computationalAperture ?: return
-        if (aperture <= 0f) return
+        val aperture = metadata.computationalAperture ?: 0f
         val focusPointX = metadata.focusPointX
         val focusPointY = metadata.focusPointY
         val bokeh = ContentRepository.getInstance(context).depthBokehProcessor.applyHighQualityBokeh(
@@ -1491,6 +1490,9 @@ object PhotoManager {
                     // 保存为 original.jpg
                     FileOutputStream(photoFile).use { out ->
                         processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                    }
+                    metadata?.let {
+                        generateBokehPhoto(context, photoId, it, processedBitmap.copy(Bitmap.Config.ARGB_8888, true))
                     }
                     // 生成缩略图
                     generateThumbnail(processedBitmap, thumbnailFile)

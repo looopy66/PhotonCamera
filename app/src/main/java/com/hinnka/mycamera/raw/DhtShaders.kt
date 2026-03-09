@@ -671,9 +671,6 @@ bool isNonGreen(ivec2 coord) {
                 rgb = mix(rgb, vec3(luma), satFactor);
             }
 
-            // CCM
-            rgb = uColorCorrectionMatrix * rgb;
-
             fragColor = vec4(rgb, 1.0);
         }
     """.trimIndent()

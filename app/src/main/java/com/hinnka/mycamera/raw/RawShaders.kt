@@ -130,6 +130,9 @@ object RawShaders {
         uniform bool uLutEnabled;
         uniform float uExposureGain;
         
+        uniform sampler2D uCurveTexture;
+        uniform bool uCurveEnabled;
+        
         uniform vec4 uLogCoeffs;  // a, b, c, d
         uniform vec4 uLogLimits;  // e, f, cut1, cut2
         uniform int uLogType;     // 0=Linear, 1=Quadratic
@@ -159,20 +162,32 @@ object RawShaders {
             return mix(lowPart, logPart, step(uLogLimits.z, reflection));
         }
         
+        vec3 applyCurve(vec3 color) {
+            float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+            // 索引使用 Log 映射以覆盖高动态范围
+            float samplePos = linearToLog(vec3(luma)).r;
+            float targetLuma = texture(uCurveTexture, vec2(samplePos, 0.5)).r;
+            
+            // 在线性空间直接做乘法：即增益 (Gain)
+            // 这能完美保护 Hue 和 Saturation，彻底解决 sRGB 下的脏色问题
+            return color * (targetLuma / max(luma, 1e-6));
+        }
+        
         void main() {
             vec3 rawColor = texture(uInputTexture, vTexCoord).rgb;
             
-            // 1. Exposure Gain (including DR expansion factor)
+            // 1. Exposure
             vec3 color = rawColor * uExposureGain;
             
-            // 略微提升饱和度
-            float gray = dot(color, vec3(0.2126, 0.7152, 0.0722));
-            color = mix(vec3(gray), color, 1.15);
+            // 2. 线性空间曲线应用 (Tonemapping)
+            if (uCurveEnabled) {
+                color = applyCurve(color);
+            }
             
-            // 2. Log Conversion
+            // 3. 颜色空间转换 (Log or sRGB)
             color = linearToLog(color);
             
-            // 3. 3D LUT
+            // 4. 3D LUT
             if (uLutEnabled) {
                 float scale = (uLutSize - 1.0) / uLutSize;
                 float offset = 1.0 / (2.0 * uLutSize);
@@ -180,14 +195,10 @@ object RawShaders {
                 color = texture(uLutTexture, lutCoord).rgb;
             }
             
-            if (uCustomCurveEnable) {
-                float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
-                color *= pow(luma, 0.15);
-            }
-            
             fragColor = vec4(color, 1.0);
         }
     """.trimIndent()
+
 
     /**
      * Dedicated Sharpening Shader

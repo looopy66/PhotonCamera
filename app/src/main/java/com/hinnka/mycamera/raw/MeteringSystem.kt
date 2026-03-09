@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.raw
 
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.utils.SplineInterpolator
 import java.nio.FloatBuffer
 import kotlin.math.log2
 import kotlin.math.pow
@@ -17,11 +18,26 @@ object MeteringSystem {
 
     data class AnalysisResult(
         val exposureGain: Float,
-        val p98Luma: Float,
-        val maxColor: Float,
-        val weightedAvgLuma: Float,
-        val droMode: DROMode = DROMode.OFF
-    )
+        val curveLut: FloatArray,
+    ) {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (javaClass != other?.javaClass) return false
+
+            other as AnalysisResult
+
+            if (exposureGain != other.exposureGain) return false
+            if (!curveLut.contentEquals(other.curveLut)) return false
+
+            return true
+        }
+
+        override fun hashCode(): Int {
+            var result = exposureGain.hashCode()
+            result = 31 * result + curveLut.contentHashCode()
+            return result
+        }
+    }
 
     /**
      * 将线性反射率 (Scene Linear Reflection) 转换为 Log (0..1)
@@ -56,7 +72,7 @@ object MeteringSystem {
 
         var totalWeight = 0.0
         var weightedSumLog = 0.0 // 在 Log 空间累加
-        var maxColor = 0.0f
+        var maxLuma = 0.0f
         var totalSumLuma = 0.0f
 
         floatBuffer.position(0)
@@ -70,11 +86,9 @@ object MeteringSystem {
                 val luma = r * 0.2126f + g * 0.7152f + b * 0.0722f
                 if (luma.isNaN() || luma < 0f) continue
 
-                val max = maxOf(r, g, b)
-                if (max > maxColor) maxColor = max
+                if (luma > maxLuma) maxLuma = luma
 
                 // 转换到 Log 空间进行测光分析
-                val logCurve = logCurve
                 val logLuma = linearToLog(luma, logCurve)
 
                 // 1. 基础权重：高斯分布 + 基础权重
@@ -99,7 +113,7 @@ object MeteringSystem {
                     val rgRatio = r / g
                     val gbRatio = g / b
                     if (rgRatio in 1.1f..2.5f && gbRatio in 1.0f..3.0f) {
-                        skinWeight = 3f
+                        skinWeight = 5f
                     }
                 }
 
@@ -114,7 +128,7 @@ object MeteringSystem {
         }
 
         if (totalWeight < 1e-6 || validPixelCount == 0) {
-            return AnalysisResult(1.0f, 0.5f, 1.0f, 0.42f)
+            return AnalysisResult(1.0f, floatArrayOf(0f, 1f))
         }
 
         val aperture = metadata?.aperture ?: 2f
@@ -131,7 +145,6 @@ object MeteringSystem {
         val avgLog = (weightedSumLog / totalWeight).toFloat()
 
         // 映射回线性空间，得到场景的“代表性亮度”
-        val logCurve = logCurve
         val representativeLinearLuma = logToLinear(avgLog, logCurve)
 
         // 计算 P98 和 P05 用于动态范围分析
@@ -143,7 +156,7 @@ object MeteringSystem {
         val p999Luma = sortedLumas[p999Index]
 
         if (p99Luma <= 0.001f || p999Luma <= 0.001f || representativeLinearLuma <= 0.001f) {
-            return AnalysisResult(1.0f, 0.5f, 1.0f, 0.42f)
+            return AnalysisResult(1.0f, floatArrayOf(0f, 1f))
         }
 
         val highlightSpan = p999Luma - p99Luma
@@ -179,14 +192,9 @@ object MeteringSystem {
             }
         }
 
-        // LV -> Luma 拟合函数
-        // 1 -> 0.26
-        // 4 -> 0.391
-        // 8 -> 0.42
-        // 13 -> 0.45
-        val logCurveForTarget = logCurve
-        val targetLumaIRE = lv / (2.087f * lv + 1.759f) / 0.391f * logCurve.middleGray
-        var gain = logToLinear(targetLumaIRE, logCurveForTarget) * biasMultiplier / representativeLinearLuma
+        val targetLumaIRE = logCurve.middleGray * 1.05f
+        val targetLinearLuma = logToLinear(targetLumaIRE, logCurve)
+        var gain = targetLinearLuma * biasMultiplier / representativeLinearLuma
 
         gain = gain.coerceAtLeast(1f)
 
@@ -196,20 +204,51 @@ object MeteringSystem {
         }
 
         // 7. 绝对剪裁保护
-        val logCurveForGain = logCurve
-        if (maxColor * gain > logCurveForGain.maxLinear) {
-            gain = logCurveForGain.maxLinear / maxColor
+        if (logCurve != LogCurve.SRGB && maxLuma * gain > logCurve.maxLinear) {
+            gain = logCurve.maxLinear / maxLuma
         }
 
-        PLog.d(TAG, "Log Analysis: EV=${ev.toInt()}, LV=${lv.toInt()}, DRO=$droMode, Contrast=${sceneContrast.toInt()}, " +
-                "p99=$p99Luma p999=$p999Luma bias=$biasMultiplier max=$maxColor gain=$gain")
+        // 6. 动态生成 S 曲线控制点
+        val points = mutableListOf<Pair<Float, Float>>()
+        points.add(0f to 0f)
+        points.add(0.015f to 0.005f)
+        points.add(0.052f to 0.036f)
+        points.add(0.217f to 0.217f)
+        points.add(0.531f to 0.579f)
+
+        val maxTarget = maxLuma * gain
+        if (maxTarget > logCurve.maxLinear) {
+            points.add(logCurve.maxLinear to logCurve.maxLinear * 0.9f)
+            points.add(maxTarget to logCurve.maxLinear)
+        } else {
+            if (maxTarget > 0.531f) {
+                points.add(maxTarget to maxTarget)
+            }
+            points.add(logCurve.maxLinear to logCurve.maxLinear)
+        }
+
+        val finalX = mutableListOf<Float>()
+        val finalY = mutableListOf<Float>()
+
+        for (i in 0 until points.size) {
+            finalX.add(linearToLog(points[i].first, logCurve))
+            // LUT 存储物理线性目标亮度，配合 Shader 在线性域应用
+            finalY.add(points[i].second)
+        }
+
+        // 生成最终曲线 LUT
+        val interpolator = SplineInterpolator(finalX.toFloatArray(), finalY.toFloatArray())
+        val curveLut = interpolator.generateLut(256)
+
+        PLog.d(
+            TAG, "Log Analysis: EV=${ev.toInt()}, LV=${lv.toInt()}, DRO=$droMode, Contrast=${sceneContrast.toInt()}, " +
+                    "p99=$p99Luma p999=$p999Luma bias=$biasMultiplier max=$maxLuma gain=$gain points=$finalX,$finalY"
+        )
 
         return AnalysisResult(
             exposureGain = gain,
-            p98Luma = p99Luma,
-            maxColor = maxColor,
-            weightedAvgLuma = avgLog,
-            droMode = droMode
+            curveLut = curveLut
         )
     }
+
 }

@@ -5,12 +5,15 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import android.media.Image
 import android.opengl.*
+import android.util.Log
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutParser
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.RawProcessor
+import com.hinnka.mycamera.utils.SplineInterpolator
+
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -173,6 +176,9 @@ class RawDemosaicProcessor {
     private var outputFramebufferId = 0
     private var outputTextureId = 0
 
+    private var curveTextureId = 0
+
+
     // DHT 多 Pass 中间资源
     private var dhtPass0Program = 0  // Init
     private var dhtPass1Program = 0  // HV Dir
@@ -219,8 +225,9 @@ class RawDemosaicProcessor {
 
     data class SceneStats(
         val exposureGain: Float,
-        val droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF
+        val curveLut: FloatArray? = null
     )
+
 
     private var isInitialized = false
     private var maxTextureSize = 8192 // default, queried at init
@@ -1628,8 +1635,9 @@ class RawDemosaicProcessor {
             metadata
         )
 
-        return SceneStats(analysis.exposureGain, analysis.droMode)
+        return SceneStats(analysis.exposureGain, analysis.curveLut)
     }
+
 
     // 辅助函数: 3x3 矩阵转置 (行主序 -> 列主序)
     private fun transposeMatrix3x3(matrix: FloatArray): FloatArray {
@@ -1678,6 +1686,32 @@ class RawDemosaicProcessor {
         GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 4)
     }
 
+    private fun uploadCurveTexture(curveLut: FloatArray) {
+        if (curveTextureId == 0) {
+            val textures = IntArray(1)
+            GLES30.glGenTextures(1, textures, 0)
+            curveTextureId = textures[0]
+        }
+
+        val buffer = ByteBuffer.allocateDirect(curveLut.size * 4)
+            .order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
+        buffer.put(curveLut)
+        buffer.position(0)
+
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, curveTextureId)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_R16F,
+            curveLut.size, 1, 0, GLES30.GL_RED, GLES30.GL_FLOAT, buffer
+        )
+    }
+
+
     /**
      * Combined Processing Pass: ToneMap + LUT + Sharpening
      */
@@ -1715,6 +1749,18 @@ class RawDemosaicProcessor {
             sceneStats.exposureGain
         )
 
+        // S-Curve LUT
+        if (sceneStats.curveLut != null) {
+            uploadCurveTexture(sceneStats.curveLut)
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, curveTextureId)
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(combinedProgram, "uCurveTexture"), 2)
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(combinedProgram, "uCurveEnabled"), 1)
+        } else {
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(combinedProgram, "uCurveEnabled"), 0)
+        }
+
+
         // Log 曲线参数
         GLES30.glUniform4f(
             GLES30.glGetUniformLocation(combinedProgram, "uLogCoeffs"),
@@ -1725,10 +1771,6 @@ class RawDemosaicProcessor {
             logCurve.e, logCurve.f, logCurve.cut1, logCurve.cut2
         )
         GLES30.glUniform1i(GLES30.glGetUniformLocation(combinedProgram, "uLogType"), logCurve.type)
-
-        val customCurveEnable = if (logCurve == LogCurve.SRGB && baseLut == null) 1 else 0
-        val customCurveLoc = GLES30.glGetUniformLocation(combinedProgram, "uCustomCurveEnable")
-        GLES30.glUniform1i(customCurveLoc, customCurveEnable)
 
         val identityMatrix = FloatArray(16)
         GlMatrix.setIdentityM(identityMatrix, 0)
@@ -2000,7 +2042,9 @@ class RawDemosaicProcessor {
         if (sharpenTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(sharpenTextureId), 0)
         if (sharpenFramebufferId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(sharpenFramebufferId), 0)
         if (lut3DTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(lut3DTextureId), 0)
+        if (curveTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(curveTextureId), 0)
         if (outputTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(outputTextureId), 0)
+
         if (outputFramebufferId != 0) GLES30.glDeleteFramebuffers(
             1,
             intArrayOf(outputFramebufferId),
