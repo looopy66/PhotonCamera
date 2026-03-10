@@ -66,7 +66,7 @@ object MeteringSystem {
         val allLumas = FloatArray(pixelCount)
         var validPixelCount = 0
 
-        val sigma = 0.35f // 建议稍微再扩大一点
+        val sigma = 0.2f
         val sigmaSq2 = 2.0f * sigma * sigma
         val baseWeight = 0.15f // 增加基础权重，让环境（田地）更多参与
 
@@ -192,9 +192,14 @@ object MeteringSystem {
             }
         }
 
-        val targetLumaIRE = logCurve.middleGray * 1.05f
-        val targetLinearLuma = logToLinear(targetLumaIRE, logCurve)
-        var gain = targetLinearLuma * biasMultiplier / representativeLinearLuma
+        // LV -> Luma 拟合函数
+        // 1 -> 0.26
+        // 4 -> 0.391
+        // 8 -> 0.42
+        // 13 -> 0.45
+        val logCurveForTarget = logCurve
+        val targetLumaIRE = lv / (2.087f * lv + 1.759f) / 0.391f * logCurve.middleGray
+        var gain = logToLinear(targetLumaIRE, logCurveForTarget) * biasMultiplier / representativeLinearLuma
 
         gain = gain.coerceAtLeast(1f)
 

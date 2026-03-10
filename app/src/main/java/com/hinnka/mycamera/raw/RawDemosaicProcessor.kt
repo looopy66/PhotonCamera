@@ -1835,14 +1835,7 @@ class RawDemosaicProcessor {
             GLES30.glGetUniformLocation(linearProgram, "uImageSize"),
             metadata.width.toFloat(), metadata.height.toFloat()
         )
-        // 风格化微调
-        val styleAdjustment = floatArrayOf(
-            1.2f, -0.12f, -0.05f, // Red row: 降低绿蓝对红的干扰，肤色去黄变粉
-            -0.03f, 1.05f, -0.02f, // Green row: 增强密度
-            -0.01f, -0.04f, 1.05f  // Blue row: 增强密度
-        )
-        val finalCCM = RawMetadata.multiplyMatrix3x3(styleAdjustment, metadata.colorCorrectionMatrix)
-        val transposedCCM = transposeMatrix3x3(finalCCM)
+        val transposedCCM = transposeMatrix3x3(metadata.colorCorrectionMatrix)
 
         GLES30.glUniformMatrix3fv(
             GLES30.glGetUniformLocation(linearProgram, "uColorCorrectionMatrix"),
