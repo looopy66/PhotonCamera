@@ -4,9 +4,95 @@ import kotlin.math.*
 
 /**
  * Generator for applying the LutRecipe parameters to a color grid
- * and interpolating it into a 33x33x33 3D Matrix (Cube LUT).
+ * and interpolating it into a 33x33x33 3D Matrix (Cube LUT) using RBF 
+ * (Radial Basis Function) interpolation.
  */
 object LutGenerator {
+
+    /**
+     * Given an existing Style Recipe (which maps Source -> Target),
+     * and a list of specific Local Target points, this function uses Inverse RBF
+     * to deduce what the original Source colors must have been to yield those targets.
+     * 
+     * It does this by building an RBF that maps Target -> Source.
+     */
+    fun inverseInterpolate(styleRecipe: LutRecipe, localTargets: List<ControlPoint>): List<ControlPoint> {
+        val n = styleRecipe.controlPoints.size
+        if (n == 0) return localTargets
+
+        val matrixSize = n + 4
+        val M = Array(matrixSize) { DoubleArray(matrixSize) }
+        val B = Array(matrixSize) { DoubleArray(3) }
+
+        val pts = styleRecipe.controlPoints
+
+        // Build system mapping Target -> Source Residual (Source - Target)
+        for (i in 0 until n) {
+            val p1 = pts[i]
+            // We fit the inverse residual: Source - Target
+            B[i][0] = (p1.sourceR - p1.targetR).toDouble()
+            B[i][1] = (p1.sourceG - p1.targetG).toDouble()
+            B[i][2] = (p1.sourceB - p1.targetB).toDouble()
+
+            for (j in 0 until n) {
+                val p2 = pts[j]
+                val dr = p1.targetR - p2.targetR
+                val dg = p1.targetG - p2.targetG
+                val db = p1.targetB - p2.targetB
+                val dist = sqrt((dr * dr + dg * dg + db * db).toDouble())
+                M[i][j] = phi(dist)
+            }
+
+            // Polynomial P block (based on Target as input)
+            M[i][n] = 1.0
+            M[i][n + 1] = p1.targetR.toDouble()
+            M[i][n + 2] = p1.targetG.toDouble()
+            M[i][n + 3] = p1.targetB.toDouble()
+
+            // Polynomial P^T block
+            M[n][i] = 1.0
+            M[n + 1][i] = p1.targetR.toDouble()
+            M[n + 2][i] = p1.targetG.toDouble()
+            M[n + 3][i] = p1.targetB.toDouble()
+        }
+
+        val W = solveLinearSystem(M, B)
+
+        // Evaluate Inverse RBF for each local target
+        return localTargets.map { local ->
+            val tInR = local.targetR.toDouble()
+            val tInG = local.targetG.toDouble()
+            val tInB = local.targetB.toDouble()
+
+            // Base affine output
+            var sOutR = tInR + W[n][0] + W[n + 1][0] * tInR + W[n + 2][0] * tInG + W[n + 3][0] * tInB
+            var sOutG = tInG + W[n][1] + W[n + 1][1] * tInR + W[n + 2][1] * tInG + W[n + 3][1] * tInB
+            var sOutB = tInB + W[n][2] + W[n + 1][2] * tInR + W[n + 2][2] * tInG + W[n + 3][2] * tInB
+
+            // RBF kernel contributions
+            for (i in 0 until n) {
+                val p = pts[i]
+                val dr = tInR - p.targetR
+                val dg = tInG - p.targetG
+                val db = tInB - p.targetB
+                val dist = sqrt(dr * dr + dg * dg + db * db)
+                val rbfVal = phi(dist)
+
+                sOutR += W[i][0] * rbfVal
+                sOutG += W[i][1] * rbfVal
+                sOutB += W[i][2] * rbfVal
+            }
+
+            ControlPoint(
+                sourceR = sOutR.toFloat().coerceIn(0f, 1f),
+                sourceG = sOutG.toFloat().coerceIn(0f, 1f),
+                sourceB = sOutB.toFloat().coerceIn(0f, 1f),
+                targetR = local.targetR,
+                targetG = local.targetG,
+                targetB = local.targetB
+            )
+        }
+    }
 
     /**
      * Generate a 33x33x33 Cube LUT representation from a LutRecipe.
@@ -17,237 +103,159 @@ object LutGenerator {
         val lutData = FloatArray(size * size * size * 3)
         var index = 0
 
+        val n = recipe.controlPoints.size
+
+        // If no control points, return Identity LUT
+        if (n == 0) {
+            for (bIdx in 0 until size) {
+                val bIn = bIdx.toFloat() / (size - 1)
+                for (gIdx in 0 until size) {
+                    val gIn = gIdx.toFloat() / (size - 1)
+                    for (rIdx in 0 until size) {
+                        val rIn = rIdx.toFloat() / (size - 1)
+                        lutData[index++] = rIn
+                        lutData[index++] = gIn
+                        lutData[index++] = bIn
+                    }
+                }
+            }
+            return lutData
+        }
+
+        // --- RBF Solver Setup (Using Affine Linear RBF System) ---
+        // We solve for weights W that map Source colors to residuals: (Target - Source).
+        // This ensures the affine polynomial P(x) can default to Identity.
+        // The size of the system is (N + 4) x (N + 4)
+        val matrixSize = n + 4
+        val M = Array(matrixSize) { DoubleArray(matrixSize) }
+        val B = Array(matrixSize) { DoubleArray(3) }
+
+        val pts = recipe.controlPoints
+
+        for (i in 0 until n) {
+            val p1 = pts[i]
+            // We fit the residual: Target - Source
+            B[i][0] = (p1.targetR - p1.sourceR).toDouble()
+            B[i][1] = (p1.targetG - p1.sourceG).toDouble()
+            B[i][2] = (p1.targetB - p1.sourceB).toDouble()
+
+            for (j in 0 until n) {
+                val p2 = pts[j]
+                val dr = p1.sourceR - p2.sourceR
+                val dg = p1.sourceG - p2.sourceG
+                val db = p1.sourceB - p2.sourceB
+                val dist = sqrt((dr * dr + dg * dg + db * db).toDouble())
+                M[i][j] = phi(dist)
+            }
+
+            // Polynomial P block
+            M[i][n] = 1.0
+            M[i][n + 1] = p1.sourceR.toDouble()
+            M[i][n + 2] = p1.sourceG.toDouble()
+            M[i][n + 3] = p1.sourceB.toDouble()
+
+            // Polynomial P^T block
+            M[n][i] = 1.0
+            M[n + 1][i] = p1.sourceR.toDouble()
+            M[n + 2][i] = p1.sourceG.toDouble()
+            M[n + 3][i] = p1.sourceB.toDouble()
+        }
+
+        // The remaining bottom-right 4x4 of M is 0.0 (already default)
+        // The remaining bottom 4 rows of B are 0.0 (already default)
+
+        // Solve M * W = B for W
+        val W = solveLinearSystem(M, B)
+
+        // Generate LUT
         for (bIdx in 0 until size) {
-            val bIn = bIdx.toFloat() / (size - 1)
+            val bIn = bIdx.toDouble() / (size - 1)
             for (gIdx in 0 until size) {
-                val gIn = gIdx.toFloat() / (size - 1)
+                val gIn = gIdx.toDouble() / (size - 1)
                 for (rIdx in 0 until size) {
-                    val rIn = rIdx.toFloat() / (size - 1)
+                    val rIn = rIdx.toDouble() / (size - 1)
 
-                    val (rOut, gOut, bOut) = applyRecipe(rIn, gIn, bIn, recipe.colorFeatures)
+                    // Start with affine polynomial part. Note: we are fitting the *residual*,
+                    // so the base output is just the input: (rIn, gIn, bIn)
+                    var rOut = rIn + W[n][0] + W[n + 1][0] * rIn + W[n + 2][0] * gIn + W[n + 3][0] * bIn
+                    var gOut = gIn + W[n][1] + W[n + 1][1] * rIn + W[n + 2][1] * gIn + W[n + 3][1] * bIn
+                    var bOut = bIn + W[n][2] + W[n + 1][2] * rIn + W[n + 2][2] * gIn + W[n + 3][2] * bIn
 
-                    lutData[index++] = rOut.coerceIn(0f, 1f)
-                    lutData[index++] = gOut.coerceIn(0f, 1f)
-                    lutData[index++] = bOut.coerceIn(0f, 1f)
+                    // Add RBF kernel contributions
+                    for (i in 0 until n) {
+                        val p = pts[i]
+                        val dr = rIn - p.sourceR
+                        val dg = gIn - p.sourceG
+                        val db = bIn - p.sourceB
+                        val dist = sqrt(dr * dr + dg * dg + db * db)
+                        val rbfVal = phi(dist)
+
+                        rOut += W[i][0] * rbfVal
+                        gOut += W[i][1] * rbfVal
+                        bOut += W[i][2] * rbfVal
+                    }
+
+                    lutData[index++] = rOut.toFloat().coerceIn(0f, 1f)
+                    lutData[index++] = gOut.toFloat().coerceIn(0f, 1f)
+                    lutData[index++] = bOut.toFloat().coerceIn(0f, 1f)
                 }
             }
         }
         return lutData
     }
 
-    private fun applyRecipe(r: Float, g: Float, b: Float, features: ColorFeatures): FloatArray {
-        var lr = OklchConverter.srgbToLinear(r)
-        var lg = OklchConverter.srgbToLinear(g)
-        var lb = OklchConverter.srgbToLinear(b)
+    private fun phi(r: Double): Double {
+        // Linear radial basis phi(r) = r is widely used for 3D color interpolation 
+        // as it minimizes overshoots and provides C0 continuity at control points.
+        return r
+    }
 
-        // 1. Basic Tone Mapping (Exposure on Linear)
-        val exposureScale = 2.0f.pow(features.tone.exposure)
-        lr *= exposureScale
-        lg *= exposureScale
-        lb *= exposureScale
+    /**
+     * Solves linear system A * X = B using Gaussian elimination with partial pivoting.
+     * A is N x N, B is N x M. Returns X as N x M.
+     */
+    private fun solveLinearSystem(A: Array<DoubleArray>, B: Array<DoubleArray>): Array<DoubleArray> {
+        val n = A.size
+        val m = B[0].size
+        val M = Array(n) { i -> DoubleArray(n + m) { j -> if (j < n) A[i][j] else B[i][j - n] } }
 
-        // Convert to OKLCH for HSL Shifts & Tone Processing
-        val oklab = OklchConverter.linearSrgbToOklab(lr, lg, lb)
-        var (L, C, H) = OklchConverter.oklabToOklch(oklab[0], oklab[1], oklab[2])
+        for (i in 0 until n) {
+            var maxRow = i
+            for (k in i + 1 until n) {
+                if (abs(M[k][i]) > abs(M[maxRow][i])) maxRow = k
+            }
+            val temp = M[i]
+            M[i] = M[maxRow]
+            M[maxRow] = temp
 
-        // Apply Global Saturation
-        C *= features.tone.saturation.coerceAtLeast(0f)
+            val pivot = M[i][i]
+            if (abs(pivot) < 1e-12) {
+                // If the matrix is singular (e.g., highly collinear or identical control points),
+                // we gracefully continue. The fallback polynomial handles it.
+                continue
+            }
 
-        // 2. Global Contrast / Tone (applied on Lightness L)
-        L = applyCurve(L, features.curves.luma)
-        L = applyContrast(L, features.tone.contrast)
-        L = applyHighlightsShadows(L, features.tone.highlights, features.tone.shadows)
+            for (j in i until n + m) {
+                M[i][j] /= pivot
+            }
 
-        // 3. Black/White point (Map [0,1] to [BlackPoint, WhitePoint])
-        val wp = features.tone.whitePoint
-        val bp = features.tone.blackPoint
-        L = (L * (wp - bp) + bp).coerceIn(0f, 1f)
-
-        // 4. HSL Shifts
-        if (hasAnyHslShift(features.hslShifts)) {
-            val shift = getHslShiftForHue(H, features.hslShifts)
-            
-            // Universal Damping Logic:
-            // 1. Chroma Gate: Only apply shifts to distinct colors. Protections neutrals (white/gray).
-            // Use a higher power (3.0) for a smoother 'fade-in' from gray.
-            val chromaGate = (C / 0.15f).pow(3.0f).coerceIn(0f, 1f)
-            
-            // 2. Luma Gate: Protect the poles (Pure White and Pure Black)
-            // Use a smoother sine-based or higher-power parabola to avoid mid-range jumps.
-            val lumaGate = sin(L * PI.toFloat()).pow(1.5f).coerceIn(0f, 1f)
-            
-            val finalDamp = (chromaGate * lumaGate).coerceIn(0f, 1f)
-            
-            val hShift = shift.hShift * finalDamp
-            val sScale = 1.0f + (shift.sScale - 1.0f) * finalDamp
-            val lScale = 1.0f + (shift.lScale - 1.0f) * finalDamp
-
-            // H is 0-360 degrees
-            H += hShift * 360f 
-            if (H < 0) H += 360f
-            if (H >= 360f) H -= 360f
-            
-            // Saturation and Lightness scaling
-            C *= sScale.coerceAtLeast(0f)
-            L = (L * lScale).coerceIn(0f, 1f)
-        }
-
-        // 5. Split Toning
-        // Use wider, more overlapping curves for smoother blending
-        val shadowWeight = (1.0f - L).pow(2.5f).coerceIn(0f, 1f)
-        val highlightWeight = L.pow(2.5f).coerceIn(0f, 1f)
-        val midtoneWeight = (1.0f - shadowWeight - highlightWeight).coerceIn(0f, 1f)
-
-        var oklabOut = OklchConverter.oklchToOklab(L, C, H)
-        var ta = oklabOut[1]
-        var tb = oklabOut[2]
-
-        fun applyToning(target: ToningTarget, weight: Float) {
-            if (target.saturation > 0f && weight > 0f) {
-                val maxChromaShift = 0.12f
-                val hRad = target.hue * Math.PI.toFloat() / 180f
-                ta += target.saturation * maxChromaShift * weight * cos(hRad)
-                tb += target.saturation * maxChromaShift * weight * sin(hRad)
+            for (k in 0 until n) {
+                if (k != i) {
+                    val factor = M[k][i]
+                    for (j in i until n + m) {
+                        M[k][j] -= factor * M[i][j]
+                    }
+                }
             }
         }
 
-        applyToning(features.splitToning.shadows, shadowWeight)
-        applyToning(features.splitToning.highlights, highlightWeight)
-        applyToning(features.splitToning.midtones, midtoneWeight)
-
-        // Convert back
-        val rgb = OklchConverter.oklabToLinearSrgb(L, ta, tb)
-        
-        // Safety: Prevent negative or NaN values before WB and sRGB conversion.
-        rgb[0] = rgb[0].coerceAtLeast(0f)
-        rgb[1] = rgb[1].coerceAtLeast(0f)
-        rgb[2] = rgb[2].coerceAtLeast(0f)
-
-        // 6. RGB Channel Curves (Applied on Linear RGB)
-        rgb[0] = applyCurve(rgb[0], features.curves.red)
-        rgb[1] = applyCurve(rgb[1], features.curves.green)
-        rgb[2] = applyCurve(rgb[2], features.curves.blue)
-
-        // White balance on Linear (simplified)
-        if (features.balance.temperature != 0f || features.balance.tint != 0f) {
-            rgb[0] *= (1.0f + features.balance.temperature)
-            rgb[2] *= (1.0f - features.balance.temperature)
-            // positive tint applies MAGENTA (decreases green)
-            rgb[1] *= (1.0f - features.balance.tint)
-        }
-
-        rgb[0] = OklchConverter.linearToSrgb(rgb[0])
-        rgb[1] = OklchConverter.linearToSrgb(rgb[1])
-        rgb[2] = OklchConverter.linearToSrgb(rgb[2])
-
-        return rgb
-    }
-
-    private fun applyContrast(x: Float, contrast: Float): Float {
-        if (contrast == 0f) return x
-        return if (contrast > 0f) {
-            val p = 1f + contrast * 1.5f
-            val num = x.toDouble().pow(p.toDouble()).toFloat()
-            val den = num + (1f - x).toDouble().pow(p.toDouble()).toFloat()
-            if (den == 0f) x else num / den
-        } else {
-            val amount = (contrast + 1f).coerceAtLeast(0f)
-            ((x - 0.5f) * amount) + 0.5f
-        }
-    }
-
-    private fun applyHighlightsShadows(x: Float, highlights: Float, shadows: Float): Float {
-        var ret = x
-        if (shadows != 0f) {
-            val sWeight = (1f - x).pow(2.0f)
-            ret += shadows * sWeight * 0.4f
-        }
-        if (highlights != 0f) {
-            val hWeight = x.pow(2.0f)
-            ret += highlights * hWeight * 0.4f
-        }
-        return ret
-    }
-
-    private fun applyCurve(x: Float, curve: List<List<Float>>): Float {
-        if (curve.isEmpty() || curve.size < 2) return x
-        if (x <= curve.first()[0]) return curve.first()[1]
-        if (x >= curve.last()[0]) return curve.last()[1]
-
-        for (i in 0 until curve.size - 1) {
-            val p1 = curve[i]
-            val p2 = curve[i + 1]
-            if (x in p1[0]..p2[0]) {
-                if (p1[0] == p2[0]) return p1[1]
-                val t = (x - p1[0]) / (p2[0] - p1[0])
-                // Smooth hermite interpolation
-                val smoothT = t * t * (3f - 2f * t)
-                return p1[1] * (1f - smoothT) + p2[1] * smoothT
+        val X = Array(n) { DoubleArray(m) }
+        for (i in 0 until n) {
+            for (j in 0 until m) {
+                X[i][j] = M[i][n + j]
             }
         }
-        return x
-    }
-
-    private fun hasAnyHslShift(shifts: HslShifts): Boolean {
-        // Checking for any non-neutral values
-        return shifts.red.hShift != 0f || shifts.red.sScale != 1f || shifts.red.lScale != 1f ||
-                shifts.green.hShift != 0f || shifts.green.sScale != 1f || shifts.green.lScale != 1f ||
-                shifts.blue.hShift != 0f || shifts.blue.sScale != 1f || shifts.blue.lScale != 1f
-    }
-
-    private fun getHslShiftForHue(hue: Float, shifts: HslShifts): Shift {
-        val targets = listOf(
-            29f to shifts.red, 60f to shifts.orange, 105f to shifts.yellow,
-            140f to shifts.green, 195f to shifts.cyan, 260f to shifts.blue,
-            295f to shifts.purple, 330f to shifts.magenta
-        )
-        val n = targets.size
-        val normalizedHue = if (hue < 29f) hue + 360f else hue
-
-        // Find the index of the anchor just before our hue
-        var i = 0
-        while (i < n) {
-            val h1 = if (i == 0) targets[0].first else targets[i].first
-            val h2 = if (i == n - 1) targets[0].first + 360f else targets[i+1].first
-            if (normalizedHue >= h1 && normalizedHue < h2) break
-            i++
-        }
-        if (i >= n) i = n - 1
-
-        // Catmull-Rom Spline Interpolation (4 points: p0, p1, p2, p3)
-        // This ensures the slope (tangent) is continuous at every anchor point.
-        val idx0 = (i - 1 + n) % n
-        val idx1 = i
-        val idx2 = (i + 1) % n
-        val idx3 = (i + 2) % n
-
-        val p0 = targets[idx0].second
-        val p1 = targets[idx1].second
-        val p2 = targets[idx2].second
-        val p3 = targets[idx3].second
-
-        val h1 = targets[idx1].first
-        var h2 = targets[idx2].first
-        if (h2 <= h1) h2 += 360f
-        
-        val t = (normalizedHue - h1) / (h2 - h1)
-
-        fun catmullRom(v0: Float, v1: Float, v2: Float, v3: Float, t: Float): Float {
-            val t2 = t * t
-            val t3 = t2 * t
-            return 0.5f * (
-                (2f * v1) +
-                (-v0 + v2) * t +
-                (2f * v0 - 5f * v1 + 4f * v2 - v3) * t2 +
-                (-v0 + 3f * v1 - 3f * v2 + v3) * t3
-            )
-        }
-
-        return Shift(
-            hShift = catmullRom(p0.hShift, p1.hShift, p2.hShift, p3.hShift, t),
-            sScale = catmullRom(p0.sScale, p1.sScale, p2.sScale, p3.sScale, t),
-            lScale = catmullRom(p0.lScale, p1.lScale, p2.lScale, p3.lScale, t)
-        )
+        return X
     }
 
     /**

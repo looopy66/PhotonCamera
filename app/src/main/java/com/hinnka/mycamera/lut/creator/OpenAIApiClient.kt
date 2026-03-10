@@ -87,46 +87,30 @@ class OpenAIApiClient(
                     val messages = JSONArray().apply {
                         val systemMessage = JSONObject().apply {
                             put("role", "system")
+
                             put(
                                 "content",
-                                "You are a master cinematic colorist and digital imaging technician. Your objective is to analyze the provided reference image(s) and precisely extract their unique color grading, film emulation characteristics, and lighting atmosphere into a rigid JSON 'LutRecipe' format.\n\n" +
-                                        "CRITICAL PHILOSOPHY: Prioritize a natural, aesthetic, and balanced look. Your adjustments should be gentle and sophisticated. Avoid aggressive or extreme parameter values that lead to drastic shifts in color or tone. The final result must feel like a professional film print, not a heavy digital filter. Subtle, nuanced adjustments are far more effective than heavy-handed ones.\n\n" +
-                                        "You must reverse-engineer the image's aesthetic essence while keeping the adjustments refined and harmonious. Return ONLY valid JSON matching this exact schema (no markdown blocks like ```json):\n" +
+                                "You are a master cinematic colorist analyzing the BEFORE and AFTER of color grading.\n" +
+                                        "Analyze the provided image(s) to understand the cinematic look/filter applied.\n" +
+                                        "Output 10-13 mapping points that define exactly how a normal image (Source) must be changed to look like this reference (Target).\n\n" +
+                                        "CRITICAL RULE: DO NOT copy Target values into Source values unless it's pure black or pure white. There MUST be a visible difference. If you just copy the Target, the LUT will do nothing!\n\n" +
+                                        "Return ONLY valid JSON matching this exact schema (no markdown blocks like ```json):\n" +
                                         "{\n" +
-                                        "  \"colorFeatures\": {\n" +
-                                        "    \"tone\": { \"exposure\": 0.0, \"contrast\": 0.0, \"saturation\": 1.0, \"highlights\": 0.0, \"shadows\": 0.0, \"whitePoint\": 0.0, \"blackPoint\": 0.0 },\n" +
-                                        "    \"balance\": { \"temperature\": 0.0, \"tint\": 0.0 },\n" +
-                                        "    \"splitToning\": { \"shadows\": { \"hue\": 0.0, \"saturation\": 0.0 }, \"midtones\": { \"hue\": 0.0, \"saturation\": 0.0 }, \"highlights\": { \"hue\": 0.0, \"saturation\": 0.0 } },\n" +
-                                        "    \"hslShifts\": { \"red\": { \"hShift\": 0.0, \"sScale\": 1.0, \"lScale\": 1.0 }, ... (orange, yellow, green, cyan, blue, purple, magenta) },\n" +
-                                        "    \"curves\": { \"luma\": [[0.0, 0.0], ...], \"red\": [], \"green\": [], \"blue\": [] }\n" +
-                                        "  }\n" +
+                                        "  \"controlPoints\": [\n" +
+                                        "    { \"sourceR\": 0.0, \"sourceG\": 0.0, \"sourceB\": 0.0, \"targetR\": 0.0, \"targetG\": 0.0, \"targetB\": 0.0 },\n" +
+                                        "    ...\n" +
+                                        "  ]\n" +
                                         "}\n\n" +
-                                        "=== PARAMETER DEFINITIONS & STRICT RANGES ===\n" +
-                                        "1. TONE & BALANCE [-1.0 to 1.0 for most, 0.0 to 2.0 for saturation]:\n" +
-                                        "   - exposure: Global Exposure Value (EV) compensation. -1.0 decreases exposure by 1 stop (50% light), 1.0 increases by 1 stop (200% light). Use sparingly (±0.3 range preferred).\n" +
-                                        "   - contrast: Macro contrast adjustment. Positive values create a non-linear S-curve to increase punch; negative values flatten the tone mapping.\n" +
-                                        "   - saturation: Global color intensity multiplier [0.0 to 2.0]. 1.0 is neutral, 0.0 is grayscale.\n" +
-                                        "   - highlights: Recovery/compression of the highlights. Negative values darken the brightest areas to recover details; positive values brighten them.\n" +
-                                        "   - shadows: Adjustment of the shadow regions. Positive values lift the darkest areas (creating a 'faded' or 'milky' film look); negative values crush them.\n" +
-                                        "   - blackPoint: The absolute target level for pure black [0.0 to 1.0] (Default: 0.0). e.g., 0.06 lifts absolute black to 6%% grey.\n" +
-                                        "   - whitePoint: The absolute target level for pure white [0.0 to 1.0] (Default: 1.0). e.g., 0.94 compresses peak white to 94%% grey.\n" +
-                                        "   - temperature: -1.0(cool/blue) to 1.0(warm/orange). Minimize global shifts to avoid muddying the image.\n" +
-                                        "   - tint: -1.0(greenish) to 1.0(magenta). Use sparingly.\n" +
-                                        "   * Note: Use either WP/BP or Curves to map black/white levels; avoid double-processing to prevent extreme contrast loss.\n\n" +
-                                        "2. SPLIT TONING (Cinematic Color Grading):\n" +
-                                        "   - hue: Exact color wheel angle [0.0 to 360.0]. (e.g., 210 for teal shadows, 45 for orange highlights).\n" +
-                                        "   - saturation: Intensity of the color tint [0.0 to 1.0]. Keep shadows/highlights subtle (0.05-0.15) for refined cinematic looks. STRONGLY MINIMIZE midtones saturation (0.0 to 0.03) to preserve natural skin tones and avoid an unnatural global color cast.\n\n" +
-                                        "3. HSL SHIFTS:\n" +
-                                        "   - hShift (Hue): Fraction of a full color wheel rotation [-1.0 to 1.0]. 1.0 = 360°.\n" +
-                                        "   - sScale (Saturation): Multiplier for color intensity [0.0 to 2.0]. 1.0 is neutral.\n" +
-                                        "   - lScale (Lightness): Multiplier for color brightness [0.0 to 2.0]. 1.0 is neutral.\n" +
-                                        "   * PREFERENCE: Prioritize HSL adjustments over global white balance (Temperature/Tint) to capture specific film-like color signatures without destroying the overall color integrity.\n" +
-                                        "   * INFERENCE: Identify specific scene elements. Reverse-engineer the color offsets by comparing these observed colors to standard real-world expectations. Determine the precise HSL shifts for each hue bucket to replicate these characteristic transformations subtly.\n\n" +
-                                        "4. CURVES (Spline Points):\n" +
-                                        "   - Arrays of exactly 2D [x, y] coordinates mapping input to output [0.0 to 1.0].\n" +
-                                        "   - luma: The master contrast/fade curve. Avoid extreme 'S' shapes; prioritize smooth, natural transitions.\n" +
-                                        "   - rgb: Individual color channel curves for advanced cross-processing. Use minimal points to ensure smooth gradients.\n\n" +
-                                        "CRITICAL: ALL values must strictly adhere to these mathematical float ratios. NEVER use integer percentages (like 15.0 or -20.0). Exceeding [-1.0, 1.0] for ratios or [0.0, 1.0] for curves will crash the rendering engine. BE GENTLE: Ensure all parameters collaborate harmoniously; avoid compounding shifts (e.g., overlapping Tint, Split Toning, and HSL shifts) that result in severe color clipping or unnatural color bias. Prefer subtle, high-quality adjustments over drastic transformations."
+                                        "=== PARAMETER DEFINITIONS ===\n" +
+                                        "1. Tone/Contrast Anchors (The first 5 points): These define the contrast curve. \n" +
+                                        "   If we see lifted shadows (Target = 0.05), you must understand they came from pure Black (Source = 0.0). If you just copy 0.05 to Source, the lifting effect is lost.\n" +
+                                        "   - Black: Source MUST BE exactly (0.0, 0.0, 0.0). Target = whatever the darkest point in the image is (often lifted or tinted).\n" +
+                                        "   - Shadows: Source MUST BE exactly (0.25, 0.25, 0.25). Target = the shadow tone.\n" +
+                                        "   - Mid-grey: Source MUST BE exactly (0.5, 0.5, 0.5). Target = the midtone.\n" +
+                                        "   - Highlights: Source MUST BE exactly (0.75, 0.75, 0.75). Target = the highlight tone.\n" +
+                                        "   - White: Source MUST BE exactly (1.0, 1.0, 1.0). Target = brightest point.\n" +
+                                        "2. Color Points (The remaining points): Extract 5-8 representative target colors (like faded teal skies, warm skin, desaturated foliage). For each Target color, you MUST assign a normal, unedited Source color that it came from. e.g. If the Target is a stylized teal (0.1, 0.3, 0.35), the Source must have been a neutral grey or normal blue (0.2, 0.2, 0.3). The difference between Source and Target IS the filter effect.\n" +
+                                        "3. All RGB values must be normalized float ratios [0.0 to 1.0]."
                             )
                         }
                         val userMessage = JSONObject().apply {

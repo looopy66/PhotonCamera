@@ -40,6 +40,10 @@ class LutCreatorViewModel(application: Application) : AndroidViewModel(applicati
                     return@launch
                 }
 
+                // Always run Local Analysis first to get the Target Control Points via K-Means.
+                // This gives us a stable mapping of the image's actual target colors.
+                val localRecipe = LocalImageAnalyzer.analyzeImages(bitmaps)
+
                 val recipe = if (isAiEnabled) {
                     val userPrefs = userPrefsRepo.userPreferences.firstOrNull()
                     val isBuiltIn = userPrefs?.useBuiltInAiService ?: false
@@ -60,12 +64,47 @@ class LutCreatorViewModel(application: Application) : AndroidViewModel(applicati
 
                     PLog.d(
                         "LutCreatorViewModel",
-                        "Calling AI Client for analysis... Custom prompt: $customPrompt, Model: $model"
+                        "Calling AI Client for Source Color Inference... Custom prompt: $customPrompt, Model: $model"
                     )
-                    val result = client.analyzeImagesForLut(bitmaps, model, customPrompt = customPrompt)
-                    result.getOrThrow()
+                    // Pass the images to AI to generate a pure Style Recipe (without constraints)
+                    val result = client.analyzeImagesForLut(
+                        bitmaps,
+                        model,
+                        customPrompt = customPrompt
+                    )
+                    val aiStyleRecipe = result.getOrThrow()
+
+                    // Now, use Inverse RBF to map our precise Local Targets through the AI's Style Recipe
+                    // This finds the exact Source colors that produce our Local Targets under the AI's style model.
+                    val inferredSources = LutGenerator.inverseInterpolate(
+                        styleRecipe = aiStyleRecipe,
+                        localTargets = localRecipe.controlPoints
+                    )
+
+                    // Sanitize the Final output: limit extreme shifts between the inferred Source and actual Local Target
+                    // If the AI's style caused an extreme shift (e.g. green to black),
+                    // we clamp the vector magnitude to preserve the *direction* but limit the *strength*.
+                    val maxDist = 0.4f // Limits shifts to a robust but realistic max delta
+                    val sanitizedPoints = inferredSources.map { cp ->
+                        val dr = cp.sourceR - cp.targetR
+                        val dg = cp.sourceG - cp.targetG
+                        val db = cp.sourceB - cp.targetB
+                        val dist = kotlin.math.sqrt((dr * dr + dg * dg + db * db).toDouble()).toFloat()
+
+                        if (dist > maxDist) {
+                            val scale = maxDist / dist
+                            cp.copy(
+                                sourceR = (cp.targetR + dr * scale).coerceIn(0f, 1f),
+                                sourceG = (cp.targetG + dg * scale).coerceIn(0f, 1f),
+                                sourceB = (cp.targetB + db * scale).coerceIn(0f, 1f)
+                            )
+                        } else {
+                            cp
+                        }
+                    }
+                    LutRecipe(sanitizedPoints)
                 } else {
-                    LocalImageAnalyzer.analyzeImages(bitmaps)
+                    localRecipe
                 }
 
                 PLog.d("LutCreatorViewModel", "Recipe: $recipe")

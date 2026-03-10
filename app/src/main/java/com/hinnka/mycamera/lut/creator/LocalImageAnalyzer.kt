@@ -4,49 +4,21 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.pow
 
 object LocalImageAnalyzer {
 
     /**
-     * Analyzes the given images and extracts a simplistic representation of their combined style
-     * as a LutRecipe.
-     * NOTE: This is a fast, heuristic-based approach. For more accurate semantic extraction,
-     * use the OpenAI/ML models.
+     * Analyzes the given images using K-Means clustering in Oklab space
+     * to extract the 8 most representative Target Colors.
+     * It then estimates their corresponding Source Colors using Inverse Transformation
+     * (Grey World + Contrast Normalization + Saturation Correction).
      */
     suspend fun analyzeImages(bitmaps: List<Bitmap>): LutRecipe = withContext(Dispatchers.Default) {
         val maxDim = 256
-        var totalLuma = 0f
-        var warmCount = 0
-        var coolCount = 0
-        var greenCount = 0
-        var magentaCount = 0
-
-        var hlX = 0f;
-        var hlY = 0f;
-        var hlCount = 0
-        var midX = 0f;
-        var midY = 0f;
-        var midCount = 0
-        var shX = 0f;
-        var shY = 0f;
-        var shCount = 0
-
-        var shadowLumaSum = 0f
-        var highlightLumaSum = 0f
-
-        val hueCounts = IntArray(8)
-        val hueSatSums = FloatArray(8)
-        val hueLumaSums = FloatArray(8)
-        val hsv = FloatArray(3)
-
         var totalPixels = 0
-        var totalSatSum = 0f
-        // We do not know total size in advance for lumaList, so we use a mutable list
-        // but for performance we can calculate total pixels first
+
         for (bitmap in bitmaps) {
             var w = bitmap.width
             var h = bitmap.height
@@ -58,8 +30,18 @@ object LocalImageAnalyzer {
             totalPixels += w * h
         }
 
-        val lumaList = FloatArray(totalPixels)
+        if (totalPixels == 0) return@withContext LutRecipe()
+
+        // We use an interleaved array for memory efficiency: [L, a, b, L, a, b...]
+        val oklabPixels = FloatArray(totalPixels * 3)
         var idx = 0
+
+        var sumL = 0.0
+        var sumA = 0.0
+        var sumB = 0.0
+        var sumC = 0.0
+        var minL = 1.0f
+        var maxL = 0.0f
 
         for (bitmap in bitmaps) {
             var w = bitmap.width
@@ -84,61 +66,28 @@ object LocalImageAnalyzer {
                 val g = Color.green(color) / 255f
                 val b = Color.blue(color) / 255f
 
-                // Use proper linear conversion and Oklab L for all analysis
                 val lr = OklchConverter.srgbToLinear(r)
                 val lg = OklchConverter.srgbToLinear(g)
                 val lb = OklchConverter.srgbToLinear(b)
                 val oklab = OklchConverter.linearSrgbToOklab(lr, lg, lb)
-                val luma = oklab[0]
-                
-                lumaList[idx++] = luma
-                totalLuma += luma
 
-                // Simple warmth/tint metric
-                if (r > b + 0.05f) warmCount++ else if (b > r + 0.05f) coolCount++
-                if (g > (r + b) / 2f + 0.05f) greenCount++ else if ((r + b) / 2f > g + 0.05f) magentaCount++
+                val L = oklab[0]
+                val a = oklab[1]
+                val b_v = oklab[2]
 
-                val (L, C, H) = OklchConverter.oklabToOklch(oklab[0], oklab[1], oklab[2])
-                totalSatSum += C
-                val hueRad = Math.toRadians(H.toDouble())
+                oklabPixels[idx * 3] = L
+                oklabPixels[idx * 3 + 1] = a
+                oklabPixels[idx * 3 + 2] = b_v
+                idx++
 
-                // Saturation weighted vector (using Oklab Chroma)
-                val vx = (Math.cos(hueRad) * C).toFloat()
-                val vy = (Math.sin(hueRad) * C).toFloat()
+                sumL += L
+                sumA += a
+                sumB += b_v
+                val c = Math.sqrt((a * a + b_v * b_v).toDouble()).toFloat()
+                sumC += c
 
-                // Luma region assignment (using Oklab L)
-                if (luma > 0.8f) {
-                    hlCount++
-                    hlX += vx
-                    hlY += vy
-                    highlightLumaSum += luma
-                } else if (luma < 0.2f) {
-                    shCount++
-                    shX += vx
-                    shY += vy
-                    shadowLumaSum += luma
-                } else {
-                    midCount++
-                    midX += vx
-                    midY += vy
-                }
-
-                // HSL Shifts bucket assignment
-                if (C > 0.01f) { 
-                    val bucket = when {
-                        H < 29f || H >= 330f + (360 - 330 + 29) / 2f -> 0 // Red
-                        H < 60f -> 1 // Orange
-                        H < 105f -> 2 // Yellow
-                        H < 140f -> 3 // Green
-                        H < 195f -> 4 // Cyan
-                        H < 260f -> 5 // Blue
-                        H < 295f -> 6 // Purple
-                        else -> 7 // Magenta
-                    }
-                    hueCounts[bucket]++
-                    hueSatSums[bucket] += C
-                    hueLumaSums[bucket] += luma
-                }
+                if (L < minL) minL = L
+                if (L > maxL) maxL = L
             }
 
             if (scaled != bitmap) {
@@ -146,135 +95,153 @@ object LocalImageAnalyzer {
             }
         }
 
-        // 1. Exposure & Contrast
-        if (totalPixels == 0) return@withContext LutRecipe()
+        // --- 1. Global Image Statistics ---
+        val avgL = (sumL / totalPixels).toFloat()
+        val avgA = (sumA / totalPixels).toFloat()
+        val avgB = (sumB / totalPixels).toFloat()
+        val avgC = (sumC / totalPixels).toFloat()
 
-        val avgLuma = totalLuma / totalPixels
-        // Reduce parametric weights since Tone Curve extraction handles macro contrast better
-        val exposureEst = ((avgLuma - 0.4f) * 0.5f).coerceIn(-0.5f, 0.5f)
+        // Dampen the global average subtraction so the white balance correction isn't too aggressive.
+        val dampenVal = 0.5f // Blend factor (0.0 = no correction, 1.0 = full correction)
 
-        lumaList.sort()
-        val p10 = lumaList[(lumaList.size * 0.1).toInt()]
-        val p90 = lumaList[(lumaList.size * 0.9).toInt()]
-        val contrastEst = ((p90 - p10) - 0.65f) * 0.2f
+        // Target neutral chroma
+        val targetNeutralC = 0.12f
+        val satCorr = (targetNeutralC / max(0.01f, avgC)).coerceIn(0.7f, 1.5f) // Narrowed range
+        val blendedSatCorr = 1.0f + (satCorr - 1.0f) * dampenVal
 
-        // Highlights & Shadows
-        // Highlights & Shadows
-        val avgHighlightLuma = if (hlCount > 0) highlightLumaSum / hlCount else 0.85f
-        val avgShadowLuma = if (shCount > 0) shadowLumaSum / shCount else 0.15f
-        // Reduce parametric weights: curve handles tone mapping better
-        val highlightsEst = ((avgHighlightLuma - 0.85f) * 0.3f).coerceIn(-0.15f, 0.15f)
-        val shadowsEst = ((avgShadowLuma - 0.15f) * 0.5f).coerceIn(-0.2f, 0.2f)
+        val lumaRange = max(0.01f, maxL - minL)
 
-        // 5. Build Macro Tone Curve (Look extraction)
-        val lumaCurve = mutableListOf<List<Float>>()
-        lumaCurve.add(listOf(0f, lumaList.first().coerceIn(0f, 0.12f))) 
-        for (i in 1..9) {
-            val pX = i * 0.1f
-            val pY = lumaList[(lumaList.size * pX).toInt()]
-            
-            // Balanced weights to preserve curve style: 60% histogram influence
-            // Use smooth threshold to protect highlights (L > 0.85)
-            val protection = max(0f, (pX - 0.85f) / 0.15f).pow(1.5f)
-            val photoWeight = (0.6f * (1f - protection)).coerceIn(0f, 0.6f)
-            
-            val blendedY = pX * (1f - photoWeight) + pY * photoWeight
-            lumaCurve.add(listOf(pX, blendedY.coerceIn(0f, 1f)))
-        }
-        lumaCurve.add(listOf(1f, 1f))
+        // --- 2. K-means Clustering (K=8) ---
+        val k = 8
+        val centroids = Array(k) { FloatArray(3) }
 
-        // 2. White Balance / Temperature & Tint
-        val tempEst = if (warmCount + coolCount > 0) {
-            val ratio = warmCount.toFloat() / (warmCount + coolCount)
-            (ratio - 0.5f) * 0.4f
-        } else {
-            0f
+        // Initialize centroids uniformly from the data
+        val step = totalPixels / k
+        for (i in 0 until k) {
+            val pIdx = min(i * step, totalPixels - 1)
+            centroids[i][0] = oklabPixels[pIdx * 3]
+            centroids[i][1] = oklabPixels[pIdx * 3 + 1]
+            centroids[i][2] = oklabPixels[pIdx * 3 + 2]
         }
 
-        val tintEst = if (magentaCount + greenCount > 0) {
-            val ratio = magentaCount.toFloat() / (magentaCount + greenCount)
-            (ratio - 0.5f) * 0.3f
-        } else {
-            0f
-        }
+        val assignments = IntArray(totalPixels)
+        val maxIters = 20
+        var centroidsChanged = true
+        var iters = 0
 
-        // 3. Split Toning
-        fun getToningTarget(xSum: Float, ySum: Float, count: Int, satMultiplier: Float = 1.0f): ToningTarget {
-            if (count < totalPixels * 0.05f) return ToningTarget()
-            val avgX = xSum / count
-            val avgY = ySum / count
-            var h = Math.toDegrees(Math.atan2(avgY.toDouble(), avgX.toDouble())).toFloat()
-            if (h < 0) h += 360f
-            // Extract Oklab chroma and scale broadly to 0.0-1.0 mapping range. 
-            // Reduce saturation extraction weight to prevent overly aggressive color casts
-            val s = min(1f, Math.sqrt((avgX * avgX + avgY * avgY).toDouble()).toFloat()) * 0.4f * satMultiplier
-            return ToningTarget(hue = h, saturation = s)
-        }
+        while (centroidsChanged && iters < maxIters) {
+            centroidsChanged = false
+            iters++
 
-        val hlToning = getToningTarget(hlX, hlY, hlCount)
-        val shToning = getToningTarget(shX, shY, shCount)
-        // Midtones naturally contain the entire scene's average color. 
-        // We dampen its split-toning extraction heavily to prevent washing the entire image.
-        val midToning = getToningTarget(midX, midY, midCount, 0.1f)
+            // Assign points to nearest centroid
+            for (i in 0 until totalPixels) {
+                val L = oklabPixels[i * 3]
+                val a = oklabPixels[i * 3 + 1]
+                val b_v = oklabPixels[i * 3 + 2]
 
-        // 4. HSL Shifts Evaluator
-        val neutralSat = 0.08f // Baseline in Oklab Chroma (C) is much lower than HSV Sat
-        val avgSatGlobal = if (totalPixels > 0) totalSatSum / totalPixels else neutralSat
-        val saturationEst = (1.0f + ln(max(0.01f, avgSatGlobal / neutralSat)) * 0.4f).coerceIn(0.7f, 1.4f)
-        
-        val hueLumaBaselines = floatArrayOf(0.4f, 0.6f, 0.8f, 0.65f, 0.6f, 0.35f, 0.45f, 0.5f)
-
-        val rawShifts = Array(8) { bucketIndex ->
-            if (hueCounts[bucketIndex] < totalPixels * 0.005f) return@Array Shift()
-            val bucketAvgSat = hueSatSums[bucketIndex] / hueCounts[bucketIndex]
-            val bucketAvgLuma = hueLumaSums[bucketIndex] / hueCounts[bucketIndex]
-            val baseLuma = hueLumaBaselines[bucketIndex]
-            
-            // Raw scales
-            Shift(
-                sScale = (1.0f + ln(max(0.1f, bucketAvgSat / neutralSat))).coerceIn(0.4f, 2.0f),
-                lScale = (1.0f + ln(max(0.1f, bucketAvgLuma / baseLuma)) * 0.5f).coerceIn(0.5f, 1.6f)
-            )
-        }
-
-        // Banding Prevention: Circular smoothing on HSL buckets (moving average)
-        fun getSmoothedShift(index: Int): Shift {
-            var sumS = 0f
-            var sumL = 0f
-            val neighbors = listOf(-1, 0, 1) // kernel
-            for (offset in neighbors) {
-                val i = (index + offset + 8) % 8
-                sumS += rawShifts[i].sScale
-                sumL += rawShifts[i].lScale
+                var bestDist = Float.MAX_VALUE
+                var bestCluster = 0
+                for (c in 0 until k) {
+                    val cL = centroids[c][0]
+                    val ca = centroids[c][1]
+                    val cb = centroids[c][2]
+                    val dL = L - cL
+                    val da = a - ca
+                    val db = b_v - cb
+                    // Euclidean distance in Oklab is perceptually uniform
+                    val dist = dL * dL + da * da + db * db
+                    if (dist < bestDist) {
+                        bestDist = dist
+                        bestCluster = c
+                    }
+                }
+                assignments[i] = bestCluster
             }
-            return Shift(sScale = sumS / 3f, lScale = sumL / 3f)
+
+            // Update centroids
+            val clusterCounts = IntArray(k)
+            val clusterSums = Array(k) { DoubleArray(3) }
+
+            for (i in 0 until totalPixels) {
+                val cluster = assignments[i]
+                clusterCounts[cluster]++
+                clusterSums[cluster][0] += oklabPixels[i * 3].toDouble()
+                clusterSums[cluster][1] += oklabPixels[i * 3 + 1].toDouble()
+                clusterSums[cluster][2] += oklabPixels[i * 3 + 2].toDouble()
+            }
+
+            for (c in 0 until k) {
+                if (clusterCounts[c] > 0) {
+                    val newL = (clusterSums[c][0] / clusterCounts[c]).toFloat()
+                    val newa = (clusterSums[c][1] / clusterCounts[c]).toFloat()
+                    val newb = (clusterSums[c][2] / clusterCounts[c]).toFloat()
+
+                    if (Math.abs(newL - centroids[c][0]) > 0.001f ||
+                        Math.abs(newa - centroids[c][1]) > 0.001f ||
+                        Math.abs(newb - centroids[c][2]) > 0.001f
+                    ) {
+                        centroidsChanged = true
+                    }
+                    centroids[c][0] = newL
+                    centroids[c][1] = newa
+                    centroids[c][2] = newb
+                }
+            }
         }
 
-        val smoothedHsl = HslShifts(
-            red = getSmoothedShift(0),
-            orange = getSmoothedShift(1),
-            yellow = getSmoothedShift(2),
-            green = getSmoothedShift(3),
-            cyan = getSmoothedShift(4),
-            blue = getSmoothedShift(5),
-            purple = getSmoothedShift(6),
-            magenta = getSmoothedShift(7)
+        // --- 3. Map Target Colors to Source Colors ---
+        val controlPoints = mutableListOf<ControlPoint>()
+
+        for (c in 0 until k) {
+            val tL = centroids[c][0]
+            val ta = centroids[c][1]
+            val tb = centroids[c][2]
+
+            // Inverse Transform:
+            // 1. Contrast Normalization (damped)
+            val fullNormL = ((tL - minL) / lumaRange).coerceIn(0f, 1f)
+            val sL = tL * (1f - dampenVal) + fullNormL * dampenVal
+
+            // 2. Grey World white balance removal (damped)
+            var sa = ta - avgA * dampenVal
+            var sb = tb - avgB * dampenVal
+
+            // 3. Saturation correction (damped)
+            sa *= blendedSatCorr
+            sb *= blendedSatCorr
+
+            // Convert back to Linear RGB, then sRGB for Control Points
+            val sourceRgb = oklabToSrgb(sL, sa, sb)
+            val targetRgb = oklabToSrgb(tL, ta, tb)
+
+            controlPoints.add(
+                ControlPoint(
+                    sourceR = sourceRgb[0], sourceG = sourceRgb[1], sourceB = sourceRgb[2],
+                    targetR = targetRgb[0], targetG = targetRgb[1], targetB = targetRgb[2]
+                )
+            )
+        }
+
+        // --- 4. Anchors (Black, White, Mid-Grey) ---
+        // Anchors should map strictly identity or very close to identity to prevent heavy color casts on neutrals
+        controlPoints.add(ControlPoint(0f, 0f, 0f, 0f, 0f, 0f))
+        controlPoints.add(ControlPoint(1f, 1f, 1f, 1f, 1f, 1f))
+
+        // Target Mid-Grey - Add a very slight curve to grey if needed, but safer to keep mostly neutral
+        val greyTarget = oklabToSrgb((minL + maxL) / 2f, avgA * 0.2f, avgB * 0.2f)
+        val sGrey = oklabToSrgb(0.5f, 0f, 0f)
+        controlPoints.add(
+            ControlPoint(sGrey[0], sGrey[1], sGrey[2], greyTarget[0], greyTarget[1], greyTarget[2])
         )
 
-        LutRecipe(
-            colorFeatures = ColorFeatures(
-                tone = Tone(
-                    exposure = exposureEst,
-                    contrast = contrastEst,
-                    saturation = saturationEst,
-                    highlights = highlightsEst,
-                    shadows = shadowsEst
-                ),
-                balance = Balance(temperature = tempEst, tint = tintEst),
-                splitToning = SplitToning(shadows = shToning, midtones = midToning, highlights = hlToning),
-                hslShifts = smoothedHsl,
-                curves = Curves(luma = lumaCurve)
-            )
-        )
+        LutRecipe(controlPoints)
+    }
+
+    private fun oklabToSrgb(L: Float, a: Float, b: Float): FloatArray {
+        val linear = OklchConverter.oklabToLinearSrgb(L, a, b)
+        val r = OklchConverter.linearToSrgb(linear[0].coerceIn(0f, 1f))
+        val g = OklchConverter.linearToSrgb(linear[1].coerceIn(0f, 1f))
+        val b_srgb = OklchConverter.linearToSrgb(linear[2].coerceIn(0f, 1f))
+        return floatArrayOf(r, g, b_srgb)
     }
 }
