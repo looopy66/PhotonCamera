@@ -1014,13 +1014,13 @@ object PhotoManager {
     }
 
     /**
-     * 生成 512x512 缩略图
+     * 生成 512 缩略图
      */
     private suspend fun generateThumbnail(bitmap: Bitmap, targetFile: File) {
         withContext(Dispatchers.IO) {
             try {
-                // 生成 512x512 缩略图
-                val thumbnail = ThumbnailUtils.extractThumbnail(bitmap, 512, 512)
+                // 生成 512 缩略图
+                val thumbnail = ThumbnailUtils.extractThumbnail(bitmap, 512, 512 * bitmap.height / bitmap.width)
                 FileOutputStream(targetFile).use { out ->
                     thumbnail.compress(Bitmap.CompressFormat.JPEG, 80, out)
                 }
@@ -1049,12 +1049,10 @@ object PhotoManager {
             val bitmap = BitmapFactory.decodeFile(sourceFile.absolutePath, options)
 
             if (bitmap != null) {
-                val thumbnail = ThumbnailUtils.extractThumbnail(bitmap, targetSize, targetSize)
                 FileOutputStream(targetFile).use { out ->
-                    thumbnail.compress(Bitmap.CompressFormat.JPEG, 80, out)
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 80, out)
                 }
                 bitmap.recycle()
-                thumbnail.recycle()
             }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to generate thumbnail", e)
@@ -1091,9 +1089,6 @@ object PhotoManager {
      * 为直接传入的系统 URI 创建删除请求（用于 Android 11+）
      */
     fun createSystemDeleteRequest(context: Context, uri: Uri): PendingIntent? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            return null
-        }
         if (uri.scheme != "content") {
             PLog.w(TAG, "createSystemDeleteRequest: URI scheme must be content, but was ${uri.scheme}")
             return null

@@ -18,8 +18,10 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -356,9 +358,11 @@ fun GalleryScreen(
             } else {
                 val currentPhotos = photos
                 // 照片网格
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
-                    contentPadding = PaddingValues(2.dp),
+                LazyVerticalStaggeredGrid(
+                    columns = StaggeredGridCells.Fixed(2),
+                    contentPadding = PaddingValues(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalItemSpacing = 4.dp,
                     modifier = Modifier.fillMaxSize()
                 ) {
                     items(
@@ -397,7 +401,7 @@ fun GalleryScreen(
                     }
 
                     if (selectedTab == GalleryTab.SYSTEM && isSystemLoadingMore) {
-                        item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                        item(span = StaggeredGridItemSpan.FullLine) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -490,10 +494,20 @@ private fun PhotoGridItem(
 ) {
     val context = LocalContext.current
 
+    val aspectRatio = remember(photo.width, photo.height, photo.metadata) {
+        val width = photo.metadata?.width ?: photo.width
+        val height = photo.metadata?.height ?: photo.height
+        if (width > 0 && height > 0) {
+            width.toFloat() / height.toFloat()
+        } else {
+            1f
+        }
+    }
+
     Box(
         modifier = Modifier
-            .aspectRatio(1f)
-            .padding(1.dp)
+            .fillMaxWidth()
+            .aspectRatio(aspectRatio)
             .clip(RoundedCornerShape(4.dp))
             .background(Color(0xFF1A1A1A))
             .combinedClickable(
@@ -515,14 +529,13 @@ private fun PhotoGridItem(
                         transformations(transformation)
                     }
                 }
-                .size(512) // 限制缩略图大小，提高加载速度
                 .build()
         }
 
         AsyncImage(
             model = imageRequest,
             contentDescription = photo.displayName,
-            contentScale = ContentScale.Crop,
+            contentScale = ContentScale.Fit,
             modifier = Modifier.fillMaxSize()
         )
 
