@@ -17,6 +17,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import com.hinnka.mycamera.R
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -31,11 +36,10 @@ fun LutCreatorScreen(
     var customPrompt by remember { mutableStateOf("") }
 
     val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetMultipleContents()
-    ) { uris: List<Uri> ->
-        if (uris.isNotEmpty()) {
-            viewModel.analyzeImages(uris, customPrompt)
-        }
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri ?: return@rememberLauncherForActivityResult
+        viewModel.analyzeImages(uri, customPrompt)
     }
 
     Scaffold(
@@ -206,22 +210,49 @@ fun LutCreatorScreen(
 
                 is LutCreatorUiState.AnalysisComplete -> {
                     Column(
-                        modifier = Modifier.fillMaxWidth().weight(1f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState()),
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
+                        verticalArrangement = Arrangement.Top
                     ) {
+                        Spacer(modifier = Modifier.height(16.dp))
                         Icon(
                             imageVector = Icons.Default.AutoAwesome,
                             contentDescription = null,
-                            modifier = Modifier.size(64.dp),
+                            modifier = Modifier.size(48.dp),
                             tint = Color(0xFFE5A324)
                         )
-                        Spacer(modifier = Modifier.height(24.dp))
+                        Spacer(modifier = Modifier.height(16.dp))
                         Text(
                             stringResource(R.string.lut_creator_analysis_complete),
-                            style = MaterialTheme.typography.headlineMedium,
+                            style = MaterialTheme.typography.headlineSmall,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                         )
+                        
+                        state.generatedSourceBitmap?.let { bitmap ->
+                            Spacer(modifier = Modifier.height(24.dp))
+                            Text(
+                                text = "AI 还原的原图预览",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                shadowElevation = 4.dp,
+                                modifier = Modifier.sizeIn(maxHeight = 300.dp)
+                            ) {
+                                androidx.compose.foundation.Image(
+                                    bitmap = bitmap.asImageBitmap(),
+                                    contentDescription = "AI Generated Original",
+                                    modifier = Modifier.fillMaxWidth(),
+                                    contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                                )
+                            }
+                        }
+
                         Spacer(modifier = Modifier.height(32.dp))
                         OutlinedTextField(
                             value = lutName,
@@ -234,6 +265,7 @@ fun LutCreatorScreen(
                                 focusedBorderColor = Color(0xFFE5A324)
                             )
                         )
+                        Spacer(modifier = Modifier.height(24.dp))
                     }
                     Button(
                         onClick = { viewModel.generateAndImportLut(lutName, state.recipe) },

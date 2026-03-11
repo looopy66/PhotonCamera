@@ -644,26 +644,14 @@ fun SettingsScreen(
                                 color = Color.White.copy(alpha = 0.1f),
                                 modifier = Modifier.padding(vertical = 8.dp)
                             )
-
-                            TextInputSettingItem(
-                                title = stringResource(R.string.settings_openai_base_url),
-                                description = stringResource(R.string.settings_openai_base_url_desc),
-                                value = openAIUrl ?: "",
-                                onValueChange = { viewModel.setOpenAIUrl(it) }
-                            )
-
-                            HorizontalDivider(
-                                color = Color.White.copy(alpha = 0.1f),
-                                modifier = Modifier.padding(vertical = 8.dp)
-                            )
                         }
 
                         DropdownSettingItem(
                             title = stringResource(R.string.settings_ai_model),
                             description = stringResource(R.string.settings_ai_model_desc),
-                            value = if (useBuiltInAiService) com.hinnka.mycamera.lut.creator.OpenAIApiClient.BUILT_IN_MODEL else openAIModel
+                            value = if (useBuiltInAiService) com.hinnka.mycamera.lut.creator.OpenAIApiClient.BUILT_IN_IMAGE_MODEL else openAIModel
                                 ?: "",
-                            options = if (useBuiltInAiService) listOf(com.hinnka.mycamera.lut.creator.OpenAIApiClient.BUILT_IN_MODEL) else availableOpenAIModels,
+                            options = if (useBuiltInAiService) listOf(com.hinnka.mycamera.lut.creator.OpenAIApiClient.BUILT_IN_IMAGE_MODEL) else availableOpenAIModels,
                             isLoading = isFetchingAIModels,
                             enabled = !useBuiltInAiService,
                             onExpanded = { viewModel.fetchAvailableAIModels() },

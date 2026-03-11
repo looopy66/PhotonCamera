@@ -24,36 +24,25 @@ class LutCreatorViewModel(application: Application) : AndroidViewModel(applicati
     private val _uiState = MutableStateFlow<LutCreatorUiState>(LutCreatorUiState.Idle)
     val uiState: StateFlow<LutCreatorUiState> = _uiState
 
-    val aiAnalysisEnabled = MutableStateFlow(false)
+    val aiAnalysisEnabled: MutableStateFlow<Boolean> = MutableStateFlow(false)
 
-    fun analyzeImages(uris: List<Uri>, customPrompt: String = "", isAiEnabled: Boolean = aiAnalysisEnabled.value) {
-        if (uris.isEmpty()) return
-
+    fun analyzeImages(uri: Uri, customPrompt: String = "", isAiEnabled: Boolean = aiAnalysisEnabled.value) {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = LutCreatorUiState.Analyzing
 
             try {
                 // Read bitmaps from URIs
-                val bitmaps = uris.mapNotNull { loadBitmapFromUri(it) }
-                if (bitmaps.isEmpty()) {
+                val bitmap = loadBitmapFromUri(uri)
+                if (bitmap == null) {
                     _uiState.value = LutCreatorUiState.Error("Failed to decode image(s)")
                     return@launch
                 }
 
-                // Always run Local Analysis first to get the Target Control Points via K-Means.
-                // This gives us a stable mapping of the image's actual target colors.
-                val localRecipe = LocalImageAnalyzer.analyzeImages(bitmaps)
-
-                val recipe = if (isAiEnabled) {
+                val (recipe, generatedSource) = if (isAiEnabled) {
                     val userPrefs = userPrefsRepo.userPreferences.firstOrNull()
                     val isBuiltIn = userPrefs?.useBuiltInAiService ?: false
                     val apiKey = if (isBuiltIn) OpenAIApiClient.BUILT_IN_API_KEY else userPrefs?.openAIApiKey ?: ""
                     val baseUrl = if (isBuiltIn) OpenAIApiClient.BUILT_IN_API_URL else userPrefs?.openAIBaseUrl ?: ""
-                    val model = if (isBuiltIn) {
-                        OpenAIApiClient.BUILT_IN_MODEL
-                    } else {
-                        userPrefs?.openAIModel?.takeIf { it.isNotEmpty() } ?: OpenAIApiClient.BUILT_IN_MODEL
-                    }
 
                     if (apiKey.isEmpty()) {
                         _uiState.value = LutCreatorUiState.Error("OpenAI API Key is not set in settings")
@@ -64,52 +53,25 @@ class LutCreatorViewModel(application: Application) : AndroidViewModel(applicati
 
                     PLog.d(
                         "LutCreatorViewModel",
-                        "Calling AI Client for Source Color Inference... Custom prompt: $customPrompt, Model: $model"
+                        "Calling Gemini 3.1 for direct image-to-image restoration..."
                     )
-                    // Pass the images to AI to generate a pure Style Recipe (without constraints)
-                    val result = client.analyzeImagesForLut(
-                        bitmaps,
-                        model,
+
+                    val sourceBitmap = client.generateOriginalImage(
+                        bitmap = bitmap,
+                        isBuiltIn,
+                        model = OpenAIApiClient.BUILT_IN_IMAGE_MODEL,
                         customPrompt = customPrompt
-                    )
-                    val aiStyleRecipe = result.getOrThrow()
+                    ).getOrThrow()
 
-                    // Now, use Inverse RBF to map our precise Local Targets through the AI's Style Recipe
-                    // This finds the exact Source colors that produce our Local Targets under the AI's style model.
-                    val inferredSources = LutGenerator.inverseInterpolate(
-                        styleRecipe = aiStyleRecipe,
-                        localTargets = localRecipe.controlPoints
-                    )
-
-                    // Sanitize the Final output: limit extreme shifts between the inferred Source and actual Local Target
-                    // If the AI's style caused an extreme shift (e.g. green to black),
-                    // we clamp the vector magnitude to preserve the *direction* but limit the *strength*.
-                    val maxDist = 0.4f // Limits shifts to a robust but realistic max delta
-                    val sanitizedPoints = inferredSources.map { cp ->
-                        val dr = cp.sourceR - cp.targetR
-                        val dg = cp.sourceG - cp.targetG
-                        val db = cp.sourceB - cp.targetB
-                        val dist = kotlin.math.sqrt((dr * dr + dg * dg + db * db).toDouble()).toFloat()
-
-                        if (dist > maxDist) {
-                            val scale = maxDist / dist
-                            cp.copy(
-                                sourceR = (cp.targetR + dr * scale).coerceIn(0f, 1f),
-                                sourceG = (cp.targetG + dg * scale).coerceIn(0f, 1f),
-                                sourceB = (cp.targetB + db * scale).coerceIn(0f, 1f)
-                            )
-                        } else {
-                            cp
-                        }
-                    }
-                    LutRecipe(sanitizedPoints)
+                    PLog.d("LutCreatorViewModel", "AI generated original image, analyzing pair locally...")
+                    LocalImageAnalyzer.analyzeSourceTargetImages(sourceBitmap, bitmap) to sourceBitmap
                 } else {
-                    localRecipe
+                    LocalImageAnalyzer.analyzeImages(listOf(bitmap)) to null
                 }
 
                 PLog.d("LutCreatorViewModel", "Recipe: $recipe")
 
-                _uiState.value = LutCreatorUiState.AnalysisComplete(recipe)
+                _uiState.value = LutCreatorUiState.AnalysisComplete(recipe, generatedSource)
             } catch (e: Exception) {
                 _uiState.value = LutCreatorUiState.Error("Analysis failed: ${e.message}")
             }
@@ -119,10 +81,17 @@ class LutCreatorViewModel(application: Application) : AndroidViewModel(applicati
     private fun loadBitmapFromUri(uri: Uri): android.graphics.Bitmap? {
         return try {
             val source = android.graphics.ImageDecoder.createSource(getApplication<Application>().contentResolver, uri)
-            android.graphics.ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+            val bitmap = android.graphics.ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
                 decoder.setAllocator(android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE) // Needs mutable maybe later, software allows fast reading
             }
+            val totalPixels = bitmap.width * bitmap.height
+            if (totalPixels == 0) {
+                PLog.w("LutCreatorViewModel", "Loaded bitmap has 0 total pixels for URI: $uri")
+                return null
+            }
+            bitmap
         } catch (e: Exception) {
+            PLog.e("LutCreatorViewModel", "Failed to load bitmap from URI: $uri", e)
             null
         }
     }
@@ -165,7 +134,10 @@ class LutCreatorViewModel(application: Application) : AndroidViewModel(applicati
 sealed class LutCreatorUiState {
     object Idle : LutCreatorUiState()
     object Analyzing : LutCreatorUiState()
-    data class AnalysisComplete(val recipe: LutRecipe) : LutCreatorUiState()
+    data class AnalysisComplete(
+        val recipe: LutRecipe,
+        val generatedSourceBitmap: android.graphics.Bitmap? = null
+    ) : LutCreatorUiState()
     object Generating : LutCreatorUiState()
     data class Success(val lutId: String) : LutCreatorUiState()
     data class Error(val message: String) : LutCreatorUiState()

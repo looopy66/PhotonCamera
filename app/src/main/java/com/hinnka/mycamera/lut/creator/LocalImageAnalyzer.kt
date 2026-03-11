@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.max
 import kotlin.math.min
+import androidx.core.graphics.scale
 
 object LocalImageAnalyzer {
 
@@ -16,6 +17,141 @@ object LocalImageAnalyzer {
      * (Grey World + Contrast Normalization + Saturation Correction).
      */
     suspend fun analyzeImages(bitmaps: List<Bitmap>): LutRecipe = withContext(Dispatchers.Default) {
+        // Existing implementation remains as fallback or for local-only extraction
+        internalAnalyzeImages(bitmaps)
+    }
+
+    suspend fun analyzeSourceTargetImages(source: Bitmap, target: Bitmap): LutRecipe = withContext(Dispatchers.Default) {
+        val maxDim = 256
+        val sw = if (source.width > maxDim || source.height > maxDim) {
+            val scale = maxDim.toFloat() / max(source.width, source.height)
+            (source.width * scale).toInt()
+        } else source.width
+        val sh = if (source.width > maxDim || source.height > maxDim) {
+            val scale = maxDim.toFloat() / max(source.width, source.height)
+            (source.height * scale).toInt()
+        } else source.height
+
+        val scaledSource = source.scale(sw, sh)
+        val scaledTarget = target.scale(sw, sh)
+
+        val pixelsS = IntArray(sw * sh)
+        val pixelsT = IntArray(sw * sh)
+        scaledSource.getPixels(pixelsS, 0, sw, 0, 0, sw, sh)
+        scaledTarget.getPixels(pixelsT, 0, sw, 0, 0, sw, sh)
+
+        val totalPixels = sw * sh
+        if (totalPixels == 0) return@withContext LutRecipe()
+
+        val oklabSource = FloatArray(totalPixels * 3)
+        for (i in 0 until totalPixels) {
+            val c = pixelsS[i]
+            val r = Color.red(c) / 255f
+            val g = Color.green(c) / 255f
+            val b = Color.blue(c) / 255f
+            val oklab = OklchConverter.linearSrgbToOklab(
+                OklchConverter.srgbToLinear(r),
+                OklchConverter.srgbToLinear(g),
+                OklchConverter.srgbToLinear(b)
+            )
+            oklabSource[i * 3] = oklab[0]
+            oklabSource[i * 3 + 1] = oklab[1]
+            oklabSource[i * 3 + 2] = oklab[2]
+        }
+
+        // K-Means on Source to find significant colors
+        val k = 12
+        val centroids = Array(k) { FloatArray(3) }
+        val step = totalPixels / k
+        for (i in 0 until k) {
+            val pIdx = min(i * step, totalPixels - 1)
+            centroids[i][0] = oklabSource[pIdx * 3]
+            centroids[i][1] = oklabSource[pIdx * 3 + 1]
+            centroids[i][2] = oklabSource[pIdx * 3 + 2]
+        }
+
+        val assignments = IntArray(totalPixels)
+        repeat(15) { // 15 iterations of K-means
+            for (i in 0 until totalPixels) {
+                var bestDist = Float.MAX_VALUE
+                var bestC = 0
+                for (c in 0 until k) {
+                    val dL = oklabSource[i * 3] - centroids[c][0]
+                    val da = oklabSource[i * 3 + 1] - centroids[c][1]
+                    val db = oklabSource[i * 3 + 2] - centroids[c][2]
+                    val dist = dL * dL + da * da + db * db
+                    if (dist < bestDist) {
+                        bestDist = dist
+                        bestC = c
+                    }
+                }
+                assignments[i] = bestC
+            }
+            val sums = Array(k) { DoubleArray(3) }
+            val counts = IntArray(k)
+            for (i in 0 until totalPixels) {
+                val c = assignments[i]
+                sums[c][0] += oklabSource[i * 3].toDouble()
+                sums[c][1] += oklabSource[i * 3 + 1].toDouble()
+                sums[c][2] += oklabSource[i * 3 + 2].toDouble()
+                counts[c]++
+            }
+            for (c in 0 until k) {
+                if (counts[c] > 0) {
+                    centroids[c][0] = (sums[c][0] / counts[c]).toFloat()
+                    centroids[c][1] = (sums[c][1] / counts[c]).toFloat()
+                    centroids[c][2] = (sums[c][2] / counts[c]).toFloat()
+                }
+            }
+        }
+
+        val controlPoints = mutableListOf<ControlPoint>()
+        // For each cluster, find the average color in TARGET
+        for (c in 0 until k) {
+            var sumTR = 0.0
+            var sumTG = 0.0
+            var sumTB = 0.0
+            var count = 0
+            for (i in 0 until totalPixels) {
+                if (assignments[i] == c) {
+                    val colorT = pixelsT[i]
+                    sumTR += Color.red(colorT) / 255f
+                    sumTG += Color.green(colorT) / 255f
+                    sumTB += Color.blue(colorT) / 255f
+                    count++
+                }
+            }
+
+            if (count > 0) {
+                val sourceRgb = oklabToSrgb(centroids[c][0], centroids[c][1], centroids[c][2])
+                controlPoints.add(ControlPoint(
+                    sourceR = sourceRgb[0], sourceG = sourceRgb[1], sourceB = sourceRgb[2],
+                    targetR = (sumTR / count).toFloat(), targetG = (sumTG / count).toFloat(), targetB = (sumTB / count).toFloat()
+                ))
+            }
+        }
+
+        // Anchors
+        controlPoints.add(ControlPoint(0f, 0f, 0f, 0f, 0f, 0f))
+        controlPoints.add(ControlPoint(1f, 1f, 1f, 1f, 1f, 1f))
+        controlPoints.add(ControlPoint(0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f))
+
+        // Skin Tone Protection Anchor
+        // Optimized for typical young Asian female skin tone to ensure natural results
+        // Representing a healthy, light warm skin tone
+        val asianSkinTone = floatArrayOf(0.82f, 0.68f, 0.62f) 
+        controlPoints.add(ControlPoint(
+            sourceR = asianSkinTone[0], sourceG = asianSkinTone[1], sourceB = asianSkinTone[2],
+            targetR = asianSkinTone[0], targetG = asianSkinTone[1], targetB = asianSkinTone[2]
+        ))
+
+        scaledSource.recycle()
+        scaledTarget.recycle()
+
+        LutRecipe(controlPoints)
+    }
+
+    private suspend fun internalAnalyzeImages(bitmaps: List<Bitmap>): LutRecipe = withContext(Dispatchers.Default) {
         val maxDim = 256
         var totalPixels = 0
 
@@ -71,23 +207,23 @@ object LocalImageAnalyzer {
                 val lb = OklchConverter.srgbToLinear(b)
                 val oklab = OklchConverter.linearSrgbToOklab(lr, lg, lb)
 
-                val L = oklab[0]
+                val l = oklab[0]
                 val a = oklab[1]
-                val b_v = oklab[2]
+                val bv = oklab[2]
 
-                oklabPixels[idx * 3] = L
+                oklabPixels[idx * 3] = l
                 oklabPixels[idx * 3 + 1] = a
-                oklabPixels[idx * 3 + 2] = b_v
+                oklabPixels[idx * 3 + 2] = bv
                 idx++
 
-                sumL += L
+                sumL += l
                 sumA += a
-                sumB += b_v
-                val c = Math.sqrt((a * a + b_v * b_v).toDouble()).toFloat()
-                sumC += c
+                sumB += bv
+                val cStrLimit = Math.sqrt((a * a + bv * bv).toDouble()).toFloat()
+                sumC += cStrLimit
 
-                if (L < minL) minL = L
-                if (L > maxL) maxL = L
+                if (l < minL) minL = l
+                if (l > maxL) maxL = l
             }
 
             if (scaled != bitmap) {
@@ -135,9 +271,9 @@ object LocalImageAnalyzer {
 
             // Assign points to nearest centroid
             for (i in 0 until totalPixels) {
-                val L = oklabPixels[i * 3]
+                val l = oklabPixels[i * 3]
                 val a = oklabPixels[i * 3 + 1]
-                val b_v = oklabPixels[i * 3 + 2]
+                val bv = oklabPixels[i * 3 + 2]
 
                 var bestDist = Float.MAX_VALUE
                 var bestCluster = 0
@@ -145,9 +281,9 @@ object LocalImageAnalyzer {
                     val cL = centroids[c][0]
                     val ca = centroids[c][1]
                     val cb = centroids[c][2]
-                    val dL = L - cL
+                    val dL = l - cL
                     val da = a - ca
-                    val db = b_v - cb
+                    val db = bv - cb
                     // Euclidean distance in Oklab is perceptually uniform
                     val dist = dL * dL + da * da + db * db
                     if (dist < bestDist) {
@@ -237,11 +373,11 @@ object LocalImageAnalyzer {
         LutRecipe(controlPoints)
     }
 
-    private fun oklabToSrgb(L: Float, a: Float, b: Float): FloatArray {
-        val linear = OklchConverter.oklabToLinearSrgb(L, a, b)
+    private fun oklabToSrgb(l: Float, a: Float, b: Float): FloatArray {
+        val linear = OklchConverter.oklabToLinearSrgb(l, a, b)
         val r = OklchConverter.linearToSrgb(linear[0].coerceIn(0f, 1f))
         val g = OklchConverter.linearToSrgb(linear[1].coerceIn(0f, 1f))
-        val b_srgb = OklchConverter.linearToSrgb(linear[2].coerceIn(0f, 1f))
-        return floatArrayOf(r, g, b_srgb)
+        val bSrgb = OklchConverter.linearToSrgb(linear[2].coerceIn(0f, 1f))
+        return floatArrayOf(r, g, bSrgb)
     }
 }

@@ -935,7 +935,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             try {
-                val client = com.hinnka.mycamera.lut.creator.OpenAIApiClient(apiKey, baseUrl)
+                val client = OpenAIApiClient(apiKey, baseUrl)
                 val result = client.getAvailableModels()
                 result.onSuccess { models ->
                     _availableOpenAIModels.value = models
