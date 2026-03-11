@@ -262,6 +262,14 @@
     <string name="settings_openai_base_url_desc">Set a custom API destination to support compatible language models</string>
     <string name="settings_use_built_in_ai">Use Built-in Experience Service</string>
     <string name="settings_use_built_in_ai_desc">Use the built-in AI extraction service without configuring your own API Key.</string>
+    <string name="settings_backup_settings">Backup Settings</string>
+    <string name="settings_backup_settings_description">Backup your preferences and custom imported LUTs/Frames.</string>
+    <string name="settings_restore_settings">Restore Settings</string>
+    <string name="settings_restore_settings_description">Restore from a previous backup ZIP file. App may require a restart to apply.</string>
+    <string name="backup_success">Backup completed successfully</string>
+    <string name="backup_failed">Backup failed</string>
+    <string name="restore_success">Restore completed successfully. Please restart the app.</string>
+    <string name="restore_failed">Restore failed</string>
     <string name="filter_management_title">LUT Management</string>
     <string name="frame_management_title">Frame Management</string>
     <string name="category_all">All</string>
