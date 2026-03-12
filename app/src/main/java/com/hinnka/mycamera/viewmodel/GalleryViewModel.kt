@@ -546,7 +546,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * 快速加载指定照片并置顶（用于 Phantom 模式跳转）
+     * 导入并快速加载指定照片并置顶（用于 Phantom 模式跳转）
      */
     fun quickLoadPhoto(photoId: String) {
         viewModelScope.launch {
@@ -579,6 +579,45 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             _photos.value = currentList
             _latestPhoto.value = photo
             PLog.d(TAG, "Quickly loaded and topped photo: $photoId")
+        }
+    }
+
+    /**
+     * 导入从系统相册分享的照片
+     */
+    fun importSharedImage(uri: android.net.Uri, onSuccess: (String) -> Unit = {}) {
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            val photoId = PhotoManager.importPhoto(context, uri, null)
+            if (photoId != null) {
+                loadPhotos()
+                selectedTab = GalleryTab.PHOTON
+                // 等待列表渲染后选中并跳转
+                delay(100)
+                setCurrentPhotoById(photoId)
+                onSuccess(photoId)
+            }
+        }
+    }
+
+    /**
+     * 批量导入从系统相册分享的照片
+     */
+    fun importSharedImages(uris: List<android.net.Uri>) {
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            var lastPhotoId: String? = null
+            uris.forEach { uri ->
+                val id = PhotoManager.importPhoto(context, uri, null)
+                if (id != null) lastPhotoId = id
+            }
+            if (lastPhotoId != null) {
+                loadPhotos()
+                selectedTab = GalleryTab.PHOTON
+                // 等待列表渲染后选中最后一张并跳转
+                delay(100)
+                setCurrentPhotoById(lastPhotoId!!)
+            }
         }
     }
 

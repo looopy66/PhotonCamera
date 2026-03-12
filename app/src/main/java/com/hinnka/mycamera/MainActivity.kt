@@ -2,6 +2,7 @@ package com.hinnka.mycamera
 
 import android.Manifest
 import android.content.Intent
+import android.net.Uri
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.os.Build
@@ -171,6 +172,30 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?) {
         intent ?: return
+        if (intent.action == Intent.ACTION_SEND && intent.type?.startsWith("image/") == true) {
+            val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+            }
+            if (uri != null) {
+                galleryViewModel.importSharedImage(uri) { photoId ->
+                    pendingRoute = Routes.photoDetail(photoId = photoId)
+                }
+            }
+        } else if (intent.action == Intent.ACTION_SEND_MULTIPLE && intent.type?.startsWith("image/") == true) {
+            val uris = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+            }
+            if (!uris.isNullOrEmpty()) {
+                galleryViewModel.importSharedImages(uris)
+                pendingRoute = Routes.GALLERY
+            }
+        }
         intent.getStringExtra("route")?.let {
             pendingRoute = it
         }
