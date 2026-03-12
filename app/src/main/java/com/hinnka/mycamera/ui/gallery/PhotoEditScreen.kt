@@ -9,6 +9,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -310,6 +311,26 @@ fun PhotoEditScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
+                    .pointerInput(isZoomed) {
+                        if (!isZoomed) {
+                            var totalDrag = 0f
+                            detectHorizontalDragGestures(
+                                onDragEnd = {
+                                    if (kotlin.math.abs(totalDrag) > 100) {
+                                        if (totalDrag > 0) {
+                                            viewModel.switchToPreviousLut()
+                                        } else {
+                                            viewModel.switchToNextLut()
+                                        }
+                                    }
+                                    totalDrag = 0f
+                                },
+                                onHorizontalDrag = { _, dragAmount ->
+                                    totalDrag += dragAmount
+                                }
+                            )
+                        }
+                    }
                     .pointerInput(Unit) {
                         awaitPointerEventScope {
                             while (true) {

@@ -1253,6 +1253,23 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun switchToNextLut() {
+        if (availableLuts.isEmpty()) return
+        val currentLut = editLutId.value
+        val currentIndex = availableLuts.indexOfFirst { it.id == currentLut }
+        val nextIndex = (currentIndex + 1) % availableLuts.size
+        setEditLut(availableLuts[nextIndex].id)
+    }
+
+    fun switchToPreviousLut() {
+        if (availableLuts.isEmpty()) return
+        val currentLut = editLutId.value
+        val currentIndex = availableLuts.indexOfFirst { it.id == currentLut }
+        val prevIndex = if (currentIndex <= 0) availableLuts.size - 1 else currentIndex - 1
+        setEditLut(availableLuts[prevIndex].id)
+    }
+
+
     /**
      * 设置边框
      */
