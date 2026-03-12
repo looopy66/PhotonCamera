@@ -2,7 +2,6 @@ package com.hinnka.mycamera.ui.gallery
 
 import android.app.Activity
 import android.os.Build
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -12,17 +11,14 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -39,12 +35,10 @@ import androidx.compose.material3.*
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -54,13 +48,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.gallery.PhotoData
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.theme.AccentOrange
+import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.GalleryTab
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 
@@ -494,11 +488,11 @@ private fun PhotoGridItem(
 ) {
     val context = LocalContext.current
 
-    val aspectRatio = remember(photo.width, photo.height, photo.metadata) {
+    val aspectRatio = remember(photo.width, photo.height, photo.metadata, OrientationObserver.isLandscape) {
         val width = photo.metadata?.width ?: photo.width
         val height = photo.metadata?.height ?: photo.height
         if (width > 0 && height > 0) {
-            width.toFloat() / height.toFloat()
+            if (OrientationObserver.isLandscape) height.toFloat() / width.toFloat() else width.toFloat() / height.toFloat()
         } else {
             1f
         }
@@ -514,7 +508,7 @@ private fun PhotoGridItem(
                 onClick = onClick,
                 onLongClick = onLongClick
             )
-            .autoRotate()
+            .autoRotate(matchParentSize = true)
     ) {
         // 照片缩略图
         val transformation = remember(photo, viewModel.selectedTab) {
@@ -535,7 +529,7 @@ private fun PhotoGridItem(
         AsyncImage(
             model = imageRequest,
             contentDescription = photo.displayName,
-            contentScale = ContentScale.Fit,
+            contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
         )
 

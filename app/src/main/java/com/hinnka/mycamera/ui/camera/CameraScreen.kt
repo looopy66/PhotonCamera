@@ -42,6 +42,7 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
@@ -65,6 +66,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
@@ -504,6 +506,7 @@ fun CameraScreen(
                                     viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO)
                                 }
                             }
+
                             CameraParameter.APERTURE -> viewModel.setVirtualApertureAuto(!state.isVirtualApertureEnabled)
                             else -> {}
                         }
@@ -787,52 +790,84 @@ fun CaptureButton(
 }
 
 
-fun Modifier.autoRotate(dx: Dp = 0.dp, dy: Dp = 0.dp): Modifier = composed {
+fun Modifier.autoRotate(
+    dx: Dp = 0.dp,
+    dy: Dp = 0.dp,
+    matchParentSize: Boolean = false
+): Modifier = composed {
     val targetDegrees =
         if (OrientationObserver.rotationDegrees != 0f) OrientationObserver.rotationDegrees - 180 else 0f
 
-    // 2. 创建动画状态
-    // label 是为了调试方便，animationSpec 可以调整快慢和回弹
     val animatedDegrees by animateFloatAsState(
         targetValue = targetDegrees,
         animationSpec = tween(durationMillis = 300),
         label = "rotationAnimation"
     )
 
-    // 3. 使用 layout 修改器
-    // 注意：这里我们使用 animatedDegrees (当前动画值) 而不是 targetDegrees (最终值)
     layout { measurable, constraints ->
-        // --- 测量阶段 ---
-
-        // A. 测量子组件 (使用原始约束)
-        val placeable = measurable.measure(constraints)
-
-        // B. 使用【动画中的角度】计算弧度
         val rad = Math.toRadians(animatedDegrees.toDouble())
         val cos = abs(cos(rad))
         val sin = abs(sin(rad))
 
-        // C. 动态计算当前动画帧所需的外接矩形大小
-        // 随着动画进行，这个 newWidth/newHeight 会每一帧都变化，产生平滑的形变效果
-        val newWidth = (placeable.width * cos + placeable.height * sin).toInt()
-        val newHeight = (placeable.width * sin + placeable.height * cos).toInt()
+        // 核心优化：匹配父布局大小时，如果旋转接近 90 度，交换约束，
+        // 从而让子组件（如 AsyncImage）按旋转后的方向进行测量，实现“铺满”效果。
+        val modifiedConstraints = if (matchParentSize && sin > 0.5f) {
+            Constraints(
+                minWidth = constraints.minHeight,
+                maxWidth = constraints.maxHeight,
+                minHeight = constraints.minWidth,
+                maxHeight = constraints.maxWidth
+            )
+        } else {
+            constraints
+        }
 
-        val nDx = dx.toPx() * sin
-        val nDy = dy.toPx() * sin
+        val placeable = measurable.measure(modifiedConstraints)
+        val width = placeable.width
+        val height = placeable.height
 
-        // --- 布局阶段 ---
-        layout(newWidth, newHeight) {
-            // D. 放置并旋转
-            placeable.placeRelativeWithLayer(
-                x = (newWidth - placeable.width) / 2 + nDx.toInt(),
-                y = (newHeight - placeable.height) / 2 + nDy.toInt()
-            ) {
-                // 这里也必须使用动画值
-                rotationZ = animatedDegrees
+        if (matchParentSize) {
+            val visualWidth = width * cos + height * sin
+            val visualHeight = width * sin + height * cos
+            
+            val containerWidth = constraints.maxWidth.toFloat()
+            val containerHeight = constraints.maxHeight.toFloat()
+
+            // 计算缩放：确保即使在动画中，内容也能刚好填满或不超出边界
+            val scale = min(
+                if (visualWidth > 0) containerWidth / visualWidth else 1.0,
+                if (visualHeight > 0) containerHeight / visualHeight else 1.0
+            ).toFloat().coerceAtMost(1.0f)
+
+            layout(constraints.maxWidth, constraints.maxHeight) {
+                placeable.placeRelativeWithLayer(
+                    (constraints.maxWidth - width) / 2,
+                    (constraints.maxHeight - height) / 2
+                ) {
+                    rotationZ = animatedDegrees
+                    scaleX = scale
+                    scaleY = scale
+                }
+            }
+        } else {
+            val newWidth = (placeable.width * cos + placeable.height * sin).toInt()
+            val newHeight = (placeable.width * sin + placeable.height * cos).toInt()
+
+            val nDx = dx.toPx() * sin
+            val nDy = dy.toPx() * sin
+
+            layout(newWidth, newHeight) {
+                placeable.placeRelativeWithLayer(
+                    x = (newWidth - placeable.width) / 2 + nDx.toInt(),
+                    y = (newHeight - placeable.height) / 2 + nDy.toInt()
+                ) {
+                    rotationZ = animatedDegrees
+                }
             }
         }
     }
 }
+
 
 @Composable
 fun CornerOverlay(
