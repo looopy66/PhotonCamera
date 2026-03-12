@@ -861,6 +861,28 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /**
+     * 切换到下一个滤镜
+     */
+    fun switchToNextLut() {
+        if (availableLutList.isEmpty()) return
+        val currentIndex = availableLutList.indexOfFirst { it.id == currentLutId.value }
+        val nextIndex = if (currentIndex == -1 || currentIndex == availableLutList.size - 1) 0 else currentIndex + 1
+        setLut(availableLutList[nextIndex].id)
+        vibrationHelper.vibrate()
+    }
+
+    /**
+     * 切换到上一个滤镜
+     */
+    fun switchToPreviousLut() {
+        if (availableLutList.isEmpty()) return
+        val currentIndex = availableLutList.indexOfFirst { it.id == currentLutId.value }
+        val prevIndex = if (currentIndex <= 0) availableLutList.size - 1 else currentIndex - 1
+        setLut(availableLutList[prevIndex].id)
+        vibrationHelper.vibrate()
+    }
+
     fun updateLut() {
         viewModelScope.launch {
             val newLutId = userPreferencesRepository.userPreferences.map { it.lutId }.firstOrNull() ?: return@launch

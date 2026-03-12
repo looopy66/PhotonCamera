@@ -14,6 +14,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -313,7 +314,25 @@ fun CameraScreen(
                         .padding(4.dp)
                         .fillMaxWidth()
                         .aspectRatio(3 / 4f)
-                        .background(Color.Black),
+                        .background(Color.Black)
+                        .pointerInput(Unit) {
+                            var totalDrag = 0f
+                            detectHorizontalDragGestures(
+                                onDragEnd = {
+                                    if (abs(totalDrag) > 100) {
+                                        if (totalDrag > 0) {
+                                            viewModel.switchToPreviousLut()
+                                        } else {
+                                            viewModel.switchToNextLut()
+                                        }
+                                    }
+                                    totalDrag = 0f
+                                },
+                                onHorizontalDrag = { _, dragAmount ->
+                                    totalDrag += dragAmount
+                                }
+                            )
+                        },
                 ) {
                     val currentCameraId = state.currentCameraId
                     val calibrationOffset by viewModel.getCameraOrientationOffset(currentCameraId)
