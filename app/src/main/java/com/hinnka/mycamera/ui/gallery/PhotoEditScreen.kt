@@ -116,6 +116,9 @@ fun PhotoEditScreen(
     val editFocusX by viewModel.editFocusPointX.collectAsState()
     val editFocusY by viewModel.editFocusPointY.collectAsState()
 
+    val editCropRect by viewModel.editCropRect.collectAsState()
+    val editCropAspectOption by viewModel.editCropAspectOption.collectAsState()
+
     val droMode by cameraViewModel.droMode.collectAsState()
     val colorSpace by cameraViewModel.colorSpace.collectAsState()
     val logCurve by cameraViewModel.logCurve.collectAsState()
@@ -126,7 +129,7 @@ fun PhotoEditScreen(
     var showOrigin by remember { mutableStateOf(false) }
 
     // 编辑标签页状态
-    var editTab by remember { mutableIntStateOf(0) } // 0: 滤镜/边框, 1: 细节处理, 2: RAW
+    var editTab by remember { mutableIntStateOf(0) } // 0: 滤镜/边框, 1: 细节处理, 2: RAW, 3: 裁剪
     var showControls by remember { mutableStateOf(true) }
     var isZoomed by remember { mutableStateOf(false) }
     val refreshKey = currentPhoto?.id?.let { viewModel.photoRefreshKeys[it] } ?: 0L
@@ -152,12 +155,13 @@ fun PhotoEditScreen(
         editComputationalAperture,
         editFocusX,
         editFocusY,
-        showOrigin
+        showOrigin,
+        editTab == 3
     ) {
         if (currentPhoto == null) return@LaunchedEffect
         isLoadingPreview = previewBitmap == null
         previewBitmap = withContext(Dispatchers.IO) {
-            viewModel.getPreviewBitmap(currentPhoto, useGlobalEdit = true, showOrigin = showOrigin)
+            viewModel.getPreviewBitmap(currentPhoto, useGlobalEdit = true, showOrigin = showOrigin, ignoreCrop = editTab == 3)
         }
         isLoadingPreview = false
     }
@@ -428,6 +432,17 @@ fun PhotoEditScreen(
                     modifier = Modifier.fillMaxSize()
                 )
 
+                // 只有在裁剪标签页才显示叠加层并且只能操作裁剪层
+                if (editTab == 3 && previewBitmap != null) {
+                    CropOverlay(
+                        bitmap = previewBitmap,
+                        cropRect = editCropRect ?: android.graphics.RectF(0f, 0f, 1f, 1f),
+                        onCropRectChanged = { rect -> viewModel.setCropRect(rect) },
+                        aspectOption = editCropAspectOption,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+
                 // 加载指示器
                 if (isLoadingPreview) {
                     CircularProgressIndicator(
@@ -473,6 +488,11 @@ fun PhotoEditScreen(
                                     onClick = { editTab = 2 }
                                 )
                             }
+                            TabItem(
+                                title = stringResource(R.string.crop),
+                                isSelected = editTab == 3,
+                                onClick = { editTab = 3 }
+                            )
                         }
                         if (editTab == 0) {
                             val currentLut = availableLuts.find { it.id == editLutId }
@@ -658,6 +678,14 @@ fun PhotoEditScreen(
                                 editLogCurve = logCurve,
                                 editRawLut = rawLut,
                                 modifier = Modifier.fillMaxWidth()
+                            )
+                        } else if (editTab == 3) {
+                            // 裁剪编辑
+                            CropEditPanel(
+                                selectedOption = editCropAspectOption,
+                                onOptionSelected = { viewModel.setCropAspectOption(it) },
+                                imageWidth = previewBitmap?.width ?: 1,
+                                imageHeight = previewBitmap?.height ?: 1
                             )
                         }
                     }

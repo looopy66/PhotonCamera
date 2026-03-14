@@ -48,7 +48,32 @@ object CameraUtils {
 
             if (bestMatching != null) return bestMatching
 
-            // 如果没有比例完全匹配的，则选择高度 >= 1080 中最小的一个（之前的逻辑）
+            // 没有精确匹配的比例时（如 XPAN 65:24），需要选择一个能覆盖目标比例的预览尺寸。
+            // 关键：必须与 getBestCaptureSize 使用相同的选择策略（选择最宽的尺寸），
+            // 否则预览和拍摄从不同基础比例裁切到目标比例时，FOV 会不一致。
+            // 
+            // 例如 XPAN (2.708:1)：如果预览选了 1:1 (1080x1080)，拍照选了 4:3 (4096x3072)，
+            // 两者裁切到 65:24 时，4:3 的水平 FOV 更大，导致拍到的画面比预览多。
+            //
+            // 策略：找到 getBestCaptureSize 会选择的比例，然后选择该比例的预览尺寸
+            val captureSizes = map.getOutputSizes(android.graphics.ImageFormat.YUV_420_888)?.toList() ?: emptyList()
+            val bestCaptureSize = captureSizes.maxByOrNull { it.width * it.height }
+            
+            if (bestCaptureSize != null) {
+                val captureRatio = bestCaptureSize.width.toFloat() / bestCaptureSize.height
+                val captureMatchingSizes = previewSizes.filter {
+                    val ratio = it.width.toFloat() / it.height
+                    abs(ratio - captureRatio) < 0.01
+                }
+                val bestCaptureMatching = captureMatchingSizes
+                    .filter { it.height <= 1080 }
+                    .maxByOrNull { it.width * it.height }
+                    ?: captureMatchingSizes.minByOrNull { it.width * it.height }
+                
+                if (bestCaptureMatching != null) return bestCaptureMatching
+            }
+
+            // 最终回退：选择高度 >= 1080 中最小的一个
             return previewSizes.filter { it.height >= 1080 }.minByOrNull { it.width } ?: Size(1440, 1080)
         } catch (e: Exception) {
             PLog.d("CameraUtils", "getFixedPreviewSize: ${e.message}")

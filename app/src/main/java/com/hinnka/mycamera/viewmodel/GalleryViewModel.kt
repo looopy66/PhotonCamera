@@ -3,6 +3,7 @@ package com.hinnka.mycamera.viewmodel
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.graphics.RectF
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -27,11 +28,14 @@ import com.hinnka.mycamera.lut.PhotoTransformation
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.raw.MeteringSystem
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.ui.gallery.CropAspectOption
+import com.hinnka.mycamera.ui.gallery.calculateInitialCropRect
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 /**
  * 相册 Tab
@@ -144,6 +148,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private val _isSharing = MutableStateFlow(false)
     val isSharing: StateFlow<Boolean> = _isSharing.asStateFlow()
 
+    // 导出状态
+    private val _isExporting = MutableStateFlow(false)
+    val isExporting: StateFlow<Boolean> = _isExporting.asStateFlow()
+    var exportProgress by mutableStateOf(0 to 0)
+        private set
+
     // 多选模式
     var isSelectionMode by mutableStateOf(false)
         private set
@@ -235,6 +245,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     var editFocusPointX = MutableStateFlow<Float?>(null)
         private set
     var editFocusPointY = MutableStateFlow<Float?>(null)
+        private set
+
+    // 裁剪编辑状态
+    var editCropRect = MutableStateFlow<RectF?>(null)
+        private set
+    var editCropAspectOption = MutableStateFlow<CropAspectOption>(CropAspectOption.Free)
         private set
 
     private var bokehJob: Job? = null
@@ -685,6 +701,30 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editSharpening.value = m.sharpening ?: 0f
             editNoiseReduction.value = m.noiseReduction ?: 0f
             editChromaNoiseReduction.value = m.chromaNoiseReduction ?: 0f
+
+            val cw = photo?.width ?: m.width
+            val ch = photo?.height ?: m.height
+            if (m.postCropRegion != null && cw > 0 && ch > 0) {
+                editCropRect.value = RectF(
+                    m.postCropRegion.left.toFloat() / cw,
+                    m.postCropRegion.top.toFloat() / ch,
+                    m.postCropRegion.right.toFloat() / cw,
+                    m.postCropRegion.bottom.toFloat() / ch
+                )
+                
+                // Set the aspect option based on ratio if it exists
+                if (m.ratio != null) {
+                    editCropAspectOption.value = CropAspectOption.FromAspectRatio(m.ratio)
+                } else {
+                    editCropAspectOption.value = CropAspectOption.Custom(
+                        m.postCropRegion.width().toFloat(),
+                        m.postCropRegion.height().toFloat()
+                    )
+                }
+            } else {
+                editCropRect.value = null
+                editCropAspectOption.value = CropAspectOption.Free
+            }
 
             // 加载 LUT 配置
             m.lutId?.let { id ->
@@ -1234,6 +1274,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editLutId.value = null
         editLutConfig = null
         editFrameId.value = null
+        editCropRect.value = null
+        editCropAspectOption.value = CropAspectOption.Free
     }
 
     /**
@@ -1319,6 +1361,34 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editChromaNoiseReduction.value = value
     }
 
+    /**
+     * 设置裁剪矩形（归一化坐标 0-1）
+     */
+    fun setCropRect(rect: RectF?) {
+        editCropRect.value = rect
+    }
+
+    /**
+     * 设置裁剪比例选项
+     */
+    fun setCropAspectOption(option: CropAspectOption) {
+        editCropAspectOption.value = option
+        val photo = getCurrentPhoto() ?: return
+        val w = photo.metadata?.width ?: photo.width
+        val h = photo.metadata?.height ?: photo.height
+        if (w > 0 && h > 0) {
+            editCropRect.value = calculateInitialCropRect(w, h, option)
+        }
+    }
+
+    /**
+     * 重置裁剪
+     */
+    fun resetCrop() {
+        editCropRect.value = null
+        editCropAspectOption.value = CropAspectOption.Free
+    }
+
 
     fun isRaw(photoId: String): Boolean {
         val context = getApplication<Application>()
@@ -1382,13 +1452,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         photo: PhotoData,
         useGlobalEdit: Boolean = false,
         showOrigin: Boolean = false,
-        bitmap: Bitmap? = null
+        bitmap: Bitmap? = null,
+        ignoreCrop: Boolean = false
     ): Bitmap? {
         return withContext(Dispatchers.IO) {
             try {
                 val context = getApplication<Application>()
 
-                val finalMetadata: PhotoMetadata
+                var finalMetadata: PhotoMetadata
                 val finalS: Float
                 val finalNR: Float
                 val finalCNR: Float
@@ -1409,8 +1480,23 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         chromaNoiseReduction = editChromaNoiseReduction.value,
                         computationalAperture = editComputationalAperture.value,
                         focusPointX = editFocusPointX.value,
-                        focusPointY = editFocusPointY.value
+                        focusPointY = editFocusPointY.value,
+                        postCropRegion = editCropRect.value?.let { rectF ->
+                            val cw = photo.metadata?.width ?: photo.width
+                            val ch = photo.metadata?.height ?: photo.height
+                            android.graphics.Rect(
+                                (rectF.left * cw).roundToInt(),
+                                (rectF.top * ch).roundToInt(),
+                                (rectF.right * cw).roundToInt(),
+                                (rectF.bottom * ch).roundToInt()
+                            )
+                        },
+                        ratio = (editCropAspectOption.value as? CropAspectOption.FromAspectRatio)?.ratio
                     )
+                    
+                    if (ignoreCrop) {
+                        finalMetadata = finalMetadata.copy(postCropRegion = null)
+                    }
                     finalS = editSharpening.value
                     finalNR = editNoiseReduction.value
                     finalCNR = editChromaNoiseReduction.value
@@ -1423,6 +1509,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                             ?: (if (finalMetadata.isImported) 0f else noiseReduction.value)
                     finalCNR = finalMetadata.chromaNoiseReduction
                         ?: (if (finalMetadata.isImported) 0f else chromaNoiseReduction.value)
+                        
+                    if (ignoreCrop) {
+                        finalMetadata = finalMetadata.copy(postCropRegion = null)
+                    }
                 }
 
                 // 使用多级缓存优化性能
@@ -1507,6 +1597,20 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     return@launch
                 }
 
+                val w = photo.metadata?.width ?: photo.width
+                val h = photo.metadata?.height ?: photo.height
+                val finalCropRegion = editCropRect.value?.let { rectF ->
+                    android.graphics.Rect(
+                        (rectF.left * w).roundToInt(),
+                        (rectF.top * h).roundToInt(),
+                        (rectF.right * w).roundToInt(),
+                        (rectF.bottom * h).roundToInt()
+                    )
+                }
+                
+                // Get AspectRatio enum if it was a preset, otherwise null
+                val finalRatio = (editCropAspectOption.value as? CropAspectOption.FromAspectRatio)?.ratio
+
                 val metadata = currentPhotoMetadata?.copy(
                     lutId = editLutId.value,
                     frameId = editFrameId.value,
@@ -1517,6 +1621,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     computationalAperture = editComputationalAperture.value,
                     focusPointX = editFocusPointX.value,
                     focusPointY = editFocusPointY.value,
+                    postCropRegion = finalCropRegion,
+                    ratio = finalRatio
                 ) ?: run {
                     onComplete(false)
                     return@launch
@@ -1619,6 +1725,56 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 loadPhotos()
             }
             onComplete(success)
+        }
+    }
+
+    /**
+     * 批量导出选中的照片
+     */
+    fun exportSelectedPhotos(onComplete: (Int) -> Unit = {}) {
+        if (selectedPhotos.isEmpty()) return
+
+        viewModelScope.launch {
+            _isExporting.value = true
+            val toExport = selectedPhotos.toList()
+            val total = toExport.size
+            exportProgress = 0 to total
+            
+            try {
+                val context = getApplication<Application>()
+                val quality = photoQuality.firstOrNull() ?: 95
+                
+                withContext(Dispatchers.IO) {
+                    toExport.forEachIndexed { index, photo ->
+                        var photoId = photo.id
+                        // 如果在系统相册 Tab，导出其关联的照片
+                        if (selectedTab == GalleryTab.SYSTEM) {
+                            photoId = photo.relatedPhoto?.id ?: return@forEachIndexed
+                        }
+                        
+                        val metadata = PhotoManager.loadMetadata(context, photoId) ?: photo.metadata ?: PhotoMetadata()
+                        PhotoManager.exportPhoto(
+                            context, photoId, null, contentRepository.photoProcessor, metadata,
+                            sharpening.value, noiseReduction.value,
+                            chromaNoiseReduction.value, quality
+                        )
+                        
+                        withContext(Dispatchers.Main) {
+                            exportProgress = (index + 1) to total
+                        }
+                    }
+                }
+                
+                exitSelectionMode()
+                loadPhotos()
+                onComplete(total)
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to batch export photos", e)
+                onComplete(0)
+            } finally {
+                _isExporting.value = false
+                exportProgress = 0 to 0
+            }
         }
     }
 

@@ -141,6 +141,7 @@ class PhotoProcessor(
 
         result ?: return@withContext null
 
+        result = applyCrop(result, metadata)
         result = applyFrame(result, metadata)
 
         result
@@ -195,6 +196,7 @@ class PhotoProcessor(
             )
         }
 
+        result = applyCrop(result, metadata)
         result = applyFrame(result, metadata)
 
         result
@@ -250,11 +252,38 @@ class PhotoProcessor(
             finalChromaNoiseReduction
         )
 
+        result = applyCrop(result, metadata)
         result = applyFrame(result, metadata)
 
         result
     }
 
+
+    private fun applyCrop(input: Bitmap, metadata: PhotoMetadata): Bitmap {
+        val cropRegion = metadata.postCropRegion ?: return input
+        if (cropRegion.width() <= 0 || cropRegion.height() <= 0) return input
+        
+        // Ensure bounds are valid
+        val safeLeft = cropRegion.left.coerceIn(0, input.width)
+        val safeTop = cropRegion.top.coerceIn(0, input.height)
+        val safeRight = cropRegion.right.coerceIn(0, input.width)
+        val safeBottom = cropRegion.bottom.coerceIn(0, input.height)
+        
+        val safeWidth = safeRight - safeLeft
+        val safeHeight = safeBottom - safeTop
+        
+        if (safeWidth <= 0 || safeHeight <= 0 || (safeWidth == input.width && safeHeight == input.height)) {
+            return input
+        }
+        
+        val cropped = Bitmap.createBitmap(input, safeLeft, safeTop, safeWidth, safeHeight)
+        if (input != cropped && !input.isRecycled) {
+            // NOTE: processYuv and processBitmap assign 'result', so we can recycle the old one if it is not the original source
+            // Wait, input might be the original bitmap passed to processBitmap?
+            // If it is the original, we should NOT recycle it because it may still be needed/managed outside.
+        }
+        return cropped
+    }
 
     private suspend fun applyFrame(
         input: Bitmap,

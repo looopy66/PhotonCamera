@@ -64,6 +64,7 @@ data class PhotoMetadata(
     val computationalAperture: Float? = null,
     val focusPointX: Float? = null,
     val focusPointY: Float? = null,
+    val postCropRegion: Rect? = null,
     // Live Photo 演示时间戳 (us)
     val presentationTimestampUs: Long? = null,
     // DRO 模式
@@ -171,6 +172,17 @@ data class PhotoMetadata(
                         put("top", cropRegion.top)
                         put("right", cropRegion.right)
                         put("bottom", cropRegion.bottom)
+                    }
+                } else {
+                    JSONObject.NULL
+                })
+            put(
+                "postCropRegion", if (postCropRegion != null) {
+                    JSONObject().apply {
+                        put("left", postCropRegion.left)
+                        put("top", postCropRegion.top)
+                        put("right", postCropRegion.right)
+                        put("bottom", postCropRegion.bottom)
                     }
                 } else {
                     JSONObject.NULL
@@ -306,6 +318,15 @@ data class PhotoMetadata(
                             cropObj.optInt("top", 0),
                             cropObj.optInt("right", 0),
                             cropObj.optInt("bottom", 0)
+                        )
+                    },
+                    postCropRegion = if (obj.isNull("postCropRegion")) null else {
+                        val pcObj = obj.getJSONObject("postCropRegion")
+                        Rect(
+                            pcObj.getInt("left"),
+                            pcObj.getInt("top"),
+                            pcObj.getInt("right"),
+                            pcObj.getInt("bottom")
                         )
                     },
                     rotation = obj.optInt("rotation", 0),

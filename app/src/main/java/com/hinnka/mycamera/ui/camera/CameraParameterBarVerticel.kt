@@ -14,7 +14,7 @@ import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.camera.CameraState
 
 @Composable
-fun CameraParameterBar(
+fun CameraParameterBarVerticel(
     state: CameraState,
     selectedParameter: CameraParameter?,
     onParameterClick: (CameraParameter) -> Unit,
@@ -22,12 +22,11 @@ fun CameraParameterBar(
 ) {
     val yellow = Color(0xFFFFD700) // Design uses a yellow/gold color for labels
 
-    Row(
+    Column(
         modifier = modifier
-            .fillMaxWidth()
-            .padding(start = 16.dp, top = 8.dp, end = 16.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+            .padding(horizontal = 8.dp, vertical = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceAround
     ) {
         ParameterItem(
             label = "AE",
@@ -81,41 +80,3 @@ fun CameraParameterBar(
     }
 }
 
-@Composable
-fun ParameterItem(
-    label: String,
-    value: String,
-    labelColor: Color,
-    valueColor: Color? = null,
-    isSelected: Boolean,
-    isEnabled: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = modifier
-            .size(64.dp)
-            .autoRotate()
-            .then(
-                if (isEnabled) {
-                    Modifier.clickable { onClick() }
-                } else {
-                    Modifier
-                }
-            )
-    ) {
-        Text(
-            text = label,
-            color = if (isSelected) Color(0xFFFFD700) else labelColor.copy(alpha = if (isEnabled) 1f else 0.5f),
-            fontSize = 10.sp,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-        )
-        Text(
-            text = value,
-            color = valueColor ?: if (isSelected) Color(0xFFFFD700) else Color.White.copy(alpha = if (isEnabled) 1f else 0.5f),
-            fontSize = 11.sp,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Bold
-        )
-    }
-}

@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.ui.gallery
 
 import android.app.Activity
+import android.widget.Toast
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
@@ -31,6 +32,7 @@ import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.BurstMode
+import androidx.compose.material.icons.filled.Output
 import androidx.compose.material3.*
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
@@ -291,6 +293,51 @@ fun GalleryScreen(
                                 color = Color.White,
                                 fontSize = 12.sp
                             )
+                        }
+
+                        // 导出按钮
+                        if (viewModel.selectedTab == GalleryTab.PHOTON) {
+                            val isExporting by viewModel.isExporting.collectAsState()
+                            val context = LocalContext.current
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.clickable(enabled = !isExporting) {
+                                    viewModel.exportSelectedPhotos { count ->
+                                        if (count > 0) {
+                                            Toast.makeText(context, R.string.export_complete, Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
+                            ) {
+                                if (isExporting) {
+                                    val progress = viewModel.exportProgress
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        CircularProgressIndicator(
+                                            color = Color.White,
+                                            modifier = Modifier.size(28.dp),
+                                            strokeWidth = 2.dp
+                                        )
+                                        Text(
+                                            text = "${progress.first}/${progress.second}",
+                                            color = Color.White,
+                                            fontSize = 10.sp
+                                        )
+                                    }
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.Output,
+                                        contentDescription = stringResource(R.string.export),
+                                        tint = AccentOrange,
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = stringResource(R.string.export),
+                                        color = Color.White,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            }
                         }
                     }
                 }

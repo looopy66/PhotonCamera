@@ -5,12 +5,15 @@ import android.os.Environment
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.*
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -41,6 +44,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Constraints
@@ -49,27 +54,16 @@ import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
-import androidx.lifecycle.viewModelScope
 import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
+import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.CameraUtils
-import com.hinnka.mycamera.ui.components.GalleryThumbnail
-import com.hinnka.mycamera.ui.components.HistogramView
-import com.hinnka.mycamera.ui.components.LutControlPanel
-import com.hinnka.mycamera.ui.components.PaymentDialog
-import com.hinnka.mycamera.ui.components.rememberBackgroundPainter
+import com.hinnka.mycamera.ui.components.*
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.launch
-import kotlin.math.abs
-import kotlin.math.cos
-import kotlin.math.min
-import kotlin.math.roundToInt
-import kotlin.math.sin
+import kotlin.math.*
 
 /**
  * 主相机界面
@@ -109,6 +103,8 @@ fun CameraScreen(
     // UI State
     var activePanel by remember { mutableStateOf(ActivePanel.NONE) }
     var selectedParameter by remember { mutableStateOf(CameraParameter.EXPOSURE_COMPENSATION) }
+    val isXpan = state.aspectRatio == AspectRatio.XPAN
+
 
     val burstCapturingCount = viewModel.burstImageCount
 
@@ -273,13 +269,29 @@ fun CameraScreen(
         )
     }
 
-    Box(modifier = modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+
         val backgroundPainter = rememberBackgroundPainter(viewModel)
+
+        val width = with(LocalDensity.current) { constraints.maxWidth.toDp() }
+        val height = with(LocalDensity.current) { constraints.maxHeight.toDp() }
+        val cardWidth = if (isXpan) {
+            (height - 280.dp) * 24 / 65 + 8.dp
+        } else {
+            width
+        }
+        val cardHeight = if (isXpan) {
+            height - 224.dp
+        } else {
+            (width - 24.dp) * 4 / 3 + 56.dp
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .paint(backgroundPainter, contentScale = ContentScale.Crop)
-                .navigationBarsPadding()
+                .navigationBarsPadding(),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             // 顶部控制条
             CameraTopBar(
@@ -300,250 +312,306 @@ fun CameraScreen(
                 }
             )
 
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp),
-                shape = RoundedCornerShape(4.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = Color.Black
-                )
+            Box(
+                modifier = Modifier.fillMaxWidth().height(cardHeight),
+                contentAlignment = Alignment.Center
             ) {
-                Box(
+                Card(
                     modifier = Modifier
-                        .padding(4.dp)
-                        .fillMaxWidth()
-                        .aspectRatio(3 / 4f)
-                        .background(Color.Black)
-                        .pointerInput(Unit) {
-                            var totalDrag = 0f
-                            detectHorizontalDragGestures(
-                                onDragEnd = {
-                                    if (abs(totalDrag) > 100) {
-                                        if (totalDrag > 0) {
-                                            viewModel.switchToPreviousLut()
-                                        } else {
-                                            viewModel.switchToNextLut()
-                                        }
-                                    }
-                                    totalDrag = 0f
-                                },
-                                onHorizontalDrag = { _, dragAmount ->
-                                    totalDrag += dragAmount
-                                }
-                            )
-                        },
-                ) {
-                    val currentCameraId = state.currentCameraId
-                    val calibrationOffset by viewModel.getCameraOrientationOffset(currentCameraId)
-                        .collectAsState(initial = 0)
-
-                    // 相机预览
-                    CameraPreviewGL(
-                        aspectRatio = state.aspectRatio,
-                        previewSize = previewSize,
-                        sensorOrientation = state.getCurrentCameraInfo()?.sensorOrientation ?: 0,
-                        lensFacing = if (state.getCurrentCameraInfo()?.lensFacing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT) 0 else 1,
-                        calibrationOffset = calibrationOffset,
-                        currentLut = viewModel.currentLutConfig,
-                        colorRecipeParams = currentRecipeParams,
-                        focusPoint = state.focusPoint,
-                        isFocusing = state.isFocusing,
-                        focusSuccess = state.focusSuccess,
-                        onSurfaceTextureReady = { surfaceTexture ->
-                            viewModel.openCamera(surfaceTexture)
-                            cameraOpened = true
-                        },
-                        onSurfaceDestroyed = {
-                            viewModel.closeCamera()
-                            cameraOpened = false
-                        },
-                        onTap = { x, y, w, h ->
-                            // 如果 LUT 面板打开，点击预览区域关闭面板
-                            if (activePanel != ActivePanel.NONE) {
-                                activePanel = ActivePanel.NONE
-                            } else {
-                                // 否则执行对焦
-                                viewModel.focusOnPoint(x, y, w, h)
-                            }
-                        },
-                        onHistogramUpdated = { viewModel.handleHistogramUpdate(it) },
-                        onMeteringUpdated = { w, l -> viewModel.handleMeteringUpdate(w, l) },
-                        onDepthInputAvailable = { viewModel.handleDepthMapUpdate(it) },
-                        onGLSurfaceViewReady = {
-                            viewModel.glSurfaceView = it
-                        },
-                        livePhotoRecorder = viewModel.livePhotoRecorder,
-                        aperture = if (state.isVirtualApertureEnabled) state.virtualAperture else 0f,
-                        modifier = Modifier.fillMaxSize()
+                        .animateContentSize(alignment = Alignment.Center)
+                        .width(cardWidth)
+                        .height(cardHeight)
+                        .padding(horizontal = if (isXpan) 0.dp else 8.dp),
+                    shape = RoundedCornerShape(4.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color.Black
                     )
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .padding(4.dp)
+                            .weight(1f)
+                            .background(Color.Black)
+                            .pointerInput(Unit) {
+                                var totalDrag = 0f
+                                detectHorizontalDragGestures(
+                                    onDragEnd = {
+                                        if (abs(totalDrag) > 100) {
+                                            if (totalDrag > 0) {
+                                                viewModel.switchToPreviousLut()
+                                            } else {
+                                                viewModel.switchToNextLut()
+                                            }
+                                        }
+                                        totalDrag = 0f
+                                    },
+                                    onHorizontalDrag = { _, dragAmount ->
+                                        totalDrag += dragAmount
+                                    }
+                                )
+                            },
+                    ) {
+                        val currentCameraId = state.currentCameraId
+                        val calibrationOffset by viewModel.getCameraOrientationOffset(currentCameraId)
+                            .collectAsState(initial = 0)
 
-                    // Live Photo Indicator
-                    if (useLivePhoto) {
-                        Surface(
-                            modifier = Modifier
-                                .padding(12.dp)
-                                .align(Alignment.TopEnd),
-                            color = Color.Black.copy(alpha = 0.8f),
-                            shape = CircleShape
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(4.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                        // 相机预览
+                        CameraPreviewGL(
+                            aspectRatio = state.aspectRatio,
+                            previewSize = previewSize,
+                            sensorOrientation = state.getCurrentCameraInfo()?.sensorOrientation ?: 0,
+                            lensFacing = if (state.getCurrentCameraInfo()?.lensFacing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT) 0 else 1,
+                            calibrationOffset = calibrationOffset,
+                            currentLut = viewModel.currentLutConfig,
+                            colorRecipeParams = currentRecipeParams,
+                            focusPoint = state.focusPoint,
+                            isFocusing = state.isFocusing,
+                            focusSuccess = state.focusSuccess,
+                            onSurfaceTextureReady = { surfaceTexture ->
+                                viewModel.openCamera(surfaceTexture)
+                                cameraOpened = true
+                            },
+                            onSurfaceDestroyed = {
+                                viewModel.closeCamera()
+                                cameraOpened = false
+                            },
+                            onTap = { x, y, w, h ->
+                                // 如果 LUT 面板打开，点击预览区域关闭面板
+                                if (activePanel != ActivePanel.NONE) {
+                                    activePanel = ActivePanel.NONE
+                                } else {
+                                    // 否则执行对焦
+                                    viewModel.focusOnPoint(x, y, w, h)
+                                }
+                            },
+                            onHistogramUpdated = { viewModel.handleHistogramUpdate(it) },
+                            onMeteringUpdated = { w, l -> viewModel.handleMeteringUpdate(w, l) },
+                            onDepthInputAvailable = { viewModel.handleDepthMapUpdate(it) },
+                            onGLSurfaceViewReady = {
+                                viewModel.glSurfaceView = it
+                            },
+                            livePhotoRecorder = viewModel.livePhotoRecorder,
+                            aperture = if (state.isVirtualApertureEnabled) state.virtualAperture else 0f,
+                            modifier = Modifier.fillMaxSize()
+                        )
+
+                        // Live Photo Indicator
+                        if (useLivePhoto) {
+                            Surface(
+                                modifier = Modifier
+                                    .padding(12.dp)
+                                    .align(Alignment.TopEnd),
+                                color = Color.Black.copy(alpha = 0.8f),
+                                shape = CircleShape
                             ) {
-                                Icon(
-                                    painterResource(R.drawable.ic_live_photo),
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(18.dp)
+                                Row(
+                                    modifier = Modifier.padding(4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        painterResource(R.drawable.ic_live_photo),
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+
+
+                        Box(
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            // 实时直方图 (Overlaid on preview if enabled)
+                            if (state.histogram != null && viewModel.showHistogram) {
+                                HistogramView(
+                                    histogram = state.histogram,
+                                    modifier = Modifier
+                                        .padding(16.dp)
+                                        .size(80.dp, 40.dp)
+                                        .align(Alignment.TopStart)
+                                        .autoRotate(dx = -20.dp, dy = 20.dp)
+                                )
+                            }
+
+                            // 网格线覆盖
+                            if (state.showGrid) {
+                                GridOverlay(
+                                    aspectRatio = state.aspectRatio,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+
+                            // 水平仪覆盖
+                            if (showLevelIndicator) {
+                                LevelIndicatorOverlay(
+                                    aspectRatio = state.aspectRatio,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+
+                            if (activePanel == ActivePanel.NONE && !isXpan) {
+                                // Zoom Control Bar (Overlay at bottom of preview)
+                                ZoomControlBar(
+                                    viewModel = viewModel,
+                                    zoomRatio = viewModel.zoomRatioByMain,
+                                    availableCameras = state.availableCameras,
+                                    currentCameraId = state.getCurrentCameraInfo()?.cameraId ?: "0",
+                                    onZoomChange = { viewModel.setZoomRatio(it) },
+                                    onLensSwitch = { lenId -> viewModel.switchToLens(lenId) },
+                                    onFilterClick = {
+                                        // Toggle Filter Panel
+                                        activePanel =
+                                            if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
+                                    },
+                                    modifier = Modifier.align(Alignment.BottomCenter)
+                                )
+                            }
+
+                            // 倒计时覆盖
+                            if (state.countdownValue > 0) {
+                                CountdownOverlay(
+                                    countdownValue = state.countdownValue,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+
+                            if (burstCapturingCount > 0) {
+                                BurstCaptureOverlay(
+                                    count = burstCapturingCount,
+                                    modifier = Modifier.fillMaxSize()
                                 )
                             }
                         }
+
+                        CornerOverlay(
+                            modifier = Modifier.fillMaxSize(),
+                            radius = 4.dp,
+                            color = Color.Black
+                        )
                     }
+                    ParameterRuler(
+                        parameter = selectedParameter,
+                        currentValue = when (selectedParameter) {
+                            CameraParameter.EXPOSURE_COMPENSATION -> state.exposureCompensation * state.getExposureCompensationStep()
+                            CameraParameter.SHUTTER_SPEED -> state.shutterSpeed.toFloat()
+                            CameraParameter.ISO -> state.iso.toFloat()
+                            CameraParameter.APERTURE -> if (state.isVirtualApertureEnabled) state.virtualAperture else state.physicalAperture
+                            CameraParameter.WHITE_BALANCE -> state.awbTemperature.toFloat()
+                        },
+                        minValue = when (selectedParameter) {
+                            CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().lower * state.getExposureCompensationStep()
+                            CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().lower.toFloat()
+                            CameraParameter.ISO -> state.getIsoRange().lower.toFloat()
+                            CameraParameter.APERTURE -> 1f // Min synthetic aperture
+                            CameraParameter.WHITE_BALANCE -> 2000f
+                        },
+                        maxValue = when (selectedParameter) {
+                            CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().upper * state.getExposureCompensationStep()
+                            CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().upper.toFloat()
+                            CameraParameter.ISO -> state.getIsoRange().upper.toFloat()
+                            CameraParameter.APERTURE -> 16.0f // Max synthetic aperture
+                            CameraParameter.WHITE_BALANCE -> 10000f
+                        },
+                        isAdjustable = when (selectedParameter) {
+                            CameraParameter.EXPOSURE_COMPENSATION -> state.isAutoExposure
+                            CameraParameter.SHUTTER_SPEED -> !state.isShutterSpeedAuto
+                            CameraParameter.ISO -> !state.isIsoAuto
+                            CameraParameter.APERTURE -> state.isVirtualApertureEnabled
+                            CameraParameter.WHITE_BALANCE -> state.awbMode != android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
+                        },
+                        showAutoButton = when (selectedParameter) {
+                            CameraParameter.SHUTTER_SPEED, CameraParameter.ISO, CameraParameter.WHITE_BALANCE, CameraParameter.APERTURE -> true
+                            else -> false
+                        },
+                        onValueChange = { value ->
+                            when (selectedParameter) {
+                                CameraParameter.EXPOSURE_COMPENSATION -> viewModel.setExposureCompensation((value / state.getExposureCompensationStep()).roundToInt())
+                                CameraParameter.SHUTTER_SPEED -> viewModel.setShutterSpeed(value.toLong())
+                                CameraParameter.ISO -> viewModel.setIso(value.toInt())
+                                CameraParameter.APERTURE -> viewModel.setAperture(value)
+                                CameraParameter.WHITE_BALANCE -> viewModel.setAwbTemperature(value.toInt())
+                            }
+                        },
+                        onAutoModeToggle = {
+                            when (selectedParameter) {
+                                CameraParameter.SHUTTER_SPEED -> viewModel.setShutterSpeedAuto(!state.isShutterSpeedAuto)
+                                CameraParameter.ISO -> viewModel.setIsoAuto(!state.isIsoAuto)
+                                CameraParameter.WHITE_BALANCE -> {
+                                    if (state.awbMode == android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO) {
+                                        viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_OFF)
+                                    } else {
+                                        viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO)
+                                    }
+                                }
 
-
-                    Box(modifier = Modifier.fillMaxWidth().aspectRatio(3 / 4f).align(Alignment.Center)) {
-                        // 实时直方图 (Overlaid on preview if enabled)
-                        if (state.histogram != null && viewModel.showHistogram) {
-                            HistogramView(
-                                histogram = state.histogram,
-                                modifier = Modifier
-                                    .padding(16.dp)
-                                    .size(80.dp, 40.dp)
-                                    .align(Alignment.TopStart)
-                                    .autoRotate(dx = -20.dp, dy = 20.dp)
-                            )
-                        }
-
-                        // 网格线覆盖
-                        if (state.showGrid) {
-                            GridOverlay(
-                                aspectRatio = state.aspectRatio,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-
-                        // 水平仪覆盖
-                        if (showLevelIndicator) {
-                            LevelIndicatorOverlay(
-                                aspectRatio = state.aspectRatio,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-
-                        if (activePanel == ActivePanel.NONE) {
-                            // Zoom Control Bar (Overlay at bottom of preview)
-                            ZoomControlBar(
-                                viewModel = viewModel,
-                                zoomRatio = viewModel.zoomRatioByMain,
-                                availableCameras = state.availableCameras,
-                                currentCameraId = state.getCurrentCameraInfo()?.cameraId ?: "0",
-                                onZoomChange = { viewModel.setZoomRatio(it) },
-                                onLensSwitch = { lenId -> viewModel.switchToLens(lenId) },
-                                onFilterClick = {
-                                    // Toggle Filter Panel
-                                    activePanel =
-                                        if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
-                                },
-                                modifier = Modifier.align(Alignment.BottomCenter)
-                            )
-                        }
-
-                        // 倒计时覆盖
-                        if (state.countdownValue > 0) {
-                            CountdownOverlay(
-                                countdownValue = state.countdownValue,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-
-                        if (burstCapturingCount > 0) {
-                            BurstCaptureOverlay(
-                                count = burstCapturingCount,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                    }
-
-                    CornerOverlay(
-                        modifier = Modifier.fillMaxSize(),
-                        radius = 4.dp,
-                        color = Color.Black
+                                CameraParameter.APERTURE -> viewModel.setVirtualApertureAuto(!state.isVirtualApertureEnabled)
+                                else -> {}
+                            }
+                        },
                     )
                 }
-                ParameterRuler(
-                    parameter = selectedParameter,
-                    currentValue = when (selectedParameter) {
-                        CameraParameter.EXPOSURE_COMPENSATION -> state.exposureCompensation * state.getExposureCompensationStep()
-                        CameraParameter.SHUTTER_SPEED -> state.shutterSpeed.toFloat()
-                        CameraParameter.ISO -> state.iso.toFloat()
-                        CameraParameter.APERTURE -> if (state.isVirtualApertureEnabled) state.virtualAperture else state.physicalAperture
-                        CameraParameter.WHITE_BALANCE -> state.awbTemperature.toFloat()
-                    },
-                    minValue = when (selectedParameter) {
-                        CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().lower * state.getExposureCompensationStep()
-                        CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().lower.toFloat()
-                        CameraParameter.ISO -> state.getIsoRange().lower.toFloat()
-                        CameraParameter.APERTURE -> 1f // Min synthetic aperture
-                        CameraParameter.WHITE_BALANCE -> 2000f
-                    },
-                    maxValue = when (selectedParameter) {
-                        CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().upper * state.getExposureCompensationStep()
-                        CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().upper.toFloat()
-                        CameraParameter.ISO -> state.getIsoRange().upper.toFloat()
-                        CameraParameter.APERTURE -> 16.0f // Max synthetic aperture
-                        CameraParameter.WHITE_BALANCE -> 10000f
-                    },
-                    isAdjustable = when (selectedParameter) {
-                        CameraParameter.EXPOSURE_COMPENSATION -> state.isAutoExposure
-                        CameraParameter.SHUTTER_SPEED -> !state.isShutterSpeedAuto
-                        CameraParameter.ISO -> !state.isIsoAuto
-                        CameraParameter.APERTURE -> state.isVirtualApertureEnabled
-                        CameraParameter.WHITE_BALANCE -> state.awbMode != android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
-                    },
-                    showAutoButton = when (selectedParameter) {
-                        CameraParameter.SHUTTER_SPEED, CameraParameter.ISO, CameraParameter.WHITE_BALANCE, CameraParameter.APERTURE -> true
-                        else -> false
-                    },
-                    onValueChange = { value ->
-                        when (selectedParameter) {
-                            CameraParameter.EXPOSURE_COMPENSATION -> viewModel.setExposureCompensation((value / state.getExposureCompensationStep()).roundToInt())
-                            CameraParameter.SHUTTER_SPEED -> viewModel.setShutterSpeed(value.toLong())
-                            CameraParameter.ISO -> viewModel.setIso(value.toInt())
-                            CameraParameter.APERTURE -> viewModel.setAperture(value)
-                            CameraParameter.WHITE_BALANCE -> viewModel.setAwbTemperature(value.toInt())
-                        }
-                    },
-                    onAutoModeToggle = {
-                        when (selectedParameter) {
-                            CameraParameter.SHUTTER_SPEED -> viewModel.setShutterSpeedAuto(!state.isShutterSpeedAuto)
-                            CameraParameter.ISO -> viewModel.setIsoAuto(!state.isIsoAuto)
-                            CameraParameter.WHITE_BALANCE -> {
-                                if (state.awbMode == android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO) {
-                                    viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_OFF)
-                                } else {
-                                    viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO)
-                                }
-                            }
 
-                            CameraParameter.APERTURE -> viewModel.setVirtualApertureAuto(!state.isVirtualApertureEnabled)
-                            else -> {}
-                        }
-                    },
-                )
+                if (isXpan) {
+                    Box(modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .width((width - cardWidth) / 2)
+                    ) {
+                        ZoomControlBarVerticel(
+                            viewModel = viewModel,
+                            zoomRatio = viewModel.zoomRatioByMain,
+                            availableCameras = state.availableCameras,
+                            currentCameraId = state.getCurrentCameraInfo()?.cameraId ?: "0",
+                            onZoomChange = { viewModel.setZoomRatio(it) },
+                            onLensSwitch = { lenId -> viewModel.switchToLens(lenId) },
+                            onFilterClick = {
+                                // Toggle Filter Panel
+                                activePanel =
+                                    if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
+                            },
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    }
+                    Box(modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .width((width - cardWidth) / 2)
+                    ) {
+                        CameraParameterBarVerticel(
+                            state = state,
+                            selectedParameter = selectedParameter,
+                            onParameterClick = { param ->
+                                selectedParameter = param
+                            },
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    }
+                }
             }
 
 
-            Column(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                CameraParameterBar(
-                    state = state,
-                    selectedParameter = selectedParameter,
-                    onParameterClick = { param ->
-                        selectedParameter = param
-                    }
-                )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(if (isXpan) Modifier.height(144.dp) else Modifier.weight(1f))
+            ) {
+                AnimatedVisibility(
+                    visible = !isXpan,
+                ) {
+                    CameraParameterBar(
+                        state = state,
+                        selectedParameter = selectedParameter,
+                        onParameterClick = { param ->
+                            selectedParameter = param
+                        }
+                    )
+                }
 
-                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(if (isXpan) Modifier.height(144.dp) else Modifier.weight(1f)),
+                    contentAlignment = Alignment.Center
+                ) {
                     // 底部控制层
                     Controls(
                         state = state,
@@ -632,25 +700,37 @@ fun CameraScreen(
         )
 
         // LutControlPanel 显示在遮罩层之上，确保能接收点击事件
-        if (activePanel != ActivePanel.NONE) {
+        AnimatedVisibility(
+            activePanel == ActivePanel.FILTERS,
+            enter = if (isXpan) {slideInVertically(initialOffsetY = { it })} else fadeIn(),
+            exit = if (isXpan) {slideOutVertically(targetOffsetY = { it })} else fadeOut()
+        ) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 48.dp)
-                    .aspectRatio(3 / 4f),
+                    .then(
+                        if (isXpan) {
+                            Modifier.fillMaxHeight()
+                        } else {
+                            Modifier.padding(top = 80.dp)
+                                .height(cardHeight - 48.dp)
+                        }
+                    ),
                 contentAlignment = Alignment.BottomCenter
             ) {
-                if (activePanel == ActivePanel.FILTERS) {
-                    LutControlPanel(
-                        availableLuts = viewModel.availableLutList,
-                        currentLutId = currentLutId,
-                        thumbnail = viewModel.previewThumbnail,
-                        onLutSelected = { viewModel.setLut(it) },
-                        categoryOrder = categoryOrder,
-                        modifier = Modifier.fillMaxWidth()
-                            .padding(horizontal = 8.dp)
-                    )
-                }
+                LutControlPanel(
+                    availableLuts = viewModel.availableLutList,
+                    currentLutId = currentLutId,
+                    thumbnail = viewModel.previewThumbnail,
+                    onLutSelected = { viewModel.setLut(it) },
+                    categoryOrder = categoryOrder,
+                    modifier = Modifier.fillMaxWidth()
+                        .then(if (isXpan) {
+                            Modifier.padding(bottom = 48.dp)
+                                .background(Color.Black)
+                        } else Modifier)
+                        .padding(horizontal = 8.dp)
+                )
             }
         }
     }
@@ -664,12 +744,17 @@ fun Controls(
     latestPhoto: com.hinnka.mycamera.gallery.PhotoData?,
     onGalleryClick: () -> Unit
 ) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(bottom = 32.dp),
+    BoxWithConstraints(
+        modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
+        val bottomPadding = (maxHeight - 80.dp).coerceIn(0.dp, 32.dp)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = bottomPadding),
+            contentAlignment = Alignment.Center
+        ) {
         // 相册入口 (Left)
         Box(
             modifier = Modifier
@@ -707,6 +792,7 @@ fun Controls(
                 tint = Color.White,
                 modifier = Modifier.size(32.dp)
             )
+        }
         }
     }
 }
@@ -848,7 +934,7 @@ fun Modifier.autoRotate(
         if (matchParentSize) {
             val visualWidth = width * cos + height * sin
             val visualHeight = width * sin + height * cos
-            
+
             val containerWidth = constraints.maxWidth.toFloat()
             val containerHeight = constraints.maxHeight.toFloat()
 

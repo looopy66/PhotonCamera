@@ -7,3 +7,13 @@
 * UI: Jetpack Compose
 * 使用 Camera2 API, 不做向下兼容
 * minSdk 30
+
+## 调试编译
+
+```
+./gradlew assembleChinaDebug
+```
+
+## 注意
+
+* 添加新功能/新逻辑时，优先选择在新方法/函数/文件中新增，而不是在现有代码中新增，避免单个方法/文件过长
