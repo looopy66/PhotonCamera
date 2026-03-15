@@ -142,9 +142,9 @@ fun ZoomRulerVertical(
             .background(Color.Black.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
             .pointerInput(Unit) {
                 detectTapGestures { offset ->
-                    val width = size.width
-                    val stepWidth = width / stopsState.size
-                    val index = (offset.x / stepWidth).toInt().coerceIn(0, stopsState.lastIndex)
+                    val height = size.height
+                    val stepHeight = height / stopsState.size
+                    val index = (offset.y / stepHeight).toInt().coerceIn(0, stopsState.lastIndex)
                     onZoomChange(stopsState[index])
                 }
             },
