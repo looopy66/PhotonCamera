@@ -116,6 +116,17 @@
     <string name="settings_grid_description">在拍摄时显示网格线，辅助构图</string>
     <string name="settings_use_multi_frame">多帧合成</string>
     <string name="settings_use_multi_frame_description">拍摄多张照片并合成，以获得更好的画质和更低的噪点。</string>
+    <string name="settings_use_multiple_exposure">多重曝光</string>
+    <string name="settings_use_multiple_exposure_description">通过多次快门逐步叠加一张作品，并提供幽灵预览辅助构图。</string>
+    <string name="multiple_exposure_short">多曝</string>
+    <string name="multiple_exposure_finish">完成</string>
+    <string name="multiple_exposure_undo">撤销</string>
+    <string name="multiple_exposure_cancel">取消拍摄</string>
+    <string name="multiple_exposure_blending">平均叠加</string>
+    <string name="multiple_exposure_guidance">参考半透明叠影继续构图，然后拍摄下一张。</string>
+    <string name="multiple_exposure_ready">已就绪，等待下一次曝光</string>
+    <string name="settings_multiple_exposure_count">多重曝光张数</string>
+    <string name="settings_multiple_exposure_count_description">最终合成所使用的曝光张数。默认 2 张，更接近经典双重曝光工作流。</string>
     <string name="settings_multi_frame_count">多帧合成帧数</string>
     <string name="settings_multi_frame_count_description">多帧合成所使用的帧数（帧数越多效果越好，但合成也越慢）。</string>
     <string name="settings_use_super_resolution">超分辨率</string>

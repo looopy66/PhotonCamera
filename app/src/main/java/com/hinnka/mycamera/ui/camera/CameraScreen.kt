@@ -1,5 +1,8 @@
 package com.hinnka.mycamera.ui.camera
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.os.Environment
 import android.provider.Settings
@@ -15,6 +18,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -22,8 +26,14 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material.icons.outlined.Undo
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -39,6 +49,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -93,9 +105,11 @@ fun CameraScreen(
     val categoryOrder by viewModel.categoryOrder.collectAsState(emptyList())
     val useRaw by viewModel.useRaw.collectAsState()
     val useMultiFrame by viewModel.useMultiFrame.collectAsState()
+    val useMultipleExposure by viewModel.useMultipleExposure.collectAsState()
     val useSuperResolution by viewModel.useSuperResolution.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
     val phantomMode by viewModel.phantomMode.collectAsState()
+    val multipleExposureState = viewModel.multipleExposureState
 
     // 标记相机是否已打开
     var cameraOpened by remember { mutableStateOf(false) }
@@ -422,12 +436,22 @@ fun CameraScreen(
                         Box(
                             modifier = Modifier.fillMaxSize()
                         ) {
+                            multipleExposureState.previewBitmap?.let { previewBitmap ->
+                                Image(
+                                    bitmap = previewBitmap.asImageBitmap(),
+                                    contentDescription = null,
+                                    modifier = Modifier.fillMaxSize(),
+                                    alpha = 0.45f,
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
+
                             // 实时直方图 (Overlaid on preview if enabled)
                             if (state.histogram != null && viewModel.showHistogram) {
                                 HistogramView(
                                     histogram = state.histogram,
                                     modifier = Modifier
-                                        .padding(16.dp)
+                                        .padding(8.dp)
                                         .size(80.dp, 40.dp)
                                         .align(Alignment.TopStart)
                                         .autoRotate(dx = -20.dp, dy = 20.dp)
@@ -479,6 +503,16 @@ fun CameraScreen(
                             if (burstCapturingCount > 0) {
                                 BurstCaptureOverlay(
                                     count = burstCapturingCount,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+
+                            if (useMultipleExposure) {
+                                MultipleExposureOverlay(
+                                    state = multipleExposureState,
+                                    onFinish = { viewModel.finishMultipleExposureSession() },
+                                    onUndo = { viewModel.undoLastMultipleExposureFrame() },
+                                    onCancel = { viewModel.cancelMultipleExposureSession() },
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }
@@ -618,6 +652,8 @@ fun CameraScreen(
                         viewModel = viewModel,
                         galleryViewModel = galleryViewModel,
                         latestPhoto = latestPhoto,
+                        useMultipleExposure = useMultipleExposure,
+                        multipleExposureState = multipleExposureState,
                         onGalleryClick = {
                             galleryViewModel.loadPhotos()
                             onGalleryClick()
@@ -653,8 +689,6 @@ fun CameraScreen(
             visible = activePanel == ActivePanel.SETTINGS,
             aspectRatio = state.aspectRatio,
             onAspectRatioChange = { viewModel.setAspectRatio(it) },
-            showLevel = showLevelIndicator,
-            onLevelToggle = { viewModel.setShowLevelIndicator(it) },
             useRaw = useRaw && state.isRawSupported,
             onRawToggle = { viewModel.toggleRaw() },
             isRawSupported = state.isRawSupported,
@@ -688,15 +722,15 @@ fun CameraScreen(
                 }
                 viewModel.setUseMultiFrame(it)
             },
+            useMultipleExposure = useMultipleExposure,
+            onMultipleExposureToggle = { viewModel.setUseMultipleExposure(it) },
             useSuperResolution = useSuperResolution,
             onSuperResolutionToggle = {
                 if (it) {
                     viewModel.setUseMultiFrame(true)
                 }
                 viewModel.setUseSuperResolution(it)
-            },
-            showGrid = state.showGrid,
-            onShowGridToggle = { viewModel.toggleGrid() }
+            }
         )
 
         // LutControlPanel 显示在遮罩层之上，确保能接收点击事件
@@ -737,11 +771,103 @@ fun CameraScreen(
 }
 
 @Composable
+fun MultipleExposureOverlay(
+    state: com.hinnka.mycamera.viewmodel.MultipleExposureSessionState,
+    onFinish: () -> Unit,
+    onUndo: () -> Unit,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(modifier = modifier.padding(8.dp)) {
+        Surface(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .wrapContentWidth(),
+            color = Color.Transparent,
+            shape = RoundedCornerShape(20.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .background(
+                        brush = Brush.horizontalGradient(
+                            listOf(
+                                Color(0xD90D1117),
+                                Color(0xB8141B22)
+                            )
+                        ),
+                        shape = RoundedCornerShape(20.dp)
+                    )
+                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(18.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Layers,
+                    contentDescription = null,
+                    tint = Color(0xFFE5A324),
+                    modifier = Modifier.size(16.dp)
+                )
+
+                Text(
+                    text = "${state.capturedCount}/${state.targetCount}",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelLarge
+                )
+
+                if (state.isSessionActive) {
+                    IconButton(
+                        onClick = onUndo,
+                        enabled = state.capturedCount > 0 && !state.isProcessing,
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Outlined.Undo,
+                            contentDescription = stringResource(R.string.multiple_exposure_undo),
+                            modifier = Modifier.size(16.dp),
+                            tint = Color.White
+                        )
+                    }
+
+                    IconButton(
+                        onClick = onFinish,
+                        enabled = state.canFinish,
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Check,
+                            contentDescription = stringResource(R.string.multiple_exposure_finish),
+                            modifier = Modifier.size(16.dp),
+                            tint = Color(0xFFE5A324)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = onCancel,
+                        enabled = !state.isProcessing,
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = stringResource(R.string.multiple_exposure_cancel),
+                            modifier = Modifier.size(16.dp),
+                            tint = Color.Red
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun Controls(
     state: CameraState,
     viewModel: CameraViewModel,
     galleryViewModel: GalleryViewModel,
     latestPhoto: com.hinnka.mycamera.gallery.PhotoData?,
+    useMultipleExposure: Boolean,
+    multipleExposureState: com.hinnka.mycamera.viewmodel.MultipleExposureSessionState,
     onGalleryClick: () -> Unit
 ) {
     BoxWithConstraints(
@@ -772,6 +898,10 @@ fun Controls(
         // 拍照按钮 (Center)
         CaptureButton(
             isCapturing = state.isCapturing,
+            allowLongPress = !useMultipleExposure,
+            multipleExposureEnabled = useMultipleExposure,
+            multipleExposureProgress = multipleExposureState.capturedCount.toFloat() /
+                multipleExposureState.targetCount.coerceAtLeast(1).toFloat(),
             onTap = { viewModel.capture() },
             onLongPressStart = { viewModel.startContinuousCapture() },
             onLongPressEnd = { viewModel.stopContinuousCapture() }
@@ -804,6 +934,9 @@ fun Controls(
 @Composable
 fun CaptureButton(
     isCapturing: Boolean,
+    allowLongPress: Boolean,
+    multipleExposureEnabled: Boolean,
+    multipleExposureProgress: Float,
     onTap: () -> Unit,
     onLongPressStart: () -> Unit,
     onLongPressEnd: () -> Unit,
@@ -840,7 +973,7 @@ fun CaptureButton(
                         }
                     },
                     onLongPress = {
-                        if (!currentIsCapturing) {
+                        if (allowLongPress && !currentIsCapturing) {
                             isLongPressStarted = true
                             onLongPressStart()
                         }
@@ -859,11 +992,32 @@ fun CaptureButton(
             },
         contentAlignment = Alignment.Center
     ) {
+        if (multipleExposureEnabled) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val strokeWidth = 5.dp.toPx()
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.14f),
+                    style = Stroke(width = strokeWidth)
+                )
+                drawArc(
+                    color = Color(0xFFE5A324),
+                    startAngle = -90f,
+                    sweepAngle = 360f * multipleExposureProgress.coerceIn(0f, 1f),
+                    useCenter = false,
+                    style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
+                )
+            }
+        }
+
         // Inner Yellow Ring
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .border(2.dp, Color(0xFFFFD700), CircleShape)
+                .border(
+                    width = if (multipleExposureEnabled) 1.dp else 2.dp,
+                    color = if (multipleExposureEnabled) Color.White.copy(alpha = 0.55f) else Color(0xFFFFD700),
+                    shape = CircleShape
+                )
         )
 
         // Live Photo Indicator (Spinning dash)
@@ -1003,10 +1157,10 @@ fun CornerOverlay(
     }
 }
 
-private fun android.content.Context.findActivity(): android.app.Activity? {
+private fun Context.findActivity(): Activity? {
     var context = this
-    while (context is android.content.ContextWrapper) {
-        if (context is android.app.Activity) return context
+    while (context is ContextWrapper) {
+        if (context is Activity) return context
         context = context.baseContext
     }
     return null

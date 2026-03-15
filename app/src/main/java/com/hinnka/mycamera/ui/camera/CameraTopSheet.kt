@@ -30,8 +30,6 @@ fun CameraTopSheet(
     visible: Boolean,
     aspectRatio: AspectRatio,
     onAspectRatioChange: (AspectRatio) -> Unit,
-    showLevel: Boolean,
-    onLevelToggle: (Boolean) -> Unit,
     useRaw: Boolean,
     onRawToggle: (Boolean) -> Unit,
     isRawSupported: Boolean,
@@ -45,10 +43,10 @@ fun CameraTopSheet(
     onMoreSettingsClick: () -> Unit,
     useMultiFrame: Boolean,
     onMultiFrameToggle: (Boolean) -> Unit,
+    useMultipleExposure: Boolean,
+    onMultipleExposureToggle: (Boolean) -> Unit,
     useSuperResolution: Boolean,
     onSuperResolutionToggle: (Boolean) -> Unit,
-    showGrid: Boolean,
-    onShowGridToggle: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(
@@ -64,14 +62,7 @@ fun CameraTopSheet(
                 .background(Color.Black.copy(alpha = 0.8f))
                 .padding(top = 48.dp, bottom = 24.dp, start = 24.dp, end = 24.dp)
         ) {
-            // Aspect Ratio Section
-            Text(
-                text = stringResource(R.string.aspect_ratio),
-                color = Color.White.copy(alpha = 0.6f),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.padding(bottom = 12.dp)
-            )
+            SectionLabel(title = stringResource(R.string.aspect_ratio))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -99,12 +90,11 @@ fun CameraTopSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Display settings section (Grid & Level)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // Multi-Frame Stacking Toggle
+
                 QuickSettingToggle(
                     title = stringResource(R.string.settings_use_multi_frame),
                     checked = useMultiFrame,
@@ -119,7 +109,6 @@ fun CameraTopSheet(
                     modifier = Modifier.weight(1f)
                 )
 
-                // RAW Toggle (if supported)
                 if (isRawSupported) {
                     QuickSettingToggle(
                         title = stringResource(R.string.settings_use_raw),
@@ -136,23 +125,14 @@ fun CameraTopSheet(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // Level Indicator Toggle
+
                 QuickSettingToggle(
-                    title = stringResource(R.string.settings_level_indicator),
-                    checked = showLevel,
-                    onCheckedChange = onLevelToggle,
+                    title = stringResource(R.string.settings_use_multiple_exposure),
+                    checked = useMultipleExposure,
+                    onCheckedChange = onMultipleExposureToggle,
                     modifier = Modifier.weight(1f)
                 )
 
-                // Grid Toggle
-                QuickSettingToggle(
-                    title = stringResource(R.string.grid),
-                    checked = showGrid,
-                    onCheckedChange = onShowGridToggle,
-                    modifier = Modifier.weight(1f)
-                )
-
-                // NR Level Cycle
                 val nrLevelNames = availableNrLevels.map {
                     when (it) {
                         0 -> stringResource(R.string.settings_nr_level_off)
@@ -181,7 +161,6 @@ fun CameraTopSheet(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-
                 if (DeviceUtil.isChinaFlavor) {
                     QuickSettingToggle(
                         title = stringResource(R.string.ghost_mode),
@@ -191,7 +170,6 @@ fun CameraTopSheet(
                     )
                 }
 
-                // Filter Management Button
                 QuickSettingButton(
                     title = stringResource(R.string.settings_filter_management),
                     icon = Icons.Default.AutoAwesome,
@@ -207,13 +185,6 @@ fun CameraTopSheet(
                         modifier = Modifier.weight(1f)
                     )
                 }
-
-                /*QuickSettingButton(
-                    title = stringResource(R.string.settings_title),
-                    icon = Icons.Default.Settings,
-                    onClick = onMoreSettingsClick,
-                    modifier = Modifier.weight(1f)
-                )*/
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -262,6 +233,17 @@ fun CameraTopSheet(
             }
         }
     }
+}
+
+@Composable
+private fun SectionLabel(title: String) {
+    Text(
+        text = title,
+        color = Color.White.copy(alpha = 0.6f),
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Medium,
+        modifier = Modifier.padding(bottom = 12.dp)
+    )
 }
 
 @Composable

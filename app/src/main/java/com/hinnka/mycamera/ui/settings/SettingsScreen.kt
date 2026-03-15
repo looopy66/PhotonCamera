@@ -118,6 +118,7 @@ fun SettingsScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val showLevelIndicator by viewModel.showLevelIndicator.collectAsState(initial = false)
+    val showGrid = state.showGrid
     val shutterSoundEnabled by viewModel.shutterSoundEnabled.collectAsState(initial = true)
     val vibrationEnabled by viewModel.vibrationEnabled.collectAsState(initial = true)
     val volumeKeyAction by viewModel.volumeKeyAction.collectAsState()
@@ -131,6 +132,8 @@ fun SettingsScreen(
     val chromaNoiseReduction by viewModel.chromaNoiseReduction.collectAsState(initial = 0f)
     val defaultFocalLength by viewModel.defaultFocalLength.collectAsState(initial = 0f)
     val multiFrameCount by viewModel.multiFrameCount.collectAsState()
+    val useMultipleExposure by viewModel.useMultipleExposure.collectAsState()
+    val multipleExposureCount by viewModel.multipleExposureCount.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
     val photoQuality by viewModel.photoQuality.collectAsState(initial = 95)
     val useGpuAcceleration by viewModel.useGpuAcceleration.collectAsState()
@@ -536,6 +539,30 @@ fun SettingsScreen(
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
 
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_level_indicator),
+                            description = stringResource(R.string.settings_level_description),
+                            checked = showLevelIndicator,
+                            onCheckedChange = { viewModel.setShowLevelIndicator(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_grid_lines),
+                            description = stringResource(R.string.settings_grid_description),
+                            checked = showGrid,
+                            onCheckedChange = { viewModel.setShowGrid(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
                         VolumeKeyActionSetting(
                             action = volumeKeyAction,
                             onActionSelected = { viewModel.setVolumeKeyAction(it) }
@@ -728,6 +755,37 @@ fun SettingsScreen(
                             ),
                             currentLevel = multiFrameCount,
                             onLevelSelected = { viewModel.setMultiFrameCount(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_use_multiple_exposure),
+                            description = stringResource(R.string.settings_use_multiple_exposure_description),
+                            checked = useMultipleExposure,
+                            onCheckedChange = { viewModel.setUseMultipleExposure(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        QualityLevelSetting(
+                            title = stringResource(R.string.settings_multiple_exposure_count),
+                            description = stringResource(R.string.settings_multiple_exposure_count_description),
+                            levels = listOf(
+                                2 to "2",
+                                3 to "3",
+                                4 to "4",
+                                5 to "5",
+                                6 to "6"
+                            ),
+                            currentLevel = multipleExposureCount,
+                            onLevelSelected = { viewModel.setMultipleExposureCount(it) }
                         )
 
                         HorizontalDivider(

@@ -42,6 +42,27 @@ import java.io.File
 import java.util.UUID
 import kotlin.math.abs
 
+data class MultipleExposureFrame(
+    val index: Int,
+    val file: File
+)
+
+data class MultipleExposureSessionState(
+    val enabled: Boolean = false,
+    val sessionId: String? = null,
+    val targetCount: Int = 2,
+    val capturedCount: Int = 0,
+    val frames: List<MultipleExposureFrame> = emptyList(),
+    val isProcessing: Boolean = false,
+    val previewBitmap: Bitmap? = null
+) {
+    val isSessionActive: Boolean
+        get() = sessionId != null
+
+    val canFinish: Boolean
+        get() = capturedCount >= 2 && !isProcessing
+}
+
 /**
  * 相机 ViewModel
  * 使用 Camera2Controller 支持隐藏摄像头
@@ -146,6 +167,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useMultiFrame: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useMultiFrame }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val useMultipleExposure: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.useMultipleExposure }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val multipleExposureCount: StateFlow<Int> = userPreferencesRepository.userPreferences
+        .map { it.multipleExposureCount }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 2)
     val multiFrameCount: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.multiFrameCount }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 8)
@@ -240,6 +267,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var hasAppliedDefaultFocalLength = false
 
     private val stackingImages = mutableListOf<SafeImage>()
+    private var multipleExposureMetadata: PhotoMetadata? = null
+    var multipleExposureState by mutableStateOf(MultipleExposureSessionState())
+        private set
 
     private val burstImages = mutableListOf<SafeImage>()
     private var burstCaptureInfo: CaptureInfo? = null
@@ -257,6 +287,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     burstCaptureInfo = captureInfo
                 }
                 burstImages.add(image)
+            } else if (multipleExposureState.enabled) {
+                viewModelScope.launch {
+                    handleMultipleExposureFrameCaptured(image, captureInfo)
+                }
             } else if (state.value.useMultiFrame) {
                 val count = state.value.multiFrameCount
                 PLog.d(TAG, "Burst frame received: ${stackingImages.size + 1}/$count")
@@ -306,6 +340,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setEdgeLevel(it.edgeLevel)
                 // 同步 RAW 设置到相机控制器
                 cameraController.setUseRaw(it.useRaw)
+                multipleExposureState = multipleExposureState.copy(
+                    enabled = it.useMultipleExposure,
+                    targetCount = it.multipleExposureCount
+                )
                 // 同步 Live Photo 设置到相机控制器
                 cameraController.setUseLivePhoto(it.useLivePhoto)
                 // 同步 Ultra HDR 设置到相机控制器
@@ -484,6 +522,245 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             if (!state.value.isPreviewActive) {
                 cameraController.openCamera(texture)
             }
+        }
+    }
+
+    private suspend fun buildPhotoMetadata(
+        width: Int,
+        height: Int,
+        captureInfo: CaptureInfo,
+        sharpeningValue: Float = 0f,
+        noiseReductionValue: Float = 0f,
+        chromaNoiseReductionValue: Float = 0f,
+        captureMode: String? = null,
+        multipleExposureFrameCount: Int? = null
+    ): PhotoMetadata {
+        val lutIdToSave = currentLutId.value
+        val aspectRatio = state.value.aspectRatio
+        val frameIdToSave = currentFrameId
+        val currentCameraId = cameraController.getCurrentCameraId()
+
+        val sensorOrientation = cameraController.getSensorOrientation()
+        val lensFacing = cameraController.getLensFacing()
+        val deviceRotation = OrientationObserver.rotationDegrees.toInt()
+        val baseRotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+            (sensorOrientation - deviceRotation + 360) % 360
+        } else {
+            (sensorOrientation + deviceRotation) % 360
+        }
+
+        val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
+        val orientationOffset = userPrefs?.cameraOrientationOffsets?.get(currentCameraId) ?: 0
+        val rotation = (baseRotation + orientationOffset) % 360
+        val shouldMirror = lensFacing == CameraCharacteristics.LENS_FACING_FRONT &&
+            (userPreferencesRepository.userPreferences.firstOrNull()?.mirrorFrontCamera ?: true)
+        val aperture = if (state.value.isVirtualApertureEnabled) state.value.virtualAperture else null
+
+        return PhotoMetadata(
+            lutId = lutIdToSave,
+            frameId = frameIdToSave,
+            colorRecipeParams = currentRecipeParams.value,
+            sharpening = sharpeningValue,
+            noiseReduction = noiseReductionValue,
+            chromaNoiseReduction = chromaNoiseReductionValue,
+            width = width,
+            height = height,
+            ratio = aspectRatio,
+            rotation = rotation,
+            deviceModel = captureInfo.model,
+            brand = captureInfo.make,
+            dateTaken = captureInfo.captureTime,
+            latitude = captureInfo.latitude,
+            longitude = captureInfo.longitude,
+            altitude = captureInfo.altitude,
+            iso = captureInfo.iso,
+            shutterSpeed = captureInfo.formatExposureTime(),
+            focalLength = captureInfo.formatFocalLength(),
+            focalLength35mm = captureInfo.formatFocalLength35mm(),
+            aperture = captureInfo.formatAperture(),
+            exposureBias = state.value.exposureBias,
+            droMode = droMode.value,
+            isMirrored = shouldMirror,
+            colorSpace = captureInfo.colorSpace,
+            computationalAperture = aperture,
+            focusPointX = state.value.focusPoint?.first,
+            focusPointY = state.value.focusPoint?.second,
+            captureMode = captureMode,
+            multipleExposureFrameCount = multipleExposureFrameCount
+        )
+    }
+
+    fun setUseMultipleExposure(enabled: Boolean) {
+        if (!enabled) {
+            cancelMultipleExposureSession()
+        }
+
+        if (enabled) {
+            cameraController.setUseMultiFrame(false, multiFrameCount.value)
+            cameraController.setUseSuperResolution(false)
+            cameraController.setUseLivePhoto(false)
+            cameraController.setUseRaw(false)
+        }
+
+        viewModelScope.launch {
+            userPreferencesRepository.saveUseMultipleExposure(enabled)
+            if (enabled) {
+                userPreferencesRepository.saveUseMultiFrame(false)
+                userPreferencesRepository.saveUseSuperResolution(false)
+                userPreferencesRepository.saveUseLivePhoto(false)
+                userPreferencesRepository.saveUseRaw(false)
+            }
+        }
+    }
+
+    fun cancelMultipleExposureSession() {
+        multipleExposureState.previewBitmap?.recycle()
+        multipleExposureState.sessionId?.let { sessionId ->
+            PhotoManager.clearMultipleExposureSession(getApplication(), sessionId)
+        }
+        multipleExposureMetadata = null
+        multipleExposureState = multipleExposureState.copy(
+            sessionId = null,
+            capturedCount = 0,
+            frames = emptyList(),
+            isProcessing = false,
+            previewBitmap = null
+        )
+    }
+
+    fun undoLastMultipleExposureFrame() {
+        val sessionId = multipleExposureState.sessionId ?: return
+        if (!PhotoManager.removeLastMultipleExposureFrame(getApplication(), sessionId)) return
+        refreshMultipleExposurePreview(sessionId)
+    }
+
+    fun finishMultipleExposureSession() {
+        if (!multipleExposureState.canFinish) return
+        val sessionId = multipleExposureState.sessionId ?: return
+        val baseMetadata = multipleExposureMetadata ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            multipleExposureState = multipleExposureState.copy(isProcessing = true)
+            try {
+                val context = getApplication<Application>()
+                val composedBitmap = PhotoManager.composeMultipleExposurePhoto(context, sessionId) ?: run {
+                    multipleExposureState = multipleExposureState.copy(isProcessing = false)
+                    return@launch
+                }
+                val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
+                val photoQualityValue = photoQuality.firstOrNull() ?: 95
+                val sharpeningValue = sharpening.firstOrNull() ?: 0f
+                val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
+                val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
+
+                val photoId = PhotoManager.preparePhoto(
+                    context,
+                    baseMetadata.copy(
+                        width = composedBitmap.width,
+                        height = composedBitmap.height,
+                        captureMode = "multiple_exposure",
+                        multipleExposureFrameCount = multipleExposureState.capturedCount
+                    ),
+                    null,
+                    previewThumbnail,
+                    false,
+                    false
+                ) ?: run {
+                    composedBitmap.recycle()
+                    multipleExposureState = multipleExposureState.copy(isProcessing = false)
+                    return@launch
+                }
+
+                PhotoManager.saveBitmapPhoto(
+                    context,
+                    photoId,
+                    composedBitmap,
+                    shouldAutoSave,
+                    contentRepository.photoProcessor,
+                    sharpeningValue,
+                    noiseReductionValue,
+                    chromaNoiseReductionValue,
+                    photoQualityValue
+                )
+                composedBitmap.recycle()
+                cancelMultipleExposureSession()
+                _imageSavedEvent.emit(Unit)
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to finish multiple exposure session", e)
+                multipleExposureState = multipleExposureState.copy(isProcessing = false)
+            }
+        }
+    }
+
+    private fun refreshMultipleExposurePreview(sessionId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            val frameFiles = PhotoManager.getMultipleExposureFrameFiles(context, sessionId)
+            val preview = if (frameFiles.isNotEmpty()) {
+                PhotoManager.composeMultipleExposurePreview(context, sessionId)
+            } else {
+                null
+            }
+            val oldPreview = multipleExposureState.previewBitmap
+            multipleExposureState = multipleExposureState.copy(
+                capturedCount = frameFiles.size,
+                frames = frameFiles.mapIndexed { index, file -> MultipleExposureFrame(index + 1, file) },
+                previewBitmap = preview,
+                sessionId = if (frameFiles.isEmpty()) null else sessionId,
+                isProcessing = false
+            )
+            if (oldPreview != null && oldPreview !== preview && !oldPreview.isRecycled) {
+                oldPreview.recycle()
+            }
+            if (frameFiles.isEmpty()) {
+                multipleExposureMetadata = null
+            }
+        }
+    }
+
+    private suspend fun handleMultipleExposureFrameCaptured(
+        image: SafeImage,
+        captureInfo: CaptureInfo
+    ) {
+        try {
+            if (state.value.useRaw || image.format == android.graphics.ImageFormat.RAW_SENSOR) {
+                image.close()
+                PLog.w(TAG, "Multiple exposure currently supports processed YUV captures only")
+                return
+            }
+
+            val context = getApplication<Application>()
+            val sessionId = multipleExposureState.sessionId ?: UUID.randomUUID().toString()
+            val frameIndex = multipleExposureState.capturedCount + 1
+            val metadata = multipleExposureMetadata ?: buildPhotoMetadata(
+                width = image.width,
+                height = image.height,
+                captureInfo = captureInfo,
+                captureMode = "multiple_exposure",
+                multipleExposureFrameCount = multipleExposureState.targetCount
+            ).also { multipleExposureMetadata = it }
+
+            val frameFile = PhotoManager.saveMultipleExposureFrame(
+                context,
+                sessionId,
+                frameIndex,
+                image,
+                metadata.rotation,
+                state.value.aspectRatio,
+                metadata.isMirrored,
+                photoQuality.firstOrNull() ?: 95
+            ) ?: return
+
+            multipleExposureState = multipleExposureState.copy(
+                sessionId = sessionId,
+                frames = multipleExposureState.frames + MultipleExposureFrame(frameIndex, frameFile),
+                capturedCount = frameIndex
+            )
+            refreshMultipleExposurePreview(sessionId)
+            if (frameIndex >= multipleExposureState.targetCount) {
+                finishMultipleExposureSession()
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to handle multiple exposure frame", e)
         }
     }
 
@@ -1070,6 +1347,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 设置是否使用多帧合成
      */
     fun setUseMultiFrame(enabled: Boolean) {
+        if (enabled) {
+            setUseMultipleExposure(false)
+        }
         /*if (enabled) {
             cameraController.setUseRaw(false)
             viewModelScope.launch {
@@ -1094,10 +1374,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun setMultipleExposureCount(count: Int) {
+        val normalizedCount = count.coerceIn(2, 9)
+        multipleExposureState = multipleExposureState.copy(targetCount = normalizedCount)
+        viewModelScope.launch {
+            userPreferencesRepository.saveMultipleExposureCount(normalizedCount)
+        }
+    }
+
     /**
      * 设置是否使用超分辨率
      */
     fun setUseSuperResolution(enabled: Boolean) {
+        if (enabled) {
+            setUseMultipleExposure(false)
+        }
         cameraController.setUseSuperResolution(enabled)
         viewModelScope.launch {
             userPreferencesRepository.saveUseSuperResolution(enabled)
@@ -1109,6 +1400,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 设置是否启用 Live Photo
      */
     fun setUseLivePhoto(enabled: Boolean) {
+        if (enabled) {
+            setUseMultipleExposure(false)
+        }
         cameraController.setUseLivePhoto(enabled)
         viewModelScope.launch {
             userPreferencesRepository.saveUseLivePhoto(enabled)
@@ -1134,11 +1428,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 切换网格线显示
      */
     fun toggleGrid() {
-        val newShowGrid = !state.value.showGrid
-        cameraController.setShowGrid(newShowGrid)
-        // 保存到用户偏好设置
+        setShowGrid(!state.value.showGrid)
+    }
+
+    /**
+     * 设置是否显示网格线
+     */
+    fun setShowGrid(show: Boolean) {
+        cameraController.setShowGrid(show)
         viewModelScope.launch {
-            userPreferencesRepository.saveShowGrid(newShowGrid)
+            userPreferencesRepository.saveShowGrid(show)
         }
     }
 
@@ -1151,6 +1450,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setUseRaw(useRaw: Boolean) {
+        if (useRaw) {
+            setUseMultipleExposure(false)
+        }
         /*if (useRaw) {
             cameraController.setUseMultiFrame(false, multiFrameCount.value)
             viewModelScope.launch {
@@ -1982,6 +2284,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         burstImages.clear()
         burstImageCount = 0
+        multipleExposureState.previewBitmap?.recycle()
+        multipleExposureState.sessionId?.let { PhotoManager.clearMultipleExposureSession(getApplication(), it) }
     }
 
     /**

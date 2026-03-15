@@ -31,6 +31,8 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.IntBuffer
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.use
@@ -52,6 +54,8 @@ object PhotoManager {
     private const val METADATA_FILE = "metadata.json"
     private const val THUMBNAIL_FILE = "thumbnail.jpg"
     private const val BOKEH_FILE = "bokeh.jpg"
+    private const val MULTIPLE_EXPOSURE_DIR = "multiple_exposure_sessions"
+    private const val MULTIPLE_EXPOSURE_PREVIEW_FILE = "preview.jpg"
 
     val processingScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
@@ -65,6 +69,22 @@ object PhotoManager {
             dir.mkdirs()
         }
         return dir
+    }
+
+    private fun getMultipleExposureBaseDir(context: Context): File {
+        return File(context.cacheDir, MULTIPLE_EXPOSURE_DIR)
+    }
+
+    private fun getMultipleExposureSessionDir(context: Context, sessionId: String, create: Boolean = false): File {
+        val dir = File(getMultipleExposureBaseDir(context), sessionId)
+        if (create && !dir.exists()) {
+            dir.mkdirs()
+        }
+        return dir
+    }
+
+    private fun getMultipleExposurePreviewFile(context: Context, sessionId: String): File {
+        return File(getMultipleExposureSessionDir(context, sessionId, true), MULTIPLE_EXPOSURE_PREVIEW_FILE)
     }
 
     fun getPhotoFile(context: Context, photoId: String): File {
@@ -622,6 +642,211 @@ object PhotoManager {
                 PLog.e(TAG, "Unsupported image format: $format")
             }
         }
+    }
+
+    suspend fun saveBitmapPhoto(
+        context: Context,
+        photoId: String,
+        bitmap: Bitmap,
+        shouldAutoSave: Boolean = true,
+        photoProcessor: PhotoProcessor,
+        sharpeningValue: Float,
+        noiseReductionValue: Float,
+        chromaNoiseReductionValue: Float,
+        photoQuality: Int = 95
+    ) = withContext(Dispatchers.IO) {
+        try {
+            val photoDir = getPhotoDir(context, photoId, true)
+            val photoFile = File(photoDir, PHOTO_FILE)
+            val tempFile = File(photoDir, "temp.jpg")
+            val metadata = loadMetadata(context, photoId) ?: return@withContext
+
+            FileOutputStream(tempFile).use { outputStream ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
+            }
+            tempFile.renameTo(photoFile)
+
+            if (shouldAutoSave) {
+                exportPhoto(
+                    context,
+                    photoId,
+                    bitmap,
+                    photoProcessor,
+                    metadata,
+                    sharpeningValue,
+                    noiseReductionValue,
+                    chromaNoiseReductionValue,
+                    photoQuality
+                )
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to save bitmap photo", e)
+        }
+    }
+
+    suspend fun saveMultipleExposureFrame(
+        context: Context,
+        sessionId: String,
+        frameIndex: Int,
+        image: SafeImage,
+        rotation: Int,
+        aspectRatio: AspectRatio,
+        shouldMirror: Boolean,
+        photoQuality: Int = 95
+    ): File? = withContext(Dispatchers.IO) {
+        try {
+            val sessionDir = getMultipleExposureSessionDir(context, sessionId, true)
+            val frameFile = File(sessionDir, String.format(Locale.US, "frame_%02d.jpg", frameIndex))
+            val previewBitmap = image.use {
+                YuvProcessor.processAndToBitmap(it.image, aspectRatio, rotation)
+            }
+            val finalBitmap = if (shouldMirror) {
+                BitmapUtils.flipHorizontal(previewBitmap)
+            } else {
+                previewBitmap
+            }
+            FileOutputStream(frameFile).use { outputStream ->
+                finalBitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
+            }
+            if (finalBitmap !== previewBitmap) {
+                previewBitmap.recycle()
+            }
+            finalBitmap.recycle()
+            frameFile
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to save multiple exposure frame", e)
+            null
+        }
+    }
+
+    fun getMultipleExposureFrameFiles(context: Context, sessionId: String): List<File> {
+        val dir = getMultipleExposureSessionDir(context, sessionId)
+        return dir.listFiles { file -> file.isFile && file.name.startsWith("frame_") && file.extension.equals("jpg", ignoreCase = true) }
+            ?.sortedBy { it.name }
+            ?: emptyList()
+    }
+
+    suspend fun composeMultipleExposurePreview(
+        context: Context,
+        sessionId: String,
+        maxEdge: Int = 1440,
+        photoQuality: Int = 85
+    ): Bitmap? = withContext(Dispatchers.IO) {
+        val frameFiles = getMultipleExposureFrameFiles(context, sessionId)
+        val result = composeAverageBitmap(frameFiles, maxEdge) ?: return@withContext null
+        try {
+            FileOutputStream(getMultipleExposurePreviewFile(context, sessionId)).use { outputStream ->
+                result.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to save multiple exposure preview", e)
+        }
+        result
+    }
+
+    suspend fun composeMultipleExposurePhoto(
+        context: Context,
+        sessionId: String
+    ): Bitmap? = withContext(Dispatchers.IO) {
+        composeAverageBitmap(getMultipleExposureFrameFiles(context, sessionId), null)
+    }
+
+    fun removeLastMultipleExposureFrame(context: Context, sessionId: String): Boolean {
+        val lastFrame = getMultipleExposureFrameFiles(context, sessionId).lastOrNull() ?: return false
+        return runCatching { lastFrame.delete() }.getOrDefault(false)
+    }
+
+    fun clearMultipleExposureSession(context: Context, sessionId: String) {
+        runCatching {
+            deleteEmptyDirs(getMultipleExposureSessionDir(context, sessionId))
+            getMultipleExposureSessionDir(context, sessionId).deleteRecursively()
+        }.onFailure {
+            PLog.e(TAG, "Failed to clear multiple exposure session", it)
+        }
+    }
+
+    private fun composeAverageBitmap(frameFiles: List<File>, maxEdge: Int?): Bitmap? {
+        if (frameFiles.isEmpty()) return null
+
+        val options = BitmapFactory.Options().apply {
+            if (maxEdge != null) {
+                inJustDecodeBounds = true
+                BitmapFactory.decodeFile(frameFiles.first().absolutePath, this)
+                val largestEdge = maxOf(outWidth, outHeight).coerceAtLeast(1)
+                inSampleSize = if (largestEdge > maxEdge) {
+                    Integer.highestOneBit((largestEdge / maxEdge).coerceAtLeast(1))
+                } else {
+                    1
+                }
+                inJustDecodeBounds = false
+            }
+        }
+
+        val firstBitmap = BitmapFactory.decodeFile(frameFiles.first().absolutePath, options) ?: return null
+        val width = firstBitmap.width
+        val height = firstBitmap.height
+        val bufferSize = firstBitmap.byteCount
+        val outputBuffer = ByteBuffer.allocateDirect(bufferSize).order(ByteOrder.nativeOrder())
+        val inputBuffer = ByteBuffer.allocateDirect(bufferSize).order(ByteOrder.nativeOrder())
+        val outputInts = outputBuffer.asIntBuffer()
+        val inputInts = inputBuffer.asIntBuffer()
+        firstBitmap.copyPixelsToBuffer(outputBuffer)
+        firstBitmap.recycle()
+        var blendedCount = 1
+
+        frameFiles.drop(1).forEach { file ->
+            val bitmap = BitmapFactory.decodeFile(file.absolutePath, options) ?: return@forEach
+            if (bitmap.width == width && bitmap.height == height) {
+                inputBuffer.clear()
+                bitmap.copyPixelsToBuffer(inputBuffer)
+                blendAverageInto(outputInts, inputInts, width * height, blendedCount + 1)
+                blendedCount++
+            } else {
+                PLog.w(TAG, "Skipping mismatched multiple exposure frame: ${file.name}")
+            }
+            bitmap.recycle()
+        }
+
+        return createBitmap(width, height, Bitmap.Config.ARGB_8888).also { output ->
+            outputBuffer.rewind()
+            output.copyPixelsFromBuffer(outputBuffer)
+        }
+    }
+
+    private fun blendAverageInto(
+        outputInts: IntBuffer,
+        inputInts: IntBuffer,
+        pixelCount: Int,
+        nextFrameIndex: Int
+    ) {
+        outputInts.rewind()
+        inputInts.rewind()
+        for (i in 0 until pixelCount) {
+            val basePixel = outputInts.get(i)
+            val newPixel = inputInts.get(i)
+
+            val baseA = basePixel ushr 24 and 0xFF
+            val baseR = basePixel ushr 16 and 0xFF
+            val baseG = basePixel ushr 8 and 0xFF
+            val baseB = basePixel and 0xFF
+
+            val newA = newPixel ushr 24 and 0xFF
+            val newR = newPixel ushr 16 and 0xFF
+            val newG = newPixel ushr 8 and 0xFF
+            val newB = newPixel and 0xFF
+
+            outputInts.put(
+                i,
+                Color.argb(
+                    baseA + (newA - baseA) / nextFrameIndex,
+                    baseR + (newR - baseR) / nextFrameIndex,
+                    baseG + (newG - baseG) / nextFrameIndex,
+                    baseB + (newB - baseB) / nextFrameIndex
+                )
+            )
+        }
+        outputInts.rewind()
+        inputInts.rewind()
     }
 
     suspend fun saveYuvStackedPhoto(

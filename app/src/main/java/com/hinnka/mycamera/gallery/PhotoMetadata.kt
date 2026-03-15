@@ -22,7 +22,7 @@ import kotlin.math.log2
  * 保存 LUT、边框水印、编辑信息和拍摄参数，用于非破坏性编辑和边框水印渲染
  */
 data class PhotoMetadata(
-    val version: Int = 10,  // Added sourceUri
+    val version: Int = 11,  // Added multiple exposure metadata
     // 编辑配置
     val lutId: String? = null,
     // 色彩配方配置
@@ -71,7 +71,9 @@ data class PhotoMetadata(
     val droMode: String? = null,
     val software: String? = null,
     val isMirrored: Boolean = false,
-    val colorSpace: ColorSpace.Named = ColorSpace.Named.SRGB
+    val colorSpace: ColorSpace.Named = ColorSpace.Named.SRGB,
+    val captureMode: String? = null,
+    val multipleExposureFrameCount: Int? = null
 ) {
     /**
      * 将元数据转换为 CaptureInfo，用于写入 EXIF
@@ -223,6 +225,8 @@ data class PhotoMetadata(
             put("software", software ?: JSONObject.NULL)
             put("isMirrored", isMirrored)
             put("colorSpace", colorSpace.name)
+            put("captureMode", captureMode ?: JSONObject.NULL)
+            put("multipleExposureFrameCount", multipleExposureFrameCount ?: JSONObject.NULL)
         }.toString(2)
     }
 
@@ -366,6 +370,8 @@ data class PhotoMetadata(
                             it
                         )
                     } ?: ColorSpace.Named.SRGB,
+                    captureMode = if (obj.isNull("captureMode")) null else obj.optString("captureMode"),
+                    multipleExposureFrameCount = if (obj.isNull("multipleExposureFrameCount")) null else obj.optInt("multipleExposureFrameCount"),
                 )
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to parse JSON", e)

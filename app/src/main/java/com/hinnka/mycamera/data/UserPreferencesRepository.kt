@@ -62,6 +62,8 @@ data class UserPreferences(
     val defaultFocalLength: Float = 0f, // 默认焦段 (mm)，0表示不设置
     val useMultiFrame: Boolean = false, // 是否使用多帧合成
     val multiFrameCount: Int = 8, // 多帧合成帧数
+    val useMultipleExposure: Boolean = false, // 是否启用多重曝光
+    val multipleExposureCount: Int = 2, // 多重曝光张数
     val useSuperResolution: Boolean = false, // 是否使用超分辨率
     val photoQuality: Int = 95, // 照片质量: 90, 95, 100
     val useLivePhoto: Boolean = false, // 是否启用 Live Photo (Motion Photo)
@@ -128,6 +130,8 @@ class UserPreferencesRepository(private val context: Context) {
         // 多帧合成 Key
         private val USE_MULTI_FRAME = booleanPreferencesKey("use_multi_frame")
         private val MULTI_FRAME_COUNT = intPreferencesKey("multi_frame_count")
+        private val USE_MULTIPLE_EXPOSURE = booleanPreferencesKey("use_multiple_exposure")
+        private val MULTIPLE_EXPOSURE_COUNT = intPreferencesKey("multiple_exposure_count")
         private val USE_SUPER_RESOLUTION = booleanPreferencesKey("use_super_resolution")
         private val PHOTO_QUALITY = intPreferencesKey("photo_quality")
         private val USE_LIVE_PHOTO = booleanPreferencesKey("use_live_photo")
@@ -186,6 +190,8 @@ class UserPreferencesRepository(private val context: Context) {
                 defaultFocalLength = preferences[DEFAULT_FOCAL_LENGTH] ?: 0f,
                 useMultiFrame = preferences[USE_MULTI_FRAME] ?: false,
                 multiFrameCount = preferences[MULTI_FRAME_COUNT] ?: 8,
+                useMultipleExposure = preferences[USE_MULTIPLE_EXPOSURE] ?: false,
+                multipleExposureCount = preferences[MULTIPLE_EXPOSURE_COUNT] ?: 2,
                 useSuperResolution = preferences[USE_SUPER_RESOLUTION] ?: false,
                 photoQuality = preferences[PHOTO_QUALITY] ?: 95,
                 useLivePhoto = preferences[USE_LIVE_PHOTO] ?: false,
@@ -491,6 +497,24 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveMultiFrameCount(count: Int) {
         context.dataStore.edit { preferences ->
             preferences[MULTI_FRAME_COUNT] = count
+        }
+    }
+
+    /**
+     * 保存是否使用多重曝光
+     */
+    suspend fun saveUseMultipleExposure(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[USE_MULTIPLE_EXPOSURE] = enabled
+        }
+    }
+
+    /**
+     * 保存多重曝光张数
+     */
+    suspend fun saveMultipleExposureCount(count: Int) {
+        context.dataStore.edit { preferences ->
+            preferences[MULTIPLE_EXPOSURE_COUNT] = count.coerceIn(2, 9)
         }
     }
 

@@ -118,6 +118,17 @@
     <string name="settings_grid_description">Show grid lines for composition</string>
     <string name="settings_use_multi_frame">Multi-Frame Stacking</string>
     <string name="settings_use_multi_frame_description">Capture multiple frames and stack them for better quality and less noise.</string>
+    <string name="settings_use_multiple_exposure">Multiple Exposure</string>
+    <string name="settings_use_multiple_exposure_description">Build one image across multiple shutter presses with ghost preview guidance.</string>
+    <string name="multiple_exposure_short">ME</string>
+    <string name="multiple_exposure_finish">Finish</string>
+    <string name="multiple_exposure_undo">Undo</string>
+    <string name="multiple_exposure_cancel">Cancel Session</string>
+    <string name="multiple_exposure_blending">Average Blend</string>
+    <string name="multiple_exposure_guidance">Compose with the ghosted result, then fire again.</string>
+    <string name="multiple_exposure_ready">Ready for next exposure</string>
+    <string name="settings_multiple_exposure_count">Multiple Exposure Count</string>
+    <string name="settings_multiple_exposure_count_description">How many exposures to combine for one final image. Default is 2 for a classic double exposure workflow.</string>
     <string name="settings_multi_frame_count">Multi-frame Count</string>
     <string name="settings_multi_frame_count_description">Number of frames for multi-frame stacking (more frames = better quality but slower).</string>
     <string name="settings_use_super_resolution">Super Resolution</string>

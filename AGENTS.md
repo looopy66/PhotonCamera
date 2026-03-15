@@ -10,9 +10,17 @@
 
 ## 调试编译
 
-```
-./gradlew assembleChinaDebug
-```
+* 完整编译
+
+    ```
+    ./gradlew assembleChinaDebug
+    ```
+
+* 通过性验证
+
+    ```
+    ./gradlew compileChinaDebugKotlin
+    ```
 
 ## 注意
 
