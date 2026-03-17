@@ -1342,6 +1342,12 @@ class LutImageProcessor {
                 return sign(c) * result;
             }
 
+            vec3 applyExposureInLinearSpace(vec3 srgbColor, float exposureEv) {
+                vec3 linearColor = srgbToLinear(clamp(srgbColor, 0.0, 1.0));
+                linearColor *= exp2(exposureEv);
+                return linearToSrgb(linearColor);
+            }
+
             bool isLogLutCurve(int curveType) {
                 return curveType >= 2 && curveType <= 6;
             }
@@ -1594,8 +1600,10 @@ class LutImageProcessor {
 
                 // === 色彩配方处理（按专业后期流程顺序） ===
                 if (uColorRecipeEnabled) {
-                    // 1. 曝光调整（线性空间，最先执行避免 clipping）
-                    color.rgb *= pow(2.0, uExposure);
+                    // 1. 曝光调整（在线性空间执行 EV 增益，再回到显示空间）
+                    if (abs(uExposure) > 0.001) {
+                        color.rgb = applyExposureInLinearSpace(color.rgb, uExposure);
+                    }
 
                     // 2. 高光/阴影调整（分区调整，基于亮度 mask）
                     float luma = getLuma(color.rgb);

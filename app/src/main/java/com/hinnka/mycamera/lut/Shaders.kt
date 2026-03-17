@@ -249,6 +249,12 @@ object Shaders {
         return mix(12.92 * l, 1.055 * pow(l, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, l));
     }
 
+    vec3 applyExposureInLinearSpace(vec3 srgbColor, float exposureEv) {
+        vec3 linearColor = srgbToLinear(clamp(srgbColor, 0.0, 1.0));
+        linearColor *= exp2(exposureEv);
+        return linearToSrgb(linearColor);
+    }
+
     bool isLogLutCurve(int curveType) {
         return curveType >= 2 && curveType <= 6;
     }
@@ -498,9 +504,9 @@ object Shaders {
 
         // === 色彩配方处理（按专业后期流程顺序） ===
         if (uColorRecipeEnabled) {
-            // 1. 曝光调整（使用预计算的 pow(2, exp) 可能更优，但先保持原样或在此优化）
+            // 1. 曝光调整（在线性空间执行 EV 增益，再回到显示空间）
             if (abs(uExposure) > 0.001) {
-                color.rgb *= pow(2.0, uExposure);
+                color.rgb = applyExposureInLinearSpace(color.rgb, uExposure);
             }
 
             // 计算基础亮度，后续复用
