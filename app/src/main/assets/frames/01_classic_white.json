@@ -7,10 +7,11 @@
   "version": 1,
   "editable": true,
   "layout": {
-    "position": "BOTTOM",
+    "position": "BORDER",
     "height": 80,
     "backgroundColor": "#FFFFFF",
-    "padding": 20
+    "padding": 20,
+    "borderWidth": 20
   },
   "elements": [
     {

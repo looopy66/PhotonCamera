@@ -1429,10 +1429,6 @@ private fun FilterManagementItem(
                 color = borderColor,
                 shape = RoundedCornerShape(12.dp)
             )
-            .combinedClickable(
-                onClick = onSetDefault,
-                onLongClick = onToggleSelection
-            )
             .padding(horizontal = 4.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1448,18 +1444,30 @@ private fun FilterManagementItem(
                 modifier = Modifier.padding(4.dp)
             )
         } else {
-            Icon(
-                imageVector = Icons.Default.DragHandle,
-                contentDescription = "Drag to reorder",
-                tint = Color.White.copy(alpha = 0.5f),
-                modifier = dragModifier.padding(8.dp).size(24.dp)
-            )
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 4.dp)
+                    .size(40.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.DragHandle,
+                    contentDescription = "Drag to reorder",
+                    tint = Color.White.copy(alpha = 0.5f),
+                    modifier = dragModifier.size(24.dp)
+                )
+            }
         }
 
         // 核心信息区
         Column(
             modifier = Modifier
                 .weight(1f)
+                .clip(RoundedCornerShape(8.dp))
+                .combinedClickable(
+                    onClick = onSetDefault,
+                    onLongClick = onToggleSelection
+                )
                 .padding(vertical = 4.dp, horizontal = 4.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {

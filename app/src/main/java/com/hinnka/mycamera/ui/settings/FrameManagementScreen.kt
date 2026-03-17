@@ -454,25 +454,34 @@ private fun FrameManagementItem(
                 color = borderColor,
                 shape = RoundedCornerShape(12.dp)
             )
-            .clickable(onClick = onSetDefault)
             .padding(horizontal = 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         // 拖拽图标 - 仅在此图标上应用拖拽手势
         if (canDrag) {
-            Icon(
-                imageVector = Icons.Default.DragHandle,
-                contentDescription = "Drag to reorder",
-                tint = Color.White.copy(alpha = 0.5f),
-                modifier = dragModifier.size(24.dp)
-            )
+            Box(
+                modifier = Modifier.size(40.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.DragHandle,
+                    contentDescription = "Drag to reorder",
+                    tint = Color.White.copy(alpha = 0.5f),
+                    modifier = dragModifier.size(24.dp)
+                )
+            }
             Spacer(modifier = Modifier.width(12.dp))
         } else {
-            Spacer(modifier = Modifier.width(36.dp)) // 保持对齐
+            Spacer(modifier = Modifier.width(52.dp)) // 保持对齐
         }
 
         // 边框名称和类型
-        Column(modifier = Modifier.weight(1f)) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClick = onSetDefault)
+        ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = name,
@@ -562,4 +571,3 @@ private fun FrameManagementItem(
         }
     }
 }
-
