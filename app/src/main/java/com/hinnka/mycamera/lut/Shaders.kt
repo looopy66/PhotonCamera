@@ -249,6 +249,15 @@ object Shaders {
         return mix(12.92 * l, 1.055 * pow(l, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, l));
     }
 
+    bool isLogLutCurve(int curveType) {
+        return curveType >= 2 && curveType <= 6;
+    }
+
+    vec3 bt709Gamma24ToSrgb(vec3 gammaColor) {
+        vec3 linearColor = pow(clamp(gammaColor, 0.0, 1.0), vec3(2.4));
+        return clamp(linearToSrgb(linearColor), 0.0, 1.0);
+    }
+
     vec3 linearRgbToOklab(vec3 c) {
         vec3 lms = mat3(
             0.4122214708, 0.2119034982, 0.0883024619,
@@ -616,6 +625,9 @@ object Shaders {
             float offset = 1.0 / (2.0 * uLutSize);
             vec3 lutCoord = lutInColor * scale + offset;
             vec4 lutColor = texture(uLutTexture, lutCoord);
+            if (isLogLutCurve(uLutCurve)) {
+                lutColor.rgb = bt709Gamma24ToSrgb(lutColor.rgb);
+            }
             color.rgb = mix(color.rgb, lutColor.rgb, uLutIntensity);
         }
 

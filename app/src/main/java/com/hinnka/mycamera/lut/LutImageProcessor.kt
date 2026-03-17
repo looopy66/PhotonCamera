@@ -1342,6 +1342,15 @@ class LutImageProcessor {
                 return sign(c) * result;
             }
 
+            bool isLogLutCurve(int curveType) {
+                return curveType >= 2 && curveType <= 6;
+            }
+
+            vec3 bt709Gamma24ToSrgb(vec3 gammaColor) {
+                vec3 linearColor = pow(clamp(gammaColor, 0.0, 1.0), vec3(2.4));
+                return clamp(linearToSrgb(linearColor), 0.0, 1.0);
+            }
+
             vec3 linearRgbToOklab(vec3 c) {
                 vec3 lms = mat3(
                     0.4122214708, 0.2119034982, 0.0883024619,
@@ -1755,6 +1764,9 @@ class LutImageProcessor {
                     float offset = 1.0 / (2.0 * uLutSize);
                     vec3 lutCoord = lutInColor * scale + offset;
                     vec4 lutColor = texture(uLutTexture, lutCoord);
+                    if (isLogLutCurve(uLutCurve)) {
+                        lutColor.rgb = bt709Gamma24ToSrgb(lutColor.rgb);
+                    }
 
                     // 在非线性 sRGB 空间进行混合
                     vec3 srgbColor = linearToSrgb(linearInput);
