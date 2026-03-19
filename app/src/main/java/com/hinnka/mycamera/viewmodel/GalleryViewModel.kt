@@ -1629,10 +1629,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         val diskCached = PhotoManager.loadBitmap(context, Uri.fromFile(detailFile), preserveHdr = true)
                         if (diskCached != null) {
                             detailBitmapCache.put(detailCacheKey, diskCached)
-                            PLog.d(
-                                TAG,
-                                "getDetailBitmap: using disk detail HDR cache for ${photo.id}, hasGainmap=${UltraHdrWriter.hasGainmap(diskCached)}"
-                            )
+//                            PLog.d(
+//                                TAG,
+//                                "getDetailBitmap: using disk detail HDR cache for ${photo.id}, hasGainmap=${UltraHdrWriter.hasGainmap(diskCached)}"
+//                            )
                             return@withContext diskCached
                         }
                     }
