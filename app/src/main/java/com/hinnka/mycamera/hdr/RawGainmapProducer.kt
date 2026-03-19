@@ -116,13 +116,13 @@ class RawGainmapProducer : GainmapProducer {
         private const val MIN_GAIN_RATIO = 1.0f
         private const val MAX_GAIN_RATIO = 7.0f
         private const val EPSILON = 1e-4f
-        private const val HIGHLIGHT_START = 0.4f
-        private const val HIGHLIGHT_END = 0.88f
+        private const val HIGHLIGHT_START = 0.62f
+        private const val HIGHLIGHT_END = 0.9f
         private const val DELTA_START = 0.01f
         private const val DELTA_END = 0.10f
         private const val HIGHLIGHT_WEIGHT_POWER = 0.72f
         private const val EXTRA_HIGHLIGHT_BOOST = 0.9f
-        private const val PEAK_START = 0.62f
+        private const val PEAK_START = 0.7f
         private const val PEAK_END = 1.35f
         private const val PEAK_WEIGHT_POWER = 0.7f
         private const val PEAK_BOOST = 1.5f
