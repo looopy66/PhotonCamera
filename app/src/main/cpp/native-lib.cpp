@@ -154,7 +154,7 @@ static inline float hlgToLinear(float value) {
   constexpr float kHlgC = 0.55991073f;
   constexpr float kHdrReferenceScale = 6.0f;
 
-  const float v = std::max(0.0f, std::min(1.0f, value));
+  const float v = std::max(0.0f, value);
   const float linear = (v <= 0.5f)
                            ? (v * v) / 3.0f
                            : static_cast<float>(
@@ -651,26 +651,27 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
                 255.0f;
       }
 
-      float R, G, B;
+      float hdrRInput, hdrGInput, hdrBInput;
       if (isP010) {
-        R = Y_val + 1.4746f * V_val;
-        G = Y_val - 0.16455f * U_val - 0.57135f * V_val;
-        B = Y_val + 1.8814f * U_val;
+        hdrRInput = Y_val + 1.4746f * V_val;
+        hdrGInput = Y_val - 0.16455f * U_val - 0.57135f * V_val;
+        hdrBInput = Y_val + 1.8814f * U_val;
       } else {
-        R = Y_val + 1.402f * V_val;
-        G = Y_val - 0.344136f * U_val - 0.714136f * V_val;
-        B = Y_val + 1.772f * U_val;
+        hdrRInput = Y_val + 1.402f * V_val;
+        hdrGInput = Y_val - 0.344136f * U_val - 0.714136f * V_val;
+        hdrBInput = Y_val + 1.772f * U_val;
       }
-      R = std::max(0.0f, std::min(1.0f, R));
-      G = std::max(0.0f, std::min(1.0f, G));
-      B = std::max(0.0f, std::min(1.0f, B));
+
+      const float R = std::max(0.0f, std::min(1.0f, hdrRInput));
+      const float G = std::max(0.0f, std::min(1.0f, hdrGInput));
+      const float B = std::max(0.0f, std::min(1.0f, hdrBInput));
 
       int idx = y * finalWidth + x;
 
       if (!hdrReferencePixels.empty()) {
-        const float hdrR = hlgToLinear(R);
-        const float hdrG = hlgToLinear(G);
-        const float hdrB = hlgToLinear(B);
+        const float hdrR = hlgToLinear(hdrRInput);
+        const float hdrG = hlgToLinear(hdrGInput);
+        const float hdrB = hlgToLinear(hdrBInput);
         const int hdrIdx = idx * 4;
         hdrReferencePixels[hdrIdx + 0] = floatToHalf(hdrR);
         hdrReferencePixels[hdrIdx + 1] = floatToHalf(hdrG);

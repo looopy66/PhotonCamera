@@ -7,11 +7,11 @@ import java.nio.ByteBuffer
 import kotlin.math.ln
 import kotlin.math.pow
 
-class RawGainmapProducer : GainmapProducer {
+class HlgGainmapProducer : GainmapProducer {
 
     override suspend fun build(source: GainmapSourceSet): GainmapResult? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return null
-        if (source.sourceKind != SourceKind.RAW) return null
+        if (source.sourceKind != SourceKind.HLG_CAPTURE) return null
 
         val hdrReference = source.hdrReference?.bitmap ?: return null
         val sdrBase = source.sdrBase
@@ -31,13 +31,13 @@ class RawGainmapProducer : GainmapProducer {
             setEpsilonSdr(EPSILON, EPSILON, EPSILON)
             setEpsilonHdr(EPSILON, EPSILON, EPSILON)
             setMinDisplayRatioForHdrTransition(1.0f)
-            setDisplayRatioForFullHdr(1.35f)
+            setDisplayRatioForFullHdr(1.45f)
         }
 
         return GainmapResult(
             payload = GainmapPayload(
                 platformGainmap = gainmap,
-                description = "raw_luminance_gainmap"
+                description = "hlg_luminance_gainmap"
             ),
             sourceKind = source.sourceKind,
             confidence = source.confidence
@@ -49,7 +49,6 @@ class RawGainmapProducer : GainmapProducer {
         val height = (sdrBase.height / DOWNSAMPLE).coerceAtLeast(1)
         val contents = Bitmap.createBitmap(width, height, Bitmap.Config.ALPHA_8)
         val pixels = ByteArray(width * height)
-
         val logRatioSpan = ln(MAX_GAIN_RATIO / MIN_GAIN_RATIO)
 
         var index = 0
@@ -89,8 +88,7 @@ class RawGainmapProducer : GainmapProducer {
 
     private fun sampleHdrLuma(bitmap: Bitmap, x: Int, y: Int): Float {
         val c = bitmap.getColor(x, y)
-        val rgb = floatArrayOf(c.red(), c.green(), c.blue())
-        return (0.2627f * rgb[0] + 0.6780f * rgb[1] + 0.0593f * rgb[2]).coerceAtLeast(0f)
+        return (0.2627f * c.red() + 0.6780f * c.green() + 0.0593f * c.blue()).coerceAtLeast(0f)
     }
 
     private fun srgbToLinear(value: Float): Float {
@@ -110,12 +108,12 @@ class RawGainmapProducer : GainmapProducer {
     companion object {
         private const val DOWNSAMPLE = 4
         private const val MIN_GAIN_RATIO = 1.0f
-        private const val MAX_GAIN_RATIO = 4.5f
+        private const val MAX_GAIN_RATIO = 3.5f
         private const val EPSILON = 1e-4f
         private const val HDR_ELIGIBILITY_START = 1.0f
-        private const val HDR_ELIGIBILITY_END = 2.0f
-        private const val DELTA_START = 0.02f
-        private const val DELTA_END = 0.22f
-        private const val WEIGHT_POWER = 1.15f
+        private const val HDR_ELIGIBILITY_END = 1.8f
+        private const val DELTA_START = 0.03f
+        private const val DELTA_END = 0.30f
+        private const val WEIGHT_POWER = 1.2f
     }
 }

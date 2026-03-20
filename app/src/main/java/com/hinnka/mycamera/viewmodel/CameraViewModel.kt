@@ -612,7 +612,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     ): Boolean {
         if (hasEmbeddedGainmap) return true
         return if (dynamicRangeProfile == "HLG10" || hasRawSource) {
-            userPrefs?.autoEnableHdrForHdrCapture ?: true
+            userPrefs?.autoEnableHdrForHdrCapture ?: false
         } else {
             userPrefs?.autoEnableHdrForSdrPhotos ?: false
         }

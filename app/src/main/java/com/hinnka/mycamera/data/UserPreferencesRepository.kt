@@ -75,7 +75,7 @@ data class UserPreferences(
     val logCurve: LogCurve = LogCurve.FLOG2, // 默认 F-Log2
     val rawLuts: Map<String, String> = emptyMap(),
     val useP010: Boolean = false,
-    val autoEnableHdrForHdrCapture: Boolean = true,
+    val autoEnableHdrForHdrCapture: Boolean = false,
     val autoEnableHdrForSdrPhotos: Boolean = false,
     val phantomMode: Boolean = false,
     val phantomButtonHidden: Boolean = false,
@@ -207,7 +207,7 @@ class UserPreferencesRepository(private val context: Context) {
                 logCurve = LogCurve.valueOf(preferences[LOG_CURVE] ?: LogCurve.FLOG2.name),
                 rawLuts = parseRawLuts(preferences),
                 useP010 = preferences[USE_P010] ?: false,
-                autoEnableHdrForHdrCapture = preferences[AUTO_ENABLE_HDR_FOR_HDR_CAPTURE] ?: true,
+                autoEnableHdrForHdrCapture = preferences[AUTO_ENABLE_HDR_FOR_HDR_CAPTURE] ?: false,
                 autoEnableHdrForSdrPhotos = preferences[AUTO_ENABLE_HDR_FOR_SDR_PHOTOS] ?: false,
                 phantomMode = preferences[PHANTOM_MODE] ?: false,
                 phantomButtonHidden = preferences[PHANTOM_BUTTON_HIDDEN] ?: false,

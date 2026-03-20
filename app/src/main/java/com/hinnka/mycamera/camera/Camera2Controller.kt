@@ -837,7 +837,7 @@ class Camera2Controller(private val context: Context) {
                             TAG,
                             "Session configuration failed: useHlgCapture=$useHlgCapture, " +
                                     "readerFormat=${imageFormatToString(readerFormat)}, " +
-                                    "sessionColorSpace=${if (useHlgCapture) "BT2020" else if (_state.value.isP3Supported) "DISPLAY_P3/DEFAULT" else "DEFAULT"}"
+                                    "sessionColorSpace=${if (_state.value.isP3Supported) "DISPLAY_P3/DEFAULT" else "DEFAULT"}"
                         )
                         if (useHlgCapture) {
                             PLog.w(TAG, "Retrying preview session with STANDARD dynamic range fallback")
@@ -2356,7 +2356,6 @@ class Camera2Controller(private val context: Context) {
             latitude = latitude,
             longitude = longitude,
             colorSpace = when {
-                shouldUseHlgCapture() -> ColorSpace.Named.BT2020
                 _state.value.isP3Supported -> ColorSpace.Named.DISPLAY_P3
                 else -> ColorSpace.Named.SRGB
             }

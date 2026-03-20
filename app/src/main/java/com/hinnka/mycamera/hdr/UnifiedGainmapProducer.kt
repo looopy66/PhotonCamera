@@ -2,6 +2,7 @@ package com.hinnka.mycamera.hdr
 
 class UnifiedGainmapProducer(
     private val producers: List<GainmapProducer> = listOf(
+        HlgGainmapProducer(),
         RawGainmapProducer(),
         EstimatedSdrGainmapProducer(),
     )

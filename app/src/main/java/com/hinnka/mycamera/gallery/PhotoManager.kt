@@ -2046,7 +2046,7 @@ object PhotoManager {
                             width = processedBitmap.width,
                             height = processedBitmap.height,
                             rotation = 0,
-                            manualHdrEffectEnabled = userPrefs?.autoEnableHdrForHdrCapture ?: true,
+                            manualHdrEffectEnabled = userPrefs?.autoEnableHdrForHdrCapture ?: false,
                         )
                         metadataFile.writeText(updatedMetadata.toJson())
                         if (updatedMetadata.computationalAperture != null) {
