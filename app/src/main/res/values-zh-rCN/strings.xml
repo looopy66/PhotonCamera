@@ -348,6 +348,7 @@
     <string name="delete_category_message">确认删除分类 "%s"？该分类下的滤镜将被设为未分类。</string>
     <string name="built_in">内置</string>
     <string name="custom">自定义</string>
+    <string name="uncategorized">未分类</string>
     <string name="no_filters">暂无自定义滤镜</string>
     <string name="no_frames">暂无自定义边框</string>
     <string name="input_curve">输入曲线</string>

@@ -358,6 +358,7 @@
     <string name="delete_category_message">Are you sure you want to delete category \"%s\"? LUTs under this category will be reset to uncategorized.</string>
     <string name="built_in">Built-in</string>
     <string name="custom">Custom</string>
+    <string name="uncategorized">Uncategorized</string>
     <string name="no_filters">No custom LUTs</string>
     <string name="no_frames">No custom frames</string>
     <string name="input_curve">Input Curve</string>

@@ -118,6 +118,11 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         const val MIN_IMPORT_SIZE = 1024 * 1024L
     }
 
+    private sealed interface LutPickerListItem {
+        data class Header(val title: String) : LutPickerListItem
+        data class LutEntry(val lut: com.hinnka.mycamera.lut.LutInfo) : LutPickerListItem
+    }
+
     data class ProcessingInfo(
         val uri: Uri,
         val name: String,
@@ -631,6 +636,39 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                             }
                             val currentLutId by currentLutIdFlow.collectAsState(initial = null)
                             val listState = rememberLazyListState()
+                            val builtInText = stringResource(R.string.built_in)
+                            val customText = stringResource(R.string.custom)
+                            val uncategorizedText = stringResource(R.string.uncategorized)
+                            val groupedLutItems = remember(
+                                availableLuts,
+                                builtInText,
+                                customText,
+                                uncategorizedText
+                            ) {
+                                availableLuts
+                                    .groupBy { lut ->
+                                        when {
+                                            lut.category.isNotEmpty() -> lut.category
+                                            lut.isBuiltIn -> builtInText
+                                            !lut.isBuiltIn -> customText
+                                            else -> uncategorizedText
+                                        }
+                                    }
+                                    .flatMap { (groupTitle, luts) ->
+                                        listOf(LutPickerListItem.Header(groupTitle)) +
+                                            luts.map { LutPickerListItem.LutEntry(it) }
+                                    }
+                            }
+                            val selectedIndex = remember(groupedLutItems, currentLutId) {
+                                groupedLutItems.indexOfFirst { item ->
+                                    item is LutPickerListItem.LutEntry && item.lut.id == currentLutId
+                                }
+                            }
+
+                            LaunchedEffect(showFilterPicker, selectedIndex) {
+                                if (!showFilterPicker || selectedIndex < 0) return@LaunchedEffect
+                                listState.scrollToItem((selectedIndex - 1).coerceAtLeast(0))
+                            }
 
                             Column(
                                 modifier = Modifier
@@ -690,56 +728,83 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                         .fillMaxWidth(),
                                     verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
-                                    items(availableLuts) { lut ->
-                                        val isSelected = lut.id == currentLutId
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clip(RoundedCornerShape(12.dp))
-                                                .background(
-                                                    if (isSelected) Color(0xFFFF6B35).copy(alpha = 0.15f)
-                                                    else Color.White.copy(alpha = 0.05f)
+                                    items(
+                                        items = groupedLutItems,
+                                        key = { item ->
+                                            when (item) {
+                                                is LutPickerListItem.Header -> "header_${item.title}"
+                                                is LutPickerListItem.LutEntry -> item.lut.id
+                                            }
+                                        }
+                                    ) { item ->
+                                        when (item) {
+                                            is LutPickerListItem.Header -> {
+                                                Text(
+                                                    text = item.title,
+                                                    color = Color.White.copy(alpha = 0.5f),
+                                                    style = MaterialTheme.typography.labelSmall.copy(
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        fontSize = 11.sp
+                                                    ),
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(top = 8.dp, start = 4.dp, end = 4.dp)
                                                 )
-                                                .border(
-                                                    width = 1.dp,
-                                                    color = if (isSelected) Color(0xFFFF6B35).copy(alpha = 0.5f)
-                                                    else Color.Transparent,
-                                                    shape = RoundedCornerShape(12.dp)
-                                                )
-                                                .clickable {
-                                                    scope.launch {
-                                                        userPreferencesRepository.saveLutConfig(lut.id)
-                                                        showFilterPicker = false
-                                                        updateWindowParams(false)
-                                                        composeView?.let {
-                                                            windowManager.updateViewLayout(
-                                                                it,
-                                                                windowParams
-                                                            )
+                                            }
+
+                                            is LutPickerListItem.LutEntry -> {
+                                                val lut = item.lut
+                                                val isSelected = lut.id == currentLutId
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .clip(RoundedCornerShape(12.dp))
+                                                        .background(
+                                                            if (isSelected) Color(0xFFFF6B35).copy(alpha = 0.15f)
+                                                            else Color.White.copy(alpha = 0.05f)
+                                                        )
+                                                        .border(
+                                                            width = 1.dp,
+                                                            color = if (isSelected) Color(0xFFFF6B35).copy(alpha = 0.5f)
+                                                            else Color.Transparent,
+                                                            shape = RoundedCornerShape(12.dp)
+                                                        )
+                                                        .clickable {
+                                                            scope.launch {
+                                                                userPreferencesRepository.saveLutConfig(lut.id)
+                                                                showFilterPicker = false
+                                                                updateWindowParams(false)
+                                                                composeView?.let {
+                                                                    windowManager.updateViewLayout(
+                                                                        it,
+                                                                        windowParams
+                                                                    )
+                                                                }
+                                                            }
                                                         }
+                                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Text(
+                                                        text = lut.getName(),
+                                                        color = if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.9f),
+                                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                            fontSize = 14.sp
+                                                        ),
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis,
+                                                        modifier = Modifier.weight(1f)
+                                                    )
+                                                    if (isSelected) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Check,
+                                                            contentDescription = null,
+                                                            tint = Color(0xFFFF6B35),
+                                                            modifier = Modifier.size(16.dp)
+                                                        )
                                                     }
                                                 }
-                                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                text = lut.getName(),
-                                                color = if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.9f),
-                                                style = MaterialTheme.typography.bodyMedium.copy(
-                                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                                    fontSize = 14.sp
-                                                ),
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                                modifier = Modifier.weight(1f)
-                                            )
-                                            if (isSelected) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Check,
-                                                    contentDescription = null,
-                                                    tint = Color(0xFFFF6B35),
-                                                    modifier = Modifier.size(16.dp)
-                                                )
                                             }
                                         }
                                     }
