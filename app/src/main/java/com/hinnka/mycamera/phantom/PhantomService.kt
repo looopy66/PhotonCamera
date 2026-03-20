@@ -118,11 +118,6 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         const val MIN_IMPORT_SIZE = 1024 * 1024L
     }
 
-    private sealed interface LutPickerListItem {
-        data class Header(val title: String) : LutPickerListItem
-        data class LutEntry(val lut: com.hinnka.mycamera.lut.LutInfo) : LutPickerListItem
-    }
-
     data class ProcessingInfo(
         val uri: Uri,
         val name: String,
@@ -639,7 +634,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                             val builtInText = stringResource(R.string.built_in)
                             val customText = stringResource(R.string.custom)
                             val uncategorizedText = stringResource(R.string.uncategorized)
-                            val groupedLutItems = remember(
+                            val groupedLuts = remember(
                                 availableLuts,
                                 builtInText,
                                 customText,
@@ -654,15 +649,19 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                             else -> uncategorizedText
                                         }
                                     }
-                                    .flatMap { (groupTitle, luts) ->
-                                        listOf(LutPickerListItem.Header(groupTitle)) +
-                                            luts.map { LutPickerListItem.LutEntry(it) }
-                                    }
+                                    .toList()
                             }
-                            val selectedIndex = remember(groupedLutItems, currentLutId) {
-                                groupedLutItems.indexOfFirst { item ->
-                                    item is LutPickerListItem.LutEntry && item.lut.id == currentLutId
+                            val selectedIndex = remember(groupedLuts, currentLutId) {
+                                var runningIndex = 0
+                                groupedLuts.forEach { (_, luts) ->
+                                    runningIndex += 1
+                                    val localIndex = luts.indexOfFirst { it.id == currentLutId }
+                                    if (localIndex >= 0) {
+                                        return@remember runningIndex + localIndex
+                                    }
+                                    runningIndex += luts.size
                                 }
+                                -1
                             }
 
                             LaunchedEffect(showFilterPicker, selectedIndex) {
@@ -728,32 +727,29 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                         .fillMaxWidth(),
                                     verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
-                                    items(
-                                        items = groupedLutItems,
-                                        key = { item ->
-                                            when (item) {
-                                                is LutPickerListItem.Header -> "header_${item.title}"
-                                                is LutPickerListItem.LutEntry -> item.lut.id
-                                            }
-                                        }
-                                    ) { item ->
-                                        when (item) {
-                                            is LutPickerListItem.Header -> {
+                                    groupedLuts.forEach { (groupTitle, luts) ->
+                                        stickyHeader(key = "header_$groupTitle") { _ ->
+                                            Column(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .background(Color(0xCC101010), RoundedCornerShape(8.dp))
+                                                    .padding(vertical = 4.dp),
+                                            ) {
                                                 Text(
-                                                    text = item.title,
-                                                    color = Color.White.copy(alpha = 0.5f),
+                                                    text = groupTitle,
+                                                    color = Color.White.copy(alpha = 0.55f),
                                                     style = MaterialTheme.typography.labelSmall.copy(
-                                                        fontWeight = FontWeight.SemiBold,
-                                                        fontSize = 11.sp
+                                                        fontWeight = FontWeight.Medium,
+                                                        fontSize = 10.sp
                                                     ),
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .padding(top = 8.dp, start = 4.dp, end = 4.dp)
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                                 )
                                             }
-
-                                            is LutPickerListItem.LutEntry -> {
-                                                val lut = item.lut
+                                        }
+                                        items(
+                                            items = luts,
+                                            key = { it.id }
+                                        ) { lut ->
                                                 val isSelected = lut.id == currentLutId
                                                 Row(
                                                     modifier = Modifier
@@ -805,7 +801,6 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                                         )
                                                     }
                                                 }
-                                            }
                                         }
                                     }
                                 }
