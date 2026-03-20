@@ -75,6 +75,7 @@ data class UserPreferences(
     val logCurve: LogCurve = LogCurve.FLOG2, // 默认 F-Log2
     val rawLuts: Map<String, String> = emptyMap(),
     val useP010: Boolean = false,
+    val useP3ColorSpace: Boolean = false,
     val autoEnableHdrForHdrCapture: Boolean = false,
     val autoEnableHdrForSdrPhotos: Boolean = false,
     val phantomMode: Boolean = false,
@@ -144,6 +145,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val COLOR_SPACE = stringPreferencesKey("color_space")
         private val LOG_CURVE = stringPreferencesKey("log_curve")
         private val USE_P010 = booleanPreferencesKey("use_p010")
+        private val USE_P3_COLOR_SPACE = booleanPreferencesKey("use_p3_color_space")
         private val AUTO_ENABLE_HDR_FOR_HDR_CAPTURE = booleanPreferencesKey("auto_enable_hdr_for_hdr_capture")
         private val AUTO_ENABLE_HDR_FOR_SDR_PHOTOS = booleanPreferencesKey("auto_enable_hdr_for_sdr_photos")
         private val PHANTOM_MODE = booleanPreferencesKey("phantom_mode")
@@ -207,6 +209,7 @@ class UserPreferencesRepository(private val context: Context) {
                 logCurve = LogCurve.valueOf(preferences[LOG_CURVE] ?: LogCurve.FLOG2.name),
                 rawLuts = parseRawLuts(preferences),
                 useP010 = preferences[USE_P010] ?: false,
+                useP3ColorSpace = preferences[USE_P3_COLOR_SPACE] ?: false,
                 autoEnableHdrForHdrCapture = preferences[AUTO_ENABLE_HDR_FOR_HDR_CAPTURE] ?: false,
                 autoEnableHdrForSdrPhotos = preferences[AUTO_ENABLE_HDR_FOR_SDR_PHOTOS] ?: false,
                 phantomMode = preferences[PHANTOM_MODE] ?: false,
@@ -620,6 +623,15 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveUseP010(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[USE_P010] = enabled
+        }
+    }
+
+    /**
+     * 保存是否启用 P3 色域
+     */
+    suspend fun saveUseP3ColorSpace(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[USE_P3_COLOR_SPACE] = enabled
         }
     }
 

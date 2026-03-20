@@ -208,6 +208,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useP010: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useP010 }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val useP3ColorSpace: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.useP3ColorSpace }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val autoEnableHdrForHdrCapture: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.autoEnableHdrForHdrCapture }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
@@ -362,6 +365,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 RawDemosaicProcessor.getInstance().setRawLut(application, currentRawLut)
                 // 同步 P010 设置到相机控制器
                 cameraController.setUseP010(it.useP010)
+                // 同步 P3 色域设置到相机控制器
+                cameraController.setUseP3ColorSpace(it.useP3ColorSpace)
             }
         }
 
@@ -1288,6 +1293,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             userPreferencesRepository.saveUseP010(enabled)
         }
+    }
+
+    fun setUseP3ColorSpace(enabled: Boolean) {
+        cameraController.setUseP3ColorSpace(enabled)
+        viewModelScope.launch {
+            userPreferencesRepository.saveUseP3ColorSpace(enabled)
+        }
+        reopenCamera()
     }
 
     fun setAutoEnableHdrForHdrCapture(enabled: Boolean) {

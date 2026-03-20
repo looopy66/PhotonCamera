@@ -241,7 +241,7 @@ class Camera2Controller(private val context: Context) {
      * 处理拍照状态机的核心逻辑
      */
     private fun processCaptureState(result: CaptureResult) {
-        val afState = result.get(CaptureResult.CONTROL_AF_STATE) ?: return
+        result.get(CaptureResult.CONTROL_AF_STATE) ?: return
         val aeState = result.get(CaptureResult.CONTROL_AE_STATE) ?: return
 
         if (aeState != lastAeState) {
@@ -521,7 +521,7 @@ class Camera2Controller(private val context: Context) {
             val isP3Supported = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 cachedCharacteristics?.get(CameraCharacteristics.REQUEST_AVAILABLE_COLOR_SPACE_PROFILES)
                     ?.getSupportedColorSpaces(captureFormat)
-                    ?.contains(android.graphics.ColorSpace.Named.DISPLAY_P3) == true
+                    ?.contains(ColorSpace.Named.DISPLAY_P3) == true
             } else false
 
             _state.value = _state.value.copy(isP3Supported = isP3Supported)
@@ -534,7 +534,7 @@ class Camera2Controller(private val context: Context) {
                         ImageFormat.YCBCR_P010 -> "P010"
                         else -> "YUV"
                     }
-                }"
+                }, isP3Supported: $isP3Supported"
             )
             imageReader = ImageReader.newInstance(
                 captureSize.width,
@@ -792,19 +792,11 @@ class Camera2Controller(private val context: Context) {
             // Android 9+ 使用 SessionConfiguration
             val useHlgCapture = shouldUseHlgCapture() && !forceStandardSession
             val readerFormat = reader.imageFormat
-            val supportedColorProfiles = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                cachedCharacteristics?.get(CameraCharacteristics.REQUEST_AVAILABLE_COLOR_SPACE_PROFILES)
-                    ?.getSupportedColorSpaces(readerFormat)
-                    ?.joinToString()
-            } else {
-                null
-            }
             PLog.i(
                 TAG,
                 "Creating preview session: forceStandard=$forceStandardSession, " +
                         "useHlgCapture=$useHlgCapture, readerFormat=${imageFormatToString(readerFormat)}, " +
-                        "isP010Supported=$isP010Supported, isHlg10Supported=$isHlg10Supported, " +
-                        "supportedColorSpaces=${supportedColorProfiles ?: "n/a"}"
+                        "isP010Supported=$isP010Supported, isHlg10Supported=$isHlg10Supported, "
             )
             val outputConfigs = surfaces.mapIndexed { index, outputSurface ->
                 OutputConfiguration(outputSurface).apply {
@@ -814,7 +806,7 @@ class Camera2Controller(private val context: Context) {
                         } else {
                             DynamicRangeProfiles.STANDARD
                         }
-                        setDynamicRangeProfile(profile)
+                        dynamicRangeProfile = profile
                     }
                 }
             }
@@ -837,7 +829,7 @@ class Camera2Controller(private val context: Context) {
                             TAG,
                             "Session configuration failed: useHlgCapture=$useHlgCapture, " +
                                     "readerFormat=${imageFormatToString(readerFormat)}, " +
-                                    "sessionColorSpace=${if (_state.value.isP3Supported) "DISPLAY_P3/DEFAULT" else "DEFAULT"}"
+                                    "sessionColorSpace=${if (shouldUseP3ColorSpace()) "DISPLAY_P3" else "DEFAULT"}"
                         )
                         if (useHlgCapture) {
                             PLog.w(TAG, "Retrying preview session with STANDARD dynamic range fallback")
@@ -848,18 +840,11 @@ class Camera2Controller(private val context: Context) {
                 }
             )
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                when {
-                    useHlgCapture -> {
-                        PLog.i(TAG, "Skipping explicit session color space for HLG capture session")
-                    }
-                    _state.value.isP3Supported -> {
-                        PLog.i(TAG, "Configuring Display P3 color space for output")
-                        sessionConfig.setColorSpace(android.graphics.ColorSpace.Named.DISPLAY_P3)
-                    }
+                if (shouldUseP3ColorSpace() && !useHlgCapture) {
+                    sessionConfig.setColorSpace(ColorSpace.Named.DISPLAY_P3)
                 }
             }
             device.createCaptureSession(sessionConfig)
-
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to create preview session")
         }
@@ -1227,7 +1212,7 @@ class Camera2Controller(private val context: Context) {
     /**
      * 获取最后一次拍摄结果（用于异步获取 EXIF 信息）
      */
-    fun getLastCaptureResult(): android.hardware.camera2.CaptureResult? {
+    fun getLastCaptureResult(): CaptureResult? {
         return lastCaptureResult
     }
 
@@ -2356,10 +2341,14 @@ class Camera2Controller(private val context: Context) {
             latitude = latitude,
             longitude = longitude,
             colorSpace = when {
-                _state.value.isP3Supported -> ColorSpace.Named.DISPLAY_P3
+                shouldUseP3ColorSpace() -> ColorSpace.Named.DISPLAY_P3
                 else -> ColorSpace.Named.SRGB
             }
         )
+    }
+
+    private fun shouldUseP3ColorSpace(): Boolean {
+        return _state.value.isP3Supported && _state.value.useP3ColorSpace
     }
 
     private fun shouldUseHlgCapture(): Boolean {
@@ -2512,6 +2501,10 @@ class Camera2Controller(private val context: Context) {
 
     fun setUseP010(enabled: Boolean) {
         _state.value = _state.value.copy(useP010 = enabled)
+    }
+
+    fun setUseP3ColorSpace(enabled: Boolean) {
+        _state.value = _state.value.copy(useP3ColorSpace = enabled)
     }
 
     fun setLocation(latitude: Double?, longitude: Double?) {

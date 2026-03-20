@@ -402,6 +402,8 @@
     <string name="settings_log_curve_description">Choose the transfer function for RAW processing (Log Curve).</string>
     <string name="settings_use_p010">P010 (10-bit YUV)</string>
     <string name="settings_use_p010_description">Enable 10-bit YUV output for better image data precision. Effective on supported devices when RAW is disabled.</string>
+    <string name="settings_use_p3_color_space">P3 Color Space</string>
+    <string name="settings_use_p3_color_space_description">Enable Display P3 output on supported devices. Default is off.</string>
     <string name="settings_auto_enable_hdr_for_hdr_capture">Enable HDR by default for P010/RAW</string>
     <string name="settings_auto_enable_hdr_for_hdr_capture_description">Enable HDR display by default in the detail page for P010/HLG and RAW captures.</string>
     <string name="settings_auto_enable_hdr_for_sdr_photos">Generate HDR by default for standard JPG</string>

@@ -143,6 +143,7 @@ fun SettingsScreen(
     val logCurve by viewModel.logCurve.collectAsState()
     val rawLut by viewModel.rawLut.collectAsState()
     val useP010 by viewModel.useP010.collectAsState()
+    val useP3ColorSpace by viewModel.useP3ColorSpace.collectAsState()
     val autoEnableHdrForHdrCapture by viewModel.autoEnableHdrForHdrCapture.collectAsState()
     val autoEnableHdrForSdrPhotos by viewModel.autoEnableHdrForSdrPhotos.collectAsState()
     val isPurchased by viewModel.isPurchased.collectAsState()
@@ -893,6 +894,20 @@ fun SettingsScreen(
                                 description = stringResource(R.string.settings_use_p010_description),
                                 checked = useP010,
                                 onCheckedChange = { viewModel.setUseP010(it) }
+                            )
+                        }
+
+                        if (state.isP3Supported) {
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 12.dp)
+                            )
+
+                            SwitchSettingItem(
+                                title = stringResource(R.string.settings_use_p3_color_space),
+                                description = stringResource(R.string.settings_use_p3_color_space_description),
+                                checked = useP3ColorSpace,
+                                onCheckedChange = { viewModel.setUseP3ColorSpace(it) }
                             )
                         }
 

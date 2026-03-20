@@ -186,6 +186,7 @@ data class CameraState(
     val isCapturingLivePhoto: Boolean = false,
     val applyUltraHDR: Boolean = true,
     val useP010: Boolean = false,
+    val useP3ColorSpace: Boolean = false,
     val isP010Supported: Boolean = false,
     val isHlg10Supported: Boolean = false,
     val burstCapturing: Boolean = false,

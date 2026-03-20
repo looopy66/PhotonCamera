@@ -388,6 +388,8 @@
     <string name="settings_log_curve_description">选择 RAW 处理的传输函数 (Log 曲线)。</string>
     <string name="settings_use_p010">P010 (10位 YUV)</string>
     <string name="settings_use_p010_description">启用 10位 YUV 输出以获得更好的图像数据精度。仅在支持的设备上且 RAW 关闭时生效。</string>
+    <string name="settings_use_p3_color_space">P3 色域</string>
+    <string name="settings_use_p3_color_space_description">在支持的设备上启用 Display P3 输出。默认关闭。</string>
     <string name="settings_auto_enable_hdr_for_hdr_capture">P010/RAW 默认开启 HDR</string>
     <string name="settings_auto_enable_hdr_for_hdr_capture_description">P010/HLG 与 RAW 拍摄的照片在详情页默认开启 HDR 显示。</string>
     <string name="settings_auto_enable_hdr_for_sdr_photos">普通 JPG 默认生成 HDR</string>
