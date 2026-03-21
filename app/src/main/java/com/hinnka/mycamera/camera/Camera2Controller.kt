@@ -2355,6 +2355,7 @@ class Camera2Controller(private val context: Context) {
     private fun shouldUseHlgCapture(): Boolean {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 _state.value.useP010 &&
+                !_state.value.useRaw &&
                 isP010Supported &&
                 isHlg10Supported
     }

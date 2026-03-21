@@ -2,7 +2,6 @@ package com.hinnka.mycamera.ui.gallery
 
 import android.graphics.Bitmap
 import android.graphics.RectF
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
@@ -11,7 +10,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
@@ -23,11 +21,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -75,28 +70,23 @@ sealed class CropAspectOption(
         if (isFree) return null
         if (isOriginal) return imageW.toFloat() / imageH.toFloat()
         if (heightRatio == 0f) return null
-        
-        val isImagePortrait = imageW < imageH
-        val isRatioPortrait = widthRatio < heightRatio
-        
-        return if (isImagePortrait != isRatioPortrait) {
-            heightRatio / widthRatio
-        } else {
-            widthRatio / heightRatio
-        }
+        return widthRatio / heightRatio
     }
 }
 
 /**
  * 获取所有可用的裁剪选项列表
  */
-fun getCropAspectOptions(imageWidth: Int, imageHeight: Int): List<CropAspectOption> {
+fun getCropAspectOptions(): List<CropAspectOption> {
     val options = mutableListOf<CropAspectOption>()
     options.add(CropAspectOption.Free)
     options.add(CropAspectOption.Original)
-    // 添加 AspectRatio 中定义的预设比例 (排除 XPAN)
     for (ratio in AspectRatio.entries) {
-        options.add(CropAspectOption.FromAspectRatio(ratio))
+        val option = CropAspectOption.FromAspectRatio(ratio)
+        options.add(option)
+        if (option.widthRatio / option.heightRatio != 1f) {
+            options.add(CropAspectOption.Custom(option.heightRatio, option.widthRatio))
+        }
     }
     return options
 }
@@ -112,8 +102,8 @@ fun CropEditPanel(
     imageHeight: Int,
     modifier: Modifier = Modifier
 ) {
-    val options = remember(imageWidth, imageHeight) {
-        getCropAspectOptions(imageWidth, imageHeight)
+    val options = remember {
+        getCropAspectOptions()
     }
 
     Column(
@@ -147,8 +137,7 @@ fun CropEditPanel(
             items(options) { option ->
                 CropAspectOptionItem(
                     option = option,
-                    isSelected = option == selectedOption
-                        || (option is CropAspectOption.Original && selectedOption is CropAspectOption.Original),
+                    isSelected = option == selectedOption,
                     onClick = { onOptionSelected(option) }
                 )
             }
@@ -586,17 +575,17 @@ private fun DrawScope.drawCropOverlay(
     // 竖线
     for (i in 1..2) {
         val x = left + thirdWidth * i
-        drawLine(gridColor, Offset(x, top), Offset(x, bottom), strokeWidth = 0.5f)
+        drawLine(gridColor, Offset(x, top), Offset(x, bottom), strokeWidth = 2f)
     }
     // 横线
     for (i in 1..2) {
         val y = top + thirdHeight * i
-        drawLine(gridColor, Offset(left, y), Offset(right, y), strokeWidth = 0.5f)
+        drawLine(gridColor, Offset(left, y), Offset(right, y), strokeWidth = 2f)
     }
 
     // 四角手柄
-    val handleLength = 32f
-    val handleWidth = 6f
+    val handleLength = 64f
+    val handleWidth = 10f
     val handleColor = Color.White
 
     // 左上

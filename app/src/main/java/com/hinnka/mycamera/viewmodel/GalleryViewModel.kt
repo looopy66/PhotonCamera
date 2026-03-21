@@ -709,6 +709,34 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    private fun restoreCropEditState(photo: PhotoData?, metadata: PhotoMetadata?) {
+        if (metadata == null) {
+            editCropRect.value = null
+            editCropAspectOption.value = CropAspectOption.Free
+            return
+        }
+
+        val cw = photo?.width ?: metadata.width
+        val ch = photo?.height ?: metadata.height
+        if (metadata.postCropRegion != null && cw > 0 && ch > 0) {
+            editCropRect.value = RectF(
+                metadata.postCropRegion.left.toFloat() / cw,
+                metadata.postCropRegion.top.toFloat() / ch,
+                metadata.postCropRegion.right.toFloat() / cw,
+                metadata.postCropRegion.bottom.toFloat() / ch
+            )
+
+            editCropAspectOption.value = metadata.ratio?.let { CropAspectOption.FromAspectRatio(it) }
+                ?: CropAspectOption.Custom(
+                    metadata.postCropRegion.width().toFloat(),
+                    metadata.postCropRegion.height().toFloat()
+                )
+        } else {
+            editCropRect.value = null
+            editCropAspectOption.value = CropAspectOption.Free
+        }
+    }
+
     private fun applyMetadataToEditState(metadata: PhotoMetadata?) {
         val photo = getCurrentPhoto()
         currentPhotoMetadataId = photo?.id
@@ -719,30 +747,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editSharpening.value = m.sharpening ?: 0f
             editNoiseReduction.value = m.noiseReduction ?: 0f
             editChromaNoiseReduction.value = m.chromaNoiseReduction ?: 0f
-
-            val cw = photo?.width ?: m.width
-            val ch = photo?.height ?: m.height
-            if (m.postCropRegion != null && cw > 0 && ch > 0) {
-                editCropRect.value = RectF(
-                    m.postCropRegion.left.toFloat() / cw,
-                    m.postCropRegion.top.toFloat() / ch,
-                    m.postCropRegion.right.toFloat() / cw,
-                    m.postCropRegion.bottom.toFloat() / ch
-                )
-                
-                // Set the aspect option based on ratio if it exists
-                if (m.ratio != null) {
-                    editCropAspectOption.value = CropAspectOption.FromAspectRatio(m.ratio)
-                } else {
-                    editCropAspectOption.value = CropAspectOption.Custom(
-                        m.postCropRegion.width().toFloat(),
-                        m.postCropRegion.height().toFloat()
-                    )
-                }
-            } else {
-                editCropRect.value = null
-                editCropAspectOption.value = CropAspectOption.Free
-            }
+            restoreCropEditState(photo, m)
 
             // 加载 LUT 配置
             m.lutId?.let { id ->
@@ -752,7 +757,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
             }
-        }
+        } ?: restoreCropEditState(photo, null)
     }
 
     fun loadThumbnail(photo: PhotoData): Bitmap? {
@@ -1262,6 +1267,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editComputationalAperture.value = metadata.computationalAperture
             editFocusPointX.value = metadata.focusPointX
             editFocusPointY.value = metadata.focusPointY
+            restoreCropEditState(targetPhoto, metadata)
         } ?: run {
             editLutId.value = null
             editFrameId.value = null
@@ -1272,6 +1278,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editComputationalAperture.value = null
             editFocusPointX.value = null
             editFocusPointY.value = null
+            restoreCropEditState(targetPhoto, null)
         }
 
         // 加载当前编辑的 LUT 配置
