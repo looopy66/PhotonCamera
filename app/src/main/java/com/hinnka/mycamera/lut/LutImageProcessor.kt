@@ -973,9 +973,9 @@ class LutImageProcessor {
 
         val texelW = 1.0f / width
         val texelH = 1.0f / height
-        // 将降噪强度映射到合理范围 (0.01 ~ 0.1)
-        val h = 0.01f + noiseReduction * noiseReduction * 4f
-        val ch = 0.01f + chromaNoiseReduction * chromaNoiseReduction * 2f
+        // 将降噪强度映射到合理范围 (0.001 ~ 0.1)
+        val h = 0.001f + noiseReduction * noiseReduction * 0.2f
+        val ch = 0.001f + chromaNoiseReduction * chromaNoiseReduction * 0.2f
 
         val identityMatrix = FloatArray(16)
         android.opengl.Matrix.setIdentityM(identityMatrix, 0)

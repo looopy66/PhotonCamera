@@ -672,7 +672,7 @@ fun PhotoEditScreen(
                                 viewModel = cameraViewModel,
                                 rawProfile = rawProfile,
                                 rawNlmNoiseFactor = editRawNlmNoiseFactor,
-                                onRawNlmNoiseFactorChange = viewModel::setRawDenoiseValue,
+                                onRawNlmNoiseFactorChange = { viewModel.saveRawDenoiseValue(currentPhoto, it) },
                                 modifier = Modifier.fillMaxWidth()
                             )
                         } else if (editTab == 3) {

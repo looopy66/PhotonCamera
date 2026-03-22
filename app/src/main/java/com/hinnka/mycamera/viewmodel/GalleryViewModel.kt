@@ -1392,8 +1392,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editChromaNoiseReduction.value = value
     }
 
-    fun setRawDenoiseValue(value: Float) {
+    fun saveRawDenoiseValue(photoData: PhotoData, value: Float) {
         editRawDenoise.value = value
+        viewModelScope.launch {
+            val metadata = photoData.metadata?.copy(
+                rawDenoiseValue = editRawDenoise.value,
+            )
+            val context = getApplication<Application>()
+            metadata?.let {
+                PhotoManager.saveMetadata(context, photoData.id, it)
+            }
+        }
     }
 
     /**

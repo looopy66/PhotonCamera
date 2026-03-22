@@ -1092,18 +1092,22 @@ class RawDemosaicProcessor {
         val noiseBase = (sqrt((s * 1e-3f + o * 1e-6f).toDouble()).toFloat() * 100.0f)
 
         // 动态计算 h 值 (衰减系数)
-        // 规则：基础强度 + 增益强度系数 + 传感器噪声水平系数
-        // 使用 sqrt(totalGain) 是因为噪声标准差随增益的平方根增加（近似）
-        val noise = if (noiseBase > 0f) {
-            noiseBase * denoiseValue * 0.5f + 0.002f * sqrt(totalGain.toDouble()).toFloat()
+        // 让 noiseProfile 的基础噪声和总增益都更明显地参与估算：
+        // 1. noiseBase 直接决定主体强度
+        // 2. totalGain 同时以 sqrt 与线性两部分参与，提升高增益场景下的去噪力度
+        val gainSqrt = sqrt(totalGain.toDouble()).toFloat()
+        val gainNoise = denoiseValue * (0.0035f * gainSqrt + 0.0006f * totalGain)
+        val baseNoise = if (noiseBase > 0f) {
+            noiseBase * denoiseValue * 0.8f
         } else {
-            denoiseValue * 0.008f * sqrt(totalGain.toDouble()).toFloat()
+            denoiseValue * 0.010f * gainSqrt
         }
+        val noise = baseNoise + gainNoise
 
         val h = noise.coerceIn(0.001f, 0.1f)
         PLog.d(
             TAG,
-            "Dynamic NLM: totalGain=${"%.2f".format(totalGain)} (ISO=$isoGain, Boost=$digitalGain, Post=$postGain), noiseBase=$noiseBase, h=$h"
+            "Dynamic NLM: totalGain=${"%.2f".format(totalGain)} (ISO=$isoGain, Boost=$digitalGain, Post=$postGain), noiseBase=$noiseBase, baseNoise=$baseNoise, gainNoise=$gainNoise, h=$h"
         )
 
         val identityMatrix = FloatArray(16)
