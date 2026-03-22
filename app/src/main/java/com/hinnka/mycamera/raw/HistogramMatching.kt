@@ -10,13 +10,13 @@ import kotlin.math.pow
 import kotlin.math.roundToInt
 
 /**
- * Histogram matching tuned for RAW tone shaping.
+ * Preview-guided tone shaping for RAW.
  *
- * Instead of fitting a dense 256-point mapping directly from the JPEG preview,
- * we extract only low-frequency percentile landmarks and build a smooth,
- * monotonic curve. This avoids baking JPEG quantization/highlight clipping
- * artifacts into the luminance gain curve, which can otherwise show up as
- * bright speckling on smooth highlights.
+ * The embedded preview is display-referred. That makes it a strong reference
+ * for sRGB output, but only a partial reference for scene-referred log curves.
+ * We therefore separate:
+ * 1. exposure anchor / base shoulder, which stays in the target log domain
+ * 2. low-frequency shape guidance from the embedded preview
  */
 object HistogramMatching {
     private const val TAG = "HistogramMatching"
@@ -25,8 +25,8 @@ object HistogramMatching {
     private const val MIN_X_STEP = 1e-4f
     private const val MIN_CURVE_STEP = 1e-5f
 
-    private val PERCENTILES = floatArrayOf(
-        0f, 0.12f, 0.25f, 0.5f, 0.75f, 1f
+    private val SCENE_LOG_PERCENTILES = floatArrayOf(
+        0f, 0.12f, 0.25f, 0.5f, 0.75f
     )
 
     fun analyze(
@@ -36,21 +36,25 @@ object HistogramMatching {
         logCurve: LogCurve,
         referenceBitmap: Bitmap?
     ): FloatArray {
+        val baseCurve = buildAcr3BaseCurve(logCurve)
         if (referenceBitmap == null) {
-            PLog.d(TAG, "No embedded preview found, using default ACR3 S-curve")
-            return buildDefaultStandardCurve(logCurve)
+            PLog.d(TAG, "No embedded preview found, using ACR3 base curve")
+            return stabilizeCurve(baseCurve, baseCurve, logCurve)
         }
 
         val reference = prepareReference(referenceBitmap, width, height) ?: run {
-            PLog.d(TAG, "Embedded preview too small or invalid, using default ACR3 S-curve")
-            return buildDefaultStandardCurve(logCurve)
+            PLog.d(TAG, "Embedded preview too small or invalid, using ACR3 base curve")
+            return stabilizeCurve(baseCurve, baseCurve, logCurve)
         }
 
-        val targetHistogram = smoothHistogram(buildHistogramFromNeutral(neutralBuffer, width, height, logCurve))
+        val targetHistogram =
+            smoothHistogram(buildHistogramFromNeutral(neutralBuffer, width, height, logCurve))
         val sourceHistogram = smoothHistogram(buildHistogramFromBitmap(reference, logCurve))
-        val curve = buildPercentileCurve(targetHistogram, sourceHistogram, logCurve)
 
-        return curve
+        val curve =
+            buildSceneLogCurve(targetHistogram, sourceHistogram, baseCurve, logCurve)
+
+        return stabilizeCurve(curve, baseCurve, logCurve)
     }
 
     private fun prepareReference(bitmap: Bitmap, targetWidth: Int, targetHeight: Int): Bitmap? {
@@ -76,6 +80,44 @@ object HistogramMatching {
         } else {
             cropped
         }
+    }
+
+    private fun buildAcr3BaseCurve(logCurve: LogCurve): FloatArray {
+        val curve = FloatArray(LUT_SIZE)
+        val maxLinear = logCurve.logToLinear(1f).coerceAtLeast(1f)
+        for (i in curve.indices) {
+            val inputLog = i.toFloat() / (curve.size - 1)
+            val inputLinear = logCurve.logToLinear(inputLog).coerceAtLeast(0f)
+            curve[i] =
+                if (logCurve == LogCurve.SRGB || inputLinear <= 1f) {
+                    interpolateAcr3DefaultCurve(inputLinear.coerceIn(0f, 1f))
+                } else {
+                    extendAcr3Highlights(inputLinear, maxLinear)
+                }
+        }
+        curve[0] = 0f
+        curve[curve.lastIndex] =
+            if (logCurve == LogCurve.SRGB) {
+                1f
+            } else {
+                maxLinear
+        }
+        return curve
+    }
+
+    private fun interpolateAcr3DefaultCurve(x: Float): Float {
+        val clampedX = x.coerceIn(0f, 1f)
+        val y = clampedX * (ACR3_DEFAULT_CURVE.size - 1)
+        val index = y.toInt().coerceIn(0, ACR3_DEFAULT_CURVE.lastIndex - 1)
+        val fraction = y - index
+        return ACR3_DEFAULT_CURVE[index] * (1f - fraction) + ACR3_DEFAULT_CURVE[index + 1] * fraction
+    }
+
+    private fun extendAcr3Highlights(inputLinear: Float, maxLinear: Float): Float {
+        if (maxLinear <= 1f) return 1f
+        val normalized = ((inputLinear - 1f) / (maxLinear - 1f)).coerceIn(0f, 1f)
+        val shoulder = normalized.toDouble().pow(1.35).toFloat()
+        return 1f + (maxLinear - 1f) * shoulder
     }
 
     private fun cropToAspect(bitmap: Bitmap, targetRatio: Float): Bitmap {
@@ -114,26 +156,6 @@ object HistogramMatching {
         return histogram
     }
 
-    private fun buildDefaultStandardCurve(logCurve: LogCurve): FloatArray {
-        val curve = FloatArray(LUT_SIZE)
-        for (i in curve.indices) {
-            val inputLog = i.toFloat() / (curve.size - 1)
-            val inputLinear = logCurve.logToLinear(inputLog).coerceAtLeast(0f)
-            curve[i] = interpolateAcr3DefaultCurve(inputLinear.coerceIn(0f, 1f))
-        }
-        curve[0] = 0f
-        curve[curve.lastIndex] = 1f
-        return curve
-    }
-
-    private fun interpolateAcr3DefaultCurve(x: Float): Float {
-        val clampedX = x.coerceIn(0f, 1f)
-        val y = clampedX * (ACR3_DEFAULT_CURVE.size - 1)
-        val index = y.toInt().coerceIn(0, ACR3_DEFAULT_CURVE.lastIndex - 1)
-        val fraction = y - index
-        return ACR3_DEFAULT_CURVE[index] * (1f - fraction) + ACR3_DEFAULT_CURVE[index + 1] * fraction
-    }
-
     private fun buildHistogramFromBitmap(bitmap: Bitmap, logCurve: LogCurve): IntArray {
         val histogram = IntArray(LUT_SIZE)
         val pixels = IntArray(bitmap.width * bitmap.height)
@@ -168,42 +190,78 @@ object HistogramMatching {
         return current
     }
 
-    private fun buildPercentileCurve(
+    private fun buildSceneLogCurve(
         targetHistogram: IntArray,
         sourceHistogram: IntArray,
+        baseCurve: FloatArray,
         logCurve: LogCurve
     ): FloatArray {
         val targetCdf = buildCdf(targetHistogram)
         val sourceCdf = buildCdf(sourceHistogram)
+        val middleGrayLog = logCurve.linearToLog(logCurve.middleGray).coerceIn(0f, 1f)
 
-        val rawX = FloatArray(PERCENTILES.size + 1)
-        val rawY = FloatArray(PERCENTILES.size + 1)
+        val rawX = ArrayList<Float>()
+        val rawY = ArrayList<Float>()
 
-        for (i in PERCENTILES.indices) {
-            val percentile = PERCENTILES[i]
+        rawX.add(0f)
+        rawY.add(0f)
+
+        addPoint(rawX, rawY, middleGrayLog, sampleCurve(baseCurve, middleGrayLog))
+
+        val matched =
+            buildControlPoints(
+                percentiles = SCENE_LOG_PERCENTILES,
+                targetCdf = targetCdf,
+                sourceCdf = sourceCdf,
+                baseCurve = baseCurve,
+                logCurve = logCurve
+            )
+        for (i in matched.first.indices) {
+            addPoint(rawX, rawY, matched.first[i], matched.second[i])
+        }
+
+        // Scene-referred highlights should converge back to the target log curve's
+        // own shoulder rather than inheriting JPEG preview clipping.
+        addPoint(rawX, rawY, 0.90f, sampleCurve(baseCurve, 0.90f))
+        addPoint(rawX, rawY, 0.97f, sampleCurve(baseCurve, 0.97f))
+        addPoint(rawX, rawY, 1f, logCurve.logToLinear(1f).coerceAtLeast(sampleCurve(baseCurve, 1f)))
+
+        val (x, y) = buildStrictControlPoints(rawX.toFloatArray(), rawY.toFloatArray())
+        val curve = SplineInterpolator(x, y).generateLut(LUT_SIZE)
+        PLog.d(TAG, "buildSceneLogCurve: x=${x.contentToString()} y=${y.contentToString()}")
+        return smoothCurve(curve)
+    }
+
+    private fun buildControlPoints(
+        percentiles: FloatArray,
+        targetCdf: FloatArray,
+        sourceCdf: FloatArray,
+        baseCurve: FloatArray,
+        logCurve: LogCurve
+    ): Pair<FloatArray, FloatArray> {
+        val rawX = ArrayList<Float>(percentiles.size + 2)
+        val rawY = ArrayList<Float>(percentiles.size + 2)
+
+        for (percentile in percentiles) {
             val targetBin = findPercentileBin(targetCdf, percentile)
             val sourceBin = findPercentileBin(sourceCdf, percentile)
 
             val inputLog = targetBin.toFloat() / (LUT_SIZE - 1)
-            val outputLog = sourceBin.toFloat() / (LUT_SIZE - 1)
+            val sourceLog = sourceBin.toFloat() / (LUT_SIZE - 1)
+            val baseLinear = sampleCurve(baseCurve, inputLog)
+            val baseLog = logCurve.linearToLog(baseLinear.coerceAtLeast(0f)).coerceIn(0f, 1f)
 
-            rawX[i] = inputLog
-            rawY[i] = logCurve.logToLinear(outputLog).coerceAtLeast(0f)
+            val desiredLog =
+                run {
+                    val delta = sourceLog - inputLog
+                    val shapeWeight = sceneLogShapeWeight(inputLog, logCurve)
+                    (baseLog + delta * shapeWeight).coerceIn(0f, 1f)
+                }
+
+            addPoint(rawX, rawY, inputLog, logCurve.logToLinear(desiredLog).coerceAtLeast(0f))
         }
 
-        rawX[rawX.lastIndex] = 1f
-        rawY[rawY.lastIndex] = logCurve.logToLinear(1f).coerceAtLeast(0f)
-
-        val (x, y) = buildStrictControlPoints(rawX, rawY)
-        val curve = SplineInterpolator(x, y).generateLut(LUT_SIZE)
-        val smoothedCurve = smoothCurve(curve)
-        val stabilizedCurve = stabilizeHighlights(smoothedCurve, logCurve)
-
-        val xDescription = x.joinToString(prefix = "[", postfix = "]")
-        val yDescription = y.joinToString(prefix = "[", postfix = "]")
-        PLog.d(TAG, "buildPercentileCurve: x=$xDescription y=$yDescription")
-
-        return stabilizedCurve
+        return buildStrictControlPoints(rawX.toFloatArray(), rawY.toFloatArray())
     }
 
     private fun buildCdf(histogram: IntArray): FloatArray {
@@ -277,18 +335,26 @@ object HistogramMatching {
         return current
     }
 
-    private fun stabilizeHighlights(curve: FloatArray, logCurve: LogCurve): FloatArray {
+    private fun stabilizeCurve(
+        curve: FloatArray,
+        baseCurve: FloatArray,
+        logCurve: LogCurve
+    ): FloatArray {
         val result = FloatArray(curve.size)
         var previous = 0f
 
         for (i in curve.indices) {
             val x = i.toFloat() / (curve.size - 1)
-            val identity = logCurve.logToLinear(x).coerceAtLeast(0f)
-            val blendToIdentity = smoothStep(0.90f, 1f, x) * 0.85f
-            val gainLimit = lerp(1.18f, 1.0f, smoothStep(0.82f, 1f, x))
+            val base = sampleCurve(baseCurve, x)
 
-            var value = lerp(curve[i], identity, blendToIdentity)
-            value = minOf(value, identity * gainLimit)
+            val highlightBlend =
+                smoothStep(0.74f, 1f, x) * 0.92f
+
+            val upperLimit =
+                lerp(base * 1.08f, logCurve.logToLinear(1f), smoothStep(0.92f, 1f, x))
+
+            var value = lerp(curve[i], base, highlightBlend)
+            value = minOf(value, upperLimit)
             value = max(value, previous + MIN_CURVE_STEP)
 
             result[i] = value
@@ -296,8 +362,36 @@ object HistogramMatching {
         }
 
         result[0] = 0f
-        result[result.lastIndex] = logCurve.logToLinear(1f).coerceAtLeast(result[result.lastIndex])
+        result[result.lastIndex] =
+            logCurve.logToLinear(1f).coerceAtLeast(result[result.lastIndex])
         return result
+    }
+
+    private fun sceneLogShapeWeight(inputLog: Float, logCurve: LogCurve): Float {
+        val middleGrayLog = logCurve.linearToLog(logCurve.middleGray).coerceIn(0f, 1f)
+        val middleDistance = (abs(inputLog - middleGrayLog) / 0.42f).coerceIn(0f, 1f)
+        val middleEmphasis = 1f - middleDistance
+        val highlightFade = 1f - smoothStep(0.72f, 0.94f, inputLog)
+        val shadowFade = lerp(0.55f, 1f, smoothStep(0.05f, 0.18f, inputLog))
+        return (0.18f + middleEmphasis * 0.52f) * highlightFade * shadowFade
+    }
+
+    private fun sampleCurve(curve: FloatArray, x: Float): Float {
+        val clampedX = x.coerceIn(0f, 1f)
+        val y = clampedX * (curve.size - 1)
+        val index = y.toInt().coerceIn(0, curve.lastIndex - 1)
+        val fraction = y - index
+        return curve[index] * (1f - fraction) + curve[index + 1] * fraction
+    }
+
+    private fun addPoint(
+        x: MutableList<Float>,
+        y: MutableList<Float>,
+        pointX: Float,
+        pointY: Float
+    ) {
+        x.add(pointX.coerceIn(0f, 1f))
+        y.add(pointY.coerceAtLeast(0f))
     }
 
     private fun smoothStep(edge0: Float, edge1: Float, x: Float): Float {

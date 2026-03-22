@@ -748,6 +748,8 @@ private fun ZoomableImage(
                     hdrBitmap?.let {
                         colorSpace.value = it.colorSpace
                     }
+                } else {
+                    hdrBitmap = null
                 }
             }
             if (isActive) {
@@ -778,7 +780,7 @@ private fun ZoomableImage(
             )
         }
 
-        if (showHdr) {
+        if (showHdr && hdrBitmap != null) {
             val imageModel = remember(photo.id, metadataHash, hdrBitmap) {
                 ImageRequest.Builder(context)
                     .data(hdrBitmap)
