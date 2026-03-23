@@ -69,7 +69,7 @@ data class UserPreferences(
     val rawSuperResolutionScale: Float = 1f, // RAW 多帧超分倍率
     val photoQuality: Int = 95, // 照片质量: 90, 95, 100
     val useLivePhoto: Boolean = false, // 是否启用 Live Photo (Motion Photo)
-    val enableDevelopAnimation: Boolean = true, // 是否启用拍摄后的显影动画
+    val enableDevelopAnimation: Boolean = false, // 是否启用拍摄后的显影动画
     val backgroundImage: String = "camera_bg", // 背景图资源名或文件路径
     val useGpuAcceleration: Boolean = DeviceUtil.defaultGpuAcceleration, // 多帧合成是否使用 GPU 加速
     val droMode: String = "OFF", // DRO 模式
@@ -207,7 +207,7 @@ class UserPreferencesRepository(private val context: Context) {
                 rawSuperResolutionScale = preferences[RAW_SUPER_RESOLUTION_SCALE] ?: 1.5f,
                 photoQuality = preferences[PHOTO_QUALITY] ?: 95,
                 useLivePhoto = preferences[USE_LIVE_PHOTO] ?: false,
-                enableDevelopAnimation = preferences[ENABLE_DEVELOP_ANIMATION] ?: true,
+                enableDevelopAnimation = preferences[ENABLE_DEVELOP_ANIMATION] ?: false,
                 backgroundImage = preferences[BACKGROUND_IMAGE] ?: "camera_bg",
                 useGpuAcceleration = preferences[USE_GPU_ACCELERATION] ?: DeviceUtil.defaultGpuAcceleration,
                 droMode = preferences[DRO_MODE] ?: "OFF",

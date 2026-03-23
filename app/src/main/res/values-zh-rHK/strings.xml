@@ -131,12 +131,14 @@
     <string name="settings_multi_frame_count_description">多幀合成所使用的幀數（幀數越多效果越好，但合成也越慢）。</string>
     <string name="settings_use_super_resolution">超解析度</string>
     <string name="settings_use_super_resolution_description">使用 2x 多幀超解析度以獲得更多細節。（需要開啟多幀合成）</string>
+    <string name="settings_super_resolution_scale_description">设置 RAW 多帧超分倍率，默认 1x。</string>
     <string name="settings_raw_engine">RAW 處理引擎</string>
     <string name="settings_raw_engine_description">選擇用於處理 RAW 資料的引擎</string>
     <string name="settings_raw_engine_native">原生</string>
     <string name="settings_raw_engine_self_developed">自研</string>
     <string name="settings_use_live_photo">動態相片 (Live Photo)</string>
     <string name="settings_use_live_photo_description">在拍照時同時錄製一段短片，讓相片動起來。</string>
+    <string name="settings_develop_animation_description">拍摄后显示胶片显影动画效果。</string>
     <string name="settings_use_gpu_acceleration">GPU 加速</string>
     <string name="settings_use_gpu_acceleration_description">使用 GPU (Vulkan) 加速多幀合成，建議開啟。</string>
     <string name="settings_section_frame">邊框浮水印</string>
@@ -348,6 +350,7 @@
     <string name="delete_category_message">確認刪除分類 "%s"？該分類下的濾鏡將被設為未分類。</string>
     <string name="built_in">內建</string>
     <string name="custom">自訂</string>
+    <string name="uncategorized">未分类</string>
     <string name="no_filters">暫無自訂濾鏡</string>
     <string name="no_frames">暫無自訂邊框</string>
     <string name="input_curve">輸入曲線</string>
@@ -393,6 +396,7 @@
     <string name="raw_profile_arri_master">ARRI 大師</string>
     <string name="raw_profile_fuji_provia">富士 PROVIA</string>
     <string name="raw_profile_standard_srgb">標準 sRGB</string>
+    <string name="settings_raw_nlm_noise_factor">RAW 降噪</string>
     <string name="settings_use_p010">P010 (10 位 YUV)</string>
     <string name="settings_use_p010_description">啟用 10 位 YUV 輸出以獲得更好的影像資料精度。僅在支援的裝置上且 RAW 關閉時生效。</string>
     <string name="refresh">重新整理</string>
@@ -409,6 +413,7 @@
     <string name="settings_color_space">RAW 色彩空間</string>
     <string name="settings_color_space_description">選擇 RAW 處理的目標色彩空間。</string>
     <string name="settings_log_curve">RAW 伽瑪</string>
+    <string name="hdr_toggle_failed">HDR 开关更新失败</string>
     <string name="ghost_mode">幻影模式</string>
     <string name="close_ghost_mode">關閉幻影模式</string>
     <string name="ghost_mode_dialog_title">開啟幻影模式</string>
@@ -488,4 +493,19 @@
     <string name="recipe_palette_density">調色盤濃度</string>
     <string name="recipe_palette_advanced">高級調整</string>
     <string name="recipe_tab_palette">調色盤</string>
+    <string name="settings_super_resolution_scale">超分倍率</string>
+    <string name="settings_develop_animation">显影动画</string>
+    <string name="settings_use_p3_color_space">P3 色域</string>
+    <string name="settings_use_p3_color_space_description">在支持的设备上启用 Display P3 输出。默认关闭。</string>
+    <string name="settings_auto_enable_hdr_for_hdr_capture">P010/RAW 默认开启 HDR</string>
+    <string name="settings_auto_enable_hdr_for_hdr_capture_description">P010/HLG 与 RAW 拍摄的照片在详情页默认开启 HDR
+        显示。
+    </string>
+    <string name="settings_auto_enable_hdr_for_sdr_photos">普通 JPG 默认生成 HDR</string>
+    <string name="settings_auto_enable_hdr_for_sdr_photos_description">普通 JPG 拍摄和导入后，默认在详情页生成并开启 HDR
+        效果。
+    </string>
+    <string name="hdr_label">HDR</string>
+    <string name="settings_raw_nlm_base_h">RAW NLM 基础强度</string>
+    <string name="settings_raw_nlm_gain_factor">RAW NLM 增益响应</string>
 </resources>
