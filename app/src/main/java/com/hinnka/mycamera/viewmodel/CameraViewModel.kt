@@ -1362,6 +1362,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    suspend fun applyLut(bitmap: Bitmap): Bitmap = withContext(Dispatchers.IO) {
+        currentLutConfig?.let { lut ->
+            val params = contentRepository.lutManager.loadColorRecipeParams(currentLutId.value)
+            contentRepository.imageProcessor.applyLut(bitmap, lut, params)
+        } ?: bitmap
+    }
+
     fun handleHistogramUpdate(histogram: IntArray) {
         cameraController.updateHistogram(histogram)
     }

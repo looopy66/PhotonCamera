@@ -74,6 +74,7 @@ import com.hinnka.mycamera.ui.components.*
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
+import kotlinx.coroutines.launch
 import kotlin.math.*
 
 /**
@@ -96,6 +97,7 @@ fun CameraScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val state by viewModel.state.collectAsState()
     val latestPhoto by galleryViewModel.latestPhoto.collectAsState()
     val showLevelIndicator by viewModel.showLevelIndicator.collectAsState(initial = false)
@@ -196,11 +198,13 @@ fun CameraScreen(
                 if (sourceBounds == null || targetBounds == null) {
                     return
                 }
-                captureAnimationSnapshot = CaptureAnimationSnapshot(
-                    bitmap = bitmap.asImageBitmap(),
-                    sourceBounds = sourceBounds,
-                    targetBounds = targetBounds
-                )
+                scope.launch {
+                    captureAnimationSnapshot = CaptureAnimationSnapshot(
+                        bitmap = viewModel.applyLut(bitmap).asImageBitmap(),
+                        sourceBounds = sourceBounds,
+                        targetBounds = targetBounds
+                    )
+                }
             }
 
             pendingCaptureAnimationBitmap?.let(::startCaptureAnimation)
