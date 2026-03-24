@@ -100,6 +100,7 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
@@ -625,7 +626,26 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
 
                     if (expanded) {
                         if (showFilterPicker) {
-                            val availableLuts by ContentRepository.getInstance(context).availableLuts.collectAsState()
+                            val sortedLutsFlow = remember {
+                                ContentRepository.getInstance(context).availableLuts.combine(
+                                    userPreferencesRepository.userPreferences.map {
+                                        it.filterOrder to it.categoryOrder
+                                    }
+                                ) { luts, (filterOrder, categoryOrder) ->
+                                    val sortedLuts = if (filterOrder.isEmpty()) {
+                                        luts
+                                    } else {
+                                        val orderMap = filterOrder.withIndex().associate { it.value to it.index }
+                                        luts.sortedBy { orderMap[it.id] ?: Int.MAX_VALUE }
+                                    }
+                                    sortedLuts to categoryOrder
+                                }
+                            }
+                            val sortedLutData by sortedLutsFlow.collectAsState(
+                                initial = emptyList<com.hinnka.mycamera.lut.LutInfo>() to emptyList()
+                            )
+                            val availableLuts = sortedLutData.first
+                            val categoryOrder = sortedLutData.second
                             val currentLutIdFlow = remember {
                                 userPreferencesRepository.userPreferences.map { it.lutId }
                             }
@@ -636,12 +656,12 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                             val uncategorizedText = stringResource(R.string.uncategorized)
                             val groupedLuts = remember(
                                 availableLuts,
+                                categoryOrder,
                                 builtInText,
                                 customText,
                                 uncategorizedText
                             ) {
-                                availableLuts
-                                    .groupBy { lut ->
+                                val grouped = availableLuts.groupBy { lut ->
                                         when {
                                             lut.category.isNotEmpty() -> lut.category
                                             lut.isBuiltIn -> builtInText
@@ -649,7 +669,20 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                             else -> uncategorizedText
                                         }
                                     }
-                                    .toList()
+                                grouped.entries.sortedWith(
+                                    compareBy<Map.Entry<String, List<com.hinnka.mycamera.lut.LutInfo>>> { entry ->
+                                        val title = entry.key
+                                        when (title) {
+                                            builtInText -> -2
+                                            customText -> -1
+                                            uncategorizedText -> Int.MAX_VALUE - 1
+                                            else -> {
+                                                val index = categoryOrder.indexOf(title)
+                                                if (index == -1) Int.MAX_VALUE else index
+                                            }
+                                        }
+                                    }.thenBy { it.key }
+                                )
                             }
                             val selectedIndex = remember(groupedLuts, currentLutId) {
                                 var runningIndex = 0
