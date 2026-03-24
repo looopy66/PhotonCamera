@@ -34,7 +34,6 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.firstOrNull
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
@@ -1347,7 +1346,7 @@ object PhotoManager {
                     rotation,
                     aspectRatio,
                     yuvFile.absolutePath,
-                    currentUseSuperResolution,
+                    false,
                     useGpuAcceleration,
                     ColorSpace.get(metadata.colorSpace)
                 )
@@ -1402,8 +1401,7 @@ object PhotoManager {
         useSuperResolution: Boolean = false,
         superResolutionScale: Float = 1.0f,
         useGpuAcceleration: Boolean = true,
-        exposureBias: Float? = null,
-        droMode: RawProcessingPreferences.DROMode = RawProcessingPreferences.DROMode.OFF
+        exposureBias: Float? = null
     ) = withContext(Dispatchers.IO) {
         try {
             val photoDir = getPhotoDir(context, photoId, true)
@@ -1441,7 +1439,6 @@ object PhotoManager {
                 whiteLevel = rawMetadata.whiteLevel.toInt(),
                 whiteBalanceGains = rawMetadata.whiteBalanceGains,
                 noiseModel = rawMetadata.noiseProfile,
-                // LibRaw 路径目前没有应用 LSC。多帧先保持一致，避免把亮度系统性抬高。
                 lensShading = null,
                 lensShadingWidth = 0,
                 lensShadingHeight = 0,
@@ -1452,7 +1449,7 @@ object PhotoManager {
                 currentUseSuperResolution = false
                 rawStackResult = MultiFrameStacker.processBurstRaw(
                     images, rawMetadata.cfaPattern,
-                    currentUseSuperResolution,
+                    false,
                     1.0f,
                     useGpuAcceleration,
                     masterBlackLevel = rawMetadata.blackLevel,
@@ -1500,17 +1497,11 @@ object PhotoManager {
                     bitmap = BitmapUtils.flipHorizontal(bitmap)
                 }
 
-                bitmap?.let {
-                    val buffer = ByteBuffer.allocateDirect(it.width * it.height * 8)
-                    it.copyPixelsToBuffer(buffer)
-                    YuvProcessor.saveCompressedArgb(buffer, it.width, it.height, yuvFile.absolutePath)
-                }
-
                 bitmap
             } ?: return@withContext
 
             processingScope.launch {
-                trySaveStackedRawDng(
+                val dngWritten = trySaveStackedRawDng(
                     context = context,
                     photoId = photoId,
                     dngFile = dngFile,
@@ -1526,6 +1517,17 @@ object PhotoManager {
                     metadata = metadata,
                     shouldAutoSave = shouldAutoSave
                 )
+                if (!dngWritten) {
+                    try {
+                        result.let {
+                            val buffer = ByteBuffer.allocateDirect(it.width * it.height * 8)
+                            it.copyPixelsToBuffer(buffer)
+                            YuvProcessor.saveCompressedArgb(buffer, it.width, it.height, yuvFile.absolutePath)
+                        }
+                    } catch (e: Throwable) {
+                        PLog.e(TAG, "saveRawStackedPhoto saveCompressedArgb", e)
+                    }
+                }
             }
 
             // Save Original (Stacked Result)
@@ -1567,7 +1569,7 @@ object PhotoManager {
         thumbnail: Bitmap?,
         metadata: PhotoMetadata,
         shouldAutoSave: Boolean,
-    ) {
+    ): Boolean {
         val tempDngFile = File(dngFile.parentFile, "temp_stacked.dng")
         val dngWritten = try {
             FileOutputStream(tempDngFile).use { outputStream ->
@@ -1597,7 +1599,7 @@ object PhotoManager {
 
         if (!dngWritten || !tempDngFile.exists() || tempDngFile.length() <= 0L) {
             tempDngFile.delete()
-            return
+            return false
         }
 
         try {
@@ -1614,12 +1616,14 @@ object PhotoManager {
                 dngFile.delete()
             }
             PLog.w(TAG, "Failed to persist stacked RAW DNG, ignoring", e)
-            return
+            return false
         }
 
         if (shouldAutoSave) {
             exportDng(context, photoId, dngFile, metadata)
         }
+
+        return true
     }
 
 
@@ -1684,8 +1688,7 @@ object PhotoManager {
                     useSuperResolution,
                     superResolutionScale,
                     useGpuAcceleration,
-                    exposureBias,
-                    droMode
+                    exposureBias
                 )
             }
 

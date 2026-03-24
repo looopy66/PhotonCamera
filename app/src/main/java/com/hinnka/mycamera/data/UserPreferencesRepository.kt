@@ -66,7 +66,7 @@ data class UserPreferences(
     val useMultipleExposure: Boolean = false, // 是否启用多重曝光
     val multipleExposureCount: Int = 2, // 多重曝光张数
     val useMFSR: Boolean = false, // 是否启用 RAW 多帧超分
-    val rawSuperResolutionScale: Float = 1f, // RAW 多帧超分倍率
+    val superResolutionScale: Float = 1.5f, // RAW 多帧超分倍率
     val photoQuality: Int = 95, // 照片质量: 90, 95, 100
     val useLivePhoto: Boolean = false, // 是否启用 Live Photo (Motion Photo)
     val enableDevelopAnimation: Boolean = false, // 是否启用拍摄后的显影动画
@@ -204,7 +204,7 @@ class UserPreferencesRepository(private val context: Context) {
                 useMultipleExposure = preferences[USE_MULTIPLE_EXPOSURE] ?: false,
                 multipleExposureCount = preferences[MULTIPLE_EXPOSURE_COUNT] ?: 2,
                 useMFSR = preferences[USE_SUPER_RESOLUTION] ?: false,
-                rawSuperResolutionScale = preferences[RAW_SUPER_RESOLUTION_SCALE] ?: 1.5f,
+                superResolutionScale = preferences[RAW_SUPER_RESOLUTION_SCALE] ?: 1.5f,
                 photoQuality = preferences[PHOTO_QUALITY] ?: 95,
                 useLivePhoto = preferences[USE_LIVE_PHOTO] ?: false,
                 enableDevelopAnimation = preferences[ENABLE_DEVELOP_ANIMATION] ?: false,
@@ -543,7 +543,7 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
-    suspend fun saveRawSuperResolutionScale(scale: Float) {
+    suspend fun saveSuperResolutionScale(scale: Float) {
         context.dataStore.edit { preferences ->
             preferences[RAW_SUPER_RESOLUTION_SCALE] = scale.coerceIn(1.0f, 2.0f)
         }

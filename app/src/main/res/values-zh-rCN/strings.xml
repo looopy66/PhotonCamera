@@ -130,9 +130,9 @@
     <string name="settings_multi_frame_count">多帧降噪帧数</string>
     <string name="settings_multi_frame_count_description">YUV 多帧降噪使用的帧数（帧数越多降噪越明显，但处理也越慢）。</string>
     <string name="settings_use_super_resolution">多帧超分</string>
-    <string name="settings_use_super_resolution_description">启用 RAW 多帧超分，仅作用于 RAW 多帧拍摄。</string>
+    <string name="settings_use_super_resolution_description">启用多帧超分</string>
     <string name="settings_super_resolution_scale">超分倍率</string>
-    <string name="settings_super_resolution_scale_description">设置 RAW 多帧超分倍率，默认 1x。</string>
+    <string name="settings_super_resolution_scale_description">设置多帧超分倍率，默认 1x。</string>
     <string name="settings_raw_engine">RAW 处理引擎</string>
     <string name="settings_raw_engine_description">选择用于处理 RAW 数据的引擎</string>
     <string name="settings_raw_engine_native">原生</string>

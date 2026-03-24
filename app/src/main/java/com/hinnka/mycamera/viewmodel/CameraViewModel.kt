@@ -178,9 +178,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useMFSR: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useMFSR }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val rawSuperResolutionScale: StateFlow<Float> = userPreferencesRepository.userPreferences
-        .map { it.rawSuperResolutionScale }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 1f)
     val useLivePhoto: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useLivePhoto }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -1427,8 +1424,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setUseMFNR(enabled: Boolean) {
         if (enabled) {
             setUseMultipleExposure(false)
-            setUseRaw(false)
-            cameraController.setUseMFSR(false)
+            setUseMFSR(false)
         }
         cameraController.setUseMFNR(enabled)
         viewModelScope.launch {
@@ -1462,7 +1458,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setUseMFSR(enabled: Boolean) {
         if (enabled) {
             setUseMultipleExposure(false)
-            setUseRaw(true)
             setUseMFNR(false)
         }
         cameraController.setUseMFSR(enabled)
@@ -1472,9 +1467,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         reopenCamera()
     }
 
-    fun setRawSuperResolutionScale(scale: Float) {
+    fun setSuperResolutionScale(scale: Float) {
         viewModelScope.launch {
-            userPreferencesRepository.saveRawSuperResolutionScale(scale)
+            userPreferencesRepository.saveSuperResolutionScale(scale)
         }
     }
 
@@ -1539,10 +1534,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setUseRaw(useRaw: Boolean) {
         if (useRaw) {
-            setUseMFNR(false)
             setUseMultipleExposure(false)
-        } else {
-            setUseMFSR(false)
         }
         cameraController.setUseRaw(useRaw)
         viewModelScope.launch {
@@ -2103,8 +2095,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val rotation = (baseRotation + orientationOffset) % 360
 
             val useSuperRes = useMFSR.value
-            val rawSuperResScale =
-                if (useSuperRes && useRaw.value) rawSuperResolutionScale.value else 1.0f
+            val superResScale = if (useSuperRes) 2f else 1.0f
 
             val aperture = if (state.value.isVirtualApertureEnabled) state.value.virtualAperture else null
             val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
@@ -2124,8 +2115,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 sharpening = sharpeningValue,
                 noiseReduction = noiseReductionValue,
                 chromaNoiseReduction = chromaNoiseReductionValue,
-                width = (images[0].width.toFloat() * rawSuperResScale).roundToInt(),
-                height = (images[0].height.toFloat() * rawSuperResScale).roundToInt(),
+                width = (images[0].width.toFloat() * superResScale).roundToInt(),
+                height = (images[0].height.toFloat() * superResScale).roundToInt(),
                 ratio = aspectRatio,
                 rotation = rotation,
                 deviceModel = captureInfo.model,
@@ -2163,7 +2154,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             characteristics ?: return
             val photoId = PhotoManager.preparePhoto(
                 context, metadata, captureResult, previewThumbnail,
-                useLivePhoto.value, rawSuperResScale
+                useLivePhoto.value, superResScale
             )
             if (photoId == null) {
                 PLog.e(TAG, "Failed to save burst image")
@@ -2188,7 +2179,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     chromaNoiseReductionValue,
                     photoQualityValue,
                     useSuperResolution = useSuperRes,
-                    superResolutionScale = rawSuperResScale,
+                    superResolutionScale = superResScale,
                     useGpuAcceleration = useGpuAcceleration.value,
                     exposureBias = state.value.exposureBias,
                     droMode = droModeForProcessing
