@@ -136,17 +136,18 @@ fun CameraTopSheet(
 
                 val nrLevelNames = availableNrLevels.map {
                     when (it) {
+                        5 -> stringResource(R.string.settings_nr_level_auto)
                         0 -> stringResource(R.string.settings_nr_level_off)
                         1 -> stringResource(R.string.settings_nr_level_fast)
                         2 -> stringResource(R.string.settings_nr_level_high_quality)
-                        3 -> stringResource(R.string.settings_nr_level_minimal)
-                        4 -> stringResource(R.string.settings_nr_level_zsl)
+                        3 -> stringResource(R.string.settings_nr_level_zsl)
+                        4 -> stringResource(R.string.settings_nr_level_minimal)
                         else -> "Unknown"
                     }
                 }
                 QuickSettingValue(
                     title = stringResource(R.string.settings_nr_level),
-                    value = nrLevelNames.getOrElse(nrLevel) { "Unknown" },
+                    value = nrLevelNames.getOrElse(availableNrLevels.indexOf(nrLevel)) { "Unknown" },
                     onClick = {
                         val nextIndex = (availableNrLevels.indexOf(nrLevel) + 1) % availableNrLevels.size
                         val nextLevel = availableNrLevels[nextIndex]

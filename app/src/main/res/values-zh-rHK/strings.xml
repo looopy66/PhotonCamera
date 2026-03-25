@@ -170,6 +170,7 @@
     <string name="settings_nr_level_fast">快速</string>
     <string name="settings_nr_level_high_quality">高品質</string>
     <string name="settings_nr_level_zsl">零延遲</string>
+    <string name="settings_nr_level_auto">自動</string>
     <string name="settings_edge_level">銳化等級</string>
     <string name="settings_edge_level_description">調整系統硬體邊緣增強（銳化）模式。</string>
     <string name="settings_sharpening">銳化</string>

@@ -151,7 +151,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val autoSaveAfterCapture: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.autoSaveAfterCapture }
     val nrLevel: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.nrLevel }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 1)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 5)
     val useRaw: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useRaw }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)

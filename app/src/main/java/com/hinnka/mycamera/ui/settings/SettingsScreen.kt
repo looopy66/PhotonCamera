@@ -123,7 +123,7 @@ fun SettingsScreen(
     val vibrationEnabled by viewModel.vibrationEnabled.collectAsState(initial = true)
     val volumeKeyAction by viewModel.volumeKeyAction.collectAsState()
     val autoSaveAfterCapture by viewModel.autoSaveAfterCapture.collectAsState(initial = true)
-    val nrLevel by viewModel.nrLevel.collectAsState(initial = 1)
+    val nrLevel by viewModel.nrLevel.collectAsState(initial = 5)
     val edgeLevel by viewModel.edgeLevel.collectAsState(initial = 1)
     val useRaw by viewModel.useRaw.collectAsState(initial = false)
     val useSuperResolution by viewModel.useMFSR.collectAsState(initial = false)
@@ -653,11 +653,12 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_nr_level),
                             description = stringResource(R.string.settings_nr_level_description),
                             levels = listOf(
+                                5 to stringResource(R.string.settings_nr_level_auto),
                                 0 to stringResource(R.string.settings_nr_level_off),
                                 1 to stringResource(R.string.settings_nr_level_fast),
                                 2 to stringResource(R.string.settings_nr_level_high_quality),
-                                3 to stringResource(R.string.settings_nr_level_minimal),
-                                4 to stringResource(R.string.settings_nr_level_zsl)
+                                3 to stringResource(R.string.settings_nr_level_zsl),
+                                4 to stringResource(R.string.settings_nr_level_minimal)
                             ),
                             currentLevel = nrLevel,
                             onLevelSelected = { viewModel.setNRLevel(it) }

@@ -48,7 +48,7 @@ data class UserPreferences(
     val vibrationEnabled: Boolean = true,  // 拍摄震动
     val volumeKeyAction: VolumeKeyAction = VolumeKeyAction.CAPTURE,  // 音量键操作
     val autoSaveAfterCapture: Boolean = true,  // 自动保存
-    val nrLevel: Int = 1,  // 降噪等级：0=Off, 1=Fast, 2=High Quality, 3=Real-time
+    val nrLevel: Int = 5,  // 降噪等级：0=Off, 1=Fast, 2=High Quality, 3=ZSL, 4=Minimal, 5=Auto
     val edgeLevel: Int = 1, // 锐化等级：0=Off, 1=Fast, 2=High Quality, 3=Real-time
     val useRaw: Boolean = false,                // 使用 RAW 格式拍摄
     val sharpening: Float = 0f,              // 0.0 ~ 1.0 锐化强度
@@ -185,7 +185,7 @@ class UserPreferencesRepository(private val context: Context) {
                     preferences[VOLUME_KEY_ACTION] ?: VolumeKeyAction.CAPTURE.name
                 ),
                 autoSaveAfterCapture = preferences[AUTO_SAVE_AFTER_CAPTURE] ?: true,
-                nrLevel = preferences[NR_LEVEL] ?: 1,
+                nrLevel = preferences[NR_LEVEL] ?: 5,
                 edgeLevel = preferences[EDGE_LEVEL] ?: 1,
                 useRaw = preferences[USE_RAW] ?: false,
                 // 软件处理参数

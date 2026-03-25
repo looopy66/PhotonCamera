@@ -87,8 +87,8 @@ class Camera2Controller(private val context: Context) {
     val previewDepthProcessor = com.hinnka.mycamera.preview.PreviewDepthProcessor(context)
 
 
-    // 降噪等级 (0=Off, 1=Fast, 2=High Quality, 3=Real-time)
-    private var nrLevel = 1
+    // 降噪等级 (0=Off, 1=Fast, 2=High Quality, 3=ZSL, 4=Minimal, 5=Auto)
+    private var nrLevel = 5
 
     // 锐化等级 (0=Off, 1=Fast, 2=High Quality, 3=Zero Shutter Lag/Real-time)
     private var edgeLevel = 1
@@ -482,12 +482,14 @@ class Camera2Controller(private val context: Context) {
                             "ManualSensor: $isManualSensorSupported, ManualPost: $isManualPostProcessingSupported, RAW: $isRawSupported, P010: $isP010Supported"
                 )
 
+                val selectableNrModes = buildSelectableNoiseReductionModes(availableNoiseReductionModes)
+
                 _state.value = _state.value.copy(
                     isRawSupported = isRawSupported,
                     isP010Supported = isP010Supported,
                     isHlg10Supported = isHlg10Supported,
                     currentDynamicRangeProfile = if (shouldUseHlgCapture()) "HLG10" else "STANDARD",
-                    availableNrModes = availableNoiseReductionModes
+                    availableNrModes = selectableNrModes
                 )
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to cache camera characteristics", e)
@@ -1102,7 +1104,8 @@ class Camera2Controller(private val context: Context) {
      */
     private fun applyImageQualitySettings(builder: CaptureRequest.Builder, isCapture: Boolean) {
         try {
-            val isBurst = _state.value.useMFNR || _state.value.useMFSR
+            val currentState = _state.value
+            val isBurst = currentState.useMFNR || currentState.useMFSR
             val effectiveEdgeLevel = if (isBurst && edgeLevel == 2) 1 else edgeLevel
             val edgeMode = when (effectiveEdgeLevel) {
                 0 -> CaptureRequest.EDGE_MODE_OFF
@@ -1121,7 +1124,8 @@ class Camera2Controller(private val context: Context) {
             } else if (availableEdgeModes.contains(CaptureRequest.EDGE_MODE_FAST)) {
                 builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
             }
-            val effectiveNrLevel = if (isBurst && nrLevel == 2) 1 else nrLevel
+            val resolvedNrLevel = resolveAutoNoiseReductionLevel(currentState, isCapture)
+            val effectiveNrLevel = if (isBurst && resolvedNrLevel == 2) 1 else resolvedNrLevel
             val noiseReductionMode = when (effectiveNrLevel) {
                 0 -> CaptureRequest.NOISE_REDUCTION_MODE_OFF
                 4 -> if (availableNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_MINIMAL)) {
@@ -1149,6 +1153,51 @@ class Camera2Controller(private val context: Context) {
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to apply image quality settings", e)
         }
+    }
+
+    private fun buildSelectableNoiseReductionModes(hardwareModes: IntArray): IntArray {
+        val orderedModes = mutableListOf(5)
+        val preferredOrder = listOf(
+            CaptureRequest.NOISE_REDUCTION_MODE_OFF,
+            CaptureRequest.NOISE_REDUCTION_MODE_FAST,
+            CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY,
+            CaptureRequest.NOISE_REDUCTION_MODE_ZERO_SHUTTER_LAG,
+            CaptureRequest.NOISE_REDUCTION_MODE_MINIMAL
+        )
+        preferredOrder.forEach { mode ->
+            if (hardwareModes.contains(mode)) {
+                orderedModes += mode
+            }
+        }
+        return orderedModes.toIntArray()
+    }
+
+    private fun resolveAutoNoiseReductionLevel(state: CameraState, isCapture: Boolean): Int {
+        if (nrLevel != 5) {
+            return nrLevel
+        }
+        val lightValue = calculateCaptureLightValue(state, isCapture)
+        val resolvedLevel = when {
+            lightValue >= 9.0 -> 0
+            lightValue >= 6.0 -> 4
+            lightValue >= 4.0 -> 1
+            else -> 2
+        }
+        PLog.d(TAG, "Auto NR resolved by LV=$lightValue to level=$resolvedLevel")
+        return resolvedLevel
+    }
+
+    private fun calculateCaptureLightValue(state: CameraState, isCapture: Boolean): Double {
+        val aperture = state.physicalAperture.takeIf { it > 0f }?.toDouble() ?: 2.0
+        val exposureTimeNs = if (isCapture) {
+            state.shutterSpeed
+        } else {
+            state.shutterSpeed.coerceAtMost(MAX_PREVIEW_EXPOSURE_TIME)
+        }
+        val exposureTimeSeconds = exposureTimeNs / 1_000_000_000.0
+        val iso = state.iso.coerceAtLeast(1).toDouble()
+        val ev100 = ln((aperture * aperture / exposureTimeSeconds) * (100.0 / iso)) / ln(2.0)
+        return (ev100 * 10.0).roundToInt() / 10.0
     }
 
     /**
