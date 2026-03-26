@@ -438,7 +438,7 @@
     <string name="screen_capture_test_start">开始</string>
     <string name="screen_capture_test_stop">停止</string>
     <string name="screen_capture_test_status_idle">准备启动录屏预览。</string>
-    <string name="screen_capture_test_status_running">录屏已开启，正在以画中画小窗显示。</string>
+    <string name="screen_capture_status_running">录屏已开启，正在以画中画小窗显示。</string>
     <string name="screen_capture_test_status_stopped">录屏已停止。</string>
     <string name="screen_capture_test_status_permission_denied">未授予录屏权限。</string>
     <string name="screen_capture_test_status_failed">录屏启动失败。</string>

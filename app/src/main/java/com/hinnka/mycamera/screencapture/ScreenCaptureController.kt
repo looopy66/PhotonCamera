@@ -69,7 +69,7 @@ class ScreenCaptureTestController(
     fun onCaptureStarted() {
         _uiState.value = _uiState.value.copy(
             isCapturing = true,
-            statusMessageRes = R.string.screen_capture_test_status_running
+            statusMessageRes = R.string.screen_capture_status_running
         )
     }
 
@@ -114,7 +114,7 @@ class ScreenCaptureTestController(
                 PLog.d(TAG, "Screen capture started")
                 _uiState.value = _uiState.value.copy(
                     isCapturing = true,
-                    statusMessageRes = R.string.screen_capture_test_status_running
+                    statusMessageRes = R.string.screen_capture_status_running
                 )
                 ensureVirtualDisplay()
             } catch (t: Throwable) {

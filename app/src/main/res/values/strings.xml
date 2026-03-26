@@ -438,7 +438,7 @@
     <string name="screen_capture_test_start">Start</string>
     <string name="screen_capture_test_stop">Stop</string>
     <string name="screen_capture_test_status_idle">Ready to start screen capture preview.</string>
-    <string name="screen_capture_test_status_running">Screen capture is active and shown in picture-in-picture.</string>
+    <string name="screen_capture_status_running">Screen capture is active and shown in picture-in-picture.</string>
     <string name="screen_capture_test_status_stopped">Screen capture stopped.</string>
     <string name="screen_capture_test_status_permission_denied">Screen capture permission denied.</string>
     <string name="screen_capture_test_status_failed">Failed to start screen capture.</string>

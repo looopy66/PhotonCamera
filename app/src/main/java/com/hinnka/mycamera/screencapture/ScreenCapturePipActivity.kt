@@ -7,6 +7,8 @@ import android.content.IntentFilter
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Rational
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -31,28 +33,38 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.lifecycleScope
-import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.data.UserPreferencesRepository
 import com.hinnka.mycamera.ui.camera.CameraGLSurfaceView
 import com.hinnka.mycamera.ui.theme.PhotonCameraTheme
 import com.hinnka.mycamera.utils.PLog
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 
 class ScreenCapturePipActivity : ComponentActivity() {
 
     private lateinit var controller: ScreenCaptureTestController
     private lateinit var userPreferencesRepository: UserPreferencesRepository
     private var isInPiPMode by mutableStateOf(false)
+    private var stopReceiverRegistered = false
+    private var hasReleasedCapture = false
+    private val stopCheckHandler = Handler(Looper.getMainLooper())
+    private val stopCheckRunnable = Runnable {
+        val actuallyInPip = isInPictureInPictureMode || ScreenCapturePipState.isInPipMode.value
+        PLog.d(TAG, "stop check: finishing=$isFinishing destroyed=$isDestroyed inPip=$actuallyInPip")
+        if (!actuallyInPip) {
+            handleCaptureClosed()
+        }
+    }
 
     private val stopReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: android.content.Context?, intent: Intent?) {
             if (intent?.action == PhantomPipPreviewCoordinator.ACTION_STOP_PHANTOM_PIP_PREVIEW) {
+                lifecycleScope.launch {
+                    userPreferencesRepository.savePhantomMode(false)
+                }
                 controller.stopCapture()
                 finish()
             }
@@ -61,6 +73,7 @@ class ScreenCapturePipActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        PLog.d(TAG, "onCreate")
         ScreenCapturePipState.setInPipMode(false)
         controller = ScreenCaptureTestController(this)
         userPreferencesRepository = ContentRepository.getInstance(this).userPreferencesRepository
@@ -88,22 +101,11 @@ class ScreenCapturePipActivity : ComponentActivity() {
         }
 
         controller.startCapture(grant.resultCode, grant.data)
-
-        lifecycle.addObserver(LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) {
-                lifecycleScope.launch {
-                    userPreferencesRepository.savePhantomMode(false)
-                }
-                ScreenCapturePipState.setInPipMode(false)
-                unregisterReceiver(stopReceiver)
-                controller.release()
-                finish()
-            }
-        })
     }
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
+        PLog.d(TAG, "onUserLeaveHint")
         enterPipIfPossible()
     }
 
@@ -112,8 +114,16 @@ class ScreenCapturePipActivity : ComponentActivity() {
         newConfig: Configuration
     ) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        PLog.d(TAG, "onPictureInPictureModeChanged: $isInPictureInPictureMode")
         ScreenCapturePipState.setInPipMode(isInPictureInPictureMode)
         isInPiPMode = isInPictureInPictureMode
+    }
+
+    override fun onStop() {
+        super.onStop()
+        PLog.d(TAG, "onStop: frameworkInPip=$isInPictureInPictureMode stateInPip=${ScreenCapturePipState.isInPipMode.value}")
+        stopCheckHandler.removeCallbacks(stopCheckRunnable)
+        stopCheckHandler.postDelayed(stopCheckRunnable, 400L)
     }
 
     private fun registerStopReceiver() {
@@ -124,6 +134,32 @@ class ScreenCapturePipActivity : ComponentActivity() {
             @Suppress("DEPRECATION")
             registerReceiver(stopReceiver, filter)
         }
+        stopReceiverRegistered = true
+    }
+
+    override fun onDestroy() {
+        PLog.d(TAG, "onDestroy: changingConfigurations=$isChangingConfigurations frameworkInPip=$isInPictureInPictureMode")
+        stopCheckHandler.removeCallbacksAndMessages(null)
+        if (stopReceiverRegistered) {
+            unregisterReceiver(stopReceiver)
+            stopReceiverRegistered = false
+        }
+        if (!isChangingConfigurations) {
+            handleCaptureClosed()
+        }
+        ScreenCapturePipState.setInPipMode(false)
+        super.onDestroy()
+    }
+
+    private fun handleCaptureClosed() {
+        if (hasReleasedCapture) return
+        PLog.d(TAG, "handleCaptureClosed")
+        hasReleasedCapture = true
+        lifecycleScope.launch {
+            userPreferencesRepository.savePhantomMode(false)
+        }
+        controller.release()
+        ScreenCapturePipState.setInPipMode(false)
     }
 
     private fun enterPipIfPossible() {
@@ -131,6 +167,7 @@ class ScreenCapturePipActivity : ComponentActivity() {
             return
         }
         try {
+            PLog.d(TAG, "enterPipIfPossible")
             val params = PictureInPictureParams.Builder()
                 .setAspectRatio(Rational(3, 4))
                 .build()
@@ -163,7 +200,14 @@ private fun ScreenCapturePipContent(
     val captureHeight = remember(windowMetrics) { windowMetrics.bounds.height().coerceAtLeast(1) }
 
     LaunchedEffect(uiState.isCapturing) {
-        if (uiState.isCapturing) {
+        if (!uiState.isCapturing) return@LaunchedEffect
+        PLog.d("ScreenCapturePip", "capture running, waiting for preview surface before entering PiP")
+    }
+
+    LaunchedEffect(uiState.isCapturing, uiState.hasPreviewSurface) {
+        if (uiState.isCapturing && uiState.hasPreviewSurface) {
+            PLog.d("ScreenCapturePip", "preview surface ready, entering PiP")
+            delay(180L)
             onRequestPip()
         }
     }
@@ -184,58 +228,62 @@ private fun ScreenCapturePipContent(
             },
         contentAlignment = Alignment.Center
     ) {
-        if (isInPiPMode) {
-            AndroidView(
-                factory = { context ->
-                    CameraGLSurfaceView(context).apply {
-                        onSurfaceReady = { surface ->
-                            controller.attachPreviewSurface(
-                                surface = surface,
-                                width = captureWidth,
-                                height = captureHeight,
-                                densityDpi = context.resources.displayMetrics.densityDpi
-                            )
-                        }
-                        onSurfaceDestroyed = {
-                            controller.detachPreviewSurface(null)
-                        }
-                    }
-                },
-                update = { glSurfaceView ->
-                    glSurfaceView.setPreviewSize(captureWidth, captureHeight)
-                    glSurfaceView.setSensorOrientation(0)
-                    glSurfaceView.setLensFacing(1)
-                    glSurfaceView.setDeviceRotation(0)
-                    glSurfaceView.setCalibrationOffset(0)
-                    glSurfaceView.setLut(renderConfig.lutConfig)
-                    glSurfaceView.setLutEnabled(renderConfig.lutConfig != null)
-                    glSurfaceView.setColorRecipeEnabled(!renderConfig.colorRecipeParams.isDefault())
-                    // MediaProjection feeds the SurfaceTexture with a vertically flipped source space.
-                    // Map the user-selected crop from display coordinates into projection coordinates here.
-                    glSurfaceView.setSourceCrop(renderConfig.crop.flipVertically())
-                    glSurfaceView.setParams(
-                        params = renderConfig.colorRecipeParams,
-                        aperture = 0f
-                    )
-                    glSurfaceView.getRenderSurface()?.let { surface ->
+        AndroidView(
+            factory = { context ->
+                CameraGLSurfaceView(context).apply {
+                    onSurfaceReady = { surface ->
                         controller.attachPreviewSurface(
                             surface = surface,
                             width = captureWidth,
                             height = captureHeight,
-                            densityDpi = glSurfaceView.resources.displayMetrics.densityDpi
+                            densityDpi = context.resources.displayMetrics.densityDpi
                         )
                     }
-                    if (viewportWidth > 0 && viewportHeight > 0) {
-                        glSurfaceView.requestRenderFrame()
+                    onSurfaceDestroyed = {
+                        controller.detachPreviewSurface(null)
                     }
-                },
-                modifier = Modifier.fillMaxSize()
-            )
-        } else {
-            Text(
-                stringResource(R.string.screen_capture_test_status_running),
-                color = Color.White,
-            )
+                }
+            },
+            update = { glSurfaceView ->
+                glSurfaceView.setPreviewSize(captureWidth, captureHeight)
+                glSurfaceView.setSensorOrientation(0)
+                glSurfaceView.setLensFacing(1)
+                glSurfaceView.setDeviceRotation(0)
+                glSurfaceView.setCalibrationOffset(0)
+                glSurfaceView.setLut(renderConfig.lutConfig)
+                glSurfaceView.setLutEnabled(renderConfig.lutConfig != null)
+                glSurfaceView.setColorRecipeEnabled(!renderConfig.colorRecipeParams.isDefault())
+                // MediaProjection feeds the SurfaceTexture with a vertically flipped source space.
+                // Map the user-selected crop from display coordinates into projection coordinates here.
+                glSurfaceView.setSourceCrop(renderConfig.crop.flipVertically())
+                glSurfaceView.setParams(
+                    params = renderConfig.colorRecipeParams,
+                    aperture = 0f
+                )
+                glSurfaceView.getRenderSurface()?.let { surface ->
+                    controller.attachPreviewSurface(
+                        surface = surface,
+                        width = captureWidth,
+                        height = captureHeight,
+                        densityDpi = glSurfaceView.resources.displayMetrics.densityDpi
+                    )
+                }
+                if (viewportWidth > 0 && viewportHeight > 0) {
+                    glSurfaceView.requestRenderFrame()
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        if (!isInPiPMode) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(stringResource(R.string.screen_capture_status_running), color = Color.White)
+            }
         }
     }
 }

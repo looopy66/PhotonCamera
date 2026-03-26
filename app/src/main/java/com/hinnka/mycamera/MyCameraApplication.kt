@@ -7,6 +7,7 @@ import android.content.Intent
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.phantom.PhantomService
 import com.hinnka.mycamera.phantom.PhantomShortcutActivity
+import com.hinnka.mycamera.screencapture.PhantomPipPreviewCoordinator
 import com.hinnka.mycamera.utils.BuglyHelper
 import com.hinnka.mycamera.utils.DeviceUtil
 import kotlinx.coroutines.MainScope
@@ -30,6 +31,7 @@ class MyCameraApplication : Application() {
                     if (phantomMode) {
                         phantomService.start()
                     } else {
+                        PhantomPipPreviewCoordinator.requestStop(this@MyCameraApplication)
                         phantomService.stop()
                     }
                     if (DeviceUtil.isChinaFlavor) {
