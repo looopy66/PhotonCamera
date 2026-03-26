@@ -166,11 +166,6 @@ fun SettingsScreen(
     val context = androidx.compose.ui.platform.LocalContext.current
     val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
     val isHdrSettingsSupported = remember { Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !DeviceUtil.isHarmonyOS }
-    val launchPhantomPipPreview = remember(context) {
-        {
-            PhantomPipPreviewCoordinator.requestStart(context)
-        }
-    }
 
     val backupLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/zip")
@@ -243,9 +238,6 @@ fun SettingsScreen(
                 isGhostPermissionFlowActive = false
                 if (!phantomMode) {
                     viewModel.togglePhantomMode()
-                    if (phantomPipPreview) {
-                        launchPhantomPipPreview()
-                    }
                 }
             } else {
                 // If overlay is still missing after returning, user might have cancelled
@@ -329,9 +321,6 @@ fun SettingsScreen(
                         } else {
                             isGhostPermissionFlowActive = false
                             viewModel.togglePhantomMode()
-                            if (phantomPipPreview) {
-                                launchPhantomPipPreview()
-                            }
                         }
                     }
                 ) {
@@ -969,11 +958,6 @@ fun SettingsScreen(
                                         showGhostPermissionDialog = true
                                     } else {
                                         viewModel.togglePhantomMode()
-                                        if (it && phantomPipPreview) {
-                                            launchPhantomPipPreview()
-                                        } else if (!it) {
-                                            PhantomPipPreviewCoordinator.requestStop(context)
-                                        }
                                     }
                                 }
                             )

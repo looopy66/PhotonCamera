@@ -174,9 +174,6 @@ fun CameraScreen(
                 isGhostPermissionFlowActive = false
                 if (!phantomMode) {
                     viewModel.togglePhantomMode()
-                    if (phantomPipPreview) {
-                        PhantomPipPreviewCoordinator.requestStart(context)
-                    }
                 }
             } else {
                 // If overlay is still missing after returning, user might have cancelled
@@ -312,9 +309,6 @@ fun CameraScreen(
                         } else {
                             isGhostPermissionFlowActive = false
                             viewModel.togglePhantomMode()
-                            if (phantomPipPreview) {
-                                PhantomPipPreviewCoordinator.requestStart(context)
-                            }
                         }
                     }
                 ) {
@@ -781,11 +775,6 @@ fun CameraScreen(
                     showGhostPermissionDialog = true
                 } else {
                     viewModel.togglePhantomMode()
-                    if (it && phantomPipPreview) {
-                        PhantomPipPreviewCoordinator.requestStart(context)
-                    } else if (!it) {
-                        PhantomPipPreviewCoordinator.requestStop(context)
-                    }
                 }
             },
             onMoreSettingsClick = {

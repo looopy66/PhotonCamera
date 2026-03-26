@@ -15,6 +15,7 @@ import android.os.Looper
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.provider.Settings
+import android.graphics.Rect
 import android.view.Gravity
 import android.view.WindowManager
 import androidx.compose.foundation.Image
@@ -63,6 +64,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.AndroidUiDispatcher
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.platform.compositionContext
 import androidx.compose.ui.res.painterResource
@@ -88,6 +90,7 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.Routes
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.screencapture.PhantomPipPreviewCoordinator
+import com.hinnka.mycamera.screencapture.ScreenCapturePipState
 import com.hinnka.mycamera.data.UserPreferencesRepository
 import com.hinnka.mycamera.gallery.ExifWriter
 import com.hinnka.mycamera.gallery.PhotoManager
@@ -105,10 +108,13 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import kotlin.math.roundToInt
 import kotlin.io.copyTo
 import kotlin.io.inputStream
 import kotlin.use
@@ -142,6 +148,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
     private lateinit var windowParams: WindowManager.LayoutParams
     private var isWindowShown = false
     private var isObserverRegistered = false
+    private var pipStateJob: Job? = null
 
     private var savedStateRegistryController = SavedStateRegistryController.create(this)
 
@@ -261,25 +268,31 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         initWindowParams()
         initComposeView()
-
         ProcessLifecycleOwner.get().lifecycle.addObserver(appLifecycleObserver)
-
-        if (!ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
-            showFloatingWindow()
-            registerObserver()
+        pipStateJob?.cancel()
+        pipStateJob = lifecycleScope.launch {
+            ScreenCapturePipState.isInPipMode.collect {
+                syncWindowAndObserver()
+            }
         }
 
+        syncWindowAndObserver()
+
         lifecycleScope.launch {
-            userPreferencesRepository.userPreferences.map { it.phantomButtonHidden }
-                .collect { hidden ->
-                    if (isWindowShown) {
-                        updateWindowParams(hidden)
-                        composeView?.let { windowManager.updateViewLayout(it, windowParams) }
-                    } else if (!ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(
-                            Lifecycle.State.STARTED
-                        )
-                    ) {
-                        showFloatingWindow()
+            userPreferencesRepository.userPreferences
+                .collect { prefs ->
+                    if (prefs.phantomMode) {
+                        if (prefs.phantomPipPreview) {
+                            PhantomPipPreviewCoordinator.requestStart(context)
+                        } else {
+                            PhantomPipPreviewCoordinator.requestStop(context)
+                        }
+                        if (isWindowShown) {
+                            updateWindowParams(prefs.phantomButtonHidden)
+                            composeView?.let { windowManager.updateViewLayout(it, windowParams) }
+                        } else if (shouldTreatAppAsStopped()) {
+                            showFloatingWindow()
+                        }
                     }
                 }
         }
@@ -288,16 +301,29 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
     private val appLifecycleObserver = LifecycleEventObserver { _, event ->
         when (event) {
             Lifecycle.Event.ON_START -> {
-                removeFloatingWindow()
-                unregisterObserver()
+                syncWindowAndObserver()
             }
 
             Lifecycle.Event.ON_STOP -> {
-                showFloatingWindow()
-                registerObserver()
+                syncWindowAndObserver()
             }
 
             else -> {}
+        }
+    }
+
+    private fun shouldTreatAppAsStopped(): Boolean {
+        return ScreenCapturePipState.isInPipMode.value ||
+            !ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+    }
+
+    private fun syncWindowAndObserver() {
+        if (shouldTreatAppAsStopped()) {
+            showFloatingWindow()
+            registerObserver()
+        } else {
+            removeFloatingWindow()
+            unregisterObserver()
         }
     }
 
@@ -511,7 +537,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
     }
 
     private fun initWindowParams() {
-        val displayMetrics = context.resources.displayMetrics
+        val displayBounds = getOverlayDisplayBounds()
         windowParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -521,7 +547,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         ).apply {
             gravity = Gravity.TOP or Gravity.END
             x = 0
-            y = displayMetrics.heightPixels / 3
+            y = displayBounds.height() / 3
         }
     }
 
@@ -532,15 +558,44 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             windowParams.flags = windowParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
             windowParams.alpha = 0f
         } else {
-            windowParams.width = WindowManager.LayoutParams.WRAP_CONTENT
+            windowParams.width = when {
+                showFilterPicker -> getExpandedPanelWidthPx()
+                expanded -> getExpandedCompactWidthPx()
+                else -> WindowManager.LayoutParams.WRAP_CONTENT
+            }
             windowParams.height = WindowManager.LayoutParams.WRAP_CONTENT
             windowParams.flags =
                 windowParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
             windowParams.alpha = 1f
         }
         if (showFilterPicker) {
-            windowParams.height = (context.resources.displayMetrics.heightPixels * 0.6f).toInt()
+            windowParams.height = (getOverlayDisplayBounds().height() * 0.6f).toInt()
         }
+    }
+
+    private fun getOverlayDisplayBounds(): Rect {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            windowManager.maximumWindowMetrics.bounds
+        } else {
+            Rect(0, 0, context.resources.displayMetrics.widthPixels, context.resources.displayMetrics.heightPixels)
+        }
+    }
+
+    private fun getExpandedPanelWidthPx(): Int {
+        val density = context.resources.displayMetrics.density
+        val minWidthPx = (220f * density).roundToInt()
+        val maxWidthPx = (320f * density).roundToInt()
+        return (getOverlayDisplayBounds().width() * 0.58f).roundToInt()
+            .coerceIn(minWidthPx, maxWidthPx)
+    }
+
+    private fun getExpandedCompactWidthPx(): Int {
+        val density = context.resources.displayMetrics.density
+        // 40dp thumbnail + 2 * 48dp icon buttons + 2 * 8dp spacers + outer paddings.
+        val minWidthPx = (176f * density).roundToInt()
+        val maxWidthPx = (220f * density).roundToInt()
+        return (getOverlayDisplayBounds().width() * 0.4f).roundToInt()
+            .coerceIn(minWidthPx, maxWidthPx)
     }
 
     private fun initComposeView() {
@@ -569,6 +624,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                         .onSizeChanged {
                             composeView?.let { view ->
                                 if (view.isAttachedToWindow) {
+                                    updateWindowParams(false)
                                     windowManager.updateViewLayout(view, windowParams)
                                 }
                             }
@@ -702,10 +758,13 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                 if (!showFilterPicker || selectedIndex < 0) return@LaunchedEffect
                                 listState.scrollToItem((selectedIndex - 1).coerceAtLeast(0))
                             }
+                            val filterPickerWidth = with(LocalDensity.current) {
+                                getExpandedPanelWidthPx().toDp()
+                            }
 
                             Column(
                                 modifier = Modifier
-                                    .width(220.dp)
+                                    .width(filterPickerWidth)
                                     .heightIn(max = 450.dp)
                                     .padding(8.dp)
                             ) {
@@ -931,6 +990,8 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         registry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
         registry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
 
+        pipStateJob?.cancel()
+        pipStateJob = null
         ProcessLifecycleOwner.get().lifecycle.removeObserver(appLifecycleObserver)
         removeFloatingWindow()
         unregisterObserver()

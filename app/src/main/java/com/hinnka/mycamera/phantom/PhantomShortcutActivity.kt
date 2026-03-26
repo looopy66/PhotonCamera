@@ -32,9 +32,6 @@ class PhantomShortcutActivity : Activity() {
                 userPreferencesRepository.savePhantomMode(newMode)
                 if (newMode) {
                     val prefs = userPreferencesRepository.userPreferences.first()
-                    if (prefs.phantomPipPreview) {
-                        PhantomPipPreviewCoordinator.requestStart(this@PhantomShortcutActivity)
-                    }
                     if (prefs.launchCameraOnPhantomMode) {
                         try {
                             val cameraIntent = Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA).apply {

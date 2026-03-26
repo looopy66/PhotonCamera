@@ -82,9 +82,6 @@ class PhantomWidgetProvider : AppWidgetProvider() {
 
                         if (newMode) {
                             val prefs = userPreferencesRepository.userPreferences.first()
-                            if (prefs.phantomPipPreview) {
-                                PhantomPipPreviewCoordinator.requestStart(context)
-                            }
                             if (prefs.launchCameraOnPhantomMode) {
                                 try {
                                     val cameraIntent = Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA).apply {
