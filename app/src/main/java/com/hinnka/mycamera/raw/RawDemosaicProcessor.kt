@@ -2075,45 +2075,31 @@ class RawDemosaicProcessor {
 
     private fun readPixels(width: Int, height: Int, colorSpace: android.graphics.ColorSpace): Bitmap? {
         val pixelSize = width * height * 8
-
-        // 使用 PBO 优化 glReadPixels
-        if (pboId == 0) {
-            val pbos = IntArray(1)
-            GLES30.glGenBuffers(1, pbos, 0)
-            pboId = pbos[0]
-        }
-
-        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pboId)
-        GLES30.glBufferData(GLES30.GL_PIXEL_PACK_BUFFER, pixelSize, null, GLES30.GL_STREAM_READ)
+        val pixelBuffer = ByteBuffer.allocateDirect(pixelSize).order(ByteOrder.nativeOrder())
 
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, outputFramebufferId)
-        GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, 0)
-
-        // 映射内存并读取
-        val mappedBuffer = GLES30.glMapBufferRange(
-            GLES30.GL_PIXEL_PACK_BUFFER,
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+        GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 8)
+        GLES30.glReadPixels(
             0,
-            pixelSize,
-            GLES30.GL_MAP_READ_BIT
-        ) as? ByteBuffer
+            0,
+            width,
+            height,
+            GLES30.GL_RGBA,
+            GLES30.GL_HALF_FLOAT,
+            pixelBuffer
+        )
+        pixelBuffer.position(0)
+        checkGlError("readPixels")
 
-        val bitmap = try {
-            createBitmap(width, height, Bitmap.Config.RGBA_F16, colorSpace = colorSpace)
+        return try {
+            createBitmap(width, height, Bitmap.Config.RGBA_F16, colorSpace = colorSpace).also { bitmap ->
+                bitmap.copyPixelsFromBuffer(pixelBuffer)
+            }
         } catch (e: OutOfMemoryError) {
             PLog.e(TAG, "OOM creating output bitmap ($width x $height)", e)
             null
         }
-
-        if (bitmap != null && mappedBuffer != null) {
-            bitmap.copyPixelsFromBuffer(mappedBuffer)
-            GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
-        } else if (mappedBuffer != null) {
-            GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
-        }
-
-        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
-
-        return bitmap
     }
 
     /**

@@ -604,37 +604,24 @@ class LutImageProcessor {
         if (positionHandle >= 0) GLES30.glDisableVertexAttribArray(positionHandle)
         if (texCoordHandle >= 0) GLES30.glDisableVertexAttribArray(texCoordHandle)
 
-        // 使用 PBO 优化 glReadPixels
-        if (pboId == 0) {
-            val pbos = IntArray(1)
-            GLES30.glGenBuffers(1, pbos, 0)
-            pboId = pbos[0]
-        }
-
         val pixelSize = width * height * 4
-        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pboId)
-        GLES30.glBufferData(GLES30.GL_PIXEL_PACK_BUFFER, pixelSize, null, GLES30.GL_STREAM_READ)
-
-        GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, 0)
-
-        // 映射内存并读取
-        val mappedBuffer = GLES30.glMapBufferRange(
-            GLES30.GL_PIXEL_PACK_BUFFER,
+        val pixelBuffer = ByteBuffer.allocateDirect(pixelSize).order(ByteOrder.nativeOrder())
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+        GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 4)
+        GLES30.glReadPixels(
             0,
-            pixelSize,
-            GLES30.GL_MAP_READ_BIT
-        ) as? ByteBuffer
+            0,
+            width,
+            height,
+            GLES30.GL_RGBA,
+            GLES30.GL_UNSIGNED_BYTE,
+            pixelBuffer
+        )
+        pixelBuffer.position(0)
 
         // 创建临时 Bitmap
         val tempBitmap = createBitmap(width, height, colorSpace = inputColorSpace)
-
-        if (mappedBuffer != null) {
-            // 直接使用映射的内存，不需要 allocateDirect，不需要 put 拷贝
-            tempBitmap.copyPixelsFromBuffer(mappedBuffer)
-            GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
-        }
-
-        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+        tempBitmap.copyPixelsFromBuffer(pixelBuffer)
 
         // 翻转 Y 轴（glReadPixels 从左下角开始读取，需要翻转）
 //        val matrix = android.graphics.Matrix()
