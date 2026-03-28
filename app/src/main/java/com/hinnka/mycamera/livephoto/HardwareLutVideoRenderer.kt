@@ -7,7 +7,9 @@ import android.opengl.EGLDisplay
 import android.opengl.EGLExt
 import android.opengl.EGLSurface
 import android.opengl.GLES30
+import android.opengl.Matrix
 import android.view.Surface
+import com.hinnka.mycamera.lut.GlUtils
 import com.hinnka.mycamera.lut.GlUtils.compileShader
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.Shaders
@@ -48,11 +50,17 @@ class HardwareLutVideoRenderer(
     // Cached locations
     private var uMVPMatrixLoc = -1
     private var uSTMatrixLoc = -1
+    private var uCropRectLoc = -1
     private var uCameraTextureLoc = -1
     private var aPositionLoc = -1
     private var aTexCoordLoc = -1
 
     private var isInitialized = false
+
+    private val fullCropRect = floatArrayOf(0f, 0f, 1f, 1f)
+    private val identityMatrix = FloatArray(16).apply {
+        Matrix.setIdentityM(this, 0)
+    }
 
     // 空实现，不再需要
     fun updateConfig(lutConfig: LutConfig?, colorRecipeParams: ColorRecipeParams?) {
@@ -140,15 +148,22 @@ class HardwareLutVideoRenderer(
         // 使用 COPY_2D Shader
         val vs = compileShader(GLES30.GL_VERTEX_SHADER, Shaders.VERTEX_SHADER)
         val fs = compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.FRAGMENT_SHADER_COPY_2D)
+        if (vs == 0 || fs == 0) {
+            PLog.e(TAG, "Failed to compile video copy shaders")
+            return
+        }
 
-        shaderProgram = GLES30.glCreateProgram().apply {
-            GLES30.glAttachShader(this, vs)
-            GLES30.glAttachShader(this, fs)
-            GLES30.glLinkProgram(this)
+        shaderProgram = GlUtils.linkProgram(vs, fs)
+        GLES30.glDeleteShader(vs)
+        GLES30.glDeleteShader(fs)
+        if (shaderProgram == 0) {
+            PLog.e(TAG, "Failed to link video copy program")
+            return
         }
 
         uMVPMatrixLoc = GLES30.glGetUniformLocation(shaderProgram, "uMVPMatrix")
         uSTMatrixLoc = GLES30.glGetUniformLocation(shaderProgram, "uSTMatrix")
+        uCropRectLoc = GLES30.glGetUniformLocation(shaderProgram, "uCropRect")
         uCameraTextureLoc = GLES30.glGetUniformLocation(shaderProgram, "uCameraTexture")
         aPositionLoc = GLES30.glGetAttribLocation(shaderProgram, "aPosition")
         aTexCoordLoc = GLES30.glGetAttribLocation(shaderProgram, "aTexCoord")
@@ -170,7 +185,7 @@ class HardwareLutVideoRenderer(
      * @param textureId 2D 纹理 ID (GL_TEXTURE_2D)
      */
     fun renderFrame(textureId: Int, stMatrix: FloatArray, timestampUs: Long) {
-        if (!isInitialized) return
+        if (!isInitialized || textureId == 0 || shaderProgram == 0) return
 
         val oldDisplay = EGL14.eglGetCurrentDisplay()
         val oldDrawSurface = EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW)
@@ -194,12 +209,18 @@ class HardwareLutVideoRenderer(
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
         GLES30.glUseProgram(shaderProgram)
 
-        // 传入矩阵
+        // 录制链路复用 LutRenderer 的顶点着色器，因此必须显式提供完整纹理裁剪区域。
         if (uSTMatrixLoc != -1) GLES30.glUniformMatrix4fv(uSTMatrixLoc, 1, false, stMatrix, 0)
-
-        val mvp = FloatArray(16)
-        android.opengl.Matrix.setIdentityM(mvp, 0)
-        if (uMVPMatrixLoc != -1) GLES30.glUniformMatrix4fv(uMVPMatrixLoc, 1, false, mvp, 0)
+        if (uMVPMatrixLoc != -1) GLES30.glUniformMatrix4fv(uMVPMatrixLoc, 1, false, identityMatrix, 0)
+        if (uCropRectLoc != -1) {
+            GLES30.glUniform4f(
+                uCropRectLoc,
+                fullCropRect[0],
+                fullCropRect[1],
+                fullCropRect[2],
+                fullCropRect[3]
+            )
+        }
 
         // 绑定 2D 纹理
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
@@ -238,6 +259,24 @@ class HardwareLutVideoRenderer(
             }
         }
 
+        restorePreviousEglContext(oldDisplay, oldDrawSurface, oldReadSurface, oldContext)
+    }
+
+    private fun restorePreviousEglContext(
+        oldDisplay: EGLDisplay,
+        oldDrawSurface: EGLSurface,
+        oldReadSurface: EGLSurface,
+        oldContext: EGLContext
+    ) {
+        if (oldDisplay == EGL14.EGL_NO_DISPLAY) {
+            EGL14.eglMakeCurrent(
+                EGL14.EGL_NO_DISPLAY,
+                EGL14.EGL_NO_SURFACE,
+                EGL14.EGL_NO_SURFACE,
+                EGL14.EGL_NO_CONTEXT
+            )
+            return
+        }
         EGL14.eglMakeCurrent(oldDisplay, oldDrawSurface, oldReadSurface, oldContext)
     }
 
