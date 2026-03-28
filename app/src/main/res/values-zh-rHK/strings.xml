@@ -428,6 +428,7 @@
     <string name="screen_capture_test_stop">停止</string>
     <string name="screen_capture_test_status_idle">準備啟動錄屏預覽。</string>
     <string name="screen_capture_status_running">錄屏已開啟，正在以畫中畫小窗顯示。</string>
+    <string name="screen_capture_return_to_pip">畫中畫</string>
     <string name="screen_capture_test_status_stopped">錄屏已停止。</string>
     <string name="screen_capture_test_status_permission_denied">未授予錄屏權限。</string>
     <string name="screen_capture_test_status_failed">錄屏啟動失敗。</string>
