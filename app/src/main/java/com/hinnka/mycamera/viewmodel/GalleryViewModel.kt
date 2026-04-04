@@ -188,6 +188,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         initialValue = ColorRecipeParams.DEFAULT
     )
 
+    /** 仅此照片的色彩配方覆盖，null 表示跟随 LUT 默认配方 */
+    var editPhotoRecipeParams = MutableStateFlow<ColorRecipeParams?>(null)
+        private set
+
     var editLutConfig: LutConfig? by mutableStateOf(null)
         private set
 
@@ -1258,6 +1262,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         currentPhotoMetadata?.let { metadata ->
             editLutId.value = metadata.lutId
             editFrameId.value = metadata.frameId
+            editPhotoRecipeParams.value = metadata.colorRecipeParams
             // 智能初始化：导入的照片默认值为 0，App 拍摄的则回退到当前全局配置
             editSharpening.value =
                 metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening.value)
@@ -1304,9 +1309,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editLutId.value = null
         editLutConfig = null
         editFrameId.value = null
+        editPhotoRecipeParams.value = null
         editCropRect.value = null
         editCropAspectOption.value = CropAspectOption.Free
         editRawDenoise.value = 0.2f
+    }
+
+    /**
+     * 设置照片级别的色彩配方覆盖（null = 清除覆盖，跟随 LUT 默认）
+     */
+    fun setPhotoRecipeParams(params: ColorRecipeParams?) {
+        editPhotoRecipeParams.value = params
     }
 
     /**
@@ -1532,7 +1545,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     finalMetadata = (currentPhotoMetadata ?: metadata).copy(
                         lutId = editLutId.value,
                         frameId = editFrameId.value,
-                        colorRecipeParams = recipeParamsOverride ?: editLutRecipeParams.value,
+                        colorRecipeParams = recipeParamsOverride ?: editPhotoRecipeParams.value ?: editLutRecipeParams.value,
                         sharpening = editSharpening.value,
                         noiseReduction = editNoiseReduction.value,
                         chromaNoiseReduction = editChromaNoiseReduction.value,
@@ -1752,7 +1765,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val metadata = currentPhotoMetadata?.copy(
                     lutId = editLutId.value,
                     frameId = editFrameId.value,
-                    colorRecipeParams = editLutRecipeParams.value,
+                    colorRecipeParams = editPhotoRecipeParams.value ?: editLutRecipeParams.value,
                     sharpening = editSharpening.value,
                     noiseReduction = editNoiseReduction.value,
                     chromaNoiseReduction = editChromaNoiseReduction.value,

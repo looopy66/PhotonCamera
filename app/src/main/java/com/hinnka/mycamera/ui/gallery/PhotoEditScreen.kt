@@ -49,6 +49,7 @@ import com.hinnka.mycamera.frame.TextType
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
+import com.hinnka.mycamera.ui.camera.RecipeScope
 import com.hinnka.mycamera.ui.components.*
 import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.viewmodel.CameraViewModel
@@ -74,6 +75,7 @@ fun PhotoEditScreen(
     val currentPhoto = viewModel.getCurrentPhoto()
     val editLutId by viewModel.editLutId.collectAsState()
     val editLutRecipeParams by viewModel.editLutRecipeParams.collectAsState()
+    val editPhotoRecipeParams by viewModel.editPhotoRecipeParams.collectAsState()
     val editLutConfig = viewModel.editLutConfig
     val availableLuts = viewModel.availableLuts
     val showPaymentDialog = viewModel.showPaymentDialog
@@ -136,7 +138,7 @@ fun PhotoEditScreen(
         currentPhoto,
         refreshKey,
         editLutId,
-        previewRecipeParamsOverride ?: editLutRecipeParams,
+        previewRecipeParamsOverride ?: editPhotoRecipeParams ?: editLutRecipeParams,
         editLutConfig,
         editFrameId,
         editFrameCustomProperties,
@@ -518,10 +520,14 @@ fun PhotoEditScreen(
                                 }
 
                                 if (editLutId != null) {
+                                    val hasPhotoOverride = editPhotoRecipeParams != null
                                     Row(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(16.dp))
-                                            .background(Color.White.copy(alpha = 0.1f))
+                                            .background(
+                                                if (hasPhotoOverride) Color(0xFFFF9800).copy(alpha = 0.15f)
+                                                else Color.White.copy(alpha = 0.1f)
+                                            )
                                             .clickable { showLutEditDialog = true }
                                             .padding(horizontal = 10.dp, vertical = 6.dp),
                                         verticalAlignment = Alignment.CenterVertically,
@@ -530,7 +536,7 @@ fun PhotoEditScreen(
                                         Icon(
                                             imageVector = Icons.Default.Tune,
                                             contentDescription = null,
-                                            tint = Color(0xFFFFD700),
+                                            tint = if (hasPhotoOverride) Color(0xFFFF9800) else Color(0xFFFFD700),
                                             modifier = Modifier.size(14.dp)
                                         )
                                         Text(
@@ -693,12 +699,15 @@ fun PhotoEditScreen(
     if (showLutEditDialog && editLutId != null) {
         LutEditBottomSheet(
             lutId = editLutId!!,
-            initialParams = previewRecipeParamsOverride ?: editLutRecipeParams,
+            initialParams = previewRecipeParamsOverride ?: editPhotoRecipeParams ?: editLutRecipeParams,
             onParamsPreviewChange = { previewRecipeParamsOverride = it },
             onDismiss = {
                 previewRecipeParamsOverride = null
                 showLutEditDialog = false
-            }
+            },
+            photoRecipeParams = editPhotoRecipeParams,
+            onPhotoParamsChange = { viewModel.setPhotoRecipeParams(it) },
+            defaultScope = RecipeScope.PHOTO_LOCAL
         )
     }
 
