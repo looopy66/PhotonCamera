@@ -50,7 +50,7 @@ fun ColorRecipePalettePanel(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(1.68f)
+                .aspectRatio(2f)
                 .pointerInput(Unit) {
                     detectTapGestures(
                         onDoubleTap = { offset ->

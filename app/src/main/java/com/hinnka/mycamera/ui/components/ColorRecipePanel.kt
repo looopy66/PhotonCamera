@@ -1,10 +1,13 @@
 package com.hinnka.mycamera.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -27,6 +30,7 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.model.ColorPaletteState
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.RecipeParam
+import com.hinnka.mycamera.ui.camera.LutIntensitySlider
 
 /**
  * 色彩配方控制面板
@@ -44,9 +48,11 @@ fun ColorRecipePanel(
 ) {
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var selectedLchTabIndex by remember { mutableIntStateOf(0) }
+    var isExpanded by remember { mutableStateOf(true) }
 
     val tabs = listOf(
         R.string.recipe_tab_palette,
+        R.string.filter,
         R.string.recipe_tab_light,
         R.string.recipe_tab_color,
         R.string.recipe_tab_lch,
@@ -56,6 +62,9 @@ fun ColorRecipePanel(
     )
     val parameterGroups = listOf(
         emptyList(),
+        listOf(
+            RecipeParam.LUT_INTENSITY,
+        ),
         listOf(
             RecipeParam.EXPOSURE,
             RecipeParam.CONTRAST,
@@ -133,20 +142,95 @@ fun ColorRecipePanel(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(4.dp)
     ) {
+
+        // 当前选中的内容
+        AnimatedVisibility(isExpanded) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Color.Black.copy(alpha = 0.3f),
+                        RoundedCornerShape(8.dp)
+                    )
+                    .padding(8.dp),
+                contentAlignment = Alignment.TopCenter
+            ) {
+                if (selectedTabIndex < parameterGroups.size) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        if (selectedTabIndex == 0) {
+                            ColorRecipePalettePanel(
+                                paletteState = paletteState,
+                                onPaletteStateChange = onPaletteStateChange,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        } else if (selectedTabIndex == 4) {
+                            LchSecondaryTabs(
+                                tabs = lchGroups.map { it.first },
+                                selectedTabIndex = selectedLchTabIndex,
+                                onTabSelected = { selectedLchTabIndex = it }
+                            )
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            lchGroups[selectedLchTabIndex].second.forEach { param ->
+                                key(param) {
+                                    ColorRecipeSlider(
+                                        param = param,
+                                        value = param.getValue(currentParams),
+                                        onValueChange = { newValue ->
+                                            onParamChange(param, newValue)
+                                        },
+                                        onDoubleTap = {
+                                            onParamChange(param, param.defaultValue)
+                                        }
+                                    )
+                                }
+                            }
+                        } else {
+                            parameterGroups[selectedTabIndex].forEach { param ->
+                                key(param) {
+                                    ColorRecipeSlider(
+                                        param = param,
+                                        value = param.getValue(currentParams),
+                                        onValueChange = { newValue ->
+                                            onParamChange(param, newValue)
+                                        },
+                                        onDoubleTap = {
+                                            onParamChange(param, param.defaultValue)
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // 备注 Tab
+                    ColorRecipeRemarksBar(
+                        remarks = currentParams.remarks,
+                        onRemarksChange = onRemarksChange,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
         // 自定义 Tab 选择器 (Pill style)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(36.dp)
-                .clip(CircleShape)
-                .background(Color.Black.copy(alpha = 0.4f))
-                .padding(4.dp)
+                .height(56.dp)
+                .background(Color.Black)
+                .padding(8.dp)
         ) {
-            Row(modifier = Modifier.fillMaxSize()) {
+            Row(modifier = Modifier.fillMaxSize().horizontalScroll(rememberScrollState())) {
                 tabs.forEachIndexed { index, title ->
-                    val isSelected = selectedTabIndex == index
+                    val isSelected = selectedTabIndex == index && isExpanded
                     val backgroundColor by animateColorAsState(
                         if (isSelected) Color.White.copy(alpha = 0.2f) else Color.Transparent,
                         label = "tabBackground"
@@ -154,97 +238,33 @@ fun ColorRecipePanel(
 
                     Box(
                         modifier = Modifier
-                            .weight(1f)
+                            .widthIn(min = 48.dp)
                             .fillMaxHeight()
-                            .clip(CircleShape)
+                            .clip(RoundedCornerShape(4.dp))
                             .background(backgroundColor)
-                            .clickable { selectedTabIndex = index },
+                            .clickable {
+                                if (selectedTabIndex == index) {
+                                    isExpanded = !isExpanded
+                                } else {
+                                    selectedTabIndex = index
+                                    isExpanded = true
+                                }
+                            },
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = stringResource(title),
                             fontSize = 11.sp,
                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                            color = if (isSelected) Color.White else Color.White.copy(alpha = 0.6f)
+                            color = if (isSelected) Color.White else Color.White.copy(alpha = 0.6f),
+                            modifier = Modifier.padding(horizontal = 4.dp)
                         )
                     }
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // 当前选中的内容
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    Color.Black.copy(alpha = 0.3f),
-                    RoundedCornerShape(8.dp)
-                )
-                .padding(8.dp),
-            contentAlignment = Alignment.TopCenter
-        ) {
-            if (selectedTabIndex < parameterGroups.size) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    if (selectedTabIndex == 0) {
-                        ColorRecipePalettePanel(
-                            paletteState = paletteState,
-                            onPaletteStateChange = onPaletteStateChange,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    } else if (selectedTabIndex == 3) {
-                        LchSecondaryTabs(
-                            tabs = lchGroups.map { it.first },
-                            selectedTabIndex = selectedLchTabIndex,
-                            onTabSelected = { selectedLchTabIndex = it }
-                        )
-
-                        Spacer(modifier = Modifier.height(6.dp))
-
-                        lchGroups[selectedLchTabIndex].second.forEach { param ->
-                            key(param) {
-                                ColorRecipeSlider(
-                                    param = param,
-                                    value = param.getValue(currentParams),
-                                    onValueChange = { newValue ->
-                                        onParamChange(param, newValue)
-                                    },
-                                    onDoubleTap = {
-                                        onParamChange(param, param.defaultValue)
-                                    }
-                                )
-                            }
-                        }
-                    } else {
-                        parameterGroups[selectedTabIndex].forEach { param ->
-                            key(param) {
-                                ColorRecipeSlider(
-                                    param = param,
-                                    value = param.getValue(currentParams),
-                                    onValueChange = { newValue ->
-                                        onParamChange(param, newValue)
-                                    },
-                                    onDoubleTap = {
-                                        onParamChange(param, param.defaultValue)
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-            } else {
-                // 备注 Tab
-                ColorRecipeRemarksBar(
-                    remarks = currentParams.remarks,
-                    onRemarksChange = onRemarksChange,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        }
+        Spacer(modifier = Modifier.height(8.dp).background(Color.Black))
     }
 }
 

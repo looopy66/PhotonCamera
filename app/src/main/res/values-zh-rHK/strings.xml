@@ -68,7 +68,7 @@
     <string name="delete_exported_photos">同時刪除系統相簿中的匯出圖</string>
     <string name="no_photos">暫無相片</string>
     <string name="photo_info">相片資訊</string>
-    <string name="filter">濾鏡</string>
+    <string name="filter">LUT</string>
     <string name="intensity">強度</string>
     <string name="original">原圖</string>
     <string name="export_confirm">要匯出已套用濾鏡的相片嗎？</string>

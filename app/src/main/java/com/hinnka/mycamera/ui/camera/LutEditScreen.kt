@@ -130,7 +130,7 @@ fun LutEditBottomSheet(
                 SingleChoiceSegmentedButtonRow(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 24.dp, vertical = 8.dp)
+                        .padding(horizontal = 24.dp)
                 ) {
                     RecipeScope.entries.forEachIndexed { index, scope ->
                         SegmentedButton(
@@ -194,7 +194,7 @@ fun LutEditBottomSheet(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(4.dp))
                                     .clickable {
-                                        onPhotoParamsChange?.invoke(null)
+                                        onPhotoParamsChange.invoke(null)
                                         coroutineScope.launch {
                                             val lutParams = lutEditViewModel.getColorRecipe(lutId)
                                             loadParamsForScope(RecipeScope.PHOTO_LOCAL, lutParams)
@@ -205,16 +205,10 @@ fun LutEditBottomSheet(
                             )
                         }
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
+                } else {
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
             }
-
-            LutIntensitySlider(
-                intensity = editingParams.lutIntensity,
-                onIntensityChange = {
-                    onParamsUpdated(editingParams.copy(lutIntensity = it))
-                }
-            )
 
             ColorRecipePanel(
                 currentParams = editingParams,
@@ -230,9 +224,7 @@ fun LutEditBottomSheet(
                 onRemarksChange = {
                     onParamsUpdated(editingParams.copy(remarks = it))
                 },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                modifier = Modifier.fillMaxWidth()
             )
         }
     }

@@ -15,13 +15,13 @@
 * 完整编译
 
     ```
-    ./gradlew assembleChinaDebug
+    ./gradlew assembleDefaultDebug
     ```
 
 * 通过性验证（kotlin端）
 
     ```
-    ./gradlew compileChinaDebugKotlin
+    ./gradlew compileDefaultDebugKotlin
     ```
 
 * 通过性验证（native端）

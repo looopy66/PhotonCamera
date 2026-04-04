@@ -68,7 +68,7 @@
     <string name="delete_exported_photos">同时删除系统相册中的导出图</string>
     <string name="no_photos">暂无照片</string>
     <string name="photo_info">照片信息</string>
-    <string name="filter">滤镜</string>
+    <string name="filter">LUT</string>
     <string name="intensity">强度</string>
     <string name="original">原图</string>
     <string name="export_confirm">导出已应用滤镜的照片吗？</string>
