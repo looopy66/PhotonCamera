@@ -42,6 +42,8 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FilterNone
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -87,6 +89,8 @@ import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
@@ -1903,6 +1907,10 @@ fun DefaultFocalLengthSetting(
     onFocalLengthSelected: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var showAddDialog by remember { mutableStateOf(false) }
+    var inputValue by remember { mutableStateOf("") }
+    val customFocalLengths by viewModel.customFocalLengths.collectAsState(initial = emptyList())
+
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
             text = stringResource(R.string.settings_default_focal_length),
@@ -1920,22 +1928,35 @@ fun DefaultFocalLengthSetting(
         )
 
         val availableFLs = remember { viewModel.getAvailableFocalLengths() }
-        val options = remember(availableFLs) {
-            val list = mutableListOf(0f to "None")
-            availableFLs.forEach { fl ->
-                list.add(fl to "${fl.roundToInt()}mm")
-            }
-            list
-        }
 
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            options.forEach { (fl, label) ->
-                val isSelected =
-                    if (fl == 0f) currentFocalLength == 0f else kotlin.math.abs(currentFocalLength - fl) < 0.5f
+            // None chip
+            val noneSelected = currentFocalLength == 0f
+            Box(
+                modifier = Modifier
+                    .width(64.dp)
+                    .height(40.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (noneSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.1f))
+                    .clickable { onFocalLengthSelected(0f) },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = stringResource(R.string.none),
+                    color = if (noneSelected) Color.White else Color.White.copy(alpha = 0.7f),
+                    fontSize = 11.sp,
+                    fontWeight = if (noneSelected) FontWeight.Bold else FontWeight.Normal,
+                    textAlign = TextAlign.Center
+                )
+            }
+
+            // Device focal length chips
+            availableFLs.forEach { fl ->
+                val isSelected = kotlin.math.abs(currentFocalLength - fl) < 0.5f
                 Box(
                     modifier = Modifier
                         .width(64.dp)
@@ -1946,7 +1967,7 @@ fun DefaultFocalLengthSetting(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = if (fl == 0f) stringResource(R.string.none) else label,
+                        text = "${fl.roundToInt()}mm",
                         color = if (isSelected) Color.White else Color.White.copy(alpha = 0.7f),
                         fontSize = 11.sp,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
@@ -1954,7 +1975,93 @@ fun DefaultFocalLengthSetting(
                     )
                 }
             }
+
+            // Custom focal length chips (with remove button)
+            customFocalLengths.forEach { fl ->
+                val isSelected = kotlin.math.abs(currentFocalLength - fl) < 0.5f
+                Box(
+                    modifier = Modifier
+                        .height(40.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (isSelected) Color(0xFFFF6B35) else Color(0xFF2A3A5C))
+                        .clickable { onFocalLengthSelected(fl) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Text(
+                            text = "${fl.roundToInt()}mm*",
+                            color = if (isSelected) Color.White else Color.White.copy(alpha = 0.7f),
+                            fontSize = 11.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                        )
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = null,
+                            tint = if (isSelected) Color.White else Color.White.copy(alpha = 0.5f),
+                            modifier = Modifier
+                                .size(14.dp)
+                                .clickable { viewModel.removeCustomFocalLength(fl) }
+                        )
+                    }
+                }
+            }
+
+            // Add button (shown when total physical + custom < 8)
+            if (availableFLs.size + customFocalLengths.size < 8) {
+                Box(
+                    modifier = Modifier
+                        .width(40.dp)
+                        .height(40.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color.White.copy(alpha = 0.08f))
+                        .clickable { showAddDialog = true },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = stringResource(R.string.settings_custom_focal_length_add),
+                        tint = Color.White.copy(alpha = 0.7f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
         }
+    }
+
+    if (showAddDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddDialog = false; inputValue = "" },
+            title = { Text(stringResource(R.string.settings_custom_focal_length_add)) },
+            text = {
+                androidx.compose.material3.OutlinedTextField(
+                    value = inputValue,
+                    onValueChange = { inputValue = it.filter { c -> c.isDigit() || c == '.' } },
+                    placeholder = { Text(stringResource(R.string.settings_custom_focal_length_hint)) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    suffix = { Text("mm") }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val fl = inputValue.toFloatOrNull()
+                    if (fl != null && fl > 0f) {
+                        viewModel.addCustomFocalLength(fl)
+                    }
+                    showAddDialog = false
+                    inputValue = ""
+                }) { Text("OK") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddDialog = false; inputValue = "" }) {
+                    Text(stringResource(android.R.string.cancel))
+                }
+            }
+        )
     }
 }
 

@@ -397,6 +397,9 @@
     <string name="settings_donation_description">Support the development of Photon Camera</string>
     <string name="settings_default_focal_length">Default Focal Length</string>
     <string name="settings_default_focal_length_description">Set the focal length to automatically switch to when the app starts.</string>
+    <string name="settings_custom_focal_length_add">Add Custom Focal Length</string>
+    <string name="settings_custom_focal_length_hint">e.g. 35, 50, 85</string>
+    <string name="settings_custom_focal_length_max">Maximum 8 custom focal lengths</string>
     <string name="settings_raw_restore_lut">RAW Restore LUT</string>
     <string name="settings_raw_restore_lut_description">Choose the LUT used for RAW color restoration. Use \"None\" for log output.</string>
     <string name="settings_raw_profile">RAW Look</string>

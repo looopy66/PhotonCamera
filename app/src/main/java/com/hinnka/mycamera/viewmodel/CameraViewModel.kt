@@ -163,6 +163,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val photoQuality: Flow<Int> = userPreferencesRepository.userPreferences.map { it.photoQuality }
 
     val defaultFocalLength: Flow<Float> = userPreferencesRepository.userPreferences.map { it.defaultFocalLength }
+    val customFocalLengths: Flow<List<Float>> = userPreferencesRepository.userPreferences.map { it.customFocalLengths }
     val userPreferences: StateFlow<com.hinnka.mycamera.data.UserPreferences> = userPreferencesRepository.userPreferences
         .stateIn(viewModelScope, SharingStarted.Eagerly, com.hinnka.mycamera.data.UserPreferences())
     val useMFNR: StateFlow<Boolean> = userPreferencesRepository.userPreferences
@@ -1720,7 +1721,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun allZoomStops(
         lensZoomStops: List<Float>,
         mainCamera: CameraInfo?,
-        currentCamera: CameraInfo?
+        currentCamera: CameraInfo?,
+        customFocalLengths: List<Float> = emptyList()
     ): List<Float> {
         val stops = mutableListOf<Float>()
         stops.addAll(lensZoomStops)
@@ -1735,7 +1737,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         mainCamera ?: return stops.sorted()
 
         if (mainCamera.focalLength35mmEquivalent > 0) {
-            listOf(35f, 50f, 85f, 200f).forEach { fl ->
+            customFocalLengths.forEach { fl ->
                 val zoom = fl / mainCamera.focalLength35mmEquivalent
                 if (stops.none { abs(it - zoom) <= 0.1f }) {
                     stops.add(zoom)
@@ -1876,6 +1878,22 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setDefaultFocalLength(focalLength: Float) {
         viewModelScope.launch {
             userPreferencesRepository.saveDefaultFocalLength(focalLength)
+        }
+    }
+
+    fun addCustomFocalLength(fl: Float) {
+        viewModelScope.launch {
+            val current = userPreferencesRepository.userPreferences.firstOrNull()?.customFocalLengths ?: emptyList()
+            val physicalCount = getAvailableFocalLengths().size
+            if (physicalCount + current.size >= 8 || current.any { abs(it - fl) < 0.5f }) return@launch
+            userPreferencesRepository.saveCustomFocalLengths((current + fl).sortedBy { it })
+        }
+    }
+
+    fun removeCustomFocalLength(fl: Float) {
+        viewModelScope.launch {
+            val current = userPreferencesRepository.userPreferences.firstOrNull()?.customFocalLengths ?: emptyList()
+            userPreferencesRepository.saveCustomFocalLengths(current.filter { abs(it - fl) >= 0.5f })
         }
     }
 
@@ -2349,9 +2367,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (mainCamera.focalLength35mmEquivalent <= 0) return emptyList()
 
         val lensZoomStops = calculateLensZoomStops(availableCameras, mainCamera)
-        val zoomStops = allZoomStops(lensZoomStops, mainCamera, mainCamera)
 
-        return zoomStops.map { it * mainCamera.focalLength35mmEquivalent }
+        return lensZoomStops.map { it * mainCamera.focalLength35mmEquivalent }
     }
 
     /**

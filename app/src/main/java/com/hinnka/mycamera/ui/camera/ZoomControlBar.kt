@@ -61,8 +61,9 @@ fun ZoomControlBar(
         availableCameras.find { it.lensType == if (currentCamera?.lensType == LensType.FRONT) LensType.FRONT else LensType.BACK_MAIN }
 
     // 根据可用相机计算变焦档位
+    val customFocalLengths by viewModel.customFocalLengths.collectAsState(initial = emptyList())
     val lensZoomStops = viewModel.calculateLensZoomStops(availableCameras, currentCamera)
-    val zoomStops = viewModel.allZoomStops(lensZoomStops, mainCamera, currentCamera)
+    val zoomStops = viewModel.allZoomStops(lensZoomStops, mainCamera, currentCamera, customFocalLengths)
 
     Box(
         modifier = modifier

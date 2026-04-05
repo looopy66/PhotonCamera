@@ -386,6 +386,9 @@
     <string name="settings_background_description">更改應用背景圖</string>
     <string name="settings_custom_background">自訂...</string>
     <string name="settings_default_focal_length_description">設定啟動 App 時自動切換到的焦段</string>
+    <string name="settings_custom_focal_length_add">新增自訂焦段</string>
+    <string name="settings_custom_focal_length_hint">如：35、50、85</string>
+    <string name="settings_custom_focal_length_max">最多 8 個焦段</string>
     <string name="settings_raw_restore_lut">RAW 還原 LUT</string>
     <string name="settings_raw_restore_lut_description">選擇用於 RAW 色彩還原的 LUT。選擇「無」以獲得 Log 風格輸出。</string>
     <string name="settings_raw_profile">RAW 風格方案</string>

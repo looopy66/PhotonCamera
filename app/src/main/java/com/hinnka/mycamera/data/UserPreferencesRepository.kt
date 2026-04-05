@@ -95,7 +95,8 @@ data class UserPreferences(
     val openAIModel: String? = null,
     val useBuiltInAiService: Boolean = false,
     val phantomSaveAsNew: Boolean = false,
-    val defaultVirtualAperture: Float = 0f // 默认虚化光圈，0表示关闭
+    val defaultVirtualAperture: Float = 0f, // 默认虚化光圈，0表示关闭
+    val customFocalLengths: List<Float> = emptyList() // 自定义焦段 (35mm等效)，最多8个
 )
 
 /**
@@ -173,6 +174,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val USE_BUILT_IN_AI_SERVICE = booleanPreferencesKey("use_built_in_ai_service")
         private val PHANTOM_SAVE_AS_NEW = booleanPreferencesKey("phantom_save_as_new")
         private val DEFAULT_VIRTUAL_APERTURE = floatPreferencesKey("default_virtual_aperture")
+        private val CUSTOM_FOCAL_LENGTHS = stringPreferencesKey("custom_focal_lengths")
     }
 
     /**
@@ -245,7 +247,11 @@ class UserPreferencesRepository(private val context: Context) {
                 openAIModel = preferences[OPENAI_MODEL],
                 useBuiltInAiService = preferences[USE_BUILT_IN_AI_SERVICE] ?: false,
                 phantomSaveAsNew = preferences[PHANTOM_SAVE_AS_NEW] ?: false,
-                defaultVirtualAperture = preferences[DEFAULT_VIRTUAL_APERTURE] ?: 0f
+                defaultVirtualAperture = preferences[DEFAULT_VIRTUAL_APERTURE] ?: 0f,
+                customFocalLengths = preferences[CUSTOM_FOCAL_LENGTHS]
+                    ?.split(",")?.filter { it.isNotEmpty() }
+                    ?.mapNotNull { it.toFloatOrNull() }
+                    ?: listOf(35f, 50f, 85f, 200f)
             )
         }
 
@@ -511,6 +517,12 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveDefaultFocalLength(focalLength: Float) {
         context.dataStore.edit { preferences ->
             preferences[DEFAULT_FOCAL_LENGTH] = focalLength
+        }
+    }
+
+    suspend fun saveCustomFocalLengths(focalLengths: List<Float>) {
+        context.dataStore.edit { preferences ->
+            preferences[CUSTOM_FOCAL_LENGTHS] = focalLengths.joinToString(",")
         }
     }
 

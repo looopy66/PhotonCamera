@@ -1,10 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(./gradlew assembleDebug:*)",
       "Bash(wc -l:*)",
-      "Bash(./gradlew compileDebugKotlin:*)",
-      "Bash(./gradlew assembleGoogleDebug:*)"
+      "Bash(./gradlew :app:compileDefaultDebugKotlin)"
     ]
   }
 }
