@@ -357,7 +357,7 @@
     <string name="delete_filter_confirm_message">Delete LUT \"%s\"?</string>
     <string name="delete_frame_confirm_message">Delete frame \"%s\"?</string>
     <string name="rename_dialog_title">Rename</string>
-    <string name="export_lut_cube">Export .cube</string>
+    <string name="export_lut_cube">Export LUT</string>
     <string name="copy">Copy</string>
     <string name="copy_lut_dialog_title">Copy LUT</string>
     <string name="copy_suffix"> (Copy)</string>

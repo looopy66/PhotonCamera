@@ -352,7 +352,7 @@
     <string name="delete_filter_confirm_message">删除滤镜 "%s"？</string>
     <string name="delete_frame_confirm_message">删除边框 "%s"？</string>
     <string name="rename_dialog_title">重命名</string>
-    <string name="export_lut_cube">导出 .cube 文件</string>
+    <string name="export_lut_cube">导出LUT</string>
     <string name="copy">复制</string>
     <string name="copy_lut_dialog_title">复制滤镜</string>
     <string name="copy_suffix"> (副本)</string>
