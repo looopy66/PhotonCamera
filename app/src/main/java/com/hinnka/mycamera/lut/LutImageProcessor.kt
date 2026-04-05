@@ -1481,7 +1481,7 @@ class LutImageProcessor {
                 if (totalBandWeight > 0.0001) {
                     for (int i = 0; i < 8; i++) {
                         float weight = bandWeights[i] / totalBandWeight;
-                        hueShift += uLchHueAdjustments[i + 1] * weight * radians(24.0);
+                        hueShift += uLchHueAdjustments[i + 1] * weight * radians(45.0);
                         chromaScale += uLchChromaAdjustments[i + 1] * weight;
                         lightnessShift += uLchLightnessAdjustments[i + 1] * weight * 0.18;
                     }
