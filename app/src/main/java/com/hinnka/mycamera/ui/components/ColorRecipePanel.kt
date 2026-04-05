@@ -49,6 +49,7 @@ fun ColorRecipePanel(
 ) {
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var selectedLchTabIndex by remember { mutableIntStateOf(0) }
+    var selectedCalibrationTabIndex by remember { mutableIntStateOf(0) }
     var isExpanded by remember { mutableStateOf(true) }
 
     val tabs = listOf(
@@ -57,10 +58,11 @@ fun ColorRecipePanel(
         R.string.recipe_tab_light,    // 2
         R.string.recipe_tab_curve,    // 3 (曲线)
         R.string.recipe_tab_color,    // 4
-        R.string.recipe_tab_lch,      // 5
-        R.string.recipe_tab_texture,  // 6
-        R.string.recipe_tab_lens,     // 7
-        R.string.recipe_tab_remarks,  // 8
+        R.string.recipe_tab_calibration, // 5
+        R.string.recipe_tab_lch,      // 6
+        R.string.recipe_tab_texture,  // 7
+        R.string.recipe_tab_lens,     // 8
+        R.string.recipe_tab_remarks,  // 9
     )
     val parameterGroups = listOf(
         emptyList(),       // 0 palette
@@ -80,8 +82,9 @@ fun ColorRecipePanel(
             RecipeParam.TINT,
             RecipeParam.COLOR
         ),
-        emptyList(),       // 5 lch (handled specially)
-        listOf(            // 6 texture
+        emptyList(),       // 5 calibration (handled specially)
+        emptyList(),       // 6 lch (handled specially)
+        listOf(            // 7 texture
             RecipeParam.VIGNETTE,
             RecipeParam.FILM_GRAIN,
             RecipeParam.FADE,
@@ -141,6 +144,23 @@ fun ColorRecipePanel(
             RecipeParam.MAGENTA_LIGHTNESS,
         ),
     )
+    val calibrationGroups = listOf(
+        R.string.recipe_lch_red to listOf(
+            RecipeParam.PRIMARY_RED_HUE,
+            RecipeParam.PRIMARY_RED_SATURATION,
+            RecipeParam.PRIMARY_RED_LIGHTNESS,
+        ),
+        R.string.recipe_lch_green to listOf(
+            RecipeParam.PRIMARY_GREEN_HUE,
+            RecipeParam.PRIMARY_GREEN_SATURATION,
+            RecipeParam.PRIMARY_GREEN_LIGHTNESS,
+        ),
+        R.string.recipe_lch_blue to listOf(
+            RecipeParam.PRIMARY_BLUE_HUE,
+            RecipeParam.PRIMARY_BLUE_SATURATION,
+            RecipeParam.PRIMARY_BLUE_LIGHTNESS,
+        ),
+    )
 
     Column(
         modifier = modifier
@@ -182,11 +202,45 @@ fun ColorRecipePanel(
                                 )
                             }
                             5 -> {
+                                // Calibration 颜色校准
+                                ColorRingTabs(
+                                    count = calibrationGroups.size,
+                                    selectedTabIndex = selectedCalibrationTabIndex,
+                                    onTabSelected = { selectedCalibrationTabIndex = it },
+                                    getColor = { index -> 
+                                        when (index) {
+                                            0 -> Color(0xFFE53935) // Red
+                                            1 -> Color(0xFF43A047) // Green
+                                            2 -> Color(0xFF1E88E5) // Blue
+                                            else -> Color.White
+                                        }
+                                    }
+                                )
+
+                                Spacer(modifier = Modifier.height(6.dp))
+
+                                calibrationGroups[selectedCalibrationTabIndex].second.forEach { param ->
+                                    key(param) {
+                                        ColorRecipeSlider(
+                                            param = param,
+                                            value = param.getValue(currentParams),
+                                            onValueChange = { newValue ->
+                                                onParamChange(param, newValue)
+                                            },
+                                            onDoubleTap = {
+                                                onParamChange(param, param.defaultValue)
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                            6 -> {
                                 // LCH 颜色混合
-                                LchSecondaryTabs(
-                                    tabs = lchGroups.map { it.first },
+                                ColorRingTabs(
+                                    count = lchGroups.size,
                                     selectedTabIndex = selectedLchTabIndex,
-                                    onTabSelected = { selectedLchTabIndex = it }
+                                    onTabSelected = { selectedLchTabIndex = it },
+                                    getColor = { getLchTabColor(it) }
                                 )
 
                                 Spacer(modifier = Modifier.height(6.dp))
@@ -286,24 +340,24 @@ fun ColorRecipePanel(
 }
 
 @Composable
-private fun LchSecondaryTabs(
-    tabs: List<Int>,
+private fun ColorRingTabs(
+    count: Int,
     selectedTabIndex: Int,
     onTabSelected: (Int) -> Unit,
+    getColor: (Int) -> Color,
     modifier: Modifier = Modifier
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceEvenly
     ) {
-        tabs.forEachIndexed { indexInRow, _ ->
+        for (indexInRow in 0 until count) {
             val isSelected = selectedTabIndex == indexInRow
-            val ringColor = getLchTabColor(indexInRow)
+            val ringColor = getColor(indexInRow)
 
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .aspectRatio(1f)
                     .clip(CircleShape)
                     .clickable { onTabSelected(indexInRow) }
                     .padding(6.dp),
@@ -502,6 +556,15 @@ private fun formatParamValue(param: RecipeParam, value: Float): String {
         RecipeParam.MAGENTA_HUE,
         RecipeParam.MAGENTA_CHROMA,
         RecipeParam.MAGENTA_LIGHTNESS,
+        RecipeParam.PRIMARY_RED_HUE,
+        RecipeParam.PRIMARY_RED_SATURATION,
+        RecipeParam.PRIMARY_RED_LIGHTNESS,
+        RecipeParam.PRIMARY_GREEN_HUE,
+        RecipeParam.PRIMARY_GREEN_SATURATION,
+        RecipeParam.PRIMARY_GREEN_LIGHTNESS,
+        RecipeParam.PRIMARY_BLUE_HUE,
+        RecipeParam.PRIMARY_BLUE_SATURATION,
+        RecipeParam.PRIMARY_BLUE_LIGHTNESS,
         RecipeParam.VIGNETTE -> {
             if (value >= 0) {
                 String.format("+%.2f", value)
@@ -541,7 +604,10 @@ private fun getParamColor(param: RecipeParam): Color {
         RecipeParam.SKIN_LIGHTNESS -> Color(0xFFD7A27A)
         RecipeParam.RED_HUE,
         RecipeParam.RED_CHROMA,
-        RecipeParam.RED_LIGHTNESS -> Color(0xFFE53935)
+        RecipeParam.RED_LIGHTNESS,
+        RecipeParam.PRIMARY_RED_HUE,
+        RecipeParam.PRIMARY_RED_SATURATION,
+        RecipeParam.PRIMARY_RED_LIGHTNESS -> Color(0xFFE53935)
         RecipeParam.ORANGE_HUE,
         RecipeParam.ORANGE_CHROMA,
         RecipeParam.ORANGE_LIGHTNESS -> Color(0xFFFB8C00)
@@ -550,13 +616,19 @@ private fun getParamColor(param: RecipeParam): Color {
         RecipeParam.YELLOW_LIGHTNESS -> Color(0xFFFDD835)
         RecipeParam.GREEN_HUE,
         RecipeParam.GREEN_CHROMA,
-        RecipeParam.GREEN_LIGHTNESS -> Color(0xFF43A047)
+        RecipeParam.GREEN_LIGHTNESS,
+        RecipeParam.PRIMARY_GREEN_HUE,
+        RecipeParam.PRIMARY_GREEN_SATURATION,
+        RecipeParam.PRIMARY_GREEN_LIGHTNESS -> Color(0xFF43A047)
         RecipeParam.CYAN_HUE,
         RecipeParam.CYAN_CHROMA,
         RecipeParam.CYAN_LIGHTNESS -> Color(0xFF00ACC1)
         RecipeParam.BLUE_HUE,
         RecipeParam.BLUE_CHROMA,
-        RecipeParam.BLUE_LIGHTNESS -> Color(0xFF1E88E5)
+        RecipeParam.BLUE_LIGHTNESS,
+        RecipeParam.PRIMARY_BLUE_HUE,
+        RecipeParam.PRIMARY_BLUE_SATURATION,
+        RecipeParam.PRIMARY_BLUE_LIGHTNESS -> Color(0xFF1E88E5)
         RecipeParam.PURPLE_HUE,
         RecipeParam.PURPLE_CHROMA,
         RecipeParam.PURPLE_LIGHTNESS -> Color(0xFF8E24AA)

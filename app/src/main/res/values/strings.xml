@@ -281,6 +281,15 @@
     <string name="recipe_param_magenta_hue">Magenta Hue</string>
     <string name="recipe_param_magenta_chroma">Magenta Chroma</string>
     <string name="recipe_param_magenta_lightness">Magenta Light</string>
+    <string name="recipe_param_primary_red_hue">Red Primary Hue</string>
+    <string name="recipe_param_primary_red_saturation">Red Primary Sat</string>
+    <string name="recipe_param_primary_red_lightness">Red Primary Light</string>
+    <string name="recipe_param_primary_green_hue">Green Primary Hue</string>
+    <string name="recipe_param_primary_green_saturation">Green Primary Sat</string>
+    <string name="recipe_param_primary_green_lightness">Green Primary Light</string>
+    <string name="recipe_param_primary_blue_hue">Blue Primary Hue</string>
+    <string name="recipe_param_primary_blue_saturation">Blue Primary Sat</string>
+    <string name="recipe_param_primary_blue_lightness">Blue Primary Light</string>
 
     <!-- Color Recipe Tabs -->
     <string name="recipe_tab_basic">Basic</string>
@@ -288,6 +297,7 @@
     <string name="recipe_tab_lch">LCH</string>
     <string name="recipe_tab_light">Light</string>
     <string name="recipe_tab_curve">Curve</string>
+    <string name="recipe_tab_calibration">Calibration</string>
     <string name="recipe_lch_skin">Skin</string>
     <string name="recipe_lch_red">Red</string>
     <string name="recipe_lch_orange">Orange</string>

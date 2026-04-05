@@ -276,6 +276,15 @@
     <string name="recipe_param_magenta_hue">品红 色相</string>
     <string name="recipe_param_magenta_chroma">品红 彩度</string>
     <string name="recipe_param_magenta_lightness">品红 明度</string>
+    <string name="recipe_param_primary_red_hue">红原色 色相</string>
+    <string name="recipe_param_primary_red_saturation">红原色 饱和度</string>
+    <string name="recipe_param_primary_red_lightness">红原色 明度</string>
+    <string name="recipe_param_primary_green_hue">绿原色 色相</string>
+    <string name="recipe_param_primary_green_saturation">绿原色 饱和度</string>
+    <string name="recipe_param_primary_green_lightness">绿原色 明度</string>
+    <string name="recipe_param_primary_blue_hue">蓝原色 色相</string>
+    <string name="recipe_param_primary_blue_saturation">蓝原色 饱和度</string>
+    <string name="recipe_param_primary_blue_lightness">蓝原色 明度</string>
 
     <!-- Color Recipe Tabs -->
     <string name="recipe_tab_basic">基础</string>
@@ -283,6 +292,7 @@
     <string name="recipe_tab_lch">LCH</string>
     <string name="recipe_tab_light">亮度</string>
     <string name="recipe_tab_curve">曲线</string>
+    <string name="recipe_tab_calibration">校准</string>
     <string name="recipe_lch_skin">肤色</string>
     <string name="recipe_lch_red">红</string>
     <string name="recipe_lch_orange">橙</string>

@@ -120,6 +120,9 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var uLchHueAdjustmentsLocation: Int = 0
     private var uLchChromaAdjustmentsLocation: Int = 0
     private var uLchLightnessAdjustmentsLocation: Int = 0
+    private var uPrimaryHueLocation: Int = 0
+    private var uPrimarySaturationLocation: Int = 0
+    private var uPrimaryLightnessLocation: Int = 0
     private var uSTMatrixFragLocation: Int = 0
     private var uCropRectLocation: Int = 0
     private var uApertureLocation: Int = 0
@@ -281,6 +284,16 @@ class LutRenderer : GLSurfaceView.Renderer {
 
     @Volatile
     var halation: Float = 0f // 0.0 ~ 1.0
+
+    @Volatile var primaryRedHue: Float = 0f
+    @Volatile var primaryRedSaturation: Float = 0f
+    @Volatile var primaryRedLightness: Float = 0f
+    @Volatile var primaryGreenHue: Float = 0f
+    @Volatile var primaryGreenSaturation: Float = 0f
+    @Volatile var primaryGreenLightness: Float = 0f
+    @Volatile var primaryBlueHue: Float = 0f
+    @Volatile var primaryBlueSaturation: Float = 0f
+    @Volatile var primaryBlueLightness: Float = 0f
 
     private val lchHueAdjustments = FloatArray(LCH_COLOR_BAND_COUNT)
     private val lchChromaAdjustments = FloatArray(LCH_COLOR_BAND_COUNT)
@@ -682,6 +695,10 @@ class LutRenderer : GLSurfaceView.Renderer {
             GLES30.glUniform1fv(uLchHueAdjustmentsLocation, LCH_COLOR_BAND_COUNT, lchHueAdjustments, 0)
             GLES30.glUniform1fv(uLchChromaAdjustmentsLocation, LCH_COLOR_BAND_COUNT, lchChromaAdjustments, 0)
             GLES30.glUniform1fv(uLchLightnessAdjustmentsLocation, LCH_COLOR_BAND_COUNT, lchLightnessAdjustments, 0)
+            
+            GLES30.glUniform3f(uPrimaryHueLocation, primaryRedHue, primaryGreenHue, primaryBlueHue)
+            GLES30.glUniform3f(uPrimarySaturationLocation, primaryRedSaturation, primaryGreenSaturation, primaryBlueSaturation)
+            GLES30.glUniform3f(uPrimaryLightnessLocation, primaryRedLightness, primaryGreenLightness, primaryBlueLightness)
         }
 
         // 曲线纹理上传（如有待处理数据）
@@ -828,6 +845,9 @@ class LutRenderer : GLSurfaceView.Renderer {
         uLchHueAdjustmentsLocation = GLES30.glGetUniformLocation(programId, "uLchHueAdjustments")
         uLchChromaAdjustmentsLocation = GLES30.glGetUniformLocation(programId, "uLchChromaAdjustments")
         uLchLightnessAdjustmentsLocation = GLES30.glGetUniformLocation(programId, "uLchLightnessAdjustments")
+        uPrimaryHueLocation = GLES30.glGetUniformLocation(programId, "uPrimaryHue")
+        uPrimarySaturationLocation = GLES30.glGetUniformLocation(programId, "uPrimarySaturation")
+        uPrimaryLightnessLocation = GLES30.glGetUniformLocation(programId, "uPrimaryLightness")
         uSTMatrixFragLocation = GLES30.glGetUniformLocation(programId, "uSTMatrix")
         uCropRectLocation = GLES30.glGetUniformLocation(programId, "uCropRect")
         uApertureLocation = GLES30.glGetUniformLocation(programId, "uAperture")
@@ -1832,6 +1852,15 @@ class LutRenderer : GLSurfaceView.Renderer {
             redCurvePoints = redCurvePoints,
             greenCurvePoints = greenCurvePoints,
             blueCurvePoints = blueCurvePoints,
+            primaryRedHue = primaryRedHue,
+            primaryRedSaturation = primaryRedSaturation,
+            primaryRedLightness = primaryRedLightness,
+            primaryGreenHue = primaryGreenHue,
+            primaryGreenSaturation = primaryGreenSaturation,
+            primaryGreenLightness = primaryGreenLightness,
+            primaryBlueHue = primaryBlueHue,
+            primaryBlueSaturation = primaryBlueSaturation,
+            primaryBlueLightness = primaryBlueLightness,
         )
     }
 
@@ -1867,6 +1896,15 @@ class LutRenderer : GLSurfaceView.Renderer {
         halation = params.halation
         noise = params.noise
         lowRes = params.lowRes
+        primaryRedHue = params.primaryRedHue
+        primaryRedSaturation = params.primaryRedSaturation
+        primaryRedLightness = params.primaryRedLightness
+        primaryGreenHue = params.primaryGreenHue
+        primaryGreenSaturation = params.primaryGreenSaturation
+        primaryGreenLightness = params.primaryGreenLightness
+        primaryBlueHue = params.primaryBlueHue
+        primaryBlueSaturation = params.primaryBlueSaturation
+        primaryBlueLightness = params.primaryBlueLightness
         setLchAdjustments(
             floatArrayOf(
                 params.skinHue, params.redHue, params.orangeHue, params.yellowHue,

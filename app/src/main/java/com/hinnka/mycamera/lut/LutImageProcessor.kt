@@ -106,6 +106,9 @@ class LutImageProcessor {
     private var uLchHueAdjustmentsLoc = 0
     private var uLchChromaAdjustmentsLoc = 0
     private var uLchLightnessAdjustmentsLoc = 0
+    private var uPrimaryHueLoc = 0
+    private var uPrimarySaturationLoc = 0
+    private var uPrimaryLightnessLoc = 0
 
     // 后期处理参数 Uniform 位置（仅拍摄和后期编辑时生效）
     private var uSharpeningLoc = 0
@@ -502,6 +505,9 @@ class LutImageProcessor {
             GLES30.glUniform1fv(uLchHueAdjustmentsLoc, LCH_COLOR_BAND_COUNT, lchHueAdjustments, 0)
             GLES30.glUniform1fv(uLchChromaAdjustmentsLoc, LCH_COLOR_BAND_COUNT, lchChromaAdjustments, 0)
             GLES30.glUniform1fv(uLchLightnessAdjustmentsLoc, LCH_COLOR_BAND_COUNT, lchLightnessAdjustments, 0)
+            GLES30.glUniform3f(uPrimaryHueLoc, effectiveRecipeParams?.primaryRedHue ?: 0f, effectiveRecipeParams?.primaryGreenHue ?: 0f, effectiveRecipeParams?.primaryBlueHue ?: 0f)
+            GLES30.glUniform3f(uPrimarySaturationLoc, effectiveRecipeParams?.primaryRedSaturation ?: 0f, effectiveRecipeParams?.primaryGreenSaturation ?: 0f, effectiveRecipeParams?.primaryBlueSaturation ?: 0f)
+            GLES30.glUniform3f(uPrimaryLightnessLoc, effectiveRecipeParams?.primaryRedLightness ?: 0f, effectiveRecipeParams?.primaryGreenLightness ?: 0f, effectiveRecipeParams?.primaryBlueLightness ?: 0f)
         }
 
         // 设置曲线纹理（Unit 3）
@@ -778,6 +784,9 @@ class LutImageProcessor {
         uLchHueAdjustmentsLoc = GLES30.glGetUniformLocation(shaderProgram, "uLchHueAdjustments")
         uLchChromaAdjustmentsLoc = GLES30.glGetUniformLocation(shaderProgram, "uLchChromaAdjustments")
         uLchLightnessAdjustmentsLoc = GLES30.glGetUniformLocation(shaderProgram, "uLchLightnessAdjustments")
+        uPrimaryHueLoc = GLES30.glGetUniformLocation(shaderProgram, "uPrimaryHue")
+        uPrimarySaturationLoc = GLES30.glGetUniformLocation(shaderProgram, "uPrimarySaturation")
+        uPrimaryLightnessLoc = GLES30.glGetUniformLocation(shaderProgram, "uPrimaryLightness")
 
         uSharpeningLoc = GLES30.glGetUniformLocation(shaderProgram, "uSharpening")
         uTexelSizeLoc = GLES30.glGetUniformLocation(shaderProgram, "uTexelSize")
@@ -1300,6 +1309,12 @@ class LutImageProcessor {
             uniform float uNoiseSeed;     // 噪点随机种子
             uniform float uLowRes;        // 0.0 ~ 1.0 (低像素强度)
             uniform float uAspectRatio;   // 图像长宽比
+            
+            // Primary Calibration
+            uniform vec3 uPrimaryHue;
+            uniform vec3 uPrimarySaturation;
+            uniform vec3 uPrimaryLightness;
+            
             uniform float uLchHueAdjustments[9];
             uniform float uLchChromaAdjustments[9];
             uniform float uLchLightnessAdjustments[9];
@@ -1540,6 +1555,54 @@ class LutImageProcessor {
                 return clamp(linearToSrgb(mixedLinear), 0.0, 1.0);
             }
 
+            vec3 applyPrimaryCalibration(vec3 color) {
+                if (abs(uPrimaryHue.x) < 0.0001 && abs(uPrimaryHue.y) < 0.0001 && abs(uPrimaryHue.z) < 0.0001 && 
+                    abs(uPrimarySaturation.x) < 0.0001 && abs(uPrimarySaturation.y) < 0.0001 && abs(uPrimarySaturation.z) < 0.0001 &&
+                    abs(uPrimaryLightness.x) < 0.0001 && abs(uPrimaryLightness.y) < 0.0001 && abs(uPrimaryLightness.z) < 0.0001) {
+                    return color;
+                }
+
+                float minC = min(min(color.r, color.g), color.b);
+                vec3 rgb = color - minC;
+                
+                // 1. Hue Shift (mixes primaries via channel rotation mapping)
+                float rH = uPrimaryHue.x * 0.35;
+                float gH = uPrimaryHue.y * 0.35;
+                float bH = uPrimaryHue.z * 0.35;
+
+                vec3 r_vec = vec3(1.0 - abs(rH), rH > 0.0 ? rH : 0.0, rH < 0.0 ? -rH : 0.0);
+                vec3 g_vec = vec3(gH < 0.0 ? -gH : 0.0, 1.0 - abs(gH), gH > 0.0 ? gH : 0.0);
+                vec3 b_vec = vec3(bH > 0.0 ? bH : 0.0, bH < 0.0 ? -bH : 0.0, 1.0 - abs(bH));
+
+                vec3 mixed = rgb.r * r_vec + rgb.g * g_vec + rgb.b * b_vec;
+
+                // 2. Saturation Shift (scales the mixed vector uniformly to strictly preserve hue ratio)
+                float total_rgb = rgb.r + rgb.g + rgb.b;
+                if (total_rgb > 0.0001) {
+                    float rS = uPrimarySaturation.x;
+                    float gS = uPrimarySaturation.y;
+                    float bS = uPrimarySaturation.z;
+                    
+                    float sat_scale = (rgb.r * rS + rgb.g * gS + rgb.b * bS) / total_rgb;
+                    
+                    if (sat_scale > 0.0) {
+                        mixed *= (1.0 + sat_scale);
+                    } else {
+                        vec3 lumaWeights = vec3(0.299, 0.587, 0.114);
+                        float m_luma = dot(mixed, lumaWeights);
+                        mixed = mix(mixed, vec3(m_luma), -sat_scale);
+                    }
+                }
+
+                // 3. Lightness Shift
+                float rL = uPrimaryLightness.x * 0.5;
+                float gL = uPrimaryLightness.y * 0.5;
+                float bL = uPrimaryLightness.z * 0.5;
+                vec3 light_add = vec3(rgb.r * rL + rgb.g * gL + rgb.b * bL);
+
+                return clamp(vec3(minC) + mixed + light_add, 0.0, 1.0);
+            }
+
             vec3 applyLutCurve(vec3 l, int curveType) {
                 if (curveType == 0) { // sRGB
                     return linearToSrgb(l);
@@ -1698,6 +1761,10 @@ class LutImageProcessor {
                         color.rgb = applyOklchDensity(color.rgb, uVibrance);
                         color.rgb = sanitizeColor(color.rgb);
                     }
+
+                    // 6.5. 颜色校准 (Camera Calibration)
+                    color.rgb = applyPrimaryCalibration(color.rgb);
+                    color.rgb = sanitizeColor(color.rgb);
 
                     color.rgb = applyLchColorMixer(color.rgb);
                     color.rgb = sanitizeColor(color.rgb);

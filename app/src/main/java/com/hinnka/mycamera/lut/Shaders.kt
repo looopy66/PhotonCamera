@@ -240,6 +240,9 @@ object Shaders {
     uniform float uLchHueAdjustments[9];
     uniform float uLchChromaAdjustments[9];
     uniform float uLchLightnessAdjustments[9];
+    uniform vec3 uPrimaryHue;
+    uniform vec3 uPrimarySaturation;
+    uniform vec3 uPrimaryLightness;
     uniform float uAperture;      // 计算光圈 (1.4 ~ 16.0)
     uniform vec2 uFocusPoint;     // 对焦点 (0.0 ~ 1.0)
 
@@ -462,6 +465,54 @@ object Shaders {
         return clamp(linearToSrgb(mixedLinear), 0.0, 1.0);
     }
 
+    vec3 applyPrimaryCalibration(vec3 color) {
+        if (abs(uPrimaryHue.x) < 0.0001 && abs(uPrimaryHue.y) < 0.0001 && abs(uPrimaryHue.z) < 0.0001 && 
+            abs(uPrimarySaturation.x) < 0.0001 && abs(uPrimarySaturation.y) < 0.0001 && abs(uPrimarySaturation.z) < 0.0001 &&
+            abs(uPrimaryLightness.x) < 0.0001 && abs(uPrimaryLightness.y) < 0.0001 && abs(uPrimaryLightness.z) < 0.0001) {
+            return color;
+        }
+
+        float minC = min(min(color.r, color.g), color.b);
+        vec3 rgb = color - minC;
+        
+        // 1. Hue Shift (mixes primaries via channel rotation mapping)
+        float rH = uPrimaryHue.x * 0.35;
+        float gH = uPrimaryHue.y * 0.35;
+        float bH = uPrimaryHue.z * 0.35;
+
+        vec3 r_vec = vec3(1.0 - abs(rH), rH > 0.0 ? rH : 0.0, rH < 0.0 ? -rH : 0.0);
+        vec3 g_vec = vec3(gH < 0.0 ? -gH : 0.0, 1.0 - abs(gH), gH > 0.0 ? gH : 0.0);
+        vec3 b_vec = vec3(bH > 0.0 ? bH : 0.0, bH < 0.0 ? -bH : 0.0, 1.0 - abs(bH));
+
+        vec3 mixed = rgb.r * r_vec + rgb.g * g_vec + rgb.b * b_vec;
+
+        // 2. Saturation Shift (scales the mixed vector uniformly to strictly preserve hue ratio)
+        float total_rgb = rgb.r + rgb.g + rgb.b;
+        if (total_rgb > 0.0001) {
+            float rS = uPrimarySaturation.x;
+            float gS = uPrimarySaturation.y;
+            float bS = uPrimarySaturation.z;
+            
+            float sat_scale = (rgb.r * rS + rgb.g * gS + rgb.b * bS) / total_rgb;
+            
+            if (sat_scale > 0.0) {
+                mixed *= (1.0 + sat_scale);
+            } else {
+                vec3 lumaWeights = vec3(0.299, 0.587, 0.114);
+                float m_luma = dot(mixed, lumaWeights);
+                mixed = mix(mixed, vec3(m_luma), -sat_scale);
+            }
+        }
+
+        // 3. Lightness Shift
+        float rL = uPrimaryLightness.x * 0.5;
+        float gL = uPrimaryLightness.y * 0.5;
+        float bL = uPrimaryLightness.z * 0.5;
+        vec3 light_add = vec3(rgb.r * rL + rgb.g * gL + rgb.b * bL);
+
+        return clamp(vec3(minC) + mixed + light_add, 0.0, 1.0);
+    }
+
     vec3 applyLutCurve(vec3 l, int curveType) {
         if (curveType == 0) { // sRGB
             return linearToSrgb(l);
@@ -625,6 +676,10 @@ object Shaders {
                 color.rgb = applyOklchDensity(color.rgb, uVibrance);
                 color.rgb = sanitizeColor(color.rgb);
             }
+
+            // 6.5. 颜色校准 (Camera Calibration)
+            color.rgb = applyPrimaryCalibration(color.rgb);
+            color.rgb = sanitizeColor(color.rgb);
 
             color.rgb = applyLchColorMixer(color.rgb);
             color.rgb = sanitizeColor(color.rgb);

@@ -58,6 +58,15 @@ data class ColorRecipeParams(
     val magentaHue: Float = 0f,
     val magentaChroma: Float = 0f,
     val magentaLightness: Float = 0f,
+    val primaryRedHue: Float = 0f,
+    val primaryRedSaturation: Float = 0f,
+    val primaryRedLightness: Float = 0f,
+    val primaryGreenHue: Float = 0f,
+    val primaryGreenSaturation: Float = 0f,
+    val primaryGreenLightness: Float = 0f,
+    val primaryBlueHue: Float = 0f,
+    val primaryBlueSaturation: Float = 0f,
+    val primaryBlueLightness: Float = 0f,
     val lutIntensity: Float = 1f,   // 0.0 ~ 1.0 (LUT强度，1为完全应用)
     val remarks: String = "",       // 用户备注
     // 曲线控制点 [x0,y0, x1,y1, ...], null = 恒等曲线（无效果）
@@ -119,6 +128,15 @@ data class ColorRecipeParams(
                 magentaHue == 0f &&
                 magentaChroma == 0f &&
                 magentaLightness == 0f &&
+                primaryRedHue == 0f &&
+                primaryRedSaturation == 0f &&
+                primaryRedLightness == 0f &&
+                primaryGreenHue == 0f &&
+                primaryGreenSaturation == 0f &&
+                primaryGreenLightness == 0f &&
+                primaryBlueHue == 0f &&
+                primaryBlueSaturation == 0f &&
+                primaryBlueLightness == 0f &&
                 remarks.isEmpty() &&
                 masterCurvePoints == null &&
                 redCurvePoints == null &&
@@ -179,6 +197,15 @@ data class ColorRecipeParams(
                 magentaHue == other.magentaHue &&
                 magentaChroma == other.magentaChroma &&
                 magentaLightness == other.magentaLightness &&
+                primaryRedHue == other.primaryRedHue &&
+                primaryRedSaturation == other.primaryRedSaturation &&
+                primaryRedLightness == other.primaryRedLightness &&
+                primaryGreenHue == other.primaryGreenHue &&
+                primaryGreenSaturation == other.primaryGreenSaturation &&
+                primaryGreenLightness == other.primaryGreenLightness &&
+                primaryBlueHue == other.primaryBlueHue &&
+                primaryBlueSaturation == other.primaryBlueSaturation &&
+                primaryBlueLightness == other.primaryBlueLightness &&
                 lutIntensity == other.lutIntensity &&
                 remarks == other.remarks &&
                 (masterCurvePoints === other.masterCurvePoints || masterCurvePoints?.contentEquals(other.masterCurvePoints) == true) &&
@@ -262,6 +289,15 @@ enum class RecipeParam(
     MAGENTA_HUE(R.string.recipe_param_magenta_hue, -1.0f, 1.0f, 0f),
     MAGENTA_CHROMA(R.string.recipe_param_magenta_chroma, -1.0f, 1.0f, 0f),
     MAGENTA_LIGHTNESS(R.string.recipe_param_magenta_lightness, -1.0f, 1.0f, 0f),
+    PRIMARY_RED_HUE(R.string.recipe_param_primary_red_hue, -1.0f, 1.0f, 0f),
+    PRIMARY_RED_SATURATION(R.string.recipe_param_primary_red_saturation, -1.0f, 1.0f, 0f),
+    PRIMARY_RED_LIGHTNESS(R.string.recipe_param_primary_red_lightness, -1.0f, 1.0f, 0f),
+    PRIMARY_GREEN_HUE(R.string.recipe_param_primary_green_hue, -1.0f, 1.0f, 0f),
+    PRIMARY_GREEN_SATURATION(R.string.recipe_param_primary_green_saturation, -1.0f, 1.0f, 0f),
+    PRIMARY_GREEN_LIGHTNESS(R.string.recipe_param_primary_green_lightness, -1.0f, 1.0f, 0f),
+    PRIMARY_BLUE_HUE(R.string.recipe_param_primary_blue_hue, -1.0f, 1.0f, 0f),
+    PRIMARY_BLUE_SATURATION(R.string.recipe_param_primary_blue_saturation, -1.0f, 1.0f, 0f),
+    PRIMARY_BLUE_LIGHTNESS(R.string.recipe_param_primary_blue_lightness, -1.0f, 1.0f, 0f),
     LUT_INTENSITY(R.string.recipe_param_lut_intensity, 0.0f, 1.0f, 1f);
 
     /**
@@ -319,6 +355,15 @@ enum class RecipeParam(
             MAGENTA_HUE -> params.magentaHue
             MAGENTA_CHROMA -> params.magentaChroma
             MAGENTA_LIGHTNESS -> params.magentaLightness
+            PRIMARY_RED_HUE -> params.primaryRedHue
+            PRIMARY_RED_SATURATION -> params.primaryRedSaturation
+            PRIMARY_RED_LIGHTNESS -> params.primaryRedLightness
+            PRIMARY_GREEN_HUE -> params.primaryGreenHue
+            PRIMARY_GREEN_SATURATION -> params.primaryGreenSaturation
+            PRIMARY_GREEN_LIGHTNESS -> params.primaryGreenLightness
+            PRIMARY_BLUE_HUE -> params.primaryBlueHue
+            PRIMARY_BLUE_SATURATION -> params.primaryBlueSaturation
+            PRIMARY_BLUE_LIGHTNESS -> params.primaryBlueLightness
             LUT_INTENSITY -> params.lutIntensity
         }
     }
@@ -372,6 +417,15 @@ enum class RecipeParam(
             MAGENTA_HUE -> params.copy(magentaHue = clampedValue)
             MAGENTA_CHROMA -> params.copy(magentaChroma = clampedValue)
             MAGENTA_LIGHTNESS -> params.copy(magentaLightness = clampedValue)
+            PRIMARY_RED_HUE -> params.copy(primaryRedHue = clampedValue)
+            PRIMARY_RED_SATURATION -> params.copy(primaryRedSaturation = clampedValue)
+            PRIMARY_RED_LIGHTNESS -> params.copy(primaryRedLightness = clampedValue)
+            PRIMARY_GREEN_HUE -> params.copy(primaryGreenHue = clampedValue)
+            PRIMARY_GREEN_SATURATION -> params.copy(primaryGreenSaturation = clampedValue)
+            PRIMARY_GREEN_LIGHTNESS -> params.copy(primaryGreenLightness = clampedValue)
+            PRIMARY_BLUE_HUE -> params.copy(primaryBlueHue = clampedValue)
+            PRIMARY_BLUE_SATURATION -> params.copy(primaryBlueSaturation = clampedValue)
+            PRIMARY_BLUE_LIGHTNESS -> params.copy(primaryBlueLightness = clampedValue)
             LUT_INTENSITY -> params.copy(lutIntensity = clampedValue)
         }
     }
