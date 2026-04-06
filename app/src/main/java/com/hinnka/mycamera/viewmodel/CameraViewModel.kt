@@ -2567,7 +2567,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     suspend fun extractAndSaveColorRecipeFromPlut(lutId: String, uri: android.net.Uri) = withContext(Dispatchers.IO) {
         try {
-            val recipeJson = getApplication<android.app.Application>().contentResolver
+            val recipeJson = getApplication<Application>().contentResolver
                 .openInputStream(uri)?.use { LutConverter.extractRecipeJsonFromPlut(it) }
                 ?: return@withContext
             val params = ColorRecipeParams.fromJson(recipeJson)

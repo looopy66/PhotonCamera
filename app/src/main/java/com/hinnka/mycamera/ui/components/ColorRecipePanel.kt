@@ -281,7 +281,7 @@ fun ColorRecipePanel(
                 } else {
                     // 备注 Tab
                     ColorRecipeRemarksBar(
-                        remarks = currentParams.remarks,
+                        remarks = currentParams.remarks ?: "",
                         onRemarksChange = onRemarksChange,
                         modifier = Modifier.fillMaxWidth()
                     )

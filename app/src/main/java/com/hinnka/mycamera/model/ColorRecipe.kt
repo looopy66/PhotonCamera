@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.model
 
+import androidx.annotation.Keep
 import com.google.gson.Gson
 import com.hinnka.mycamera.R
 
@@ -8,6 +9,7 @@ import com.hinnka.mycamera.R
  *
  * 定义所有色彩调整参数的值
  */
+@Keep
 data class ColorRecipeParams(
     val exposure: Float = 0f,       // -2.0 ~ +2.0 (EV值，曝光调整)
     val contrast: Float = 1f,       // 0.5 ~ 1.5 (对比度，1为无调整)
@@ -68,7 +70,7 @@ data class ColorRecipeParams(
     val primaryBlueSaturation: Float = 0f,
     val primaryBlueLightness: Float = 0f,
     val lutIntensity: Float = 1f,   // 0.0 ~ 1.0 (LUT强度，1为完全应用)
-    val remarks: String = "",       // 用户备注
+    val remarks: String? = "",       // 用户备注
     // 曲线控制点 [x0,y0, x1,y1, ...], null = 恒等曲线（无效果）
     val masterCurvePoints: FloatArray? = null,
     val redCurvePoints: FloatArray? = null,
@@ -137,7 +139,7 @@ data class ColorRecipeParams(
                 primaryBlueHue == 0f &&
                 primaryBlueSaturation == 0f &&
                 primaryBlueLightness == 0f &&
-                remarks.isEmpty() &&
+                remarks.isNullOrEmpty() &&
                 masterCurvePoints == null &&
                 redCurvePoints == null &&
                 greenCurvePoints == null &&
@@ -225,8 +227,9 @@ data class ColorRecipeParams(
         /**
          * 从 JSON 字符串反序列化
          */
-        fun fromJson(json: String): ColorRecipeParams =
-            gson.fromJson(json, ColorRecipeParams::class.java) ?: DEFAULT
+        fun fromJson(json: String): ColorRecipeParams {
+            return gson.fromJson(json, ColorRecipeParams::class.java) ?: return DEFAULT
+        }
 
         /**
          * 默认参数（无调整）
