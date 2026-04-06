@@ -10,19 +10,10 @@ import android.os.Environment
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.*
 import androidx.compose.animation.core.*
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -389,23 +380,53 @@ fun CameraScreen(
                             .onGloballyPositioned { coordinates ->
                                 previewBounds = coordinates.boundsInRoot()
                             }
-                            .pointerInput(Unit) {
+                            .pointerInput(state.availableCameras) {
                                 var totalDrag = 0f
-                                detectHorizontalDragGestures(
-                                    onDragEnd = {
-                                        if (abs(totalDrag) > 100) {
-                                            if (totalDrag > 0) {
-                                                viewModel.switchToPreviousLut()
+                                awaitEachGesture {
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        if (event.changes.size >= 2) {
+                                            // Pinch to zoom
+                                            viewModel.isZooming = true
+                                            val zoom = event.calculateZoom()
+                                            if (zoom != 1f) {
+                                                val nextZoom = (viewModel.zoomRatioByMain * zoom).coerceIn(viewModel.globalMinZoom, viewModel.globalMaxZoom)
+                                                // Check for lens switch
+                                                val info = state.getCurrentCameraInfo()
+                                                val camera = viewModel.findOptimalLens(nextZoom, state.availableCameras, info?.cameraId ?: "0")
+                                                if (camera != null && camera.cameraId != info?.cameraId) {
+                                                    viewModel.switchToLens(camera.cameraId)
+                                                }
+                                                viewModel.setZoomRatio(nextZoom)
+                                            }
+                                            event.changes.forEach { it.consume() }
+                                        } else if (event.changes.size == 1) {
+                                            // Single finger -> horizontal drag for LUT switch
+                                            val change = event.changes[0]
+                                            if (change.pressed) {
+                                                val dragAmount = change.position.x - change.previousPosition.x
+                                                totalDrag += dragAmount
                                             } else {
-                                                viewModel.switchToNextLut()
+                                                // onDragEnd logic
+                                                if (abs(totalDrag) > 100) {
+                                                    if (totalDrag > 0) {
+                                                        viewModel.switchToPreviousLut()
+                                                    } else {
+                                                        viewModel.switchToNextLut()
+                                                    }
+                                                }
+                                                totalDrag = 0f
+                                                viewModel.isZooming = false
                                             }
                                         }
-                                        totalDrag = 0f
-                                    },
-                                    onHorizontalDrag = { _, dragAmount ->
-                                        totalDrag += dragAmount
+                                        
+                                        if (event.changes.all { !it.pressed }) {
+                                            viewModel.isZooming = false
+                                            totalDrag = 0f
+                                            break
+                                        }
                                     }
-                                )
+                                }
                             },
                     ) {
                         val currentCameraId = state.currentCameraId

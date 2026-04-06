@@ -1,6 +1,10 @@
 package com.hinnka.mycamera.ui.camera
 
+import androidx.compose.animation.*
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -15,19 +19,30 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.CameraInfo
 import com.hinnka.mycamera.camera.LensType
 import com.hinnka.mycamera.viewmodel.CameraViewModel
+import kotlinx.coroutines.delay
 import kotlin.math.abs
+import kotlin.math.exp
+import kotlin.math.ln
 import kotlin.math.roundToInt
 
 /**
@@ -65,70 +80,218 @@ fun ZoomControlBar(
     val lensZoomStops = viewModel.calculateLensZoomStops(availableCameras, currentCamera)
     val zoomStops = viewModel.allZoomStops(lensZoomStops, mainCamera, currentCamera, customFocalLengths)
 
+    val cameraState by viewModel.state.collectAsState()
+    val minZoom = remember(cameraState.availableCameras) {
+        cameraState.availableCameras.filter { it.lensType != LensType.FRONT }.minOfOrNull { it.minZoom * it.intrinsicZoomRatio } ?: 1f
+    }
+    val maxZoom = remember(cameraState.availableCameras) {
+        cameraState.availableCameras.filter { it.lensType != LensType.FRONT }.maxOfOrNull { it.maxZoom * it.intrinsicZoomRatio } ?: 20f
+    }
+
+    var isContinuousZooming by remember { mutableStateOf(false) }
+    var lastInteractionTime by remember { mutableLongStateOf(0L) }
+    // 使用内部状态暂存变焦值，避免 StateFlow 异步导致的“拉回”现象
+    var internalZoomRatio by remember { mutableFloatStateOf(zoomRatio) }
+    var isDragging by remember { mutableStateOf(false) }
+    
+    // 离开连续变焦后显示的临时档位逻辑
+    var customZoomStop by remember { mutableStateOf<Float?>(null) }
+    var replacedStopIndex by remember { mutableIntStateOf(-1) }
+    var originalStopRatio by remember { mutableFloatStateOf(0f) }
+
+    // 当不处于拖拽状态且没有临时档位时，或者处于外部变焦（Pinch）过程中，同步外部变焦值
+    LaunchedEffect(zoomRatio, isDragging, isContinuousZooming, viewModel.isZooming) {
+        if (viewModel.isZooming || (!isDragging && !isContinuousZooming && customZoomStop == null)) {
+            internalZoomRatio = zoomRatio
+        }
+    }
+
+    // 监听外部变焦状态 (如预览 Pinch)
+    LaunchedEffect(viewModel.isZooming) {
+        if (viewModel.isZooming) {
+            isContinuousZooming = true
+            customZoomStop = null
+            replacedStopIndex = -1
+        }
+        lastInteractionTime = System.currentTimeMillis()
+    }
+
+    // 自动恢复默认 UI 的定时器
+    LaunchedEffect(isContinuousZooming, lastInteractionTime, isDragging, viewModel.isZooming) {
+        if (isContinuousZooming && !isDragging && !viewModel.isZooming) {
+            delay(2000)
+            isContinuousZooming = false
+            
+            // 找到距离当前倍率最近的已有档位索引
+            val closestIndex = zoomStops.indices.minByOrNull { abs(zoomStops[it] - internalZoomRatio) } ?: -1
+            if (closestIndex != -1) {
+                val closestStop = zoomStops[closestIndex]
+                if (abs(closestStop - internalZoomRatio) > 0.05f) {
+                    // 替换该档位
+                    customZoomStop = internalZoomRatio
+                    replacedStopIndex = closestIndex
+                    originalStopRatio = closestStop
+                } else {
+                    // 如果极其接近，直接吸附并清空覆盖状态
+                    onZoomChange(closestStop)
+                    customZoomStop = null
+                    replacedStopIndex = -1
+                }
+            }
+        }
+    }
+
     Box(
         modifier = modifier
             .fillMaxWidth()
             .padding(8.dp)
-            .height(32.dp),
+            .height(32.dp)
+            .pointerInput(minZoom, maxZoom, zoomStops) {
+                var dragAccumulated = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = {
+                        dragAccumulated = 0f
+                        isDragging = true
+                        customZoomStop = null
+                        replacedStopIndex = -1
+                    },
+                    onHorizontalDrag = { change, dragAmount ->
+                        if (!isContinuousZooming) {
+                            dragAccumulated += dragAmount
+                            if (abs(dragAccumulated) > 10.dp.toPx()) {
+                                isContinuousZooming = true
+                            }
+                        }
+
+                        if (isContinuousZooming) {
+                            change.consume()
+                            lastInteractionTime = System.currentTimeMillis()
+                            // 使用指数变焦公式计算新倍率
+                            val sensitivity = 0.002f
+                            val newZoom = (internalZoomRatio * exp(-dragAmount.toDouble() * sensitivity).toFloat()).coerceIn(minZoom, maxZoom)
+                            internalZoomRatio = newZoom
+                            
+                            // 检查是否需要切换镜头
+                            val camera = viewModel.findOptimalLens(newZoom, availableCameras, currentCameraIdState)
+                            if (camera != null && camera.cameraId != currentCameraIdState) {
+                                onLensSwitch(camera.cameraId)
+                            }
+                            onZoomChange(newZoom)
+                        }
+                    },
+                    onDragEnd = {
+                        isDragging = false
+                        dragAccumulated = 0f
+                        lastInteractionTime = System.currentTimeMillis()
+                    },
+                    onDragCancel = {
+                        isDragging = false
+                        dragAccumulated = 0f
+                        lastInteractionTime = System.currentTimeMillis()
+                    }
+                )
+            },
         contentAlignment = Alignment.Center
     ) {
-        // Display Mode Toggle (Left)
-        IconButton(
-            onClick = {
-                displayMode = if (displayMode == ZoomDisplayMode.ZOOM_RATIO) {
-                    ZoomDisplayMode.FOCAL_LENGTH
-                } else {
-                    ZoomDisplayMode.ZOOM_RATIO
-                }
-            },
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .size(32.dp)
+        AnimatedVisibility(
+            visible = !isContinuousZooming,
+            enter = fadeIn() + expandHorizontally(),
+            exit = fadeOut() + shrinkHorizontally(),
+            modifier = Modifier.align(Alignment.CenterStart)
         ) {
-            Icon(
-                imageVector = Icons.Default.SwapHoriz,
-                contentDescription = stringResource(R.string.toggle_display_mode),
+            // Display Mode Toggle (Left)
+            IconButton(
+                onClick = {
+                    displayMode = if (displayMode == ZoomDisplayMode.ZOOM_RATIO) {
+                        ZoomDisplayMode.FOCAL_LENGTH
+                    } else {
+                        ZoomDisplayMode.ZOOM_RATIO
+                    }
+                },
                 modifier = Modifier.size(32.dp)
-                    .background(Color.Black.copy(alpha = 0.3f), CircleShape)
-                    .padding(8.dp),
-                tint = Color.White
-            )
+            ) {
+                Icon(
+                    imageVector = Icons.Default.SwapHoriz,
+                    contentDescription = stringResource(R.string.toggle_display_mode),
+                    modifier = Modifier.size(32.dp)
+                        .background(Color.Black.copy(alpha = 0.3f), CircleShape)
+                        .padding(8.dp),
+                    tint = Color.White
+                )
+            }
         }
 
-        // 右侧滤镜按钮
-        IconButton(
-            onClick = onFilterClick,
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .size(32.dp)
+        AnimatedVisibility(
+            visible = !isContinuousZooming,
+            enter = fadeIn() + expandHorizontally(),
+            exit = fadeOut() + shrinkHorizontally(),
+            modifier = Modifier.align(Alignment.CenterEnd)
         ) {
-            Icon(
-                imageVector = Icons.Default.AutoAwesome,
-                contentDescription = stringResource(R.string.filters_panel),
+            // 右侧滤镜按钮
+            IconButton(
+                onClick = onFilterClick,
                 modifier = Modifier.size(32.dp)
-                    .background(Color.Black.copy(alpha = 0.3f), CircleShape)
-                    .padding(8.dp),
-                tint = Color.Yellow
-            )
+            ) {
+                Icon(
+                    imageVector = Icons.Default.AutoAwesome,
+                    contentDescription = stringResource(R.string.filters_panel),
+                    modifier = Modifier.size(32.dp)
+                        .background(Color.Black.copy(alpha = 0.3f), CircleShape)
+                        .padding(8.dp),
+                    tint = Color.Yellow
+                )
+            }
         }
 
         // Zoom Ruler (Center)
-        ZoomRuler(
-            zoomRatio = zoomRatio,
-            lensStops = lensZoomStops,
-            stops = zoomStops,
-            mainCamera = mainCamera,
-            displayMode = displayMode,
-            onZoomChange = { newZoom ->
-                // 检查是否需要切换镜头
-                val camera = viewModel.findOptimalLens(newZoom, availableCameras, currentCameraIdState)
-                if (camera != null && camera.cameraId != currentCameraIdState) {
-                    onLensSwitch(camera.cameraId)
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .padding(horizontal = if (isContinuousZooming) 0.dp else 40.dp)
+                .fillMaxWidth(),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isContinuousZooming) {
+                ZoomContinuousRuler(
+                    zoomRatio = internalZoomRatio,
+                    minZoom = minZoom,
+                    maxZoom = maxZoom,
+                    mainCamera = mainCamera,
+                    displayMode = displayMode,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                val effectiveStops = remember(zoomStops, customZoomStop, replacedStopIndex) {
+                    if (customZoomStop != null && replacedStopIndex != -1) {
+                        zoomStops.toMutableList().apply {
+                            this[replacedStopIndex] = customZoomStop!!
+                        }
+                    } else {
+                        zoomStops
+                    }
                 }
-                onZoomChange(newZoom)
-            },
-            modifier = Modifier.fillMaxHeight()
-        )
+                ZoomRuler(
+                    zoomRatio = internalZoomRatio,
+                    lensStops = lensZoomStops,
+                    stops = effectiveStops,
+                    mainCamera = mainCamera,
+                    displayMode = displayMode,
+                    onZoomChange = { stop ->
+                        if (customZoomStop != null && stop == customZoomStop) {
+                            // 点击了替换后的档位，恢复原来的档位并吸附
+                            onZoomChange(originalStopRatio)
+                            customZoomStop = null
+                            replacedStopIndex = -1
+                        } else {
+                            onZoomChange(stop)
+                            customZoomStop = null
+                            replacedStopIndex = -1
+                        }
+                    },
+                    modifier = Modifier.fillMaxHeight()
+                )
+            }
+        }
     }
 }
 
@@ -188,6 +351,149 @@ fun ZoomRuler(
             Box(modifier = Modifier.size(32.dp).autoRotate(), contentAlignment = Alignment.Center) {
                 Text(text, style = style)
             }
+        }
+    }
+}
+
+/**
+ * 连续变焦标尺
+ */
+@Composable
+fun ZoomContinuousRuler(
+    zoomRatio: Float,
+    minZoom: Float,
+    maxZoom: Float,
+    mainCamera: CameraInfo?,
+    displayMode: ZoomDisplayMode,
+    modifier: Modifier = Modifier
+) {
+    val yellow = Color(0xFFFFD700)
+    val textMeasurer = rememberTextMeasurer()
+
+    Box(
+        modifier = modifier
+            .background(Color.Black.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 4.dp)) {
+            val width = size.width
+            val height = size.height
+            val yellowPx = yellow
+            
+            // 绘制刻度。在当前 Zoom 附近绘制。
+            // 我们在尺子上每隔一定的比例（比如 1.1倍）画一个大刻度。
+            val zoomStep = 1.1f
+            val visibleRatioRange = 1.5f // 屏幕宽度覆盖的变焦倍率范围 (约 1.5x)
+            
+            // 计算尺子上每像素对应的变焦倍率对数
+            // ln(zoomRatio) 映射到中心。
+            // ln(z) = ln(zoomRatio) + (x - center) * logRangePerPixel
+            val logRangePerPixel = ln(visibleRatioRange.toDouble()) / width
+            
+            fun zoomToX(z: Float): Float {
+                return (width / 2 + (ln(z.toDouble() / zoomRatio.toDouble()) / logRangePerPixel)).toFloat()
+            }
+            
+            fun xToZoom(x: Float): Float {
+                return (zoomRatio * exp((x - width / 2) * logRangePerPixel)).toFloat()
+            }
+
+            // 绘制主要刻度 (0.1, 0.5, 1, 2, 5, 10, etc.)
+            // 为了简单，我们绘制 1.0, 2.0, 3.0 等整数，以及 0.5 的倍数
+            val minVisibleZoom = xToZoom(0f)
+            val maxVisibleZoom = xToZoom(width)
+            
+            val majorSteps = listOf(0.5f, 1f, 2f, 3f, 4f, 5f, 6f, 7f, 8f, 9f, 10f, 12f, 15f, 20f, 30f, 50f)
+            majorSteps.forEach { stepValue ->
+                if (stepValue in minVisibleZoom..maxVisibleZoom) {
+                    val x = zoomToX(stepValue)
+                    val tickHeight = 12.dp.toPx()
+                    val tickWidth = 1.5.dp.toPx()
+                    
+                    drawRect(
+                        color = Color.White.copy(alpha = 0.8f),
+                        topLeft = Offset(x - tickWidth / 2f, height - tickHeight),
+                        size = Size(tickWidth, tickHeight)
+                    )
+                    
+                    val text = when (displayMode) {
+                        ZoomDisplayMode.ZOOM_RATIO -> formatZoomRatio(stepValue)
+                        ZoomDisplayMode.FOCAL_LENGTH -> zoomRatioToFocalLength(stepValue, mainCamera)
+                    }
+                    
+                    val textLayoutResult = textMeasurer.measure(
+                        text = text,
+                        style = androidx.compose.ui.text.TextStyle(
+                            fontSize = 9.sp,
+                            color = Color.White.copy(alpha = 0.8f),
+                            textAlign = TextAlign.Center
+                        )
+                    )
+                    
+                    drawText(
+                        textLayoutResult = textLayoutResult,
+                        topLeft = Offset(
+                            x - textLayoutResult.size.width / 2f,
+                            y = 0f
+                        )
+                    )
+                }
+            }
+
+            // 绘制细刻度 (0.1x 的倍数)
+            var minor = (Math.floor(minVisibleZoom * 10.0) / 10.0).toFloat()
+            while (minor <= maxVisibleZoom) {
+                if (minor >= minZoom && minor <= maxZoom) {
+                    val x = zoomToX(minor)
+                    if (x in 0f..width) {
+                        val isMajor = majorSteps.any { abs(it - minor) < 0.01f }
+                        if (!isMajor) {
+                            val tickHeight = 6.dp.toPx()
+                            val tickWidth = 1.dp.toPx()
+                            drawRect(
+                                color = Color.White.copy(alpha = 0.4f),
+                                topLeft = Offset(x - tickWidth / 2f, height - tickHeight),
+                                size = Size(tickWidth, tickHeight)
+                            )
+                        }
+                    }
+                }
+                minor += 0.1f
+            }
+            
+            // 绘制中心指示灯 (固定在中心)
+            val centerX = width / 2f
+            val indicatorWidth = 2.dp.toPx()
+            
+            // 绘制指示器背景发光
+            drawCircle(
+                color = yellowPx.copy(alpha = 0.2f),
+                center = Offset(centerX, height - 6.dp.toPx()),
+                radius = 8.dp.toPx()
+            )
+            
+            drawRect(
+                color = yellowPx,
+                topLeft = Offset(centerX - indicatorWidth / 2f, height - 15.dp.toPx()),
+                size = Size(indicatorWidth, 15.dp.toPx())
+            )
+
+            // 显示当前数值 (在尺子上方的浮窗感)
+            val currentText = when (displayMode) {
+                ZoomDisplayMode.ZOOM_RATIO -> formatZoomRatio(zoomRatio)
+                ZoomDisplayMode.FOCAL_LENGTH -> zoomRatioToFocalLength(zoomRatio, mainCamera) + "mm"
+            }
+            val currentTextLayout = textMeasurer.measure(
+                text = currentText,
+                style = androidx.compose.ui.text.TextStyle(
+                    fontSize = 14.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    color = yellowPx
+                )
+            )
+            drawText(
+                currentTextLayout,
+                topLeft = Offset(centerX - currentTextLayout.size.width / 2f, -18.dp.toPx())
+            )
         }
     }
 }

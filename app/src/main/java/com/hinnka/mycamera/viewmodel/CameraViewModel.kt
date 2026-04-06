@@ -138,6 +138,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         private set
 
     var zoomRatioByMain by mutableFloatStateOf(1f)
+    var isZooming by mutableStateOf(false)
+    val globalMinZoom: Float
+        get() = state.value.availableCameras.filter { it.lensType != LensType.FRONT }.minOfOrNull { it.minZoom * it.intrinsicZoomRatio } ?: 1f
+    val globalMaxZoom: Float
+        get() = state.value.availableCameras.filter { it.lensType != LensType.FRONT }.maxOfOrNull { it.maxZoom * it.intrinsicZoomRatio } ?: 20f
 
     // 付费弹窗状态
     var showPaymentDialog by mutableStateOf(false)
