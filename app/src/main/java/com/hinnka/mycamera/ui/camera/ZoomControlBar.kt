@@ -277,16 +277,14 @@ fun ZoomControlBar(
                     mainCamera = mainCamera,
                     displayMode = displayMode,
                     onZoomChange = { stop ->
-                        if (customZoomStop != null && stop == customZoomStop) {
-                            // 点击了替换后的档位，恢复原来的档位并吸附
-                            onZoomChange(originalStopRatio)
-                            customZoomStop = null
-                            replacedStopIndex = -1
-                        } else {
-                            onZoomChange(stop)
-                            customZoomStop = null
-                            replacedStopIndex = -1
+                        val targetStop = if (customZoomStop != null && stop == customZoomStop) originalStopRatio else stop
+                        val camera = viewModel.findOptimalLens(targetStop, availableCameras, currentCameraIdState)
+                        if (camera != null && camera.cameraId != currentCameraIdState) {
+                            onLensSwitch(camera.cameraId)
                         }
+                        onZoomChange(targetStop)
+                        customZoomStop = null
+                        replacedStopIndex = -1
                     },
                     modifier = Modifier.fillMaxHeight()
                 )
