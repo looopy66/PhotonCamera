@@ -24,6 +24,7 @@ class RawGainmapProducer : GainmapProducer {
         }
 
         val gainmapBitmap = createGainmapBitmap(sdrBase, alignedHdr) ?: return null
+        val fullHdrRatio = source.displayHdrSdrRatio.takeIf { it > 1f } ?: DEFAULT_FULL_HDR_RATIO
         val gainmap = Gainmap(gainmapBitmap).apply {
             setRatioMin(MIN_GAIN_RATIO, MIN_GAIN_RATIO, MIN_GAIN_RATIO)
             setRatioMax(MAX_GAIN_RATIO, MAX_GAIN_RATIO, MAX_GAIN_RATIO)
@@ -31,7 +32,7 @@ class RawGainmapProducer : GainmapProducer {
             setEpsilonSdr(EPSILON, EPSILON, EPSILON)
             setEpsilonHdr(EPSILON, EPSILON, EPSILON)
             setMinDisplayRatioForHdrTransition(1.0f)
-            setDisplayRatioForFullHdr(1.35f)
+            setDisplayRatioForFullHdr(fullHdrRatio)
         }
 
         return GainmapResult(
@@ -61,7 +62,8 @@ class RawGainmapProducer : GainmapProducer {
                 val rawRatio = (hdrLuma / (sdrLuma + EPSILON)).coerceIn(MIN_GAIN_RATIO, MAX_GAIN_RATIO)
                 val hdrEligibility = smoothstep(HDR_ELIGIBILITY_START, HDR_ELIGIBILITY_END, hdrLuma)
                 val deltaMask = smoothstep(DELTA_START, DELTA_END, hdrLuma - sdrLuma)
-                val selectiveWeight = (hdrEligibility * deltaMask).pow(WEIGHT_POWER)
+                val highlightMask = smoothstep(0.7f, 1.0f, sdrLuma)
+                val selectiveWeight = (hdrEligibility * deltaMask * highlightMask).pow(WEIGHT_POWER)
                 val targetRatio = (1.0f + (rawRatio - 1.0f) * selectiveWeight)
                     .coerceIn(MIN_GAIN_RATIO, MAX_GAIN_RATIO)
                 val encoded = ((ln(targetRatio / MIN_GAIN_RATIO) / logRatioSpan) * 255.0f)
@@ -72,8 +74,34 @@ class RawGainmapProducer : GainmapProducer {
             }
         }
 
-        contents.copyPixelsFromBuffer(ByteBuffer.wrap(pixels))
+        val blurred = blurGainmap(pixels, width, height)
+        contents.copyPixelsFromBuffer(ByteBuffer.wrap(blurred))
         return contents
+    }
+
+    private fun blurGainmap(pixels: ByteArray, width: Int, height: Int): ByteArray {
+        val r = BLUR_RADIUS
+        val temp = ByteArray(width * height)
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                var sum = 0
+                for (dx in -r..r) {
+                    sum += pixels[y * width + (x + dx).coerceIn(0, width - 1)].toInt() and 0xFF
+                }
+                temp[y * width + x] = (sum / (2 * r + 1)).toByte()
+            }
+        }
+        val result = ByteArray(width * height)
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                var sum = 0
+                for (dy in -r..r) {
+                    sum += temp[(y + dy).coerceIn(0, height - 1) * width + x].toInt() and 0xFF
+                }
+                result[y * width + x] = (sum / (2 * r + 1)).toByte()
+            }
+        }
+        return result
     }
 
     private fun sampleSdrLuma(bitmap: Bitmap, x: Int, y: Int): Float {
@@ -114,5 +142,7 @@ class RawGainmapProducer : GainmapProducer {
         private const val DELTA_START = 0.02f
         private const val DELTA_END = 0.22f
         private const val WEIGHT_POWER = 1.15f
+        private const val BLUR_RADIUS = 3
+        private const val DEFAULT_FULL_HDR_RATIO = 1.35f
     }
 }

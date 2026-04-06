@@ -3,7 +3,8 @@
     "allow": [
       "Bash(wc -l:*)",
       "Bash(./gradlew :app:compileDefaultDebugKotlin)",
-      "Bash(./gradlew :app:compileDebugKotlin)"
+      "Bash(./gradlew :app:compileDebugKotlin)",
+      "Bash(grep:*)"
     ]
   }
 }

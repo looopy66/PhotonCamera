@@ -72,6 +72,8 @@ import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import com.hinnka.mycamera.lut.creator.LutCreatorScreen
 import com.hinnka.mycamera.lut.creator.LutCreatorViewModel
 import com.hinnka.mycamera.utils.DeviceUtil
+import com.hinnka.mycamera.gallery.PhotoManager
+import com.hinnka.mycamera.utils.PLog
 
 /**
  * 路由常量
@@ -135,6 +137,10 @@ class MainActivity : ComponentActivity() {
         applyPreferredWindowColorMode()
 
         OrientationObserver.observe(this)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            PhotoManager.hdrSdrRatio = display?.hdrSdrRatio ?: 0f
+        }
+        PLog.d("MainActivity", "hdrSdrRatio=${PhotoManager.hdrSdrRatio}")
 
         // 检查权限
         hasPermissions = permissions.all {

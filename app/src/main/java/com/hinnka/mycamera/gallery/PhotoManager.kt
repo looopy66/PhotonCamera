@@ -78,6 +78,9 @@ object PhotoManager {
 
     val processingScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val gainmapProducer = UnifiedGainmapProducer()
+
+    @Volatile
+    var hdrSdrRatio: Float = 0f
     private val detailHdrBuildJobs = ConcurrentHashMap<String, Job>()
     private val _detailHdrReadyEvents = MutableSharedFlow<String>(extraBufferCapacity = 16)
     val detailHdrReadyEvents: SharedFlow<String> = _detailHdrReadyEvents.asSharedFlow()

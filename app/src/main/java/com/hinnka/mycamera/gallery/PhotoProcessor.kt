@@ -103,7 +103,8 @@ class PhotoProcessor(
                     sdrBase = sdrBitmap,
                     hdrReference = HdrBuffer(hdrReferenceBitmap, "hlg_sidecar_rgba16"),
                     sourceKind = SourceKind.HLG_CAPTURE,
-                    confidence = 0.75f
+                    confidence = 0.75f,
+                    displayHdrSdrRatio = readDisplayHdrSdrRatio()
                 )
             }
 
@@ -154,7 +155,8 @@ class PhotoProcessor(
                     sdrBase = sdrBitmap,
                     hdrReference = hdrReferenceBitmap?.let { HdrBuffer(it, "hlg_bt2020_linear") },
                     sourceKind = SourceKind.HLG_CAPTURE,
-                    confidence = source.confidence
+                    confidence = source.confidence,
+                    displayHdrSdrRatio = readDisplayHdrSdrRatio()
                 )
             } finally {
                 YuvProcessor.free(data)
@@ -178,7 +180,8 @@ class PhotoProcessor(
                 sdrBase = sdrBitmap,
                 hdrReference = null,
                 sourceKind = SourceKind.SDR_BITMAP,
-                confidence = 0.35f
+                confidence = 0.35f,
+                displayHdrSdrRatio = readDisplayHdrSdrRatio()
             )
         }
 
@@ -188,6 +191,8 @@ class PhotoProcessor(
     fun hasDeferredHlgSource(metadata: PhotoMetadata): Boolean {
         return hlgImageProcessor.isHlgCapture(metadata)
     }
+
+    private fun readDisplayHdrSdrRatio(): Float = PhotoManager.hdrSdrRatio
 
     suspend fun prepareUltraHdrSourceFromRawResult(
         context: Context,
@@ -199,6 +204,7 @@ class PhotoProcessor(
         chromaNoiseReduction: Float = 0f,
         applyMirror: Boolean = false,
     ): GainmapSourceSet? = withContext(Dispatchers.IO) {
+        val displayHdrSdrRatio = readDisplayHdrSdrRatio()
         val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
         val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
         val finalChromaNoiseReduction =
@@ -260,7 +266,8 @@ class PhotoProcessor(
                 )
             },
             sourceKind = SourceKind.RAW,
-            confidence = 0.8f
+            confidence = 0.8f,
+            displayHdrSdrRatio = displayHdrSdrRatio
         )
     }
 

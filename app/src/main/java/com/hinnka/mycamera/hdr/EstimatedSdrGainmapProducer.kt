@@ -16,6 +16,7 @@ class EstimatedSdrGainmapProducer : GainmapProducer {
         if (source.sourceKind != SourceKind.SDR_BITMAP) return null
 
         val gainmapBitmap = createGainmapBitmap(source.sdrBase) ?: return null
+        val fullHdrRatio = source.displayHdrSdrRatio.takeIf { it > 1f } ?: DEFAULT_FULL_HDR_RATIO
         val gainmap = Gainmap(gainmapBitmap).apply {
             setRatioMin(MIN_GAIN_RATIO, MIN_GAIN_RATIO, MIN_GAIN_RATIO)
             setRatioMax(MAX_GAIN_RATIO, MAX_GAIN_RATIO, MAX_GAIN_RATIO)
@@ -23,7 +24,7 @@ class EstimatedSdrGainmapProducer : GainmapProducer {
             setEpsilonSdr(EPSILON, EPSILON, EPSILON)
             setEpsilonHdr(EPSILON, EPSILON, EPSILON)
             setMinDisplayRatioForHdrTransition(1.02f)
-            setDisplayRatioForFullHdr(1.8f)
+            setDisplayRatioForFullHdr(fullHdrRatio)
         }
 
         return GainmapResult(
@@ -72,8 +73,34 @@ class EstimatedSdrGainmapProducer : GainmapProducer {
             }
         }
 
-        contents.copyPixelsFromBuffer(ByteBuffer.wrap(pixels))
+        val blurred = blurGainmap(pixels, width, height)
+        contents.copyPixelsFromBuffer(ByteBuffer.wrap(blurred))
         return contents
+    }
+
+    private fun blurGainmap(pixels: ByteArray, width: Int, height: Int): ByteArray {
+        val r = BLUR_RADIUS
+        val temp = ByteArray(width * height)
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                var sum = 0
+                for (dx in -r..r) {
+                    sum += pixels[y * width + (x + dx).coerceIn(0, width - 1)].toInt() and 0xFF
+                }
+                temp[y * width + x] = (sum / (2 * r + 1)).toByte()
+            }
+        }
+        val result = ByteArray(width * height)
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                var sum = 0
+                for (dy in -r..r) {
+                    sum += temp[(y + dy).coerceIn(0, height - 1) * width + x].toInt() and 0xFF
+                }
+                result[y * width + x] = (sum / (2 * r + 1)).toByte()
+            }
+        }
+        return result
     }
 
     private fun srgbToLinear(value: Float): Float {
@@ -95,8 +122,8 @@ class EstimatedSdrGainmapProducer : GainmapProducer {
         private const val MIN_GAIN_RATIO = 1.0f
         private const val MAX_GAIN_RATIO = 7.0f
         private const val EPSILON = 1e-4f
-        private const val HIGHLIGHT_START = 0.6f
-        private const val HIGHLIGHT_END = 0.95f
+        private const val HIGHLIGHT_START = 0.7f
+        private const val HIGHLIGHT_END = 1f
         private const val PEAK_START = 0.72f
         private const val PEAK_END = 1.0f
         private const val CLIP_START = 0.96f
@@ -106,5 +133,7 @@ class EstimatedSdrGainmapProducer : GainmapProducer {
         private const val BASE_BOOST = 0.55f
         private const val PEAK_POWER = 0.7f
         private const val PEAK_BOOST = 1.5f
+        private const val BLUR_RADIUS = 3
+        private const val DEFAULT_FULL_HDR_RATIO = 1.8f
     }
 }
