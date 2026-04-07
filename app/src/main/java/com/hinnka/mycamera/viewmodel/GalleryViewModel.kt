@@ -1481,12 +1481,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /**
      * 生成预览缓存 key
      */
-    private fun previewCacheKey(photoData: PhotoData, metadata: PhotoMetadata, showOrigin: Boolean): String {
+    private fun previewCacheKey(photoData: PhotoData, metadata: PhotoMetadata, showOrigin: Boolean, maxEdge: Int = 4096): String {
         val photoId = photoData.id
         val metadataHash = metadata.toJson().hashCode()
         val refreshKey = photoRefreshKeys[photoId] ?: 0L
         return if (showOrigin) {
             "${photoId}_${refreshKey}"
+        } else if (maxEdge < 4096) {
+            "${photoId}_${metadataHash}_${refreshKey}_${maxEdge}"
         } else {
             "${photoId}_${metadataHash}_${refreshKey}"
         }
@@ -1524,7 +1526,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         bitmap: Bitmap? = null,
         ignoreCrop: Boolean = false,
         ignoreDenoise: Boolean = false,
-        recipeParamsOverride: ColorRecipeParams? = null
+        recipeParamsOverride: ColorRecipeParams? = null,
+        maxEdge: Int = 4096
     ): Bitmap? {
         return withContext(Dispatchers.IO) {
             try {
@@ -1591,22 +1594,25 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
 
                 // 使用多级缓存优化性能
-                val previewCacheKey = previewCacheKey(photo, finalMetadata, showOrigin)
+                val previewCacheKey = previewCacheKey(photo, finalMetadata, showOrigin, maxEdge)
 
                 val cached = previewBitmapCache.get(previewCacheKey)
                 if (cached != null && !cached.isRecycled) {
                     return@withContext cached
                 }
 
-                // 2. 原始底图缓存 (4096px 状态，用于快速重新应用编辑)
+                // 2. 原始底图缓存（按 maxEdge 加载，快速预览走小尺寸，正式预览走高分辨率）
                 val currentBitmap = bitmap ?: if (selectedTab == GalleryTab.PHOTON) {
-                    PhotoManager.loadBitmap(context, photo.id, 4096)
+                    PhotoManager.loadBitmap(context, photo.id, maxEdge)
                 } else {
-                    PhotoManager.loadBitmap(context, photo.id, 4096)
-                        ?: PhotoManager.loadBitmap(context, photo.uri, 4096)
+                    PhotoManager.loadBitmap(context, photo.id, maxEdge)
+                        ?: PhotoManager.loadBitmap(context, photo.uri, maxEdge)
                 } ?: return@withContext null
 
-                previewBitmapCache.put(previewCacheKey(photo, finalMetadata, true), currentBitmap)
+                // 只在全分辨率路径下缓存原始底图（避免低分辨率污染 origin 缓存）
+                if (maxEdge >= 4096) {
+                    previewBitmapCache.put(previewCacheKey(photo, finalMetadata, true), currentBitmap)
+                }
 
                 if (showOrigin) {
                     currentBitmap
@@ -1617,9 +1623,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         finalS, finalNR, finalCNR,
                         false
                     )
-                    // 估计平均亮度
-                    currentBrightness[photo.id] = estimateAverageBrightness(result)
-
+                    // 只在全分辨率路径下更新亮度估计（结果更准确）
+                    if (maxEdge >= 4096) {
+                        currentBrightness[photo.id] = estimateAverageBrightness(result)
+                    }
                     // 存入缓存
                     previewBitmapCache.put(previewCacheKey, result)
 

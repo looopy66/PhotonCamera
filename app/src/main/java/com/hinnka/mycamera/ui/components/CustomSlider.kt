@@ -199,6 +199,7 @@ fun CustomSliderThinThumb(
     value: Float,
     onValueChange: (Float) -> Unit,
     onDoubleTap: (() -> Unit)? = null,
+    onValueChangeFinished: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
@@ -212,6 +213,7 @@ fun CustomSliderThinThumb(
     var isDragging by remember { mutableStateOf(false) }
     val currentOnValueChange by rememberUpdatedState(onValueChange)
     val currentOnDoubleTap by rememberUpdatedState(onDoubleTap)
+    val currentOnValueChangeFinished by rememberUpdatedState(onValueChangeFinished)
 
     val density = LocalDensity.current
     val thumbWidthPx = with(density) { thumbWidth.toPx() }
@@ -236,8 +238,8 @@ fun CustomSliderThinThumb(
                     if (!enabled) return@pointerInput
                     detectDragGestures(
                         onDragStart = { isDragging = true },
-                        onDragEnd = { isDragging = false },
-                        onDragCancel = { isDragging = false }
+                        onDragEnd = { isDragging = false; currentOnValueChangeFinished?.invoke() },
+                        onDragCancel = { isDragging = false; currentOnValueChangeFinished?.invoke() }
                     ) { change, _ ->
                         change.consume()
                         val trackWidth = size.width - thumbWidthPx

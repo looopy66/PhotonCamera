@@ -28,6 +28,7 @@ fun SliderSettingItem(
     value: Float,
     valueRange: ClosedFloatingPointRange<Float>,
     onValueChange: (Float) -> Unit,
+    onValueChangeFinished: (() -> Unit)? = null,
     toggleValue: Boolean? = null,
     onToggleChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
@@ -93,6 +94,7 @@ fun SliderSettingItem(
             CustomSliderThinThumb(
                 value = value,
                 onValueChange = onValueChange,
+                onValueChangeFinished = onValueChangeFinished,
                 valueRange = valueRange,
                 thumbColor = Color.White,
                 activeTrackColor = Color(0xFFFF6B35),

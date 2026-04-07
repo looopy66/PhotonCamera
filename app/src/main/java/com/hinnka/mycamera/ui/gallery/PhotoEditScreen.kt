@@ -52,9 +52,14 @@ import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.camera.RecipeScope
 import com.hinnka.mycamera.ui.components.*
 import com.hinnka.mycamera.ui.theme.AccentOrange
+import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.withContext
 import me.saket.telephoto.zoomable.ZoomSpec
 import java.text.SimpleDateFormat
@@ -84,6 +89,7 @@ fun PhotoEditScreen(
 
     var isSaving by remember { mutableStateOf(false) }
     var isLoadingPreview by remember { mutableStateOf(false) }
+    var isAdjusting by remember { mutableStateOf(false) }
     val lutScrollState = rememberLazyListState()
     val frameScrollState = rememberLazyListState()
     var showLutEditDialog by remember { mutableStateOf(false) }
@@ -134,35 +140,68 @@ fun PhotoEditScreen(
             ?: viewModel.getEditCustomProperties(currentPhoto.id)
     }
 
-    LaunchedEffect(
-        currentPhoto,
-        refreshKey,
-        editLutId,
-        previewRecipeParamsOverride ?: editPhotoRecipeParams ?: editLutRecipeParams,
-        editLutConfig,
-        editFrameId,
-        editFrameCustomProperties,
-        editSharpening,
-        editNoiseReduction,
-        editChromaNoiseReduction,
-        editComputationalAperture,
-        editFocusX,
-        editFocusY,
-        showOrigin,
-        editTab == 3
-    ) {
+    // 快速预览：conflate 保证渲染不被中断，参数变化只跳过中间帧，始终处理最新值
+    LaunchedEffect(currentPhoto, refreshKey) {
         if (currentPhoto == null) return@LaunchedEffect
-        isLoadingPreview = previewBitmap == null
-        previewBitmap = withContext(Dispatchers.IO) {
-            viewModel.getPreviewBitmap(
-                currentPhoto,
-                useGlobalEdit = true,
-                showOrigin = showOrigin,
-                ignoreCrop = editTab == 3,
-                recipeParamsOverride = previewRecipeParamsOverride
+        snapshotFlow {
+            listOf(
+                editLutId, previewRecipeParamsOverride ?: editPhotoRecipeParams ?: editLutRecipeParams,
+                editLutConfig, editFrameId, editFrameCustomProperties,
+                editSharpening, editNoiseReduction, editChromaNoiseReduction,
+                editComputationalAperture, editFocusX, editFocusY, showOrigin, editTab
             )
         }
-        isLoadingPreview = false
+        .conflate()
+        .collect {
+            isLoadingPreview = previewBitmap == null
+            val fast = withContext(Dispatchers.IO) {
+                viewModel.getPreviewBitmap(
+                    currentPhoto,
+                    useGlobalEdit = true,
+                    showOrigin = showOrigin,
+                    ignoreCrop = editTab == 3,
+                    recipeParamsOverride = previewRecipeParamsOverride,
+                    maxEdge = 800
+                )
+            }
+            if (fast != null) {
+                previewBitmap = fast
+                isLoadingPreview = false
+            }
+        }
+    }
+
+    // 高分辨率预览：手指抬起时触发；非 slider 的离散变化（切 LUT、切 Tab 等）100ms 防抖后触发
+    LaunchedEffect(currentPhoto, refreshKey) {
+        if (currentPhoto == null) return@LaunchedEffect
+        snapshotFlow {
+            Pair(
+                isAdjusting,
+                listOf(
+                    editLutId, previewRecipeParamsOverride ?: editPhotoRecipeParams ?: editLutRecipeParams,
+                    editLutConfig, editFrameId, editFrameCustomProperties,
+                    editSharpening, editNoiseReduction, editChromaNoiseReduction,
+                    editComputationalAperture, editFocusX, editFocusY, showOrigin, editTab
+                )
+            )
+        }
+        .filter { (adjusting, _) -> !adjusting }  // 手指拖动时跳过，抬起后放行
+        .debounce(100)                             // 离散操作的小防抖
+        .collectLatest { _ ->
+            val hires = withContext(Dispatchers.IO) {
+                viewModel.getPreviewBitmap(
+                    currentPhoto,
+                    useGlobalEdit = true,
+                    showOrigin = showOrigin,
+                    ignoreCrop = editTab == 3,
+                    recipeParamsOverride = previewRecipeParamsOverride
+                )
+            }
+            if (hires != null) {
+                previewBitmap = hires
+            }
+            isLoadingPreview = false
+        }
     }
 
     LaunchedEffect(currentPhoto) {
@@ -379,7 +418,7 @@ fun PhotoEditScreen(
                                                 val boxHeight = size.height.toFloat()
                                                 val imageRatio = previewBitmap!!.width.toFloat() / previewBitmap!!.height.toFloat()
                                                 val boxRatio = boxWidth / boxHeight
-                                                
+
                                                 var imageDisplayWidth = boxWidth
                                                 var imageDisplayHeight = boxHeight
                                                 if (imageRatio > boxRatio) {
@@ -387,13 +426,13 @@ fun PhotoEditScreen(
                                                 } else {
                                                     imageDisplayWidth = boxHeight * imageRatio
                                                 }
-                                                
+
                                                 val offsetX = (boxWidth - imageDisplayWidth) / 2f
                                                 val offsetY = (boxHeight - imageDisplayHeight) / 2f
-                                                
+
                                                 val relativeX = (tapPosition.x - offsetX) / imageDisplayWidth
                                                 val relativeY = (tapPosition.y - offsetY) / imageDisplayHeight
-                                                
+
                                                 if (relativeX in 0f..1f && relativeY in 0f..1f) {
                                                     viewModel.setFocusPoint(relativeX, relativeY)
                                                 } else {
@@ -644,7 +683,8 @@ fun PhotoEditScreen(
                                 title = stringResource(R.string.virtual_aperture),
                                 value = editComputationalAperture ?: 2.8f,
                                 valueRange = 1.0f..16.0f,
-                                onValueChange = { viewModel.setComputationalAperture(it) },
+                                onValueChange = { isAdjusting = true; viewModel.setComputationalAperture(it) },
+                                onValueChangeFinished = { isAdjusting = false },
                                 toggleValue = aperture != null && aperture > 0f,
                                 onToggleChange = { checked ->
                                     if (checked) {
@@ -658,19 +698,22 @@ fun PhotoEditScreen(
                                 title = stringResource(R.string.settings_sharpening),
                                 value = editSharpening,
                                 valueRange = 0f..1f,
-                                onValueChange = { viewModel.setSharpening(it) }
+                                onValueChange = { isAdjusting = true; viewModel.setSharpening(it) },
+                                onValueChangeFinished = { isAdjusting = false }
                             )
                             SliderSettingItem(
                                 title = stringResource(R.string.settings_noise_reduction),
                                 value = editNoiseReduction,
                                 valueRange = 0f..1f,
-                                onValueChange = { viewModel.setNoiseReduction(it) }
+                                onValueChange = { isAdjusting = true; viewModel.setNoiseReduction(it) },
+                                onValueChangeFinished = { isAdjusting = false }
                             )
                             SliderSettingItem(
                                 title = stringResource(R.string.settings_chroma_noise_reduction),
                                 value = editChromaNoiseReduction,
                                 valueRange = 0f..1f,
-                                onValueChange = { viewModel.setChromaNoiseReduction(it) }
+                                onValueChange = { isAdjusting = true; viewModel.setChromaNoiseReduction(it) },
+                                onValueChangeFinished = { isAdjusting = false }
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                         } else if (editTab == 2) {
@@ -700,9 +743,10 @@ fun PhotoEditScreen(
         LutEditBottomSheet(
             lutId = editLutId!!,
             initialParams = previewRecipeParamsOverride ?: editPhotoRecipeParams ?: editLutRecipeParams,
-            onParamsPreviewChange = { previewRecipeParamsOverride = it },
+            onParamsPreviewChange = { isAdjusting = true; previewRecipeParamsOverride = it },
             onDismiss = {
                 previewRecipeParamsOverride = null
+                isAdjusting = false
                 showLutEditDialog = false
             },
             photoRecipeParams = editPhotoRecipeParams,
