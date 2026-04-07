@@ -544,7 +544,14 @@ class RawDemosaicProcessor {
                 actualRowStride,
                 RawMetadata.CFA_LINEAR_RGB
             )
+            // GPU 已消费 rawData，立即释放 CPU 侧引用，帮助 GC 回收（超分时约 288 MB）
+            actualRawData = null
             renderLinearPass(actualMetadata)
+            // rawTextureId 已被 linearPass 消费，提前释放 GPU 显存
+            if (rawTextureId != 0) {
+                GLES30.glDeleteTextures(1, intArrayOf(rawTextureId), 0)
+                rawTextureId = 0
+            }
 
             val calcExposureGain =
                 analyzeFromGpuTexture(
@@ -565,6 +572,32 @@ class RawDemosaicProcessor {
                 denoiseValue = denoiseValue,
                 chromaDenoiseValue = chromaDenoiseValue,
             )
+            // demosaicTextureId / gfChromaTexId / gfTexId[0] 已被 NLM Pass 消费，提前释放
+            if (demosaicTextureId != 0) {
+                GLES30.glDeleteTextures(1, intArrayOf(demosaicTextureId), 0)
+                demosaicTextureId = 0
+            }
+            if (demosaicFramebufferId != 0) {
+                GLES30.glDeleteFramebuffers(1, intArrayOf(demosaicFramebufferId), 0)
+                demosaicFramebufferId = 0
+            }
+            demosaicWidth = 0; demosaicHeight = 0
+            if (gfChromaTexId != 0) {
+                GLES30.glDeleteTextures(1, intArrayOf(gfChromaTexId), 0)
+                gfChromaTexId = 0
+            }
+            if (gfChromaFboId != 0) {
+                GLES30.glDeleteFramebuffers(1, intArrayOf(gfChromaFboId), 0)
+                gfChromaFboId = 0
+            }
+            if (gfTexId[0] != 0) {
+                GLES30.glDeleteTextures(1, intArrayOf(gfTexId[0]), 0)
+                gfTexId[0] = 0
+            }
+            if (gfFboId[0] != 0) {
+                GLES30.glDeleteFramebuffers(1, intArrayOf(gfFboId[0]), 0)
+                gfFboId[0] = 0
+            }
 
             val outputTexture = gfTexId[1]
 
@@ -582,7 +615,18 @@ class RawDemosaicProcessor {
                     bounds,
                     hdrReferenceTextureId
                 )
-                readPixels(finalWidth, finalHeight, workingColorSpace)
+                val hdrPixels = readPixels(finalWidth, finalHeight, workingColorSpace)
+                // hdrReferenceTextureId 已被 outputPass 消费
+                if (hdrReferenceTextureId != 0) {
+                    GLES30.glDeleteTextures(1, intArrayOf(hdrReferenceTextureId), 0)
+                    hdrReferenceTextureId = 0
+                }
+                if (hdrReferenceFramebufferId != 0) {
+                    GLES30.glDeleteFramebuffers(1, intArrayOf(hdrReferenceFramebufferId), 0)
+                    hdrReferenceFramebufferId = 0
+                }
+                hdrReferenceWidth = 0; hdrReferenceHeight = 0
+                hdrPixels
             } else {
                 null
             }
@@ -592,12 +636,32 @@ class RawDemosaicProcessor {
             val combinedStart = System.currentTimeMillis()
             renderCombinedPass(actualMetadata, calcExposureGain, baseLut, logCurve, inputTextureId = outputTexture)
             PLog.d(TAG, "Combined Pass took: ${System.currentTimeMillis() - combinedStart}ms")
+            // outputTexture (gfTexId[1]) 已被 combinedPass 消费，提前释放
+            if (gfTexId[1] != 0) {
+                GLES30.glDeleteTextures(1, intArrayOf(gfTexId[1]), 0)
+                gfTexId[1] = 0
+            }
+            if (gfFboId[1] != 0) {
+                GLES30.glDeleteFramebuffers(1, intArrayOf(gfFboId[1]), 0)
+                gfFboId[1] = 0
+            }
+            gfWidth = 0; gfHeight = 0
 
             // 6. 第三步：锐化 (Sharpen Pass)
             setupSharpenFramebuffer(actualWidth, actualHeight)
             val sharpenStart = System.currentTimeMillis()
             renderSharpenPass(actualMetadata, sharpeningValue, combinedTextureId)
             PLog.d(TAG, "Sharpen Pass took: ${System.currentTimeMillis() - sharpenStart}ms")
+            // combinedTextureId 已被 sharpenPass 消费，提前释放
+            if (combinedTextureId != 0) {
+                GLES30.glDeleteTextures(1, intArrayOf(combinedTextureId), 0)
+                combinedTextureId = 0
+            }
+            if (combinedFramebufferId != 0) {
+                GLES30.glDeleteFramebuffers(1, intArrayOf(combinedFramebufferId), 0)
+                combinedFramebufferId = 0
+            }
+            combinedWidth = 0; combinedHeight = 0
 
             val sourceTextureForOutput = sharpenTextureId
 
@@ -612,6 +676,16 @@ class RawDemosaicProcessor {
                 sourceTextureForOutput
             )
             PLog.d(TAG, "Output Pass took: ${System.currentTimeMillis() - outputStart}ms")
+            // sharpenTextureId 已被 outputPass 消费，在 readPixels 前释放以降低峰值内存
+            if (sharpenTextureId != 0) {
+                GLES30.glDeleteTextures(1, intArrayOf(sharpenTextureId), 0)
+                sharpenTextureId = 0
+            }
+            if (sharpenFramebufferId != 0) {
+                GLES30.glDeleteFramebuffers(1, intArrayOf(sharpenFramebufferId), 0)
+                sharpenFramebufferId = 0
+            }
+            sharpenWidth = 0; sharpenHeight = 0
 
             // 8. 读取结果
             val readStart = System.currentTimeMillis()
@@ -1776,25 +1850,68 @@ class RawDemosaicProcessor {
         if (texCoordHandle >= 0) GLES30.glDisableVertexAttribArray(texCoordHandle)
     }
 
+    /**
+     * 从当前 outputFramebuffer 读取像素并创建 Bitmap。
+     *
+     * 优先使用 PBO（Pixel Buffer Object）：像素数据存放在 GPU 内存（通过 glMapBufferRange 映射为
+     * native ByteBuffer），完全不占用 Java 堆，避免超分时 stackedRgbBuffer + fusedBayerBuffer +
+     * pixelBuffer 同时存活导致 Java 堆 OOM（512 MB 设备上三者合计可达 768 MB）。
+     * 若 PBO 分配或 map 失败则降级为直接分配 ByteBuffer。
+     */
     private fun readPixels(width: Int, height: Int, colorSpace: android.graphics.ColorSpace): Bitmap? {
         val pixelSize = width * height * 8
-        val pixelBuffer = ByteBuffer.allocateDirect(pixelSize).order(ByteOrder.nativeOrder())
 
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, outputFramebufferId)
-        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
         GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 8)
-        GLES30.glReadPixels(
-            0,
-            0,
-            width,
-            height,
-            GLES30.GL_RGBA,
-            GLES30.GL_HALF_FLOAT,
-            pixelBuffer
-        )
-        pixelBuffer.position(0)
-        checkGlError("readPixels")
 
+        // --- PBO 路径（避免 Java 堆分配）---
+        if (pboId == 0) {
+            val ids = IntArray(1)
+            GLES30.glGenBuffers(1, ids, 0)
+            pboId = ids[0]
+        }
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pboId)
+        // glBufferData(null) 重新分配 GPU 缓冲区（旧数据自动孤立释放）
+        GLES30.glBufferData(GLES30.GL_PIXEL_PACK_BUFFER, pixelSize, null, GLES30.GL_STREAM_READ)
+        val pboReady = GLES30.glGetError() == GLES30.GL_NO_ERROR
+        if (pboReady) {
+            // offset=0：读取写入已绑定的 PBO（GPU→GPU DMA，不阻塞 Java 堆）
+            GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, 0)
+            checkGlError("readPixels PBO glReadPixels")
+            // 映射 PBO 为 native ByteBuffer（不占用 Java 堆）
+            val mappedBuffer = GLES30.glMapBufferRange(
+                GLES30.GL_PIXEL_PACK_BUFFER, 0, pixelSize, GLES30.GL_MAP_READ_BIT
+            ) as? ByteBuffer
+            if (mappedBuffer != null) {
+                return try {
+                    createBitmap(width, height, Bitmap.Config.RGBA_F16, colorSpace = colorSpace).also { bmp ->
+                        bmp.copyPixelsFromBuffer(mappedBuffer.order(ByteOrder.nativeOrder()))
+                    }
+                } catch (e: OutOfMemoryError) {
+                    PLog.e(TAG, "OOM creating output bitmap ($width x $height)", e)
+                    null
+                } finally {
+                    GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
+                    GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+                }
+            }
+            PLog.w(TAG, "glMapBufferRange returned null, falling back to direct readPixels")
+        } else {
+            PLog.w(TAG, "PBO glBufferData failed for ${pixelSize}B, falling back to direct readPixels")
+        }
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+
+        // --- 降级路径：直接分配 ByteBuffer（Java 堆）---
+        val pixelBuffer = try {
+            ByteBuffer.allocateDirect(pixelSize).order(ByteOrder.nativeOrder())
+        } catch (e: OutOfMemoryError) {
+            PLog.e(TAG, "OOM allocating pixel buffer ($width x $height, ${pixelSize}B)", e)
+            return null
+        }
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+        GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, pixelBuffer)
+        pixelBuffer.position(0)
+        checkGlError("readPixels direct")
         return try {
             createBitmap(width, height, Bitmap.Config.RGBA_F16, colorSpace = colorSpace).also { bitmap ->
                 bitmap.copyPixelsFromBuffer(pixelBuffer)

@@ -1488,7 +1488,7 @@ object PhotoManager {
                 )
                 var bitmap = RawDemosaicProcessor.getInstance().process(
                     context,
-                    finalStackResult.stackedRgbBuffer,
+                    finalStackResult.stackedRgbBuffer ?: return@run null,
                     finalWidth,
                     finalHeight,
                     finalWidth * 6, // 3 channels * 2 bytes
@@ -1500,6 +1500,9 @@ object PhotoManager {
                     denoiseValue = 0.2f,
                     chromaDenoiseValue = 0.2f
                 )
+                // GPU 已消费 stackedRgbBuffer，立即释放引用（超分时约 288 MB）
+                // fusedBayerBuffer 仍由 finalStackResult 持有，用于后续 DNG 保存
+                finalStackResult.stackedRgbBuffer = null
 
                 if (metadata.isMirrored && bitmap != null) {
                     bitmap = BitmapUtils.flipHorizontal(bitmap)

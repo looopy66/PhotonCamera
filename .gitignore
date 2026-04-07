@@ -11,3 +11,4 @@ local.properties
 app/*/release
 app/release.jks
 .gradle-home
+MGC
