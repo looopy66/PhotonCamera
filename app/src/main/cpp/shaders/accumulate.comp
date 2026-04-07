@@ -156,6 +156,17 @@ void main() {
     uint kpIndex = ny * nativeW + nx;
     vec4 kp = kernelParams.data[kpIndex];
 
+    // Edge sentinel: structure tensor marked this pixel as a strong edge.
+    // Skip fusion for non-first frames to preserve edge sharpness.
+    bool isEdgePixel = (kp.x < 0.0);
+    if (isEdgePixel && pc.isFirstFrame == 0) {
+        return;
+    }
+    // For first frame on edge pixels, use identity kernel so base is recorded
+    if (isEdgePixel) {
+        kp = vec4(1.0, 1.0, 1.0, 0.0);
+    }
+
     // 1. Get transformations / coordinates
     vec2 pixelSize = vec2(1.0) / vec2(pc.width, pc.height);
     vec2 normalizedUV = (vec2(x, y) + 0.5) * pixelSize;
@@ -239,6 +250,11 @@ void main() {
         supportRadius = 2;
         float tilePenalty = 1.0 - smoothstep(0.10, 0.55, localTileWeight);
         fusionMask *= mix(0.90, 0.55, tilePenalty);
+    } else if (pc.scale > 1.5) {
+        // Super-res first frame: use 3x3 kernel regression so that
+        // neighboring 2x super-res pixels get distinct sub-pixel
+        // reconstructed values instead of all reading the same bicubic sample.
+        supportRadius = 1;
     }
 
     // Accumulate neighbors

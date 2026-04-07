@@ -154,7 +154,7 @@ void main() {
     // Python's "hard_threshold" selection law
     float k1_base = 1.0;
     float k2_base = 1.0;
-    if (A_py > 1.95) {
+    if (A_py > 1.85) {
         k1_base = 1.0 / k_shrink;
         k2_base = k_stretch;
     }

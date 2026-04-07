@@ -95,7 +95,10 @@ void main() {
     
     // Parameters derived from reference code (Relaxed for YUV fp domain scale)
     float k_detail = 0.30; 
-    float k_denoise = 16.0; 
+    // In super-res mode (scale > 1), a large denoise kernel averages away the
+    // sub-pixel differences needed for resolution recovery.  Shrink it so the
+    // kernel regression can actually exploit inter-frame sub-pixel offsets.
+    float k_denoise = (pc.scale > 1.5) ? 4.0 : 16.0; 
     float k_shrink = 2.0;
     float k_stretch = 4.0;
     
@@ -105,9 +108,14 @@ void main() {
     // Anisotropy factor A 
     float A_py = 1.0 + sqrt(max(lambda1 - lambda2, 0.0) / max(lambda1 + lambda2, 1e-7));
     
+    // Edge detection: strong edge (high anisotropy) with sufficient signal
+    // means this is a real structural edge, not noise.
+    // Mark with sentinel k1 = -1.0 so accumulator can skip fusion.
+    bool isEdge = (A_py > 1.85) && (SNR > 0.35);
+    
     float k1_base = 1.0;
     float k2_base = 1.0;
-    if (A_py > 1.95) {
+    if (A_py > 1.8) {
         k1_base = 1.0 / k_shrink;
         k2_base = k_stretch;
     }
@@ -116,8 +124,8 @@ void main() {
     float pre_k2 = k_detail * mix(k2_base, k_denoise, D);
     
     // Passed as INVERSE variance to the accumulator
-    float k1 = 1.0 / max(pre_k1 * pre_k1, 1e-7);
-    float k2 = 1.0 / max(pre_k2 * pre_k2, 1e-7);
+    float k1 = isEdge ? -1.0 : 1.0 / max(pre_k1 * pre_k1, 1e-7);
+    float k2 = isEdge ? -1.0 : 1.0 / max(pre_k2 * pre_k2, 1e-7);
     
     // 2*theta logic for orientation
     float diff = varIxIx - varIyIy;
