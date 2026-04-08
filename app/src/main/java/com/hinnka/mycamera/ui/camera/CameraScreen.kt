@@ -116,6 +116,7 @@ fun CameraScreen(
     var previewRecipeParamsOverride by remember(currentLutId) { mutableStateOf<ColorRecipeParams?>(null) }
     var pendingCaptureAnimationBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var previewBounds by remember { mutableStateOf<Rect?>(null) }
+    var zoomBarBounds by remember { mutableStateOf<Rect?>(null) }
     var galleryThumbnailBounds by remember { mutableStateOf<Rect?>(null) }
     var captureAnimationSnapshot by remember { mutableStateOf<CaptureAnimationSnapshot?>(null) }
 
@@ -382,8 +383,16 @@ fun CameraScreen(
                     onFilterClick = {
                         activePanel = if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
                     },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onGloballyPositioned { coordinates ->
+                            zoomBarBounds = coordinates.boundsInRoot()
+                        }
                 )
+            } else {
+                SideEffect {
+                    zoomBarBounds = null
+                }
             }
         }
 
@@ -410,8 +419,29 @@ fun CameraScreen(
                         .pointerInput(state.availableCameras) {
                             var totalDrag = 0f
                             awaitEachGesture {
+                                var gestureStartedInZoomBar: Boolean? = null
                                 while (true) {
                                     val event = awaitPointerEvent()
+                                    if (gestureStartedInZoomBar == null) {
+                                        val firstPressedChange = event.changes.firstOrNull { it.pressed }
+                                        val currentPreviewBounds = previewBounds
+                                        gestureStartedInZoomBar =
+                                            if (firstPressedChange != null && currentPreviewBounds != null) {
+                                                val positionInRoot =
+                                                    currentPreviewBounds.topLeft + firstPressedChange.position
+                                                zoomBarBounds?.contains(positionInRoot) == true
+                                            } else {
+                                                false
+                                            }
+                                    }
+                                    if (gestureStartedInZoomBar == true) {
+                                        if (event.changes.all { !it.pressed }) {
+                                            viewModel.isZooming = false
+                                            totalDrag = 0f
+                                            break
+                                        }
+                                        continue
+                                    }
                                     if (event.changes.size >= 2) {
                                         // Pinch to zoom
                                         viewModel.isZooming = true
