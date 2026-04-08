@@ -30,7 +30,7 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Configure Gradle for faster builds
+      - name: Configure Gradle properties
         run: |
           {
             echo "org.gradle.parallel=true"
@@ -40,93 +40,11 @@ jobs:
             echo "android.nonTransitiveRClass=true"
           } >> gradle.properties
 
-      - name: Show original build.gradle.kts content
-        run: |
-          cat app/build.gradle.kts
-
-      - name: Backup and modify build.gradle.kts
-        run: |
-          # 备份原始文件
-          cp app/build.gradle.kts app/build.gradle.kts.bak
-          
-          # 读取原文件内容
-          ORIGINAL_CONTENT=$(cat app/build.gradle.kts)
-          
-          # 检查是否包含buildTypes配置
-          if echo "$ORIGINAL_CONTENT" | grep -q "buildTypes"; then
-            # 如果已存在buildTypes，我们直接修改整个文件
-            echo "$ORIGINAL_CONTENT" | awk '
-            BEGIN { in_build_types = 0; processed = 0 }
-            /^buildTypes\s*{/ { 
-                print $0
-                in_build_types = 1
-                next
-            }
-            in_build_types && /^[[:space:]]*}/ && !processed {
-                # 找到buildTypes块的结束
-                print "        create(\"unsignedRelease\") {"
-                print "            initWith(getByName(\"release\"))"
-                print "            signingConfig = null"
-                print "        }"
-                print $0
-                in_build_types = 0
-                processed = 1
-                next
-            }
-            /^[[:space:]]*android\s*{/ {
-                print $0
-                android_indent = substr($0, 1, match($0, "[^[:space:]]") - 1)
-                next
-            }
-            /^[[:space:]]*}/ && !processed && !in_build_types {
-                # 如果在android块结尾但还没有添加buildTypes，说明没有buildTypes块
-                if (match($0, "^" android_indent "}")) {
-                    print "    buildTypes {"
-                    print "        create(\"unsignedRelease\") {"
-                    print "            initWith(getByName(\"release\"))"
-                    print "            signingConfig = null"
-                    print "        }"
-                    print "    }"
-                    print $0
-                    processed = 1
-                    next
-                }
-            }
-            { print }
-            END { if (!processed) print "Warning: Could not add unsignedRelease configuration properly" > "/dev/stderr" }
-            ' > app/build.gradle.kts.tmp && mv app/build.gradle.kts.tmp app/build.gradle.kts
-          else
-            # 如果不存在buildTypes，我们需要添加整个块
-            # 找到android块并添加buildTypes
-            echo "$ORIGINAL_CONTENT" | sed '
-            /^android\s*{/ {
-                N
-                s/$/\
-    buildTypes {\
-        create("unsignedRelease") {\
-            initWith(getByName("release"))\
-            signingConfig = null\
-        }\
-    }/
-            }' > app/build.gradle.kts.tmp && mv app/build.gradle.kts.tmp app/build.gradle.kts
-          fi
-
-      - name: Show modified build.gradle.kts content
-        run: |
-          cat app/build.gradle.kts
-
       - name: Build Unsigned Release APK
         run: |
           ./gradlew assembleUnsignedRelease \
             --no-daemon \
             --max-workers=2
-
-      # 恢复原始build.gradle.kts文件
-      - name: Restore original build.gradle.kts
-        run: |
-          if [ -f "app/build.gradle.kts.bak" ]; then
-            mv app/build.gradle.kts.bak app/build.gradle.kts
-          fi
 
       # 输出当前生成的 APK 产物（文件名、路径、大小）
       - name: List built APK files
