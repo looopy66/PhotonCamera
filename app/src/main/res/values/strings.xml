@@ -413,6 +413,8 @@
     <string name="no_filters">No custom LUTs</string>
     <string name="no_frames">No custom frames</string>
     <string name="input_curve">Input Curve</string>
+    <string name="photo_lut">Photo LUT</string>
+    <string name="video_lut">Video LUT</string>
 
     <!-- Frame Import Help -->
     <string name="help">Help</string>

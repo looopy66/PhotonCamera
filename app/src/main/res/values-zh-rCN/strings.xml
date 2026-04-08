@@ -403,6 +403,8 @@
     <string name="no_filters">暂无自定义滤镜</string>
     <string name="no_frames">暂无自定义边框</string>
     <string name="input_curve">输入曲线</string>
+    <string name="photo_lut">照片 LUT</string>
+    <string name="video_lut">视频 LUT</string>
 
     <!-- 边框导入帮助 -->
     <string name="help">帮助</string>

@@ -838,7 +838,7 @@ fun FilterManagementScreen(
         if (showImportCategoryDialog && pendingImportUris.isNotEmpty()) {
             var selectedColorSpace by remember { mutableStateOf(ColorSpace.SRGB) }
             var selectedCurve by remember { mutableStateOf(LutCurve.SRGB) }
-            var showAdvancedOptions by remember { mutableStateOf(false) }
+            var selectedLutType by remember { mutableIntStateOf(0) } // 0: Photo, 1: Video
             AlertDialog(
                 onDismissRequest = {
                     //showImportCategoryDialog = false
@@ -847,79 +847,46 @@ fun FilterManagementScreen(
                 title = { Text(stringResource(R.string.import_to_category)) },
                 text = {
                     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                        OutlinedTextField(
-                            value = categoryText,
-                            onValueChange = { categoryText = it },
-                            label = { Text(stringResource(R.string.category)) },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                            trailingIcon = if (categoryText.isNotEmpty()) {
-                                {
-                                    IconButton(onClick = { categoryText = "" }) {
-                                        Icon(
-                                            imageVector = Icons.Default.Clear,
-                                            contentDescription = "Clear",
-                                            tint = Color.White.copy(alpha = 0.5f)
-                                        )
-                                    }
-                                }
-                            } else null
-                        )
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        // 常用分类快速选择
-                        val commonCategories = remember(localLutList, categoryOrder) {
-                            val dynamic = localLutList.map { it.category }.distinct().filter { it.isNotEmpty() }
-                            (categoryOrder + dynamic).distinct()
-                        }
-                        if (commonCategories.isNotEmpty()) {
-                            Text(
-                                text = stringResource(R.string.common_categories),
-                                fontSize = 12.sp,
-                                color = Color.White.copy(alpha = 0.5f),
-                                modifier = Modifier.padding(vertical = 4.dp)
-                            )
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                        SingleChoiceSegmentedButtonRow(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp)
+                        ) {
+                            SegmentedButton(
+                                selected = selectedLutType == 0,
+                                onClick = { selectedLutType = 0 },
+                                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                                colors = SegmentedButtonDefaults.colors(
+                                    activeContainerColor = Color(0xFFFF6B35),
+                                    activeContentColor = Color.White,
+                                    inactiveContainerColor = Color.Transparent,
+                                    inactiveContentColor = Color.White.copy(alpha = 0.5f),
+                                    activeBorderColor = Color(0xFFFF6B35),
+                                    inactiveBorderColor = Color.White.copy(alpha = 0.2f)
+                                )
                             ) {
-                                commonCategories.forEach { cat ->
-                                    InputChip(
-                                        selected = categoryText == cat,
-                                        onClick = { categoryText = cat },
-                                        label = { Text(cat) }
-                                    )
-                                }
+                                Text(stringResource(R.string.photo_lut), fontSize = 13.sp)
+                            }
+                            SegmentedButton(
+                                selected = selectedLutType == 1,
+                                onClick = { selectedLutType = 1 },
+                                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                                colors = SegmentedButtonDefaults.colors(
+                                    activeContainerColor = Color(0xFFFF6B35),
+                                    activeContentColor = Color.White,
+                                    inactiveContainerColor = Color.Transparent,
+                                    inactiveContentColor = Color.White.copy(alpha = 0.5f),
+                                    activeBorderColor = Color(0xFFFF6B35),
+                                    inactiveBorderColor = Color.White.copy(alpha = 0.2f)
+                                )
+                            ) {
+                                Text(stringResource(R.string.video_lut), fontSize = 13.sp)
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { showAdvancedOptions = !showAdvancedOptions }
-                                .padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = stringResource(R.string.advanced_options),
-                                fontSize = 14.sp,
-                                color = Color.White.copy(alpha = 0.7f),
-                                modifier = Modifier.weight(1f)
-                            )
-                            Icon(
-                                imageVector = if (showAdvancedOptions) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                contentDescription = null,
-                                tint = Color.White.copy(alpha = 0.7f)
-                            )
-                        }
-
-                        if (showAdvancedOptions) {
+                        if (selectedLutType == 1) {
                             var expanded by remember { mutableStateOf(false) }
-                            Spacer(modifier = Modifier.height(8.dp))
+                            Spacer(modifier = Modifier.height(12.dp))
 
                             ExposedDropdownMenuBox(
                                 expanded = expanded,
@@ -1007,7 +974,58 @@ fun FilterManagementScreen(
                                     }
                                 }
                             }
+                            Spacer(modifier = Modifier.height(16.dp))
                         }
+
+                        OutlinedTextField(
+                            value = categoryText,
+                            onValueChange = { categoryText = it },
+                            label = { Text(stringResource(R.string.category)) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            trailingIcon = if (categoryText.isNotEmpty()) {
+                                {
+                                    IconButton(onClick = { categoryText = "" }) {
+                                        Icon(
+                                            imageVector = Icons.Default.Clear,
+                                            contentDescription = "Clear",
+                                            tint = Color.White.copy(alpha = 0.5f)
+                                        )
+                                    }
+                                }
+                            } else null
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // 常用分类快速选择
+                        val commonCategories = remember(localLutList, categoryOrder) {
+                            val dynamic = localLutList.map { it.category }.distinct().filter { it.isNotEmpty() }
+                            (categoryOrder + dynamic).distinct()
+                        }
+                        if (commonCategories.isNotEmpty()) {
+                            Text(
+                                text = stringResource(R.string.common_categories),
+                                fontSize = 12.sp,
+                                color = Color.White.copy(alpha = 0.5f),
+                                modifier = Modifier.padding(vertical = 4.dp)
+                            )
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                commonCategories.forEach { cat ->
+                                    InputChip(
+                                        selected = categoryText == cat,
+                                        onClick = { categoryText = cat },
+                                        label = { Text(cat) }
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
                     }
                 },
                 confirmButton = {
