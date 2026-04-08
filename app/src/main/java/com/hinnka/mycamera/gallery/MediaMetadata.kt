@@ -20,8 +20,9 @@ import kotlin.math.log2
  *
  * 保存 LUT、边框水印、编辑信息和拍摄参数，用于非破坏性编辑和边框水印渲染
  */
-data class PhotoMetadata(
-    val version: Int = 11,  // Added multiple exposure metadata
+data class MediaMetadata(
+    val version: Int = 12,  // Added video media metadata
+    val mediaType: MediaType = MediaType.IMAGE,
     // 编辑配置
     val lutId: String? = null,
     // 色彩配方配置
@@ -56,6 +57,14 @@ data class PhotoMetadata(
     val exposureBias: Float? = null,
     val isImported: Boolean = false,
     val sourceUri: String? = null, // 原始系统相册 URI (用于关联)
+    val mimeType: String? = null,
+    val durationMs: Long? = null,
+    val frameRate: Int? = null,
+    val bitrate: Long? = null,
+    val rotationDegrees: Int? = null,
+    val hasAudio: Boolean? = null,
+    val videoWidth: Int? = null,
+    val videoHeight: Int? = null,
     // 边框水印自定义
     val customProperties: Map<String, String> = emptyMap(),
     // 导出到系统相册的 URI 列表
@@ -136,6 +145,7 @@ data class PhotoMetadata(
     fun toJson(): String {
         return JSONObject().apply {
             put("version", version)
+            put("mediaType", mediaType.name.lowercase(Locale.US))
             put("lutId", lutId ?: JSONObject.NULL)
             // 色彩配方配置
             if (colorRecipeParams != null) {
@@ -192,6 +202,14 @@ data class PhotoMetadata(
             put("exposureBias", exposureBias ?: JSONObject.NULL)
             put("isImported", isImported)
             put("sourceUri", sourceUri ?: JSONObject.NULL)
+            put("mimeType", mimeType ?: JSONObject.NULL)
+            put("durationMs", durationMs ?: JSONObject.NULL)
+            put("frameRate", frameRate ?: JSONObject.NULL)
+            put("bitrate", bitrate ?: JSONObject.NULL)
+            put("rotationDegrees", rotationDegrees ?: JSONObject.NULL)
+            put("hasAudio", hasAudio ?: JSONObject.NULL)
+            put("videoWidth", videoWidth ?: JSONObject.NULL)
+            put("videoHeight", videoHeight ?: JSONObject.NULL)
             // 边框水印自定义
             val customPropsObj = JSONObject()
             customProperties.forEach { (k, v) -> customPropsObj.put(k, v) }
@@ -222,7 +240,7 @@ data class PhotoMetadata(
     /**
      * 从 RawMetadata 补齐信息
      */
-    fun merge(raw: RawMetadata): PhotoMetadata {
+    fun merge(raw: RawMetadata): MediaMetadata {
         return copy(
             iso = raw.iso.takeIf { it > 0 } ?: iso,
             shutterSpeed = formatShutterSpeed(raw.shutterSpeed).takeIf { it.isNotEmpty() } ?: shutterSpeed,
@@ -252,7 +270,7 @@ data class PhotoMetadata(
     companion object {
         private const val TAG = "PhotoMetadata"
 
-        fun fromJson(json: String): PhotoMetadata? {
+        fun fromJson(json: String): MediaMetadata? {
             return try {
                 val obj = JSONObject(json)
 
@@ -277,8 +295,13 @@ data class PhotoMetadata(
                     null
                 }
 
-                PhotoMetadata(
+                MediaMetadata(
                     version = obj.optInt("version", 1),
+                    mediaType = obj.optString("mediaType", MediaType.IMAGE.name).let {
+                        MediaType.entries.firstOrNull { type ->
+                            type.name.equals(it, ignoreCase = true)
+                        } ?: MediaType.IMAGE
+                    },
                     lutId = if (obj.isNull("lutId")) null else obj.optString("lutId"),
                     colorRecipeParams = colorRecipeParams,
                     sharpening = if (obj.isNull("sharpening")) null else obj.optDouble("sharpening").toFloat(),
@@ -326,6 +349,14 @@ data class PhotoMetadata(
                     exposureBias = if (obj.isNull("exposureBias")) null else obj.optDouble("exposureBias").toFloat(),
                     isImported = obj.optBoolean("isImported", false),
                     sourceUri = if (obj.isNull("sourceUri")) null else obj.optString("sourceUri"),
+                    mimeType = if (obj.isNull("mimeType")) null else obj.optString("mimeType"),
+                    durationMs = if (obj.isNull("durationMs")) null else obj.optLong("durationMs"),
+                    frameRate = if (obj.isNull("frameRate")) null else obj.optInt("frameRate"),
+                    bitrate = if (obj.isNull("bitrate")) null else obj.optLong("bitrate"),
+                    rotationDegrees = if (obj.isNull("rotationDegrees")) null else obj.optInt("rotationDegrees"),
+                    hasAudio = if (obj.isNull("hasAudio")) null else obj.optBoolean("hasAudio"),
+                    videoWidth = if (obj.isNull("videoWidth")) null else obj.optInt("videoWidth"),
+                    videoHeight = if (obj.isNull("videoHeight")) null else obj.optInt("videoHeight"),
                     customProperties = mutableMapOf<String, String>().apply {
                         val customPropsObj = obj.optJSONObject("customProperties")
                         customPropsObj?.keys()?.forEach { key ->
@@ -361,8 +392,8 @@ data class PhotoMetadata(
         /**
          * 从系统信息创建默认元数据
          */
-        fun createDefault(width: Int, height: Int): PhotoMetadata {
-            return PhotoMetadata(
+        fun createDefault(width: Int, height: Int): MediaMetadata {
+            return MediaMetadata(
                 deviceModel = Build.MODEL,
                 brand = Build.MANUFACTURER.replaceFirstChar { it.uppercase() },
                 dateTaken = System.currentTimeMillis(),
@@ -374,7 +405,7 @@ data class PhotoMetadata(
         /**
          * 从指定的 URI 加载 EXIF 元数据
          */
-        fun fromUri(context: Context, uri: Uri): PhotoMetadata {
+        fun fromUri(context: Context, uri: Uri): MediaMetadata {
             return try {
                 context.contentResolver.openInputStream(uri)?.use { inputStream ->
                     val exif = ExifInterface(inputStream)
@@ -430,7 +461,7 @@ data class PhotoMetadata(
                     val altitude = exif.getAltitude(0.0)
                         .takeIf { it != 0.0 || exif.getAttribute(ExifInterface.TAG_GPS_ALTITUDE) != null }
 
-                    PhotoMetadata(
+                    MediaMetadata(
                         deviceModel = model,
                         brand = make?.replaceFirstChar { it.uppercase() },
                         dateTaken = dateTaken,

@@ -19,8 +19,8 @@ import com.hinnka.mycamera.camera.*
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
-import com.hinnka.mycamera.gallery.PhotoManager
-import com.hinnka.mycamera.gallery.PhotoMetadata
+import com.hinnka.mycamera.gallery.MediaManager
+import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutConverter
 import com.hinnka.mycamera.lut.LutInfo
@@ -315,7 +315,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var hasAppliedDefaultFocalLength = false
 
     private val stackingImages = mutableListOf<SafeImage>()
-    private var multipleExposureMetadata: PhotoMetadata? = null
+    private var multipleExposureMetadata: MediaMetadata? = null
     var multipleExposureState by mutableStateOf(MultipleExposureSessionState())
         private set
 
@@ -357,6 +357,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 )
                 viewModelScope.launch {
                     saveImage(image, captureInfo, characteristics, captureResult)
+                }
+            }
+        }
+        cameraController.onVideoSaved = { uri ->
+            if (uri != null) {
+                viewModelScope.launch {
+                    val mediaId = MediaManager.recordVideoCapture(getApplication(), uri)
+                    if (mediaId != null) {
+                        _imageSavedEvent.emit(Unit)
+                    }
                 }
             }
         }
@@ -608,7 +618,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         chromaNoiseReductionValue: Float = 0f,
         captureMode: String? = null,
         multipleExposureFrameCount: Int? = null
-    ): PhotoMetadata {
+    ): MediaMetadata {
         val lutIdToSave = currentLutId.value
         val aspectRatio = state.value.aspectRatio
         val frameIdToSave = currentFrameId
@@ -635,7 +645,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             userPrefs = userPrefs
         )
 
-        return PhotoMetadata(
+        return MediaMetadata(
             lutId = lutIdToSave,
             frameId = frameIdToSave,
             colorRecipeParams = currentRecipeParams.value,
@@ -704,7 +714,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun cancelMultipleExposureSession() {
         multipleExposureState.previewBitmap?.recycle()
         multipleExposureState.sessionId?.let { sessionId ->
-            PhotoManager.clearMultipleExposureSession(getApplication(), sessionId)
+            MediaManager.clearMultipleExposureSession(getApplication(), sessionId)
         }
         multipleExposureMetadata = null
         multipleExposureState = multipleExposureState.copy(
@@ -718,7 +728,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun undoLastMultipleExposureFrame() {
         val sessionId = multipleExposureState.sessionId ?: return
-        if (!PhotoManager.removeLastMultipleExposureFrame(getApplication(), sessionId)) return
+        if (!MediaManager.removeLastMultipleExposureFrame(getApplication(), sessionId)) return
         refreshMultipleExposurePreview(sessionId)
     }
 
@@ -730,7 +740,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             multipleExposureState = multipleExposureState.copy(isProcessing = true)
             try {
                 val context = getApplication<Application>()
-                val composedBitmap = PhotoManager.composeMultipleExposurePhoto(context, sessionId) ?: run {
+                val composedBitmap = MediaManager.composeMultipleExposurePhoto(context, sessionId) ?: run {
                     multipleExposureState = multipleExposureState.copy(isProcessing = false)
                     return@launch
                 }
@@ -740,7 +750,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
                 val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
 
-                val photoId = PhotoManager.preparePhoto(
+                val photoId = MediaManager.preparePhoto(
                     context,
                     baseMetadata.copy(
                         width = composedBitmap.width,
@@ -758,7 +768,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     return@launch
                 }
 
-                PhotoManager.saveBitmapPhoto(
+                MediaManager.saveBitmapPhoto(
                     context,
                     photoId,
                     composedBitmap,
@@ -788,9 +798,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private fun refreshMultipleExposurePreview(sessionId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>()
-            val frameFiles = PhotoManager.getMultipleExposureFrameFiles(context, sessionId)
+            val frameFiles = MediaManager.getMultipleExposureFrameFiles(context, sessionId)
             val preview = if (frameFiles.isNotEmpty()) {
-                PhotoManager.composeMultipleExposurePreview(context, sessionId)
+                MediaManager.composeMultipleExposurePreview(context, sessionId)
             } else {
                 null
             }
@@ -833,7 +843,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 multipleExposureFrameCount = multipleExposureState.targetCount
             ).also { multipleExposureMetadata = it }
 
-            val frameFile = PhotoManager.saveMultipleExposureFrame(
+            val frameFile = MediaManager.saveMultipleExposureFrame(
                 context,
                 sessionId,
                 frameIndex,
@@ -2109,7 +2119,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             )
 
             // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
-            val metadata = PhotoMetadata(
+            val metadata = MediaMetadata(
                 lutId = lutIdToSave,
                 frameId = frameIdToSave,
                 colorRecipeParams = currentRecipeParams.value,
@@ -2152,7 +2162,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
             characteristics ?: return
             val photoId =
-                PhotoManager.preparePhoto(
+                MediaManager.preparePhoto(
                     context,
                     metadata,
                     captureResult,
@@ -2166,9 +2176,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 return
             }
             viewModelScope.launch(Dispatchers.IO) {
-                PhotoManager.saveVideo(context, photoId, livePhotoVideoDeferred)
+                MediaManager.saveVideo(context, photoId, livePhotoVideoDeferred)
 
-                PhotoManager.savePhoto(
+                MediaManager.savePhoto(
                     context,
                     photoId,
                     image,
@@ -2253,7 +2263,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             )
 
             // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
-            val metadata = PhotoMetadata(
+            val metadata = MediaMetadata(
                 lutId = lutIdToSave,
                 frameId = frameIdToSave,
                 colorRecipeParams = currentRecipeParams.value,
@@ -2297,7 +2307,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             } else null
 
             characteristics ?: return
-            val photoId = PhotoManager.preparePhoto(
+            val photoId = MediaManager.preparePhoto(
                 context,
                 metadata,
                 captureResult,
@@ -2314,9 +2324,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             viewModelScope.launch(Dispatchers.IO) {
-                PhotoManager.saveVideo(context, photoId, livePhotoVideoDeferred)
+                MediaManager.saveVideo(context, photoId, livePhotoVideoDeferred)
 
-                PhotoManager.saveStackedPhoto(
+                MediaManager.saveStackedPhoto(
                     context,
                     photoId,
                     images,
@@ -2383,7 +2393,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         )
 
         // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
-        val metadata = PhotoMetadata(
+        val metadata = MediaMetadata(
             lutId = lutIdToSave,
             frameId = frameIdToSave,
             colorRecipeParams = currentRecipeParams.value,
@@ -2414,7 +2424,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             manualHdrEffectEnabled = defaultHdrEffectEnabled
         )
 
-        PhotoManager.preparePhoto(
+        MediaManager.preparePhoto(
             context,
             metadata,
             null,
@@ -2448,13 +2458,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             burstImageCount++
             try {
-                val metadata = PhotoManager.loadMetadata(context, photoId)
+                val metadata = MediaManager.loadMetadata(context, photoId)
                 if (metadata == null) {
                     prepareBurst(context, photoId, image, captureInfo)
                 }
                 val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
                 val photoQualityValue = photoQuality.firstOrNull() ?: 95
-                PhotoManager.saveBurstPhoto(
+                MediaManager.saveBurstPhoto(
                     context,
                     photoId,
                     image,
@@ -2553,7 +2563,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         burstImages.clear()
         burstImageCount = 0
         multipleExposureState.previewBitmap?.recycle()
-        multipleExposureState.sessionId?.let { PhotoManager.clearMultipleExposureSession(getApplication(), it) }
+        multipleExposureState.sessionId?.let { MediaManager.clearMultipleExposureSession(getApplication(), it) }
     }
 
     /**

@@ -4,7 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.ColorSpace
 import android.util.Half
-import com.hinnka.mycamera.gallery.PhotoMetadata
+import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -15,7 +15,7 @@ import kotlin.system.measureTimeMillis
 
 class HlgImageProcessor {
 
-    fun isHlgCapture(metadata: PhotoMetadata): Boolean {
+    fun isHlgCapture(metadata: MediaMetadata): Boolean {
         return metadata.dynamicRangeProfile == "HLG10"
     }
 

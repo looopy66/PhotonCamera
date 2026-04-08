@@ -1,8 +1,10 @@
 package com.hinnka.mycamera.ui.gallery
 
 import android.app.Activity
+import android.graphics.Bitmap
 import android.widget.Toast
 import android.os.Build
+import android.util.Size
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -27,6 +29,7 @@ import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Share
@@ -53,7 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.hinnka.mycamera.R
-import com.hinnka.mycamera.gallery.PhotoData
+import com.hinnka.mycamera.gallery.MediaData
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.utils.OrientationObserver
@@ -89,9 +92,9 @@ fun GalleryScreen(
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        if (grants.values.all { it }) {
             viewModel.checkGalleryPermission()
         }
     }
@@ -372,9 +375,12 @@ fun GalleryScreen(
                     Button(
                         onClick = {
                             val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                android.Manifest.permission.READ_MEDIA_IMAGES
+                                arrayOf(
+                                    android.Manifest.permission.READ_MEDIA_IMAGES,
+                                    android.Manifest.permission.READ_MEDIA_VIDEO
+                                )
                             } else {
-                                android.Manifest.permission.READ_EXTERNAL_STORAGE
+                                arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE)
                             }
                             permissionLauncher.launch(permission)
                         },
@@ -526,7 +532,7 @@ fun GalleryScreen(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PhotoGridItem(
-    photo: PhotoData,
+    photo: MediaData,
     viewModel: GalleryViewModel,
     isSelected: Boolean,
     isSelectionMode: Boolean,
@@ -534,10 +540,35 @@ private fun PhotoGridItem(
     onLongClick: () -> Unit
 ) {
     val context = LocalContext.current
+    val videoThumbnail by produceState<Bitmap?>(initialValue = null, key1 = photo.id, key2 = photo.thumbnailUri) {
+        value = if (photo.isVideo && photo.thumbnailUri.scheme == "content") {
+            runCatching {
+                context.contentResolver.loadThumbnail(photo.thumbnailUri, Size(512, 512), null)
+            }.getOrNull()
+        } else {
+            null
+        }
+    }
 
     val aspectRatio = remember(photo.width, photo.height, photo.metadata, OrientationObserver.isLandscape) {
-        val width = photo.metadata?.width ?: photo.width
-        val height = photo.metadata?.height ?: photo.height
+        val rawWidth = if (photo.isVideo) {
+            photo.metadata?.videoWidth ?: photo.width
+        } else {
+            photo.metadata?.width ?: photo.width
+        }
+        val rawHeight = if (photo.isVideo) {
+            photo.metadata?.videoHeight ?: photo.height
+        } else {
+            photo.metadata?.height ?: photo.height
+        }
+        val rotationDegrees = if (photo.isVideo) {
+            photo.metadata?.rotationDegrees ?: 0
+        } else {
+            0
+        }
+        val shouldSwapDimensions = rotationDegrees == 90 || rotationDegrees == 270
+        val width = if (shouldSwapDimensions) rawHeight else rawWidth
+        val height = if (shouldSwapDimensions) rawWidth else rawHeight
         if (width > 0 && height > 0) {
             if (OrientationObserver.isLandscape) height.toFloat() / width.toFloat() else width.toFloat() / height.toFloat()
         } else {
@@ -574,7 +605,7 @@ private fun PhotoGridItem(
         }
 
         AsyncImage(
-            model = imageRequest,
+            model = videoThumbnail ?: imageRequest,
             contentDescription = photo.displayName,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
@@ -601,8 +632,32 @@ private fun PhotoGridItem(
             )
         }
 
-        // Live Photo 标记
-        if (photo.isMotionPhoto) {
+        // 媒体类型标记
+        if (photo.isVideo) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(4.dp)
+                    .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(999.dp))
+                    .padding(horizontal = 6.dp, vertical = 4.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = stringResource(R.string.video),
+                        tint = Color.White,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(2.dp))
+                    Text(
+                        text = photo.getFormattedDuration(),
+                        color = Color.White,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        } else if (photo.isMotionPhoto) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopStart)
@@ -641,7 +696,7 @@ private fun PhotoGridItem(
                 .align(Alignment.BottomStart)
         ) {
             // RAW 标记
-            val isRaw = remember(photo.id) { viewModel.isRaw(photo.id) }
+            val isRaw = remember(photo.id) { photo.isImage && viewModel.isRaw(photo.id) }
             if (isRaw) {
                 Box(
                     modifier = Modifier

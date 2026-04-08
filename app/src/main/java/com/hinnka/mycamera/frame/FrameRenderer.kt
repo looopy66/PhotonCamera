@@ -5,7 +5,7 @@ import android.graphics.*
 import android.util.TypedValue
 import androidx.core.graphics.drawable.toBitmap
 import com.hinnka.mycamera.R
-import com.hinnka.mycamera.gallery.PhotoMetadata
+import com.hinnka.mycamera.gallery.MediaMetadata
 import java.text.SimpleDateFormat
 import java.util.*
 import androidx.core.graphics.createBitmap
@@ -42,7 +42,7 @@ class FrameRenderer(private val context: Context) {
     fun render(
         originalBitmap: Bitmap,
         template: FrameTemplate,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
     ): Bitmap {
 
         PLog.d(TAG, "render: $metadata")
@@ -228,7 +228,7 @@ class FrameRenderer(private val context: Context) {
     private fun drawFrameContent(
         canvas: Canvas,
         elements: List<FrameElement>,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
         left: Float,
         top: Float,
         right: Float,
@@ -378,7 +378,7 @@ class FrameRenderer(private val context: Context) {
 
     private fun measureElementsWidth(
         elements: List<FrameElement>,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
         showAppBranding: Boolean,
         scale: Float = 1f
     ): Float {
@@ -401,7 +401,7 @@ class FrameRenderer(private val context: Context) {
         return xPerLine.values.maxOrNull() ?: 0f
     }
 
-    private fun isElementVisible(element: FrameElement, metadata: PhotoMetadata): Boolean {
+    private fun isElementVisible(element: FrameElement, metadata: MediaMetadata): Boolean {
         return when (element) {
             is FrameElement.Text -> getTextContent(element, metadata) != null
             is FrameElement.Logo -> {
@@ -416,7 +416,7 @@ class FrameRenderer(private val context: Context) {
 
     private fun filterVisibleGroup(
         elements: List<FrameElement>,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
     ): List<FrameElement> {
         val initiallyVisible = elements.filter { isElementVisible(it, metadata) }
         val result = mutableListOf<FrameElement>()
@@ -447,7 +447,7 @@ class FrameRenderer(private val context: Context) {
      */
     private fun measureElementWidth(
         element: FrameElement,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
         scale: Float = 1f
     ): Float {
         return when (element) {
@@ -487,7 +487,7 @@ class FrameRenderer(private val context: Context) {
     private fun drawElement(
         canvas: Canvas,
         element: FrameElement,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
         x: Float,
         centerY: Float,
         leftToRight: Boolean,
@@ -525,7 +525,7 @@ class FrameRenderer(private val context: Context) {
     private fun drawTextElement(
         canvas: Canvas,
         element: FrameElement.Text,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
         x: Float,
         centerY: Float,
         leftToRight: Boolean,
@@ -553,7 +553,7 @@ class FrameRenderer(private val context: Context) {
      */
     private fun getTextContent(
         element: FrameElement.Text,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
     ): String? {
         val content = when (element.textType) {
             TextType.DEVICE_MODEL -> metadata.deviceModel
@@ -591,7 +591,7 @@ class FrameRenderer(private val context: Context) {
 
     private fun measureLogoSize(
         element: FrameElement.Logo,
-        metadata: PhotoMetadata?,
+        metadata: MediaMetadata?,
         scale: Float = 1f
     ): Pair<Int, Int> {
         val size = (dpToPx(element.sizeDp) * scale).toInt()
@@ -647,7 +647,7 @@ class FrameRenderer(private val context: Context) {
         x: Float,
         centerY: Float,
         leftToRight: Boolean,
-        metadata: PhotoMetadata? = null,
+        metadata: MediaMetadata? = null,
         scale: Float = 1f
     ): Float {
         // 如果是 App Logo 且不显示品牌，则跳过
@@ -968,7 +968,7 @@ class FrameRenderer(private val context: Context) {
         val scaledBitmap = Bitmap.createScaledBitmap(originalBitmap, scaledWidth, scaledHeight, true)
 
         // 渲染边框
-        val metadata = PhotoMetadata.createDefault(scaledWidth, scaledHeight)
+        val metadata = MediaMetadata.createDefault(scaledWidth, scaledHeight)
         return render(scaledBitmap, template, metadata)
     }
 
@@ -1025,7 +1025,7 @@ class FrameRenderer(private val context: Context) {
         }
     }
 
-    private fun getTextTypeface(element: FrameElement.Text, metadata: PhotoMetadata): Typeface {
+    private fun getTextTypeface(element: FrameElement.Text, metadata: MediaMetadata): Typeface {
         if (element.textType == TextType.DEVICE_MODEL) {
             val customFont = metadata.customProperties["DEVICE_MODEL_FONT"]
             if (customFont == "Default") {

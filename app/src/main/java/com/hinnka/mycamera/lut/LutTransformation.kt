@@ -4,7 +4,7 @@ import android.graphics.Bitmap
 import coil.size.Size
 import coil.transform.Transformation
 import android.content.Context
-import com.hinnka.mycamera.gallery.PhotoMetadata
+import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.gallery.PhotoProcessor
 
 /**
@@ -17,7 +17,7 @@ import com.hinnka.mycamera.gallery.PhotoProcessor
  */
 class PhotoTransformation(
     private val context: Context,
-    private val metadata: PhotoMetadata,
+    private val metadata: MediaMetadata,
     private val photoProcessor: PhotoProcessor,
     private val sharpening: Float = 0f,
     private val noiseReduction: Float = 0f,

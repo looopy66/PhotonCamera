@@ -58,7 +58,7 @@ import com.hinnka.mycamera.ui.settings.PhantomPipCropScreen
 import com.hinnka.mycamera.ui.camera.CameraScreen
 import com.hinnka.mycamera.ui.gallery.BurstDetailScreen
 import com.hinnka.mycamera.ui.gallery.GalleryScreen
-import com.hinnka.mycamera.ui.gallery.PhotoDetailScreen
+import com.hinnka.mycamera.ui.gallery.MediaDetailScreen
 import com.hinnka.mycamera.ui.gallery.PhotoEditScreen
 import com.hinnka.mycamera.ui.settings.FilterManagementScreen
 import com.hinnka.mycamera.ui.settings.FrameManagementScreen
@@ -72,7 +72,7 @@ import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import com.hinnka.mycamera.lut.creator.LutCreatorScreen
 import com.hinnka.mycamera.lut.creator.LutCreatorViewModel
 import com.hinnka.mycamera.utils.DeviceUtil
-import com.hinnka.mycamera.gallery.PhotoManager
+import com.hinnka.mycamera.gallery.MediaManager
 import com.hinnka.mycamera.utils.PLog
 
 /**
@@ -138,9 +138,9 @@ class MainActivity : ComponentActivity() {
 
         OrientationObserver.observe(this)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            PhotoManager.hdrSdrRatio = display?.hdrSdrRatio ?: 0f
+            MediaManager.hdrSdrRatio = display?.hdrSdrRatio ?: 0f
         }
-        PLog.d("MainActivity", "hdrSdrRatio=${PhotoManager.hdrSdrRatio}")
+        PLog.d("MainActivity", "hdrSdrRatio=${MediaManager.hdrSdrRatio}")
 
         // 检查权限
         hasPermissions = permissions.all {
@@ -316,7 +316,7 @@ fun NavigationHost(
                             },
                             modifier = Modifier.weight(1f)
                         )
-                        PhotoDetailScreen(
+                        MediaDetailScreen(
                             viewModel = galleryViewModel,
                             isExpanded = true,
                             onEdit = {
@@ -381,7 +381,7 @@ fun NavigationHost(
                 val tab = backStackEntry.arguments?.getString("tab") ?: GalleryTab.PHOTON.name
                 val photoId = backStackEntry.arguments?.getString("photoId")
                 galleryViewModel.selectTab(GalleryTab.valueOf(tab))
-                PhotoDetailScreen(
+                MediaDetailScreen(
                     viewModel = galleryViewModel,
                     initialIndex = index,
                     photoId = photoId,

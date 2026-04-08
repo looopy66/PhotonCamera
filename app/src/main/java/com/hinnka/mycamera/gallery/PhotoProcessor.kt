@@ -42,7 +42,7 @@ class PhotoProcessor(
     suspend fun prepareUltraHdrSource(
         context: Context,
         photoId: String,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f
@@ -51,7 +51,7 @@ class PhotoProcessor(
             return null
         }
 
-        val dngFile = PhotoManager.getDngFile(context, photoId)
+        val dngFile = MediaManager.getDngFile(context, photoId)
         if (dngFile.exists()) {
             return processDngForUltraHdr(
                 context = context,
@@ -64,12 +64,12 @@ class PhotoProcessor(
             )
         }
 
-        val yuvFile = PhotoManager.getYuvFile(context, photoId)
+        val yuvFile = MediaManager.getYuvFile(context, photoId)
         if (hlgImageProcessor.isHlgCapture(metadata)) {
             val prepareStart = System.currentTimeMillis()
-            val hdrData = PhotoManager.loadHdrData(context, photoId)
+            val hdrData = MediaManager.loadHdrData(context, photoId)
             if (hdrData != null) {
-                val photoFile = PhotoManager.getPhotoFile(context, photoId)
+                val photoFile = MediaManager.getPhotoFile(context, photoId)
                 val photoBitmap = BitmapFactory.decodeFile(photoFile.absolutePath) ?: return null
                 val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
                 val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
@@ -111,7 +111,7 @@ class PhotoProcessor(
             if (!yuvFile.exists()) {
                 return null
             }
-            val data = PhotoManager.loadYuvData(context, photoId) ?: return null
+            val data = MediaManager.loadYuvData(context, photoId) ?: return null
             return try {
                 val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
                 val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
@@ -163,7 +163,7 @@ class PhotoProcessor(
             }
         }
 
-        val photoFile = PhotoManager.getPhotoFile(context, photoId)
+        val photoFile = MediaManager.getPhotoFile(context, photoId)
         if (photoFile.exists()) {
             val bitmap = BitmapFactory.decodeFile(photoFile.absolutePath) ?: return null
             val sdrBitmap = processBitmap(
@@ -188,17 +188,17 @@ class PhotoProcessor(
         return null
     }
 
-    fun hasDeferredHlgSource(metadata: PhotoMetadata): Boolean {
+    fun hasDeferredHlgSource(metadata: MediaMetadata): Boolean {
         return hlgImageProcessor.isHlgCapture(metadata)
     }
 
-    private fun readDisplayHdrSdrRatio(): Float = PhotoManager.hdrSdrRatio
+    private fun readDisplayHdrSdrRatio(): Float = MediaManager.hdrSdrRatio
 
     suspend fun prepareUltraHdrSourceFromRawResult(
         context: Context,
         photoId: String?,
         rawResult: RawHdrRenderResult,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f,
@@ -241,7 +241,7 @@ class PhotoProcessor(
                     aperture
                 )
             }
-            photoId?.let { id -> PhotoManager.saveBokehPhoto(context, id, sdrBitmap) }
+            photoId?.let { id -> MediaManager.saveBokehPhoto(context, id, sdrBitmap) }
         }
 
         sdrBitmap = lutImageProcessor.applyLut(
@@ -272,14 +272,14 @@ class PhotoProcessor(
     }
 
     suspend fun process(
-        context: Context, photoId: String, metadata: PhotoMetadata,
+        context: Context, photoId: String, metadata: MediaMetadata,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f
     ): Bitmap? {
-        val dngFile = PhotoManager.getDngFile(context, photoId)
-        val yuvFile = PhotoManager.getYuvFile(context, photoId)
-        val photoFile = PhotoManager.getPhotoFile(context, photoId)
+        val dngFile = MediaManager.getDngFile(context, photoId)
+        val yuvFile = MediaManager.getYuvFile(context, photoId)
+        val photoFile = MediaManager.getPhotoFile(context, photoId)
 
         if (dngFile.exists()) {
             return processDng(
@@ -292,7 +292,7 @@ class PhotoProcessor(
                 chromaNoiseReduction
             )
         } else if (yuvFile.exists()) {
-            val data = PhotoManager.loadYuvData(context, photoId) ?: return null
+            val data = MediaManager.loadYuvData(context, photoId) ?: return null
             return processYuv(
                 context,
                 photoId,
@@ -322,7 +322,7 @@ class PhotoProcessor(
         context: Context,
         photoId: String?,
         dngPath: String,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f
@@ -361,7 +361,7 @@ class PhotoProcessor(
         context: Context,
         photoId: String?,
         dngPath: String,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f
@@ -399,7 +399,7 @@ class PhotoProcessor(
                     context, photoId, b,
                     metadata.focusPointX, metadata.focusPointY, aperture
                 )
-                photoId?.let { photoId -> PhotoManager.saveBokehPhoto(context, photoId, b) }
+                photoId?.let { photoId -> MediaManager.saveBokehPhoto(context, photoId, b) }
             }
 
             lutImageProcessor.applyLut(
@@ -432,7 +432,7 @@ class PhotoProcessor(
         context: Context,
         photoId: String?,
         input: ByteBuffer,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f
@@ -488,7 +488,7 @@ class PhotoProcessor(
         context: Context,
         photoId: String?,
         input: Bitmap,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f,
@@ -506,7 +506,7 @@ class PhotoProcessor(
                     context, photoId, result,
                     metadata.focusPointX, metadata.focusPointY, aperture
                 )
-                photoId?.let { photoId -> PhotoManager.saveBokehPhoto(context, photoId, result) }
+                photoId?.let { photoId -> MediaManager.saveBokehPhoto(context, photoId, result) }
             }
         }
 
@@ -527,7 +527,7 @@ class PhotoProcessor(
     }
 
 
-    private fun applyCrop(input: Bitmap, metadata: PhotoMetadata): Bitmap {
+    private fun applyCrop(input: Bitmap, metadata: MediaMetadata): Bitmap {
         val cropRegion = metadata.postCropRegion ?: return input
         if (cropRegion.width() <= 0 || cropRegion.height() <= 0) return input
         
@@ -555,7 +555,7 @@ class PhotoProcessor(
 
     private suspend fun applyFrame(
         input: Bitmap,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
     ): Bitmap {
         var result = input
         // 2. 应用边框水印

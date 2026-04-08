@@ -89,6 +89,7 @@
     <string name="delete_exported_photos">同时删除系统相册中的导出图</string>
     <string name="no_photos">暂无照片</string>
     <string name="photo_info">照片信息</string>
+    <string name="video_info">视频信息</string>
     <string name="filter">LUT</string>
     <string name="intensity">强度</string>
     <string name="original">原图</string>
@@ -104,6 +105,15 @@
     <string name="photo_info_aperture">光圈</string>
     <string name="photo_info_iso">ISO</string>
     <string name="photo_info_shutter_speed">快门速度</string>
+    <string name="video">视频</string>
+    <string name="yes">是</string>
+    <string name="no">否</string>
+    <string name="video_info_duration">时长</string>
+    <string name="video_info_mime">格式</string>
+    <string name="video_info_frame_rate">帧率</string>
+    <string name="video_info_bitrate">码率</string>
+    <string name="video_info_has_audio">音轨</string>
+    <string name="video_info_rotation">旋转角</string>
 
     <!-- Frame Watermark -->
     <string name="frame">边框</string>

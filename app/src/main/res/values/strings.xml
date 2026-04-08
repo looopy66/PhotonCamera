@@ -91,6 +91,7 @@
     <string name="delete_exported_photos">Also delete from system gallery</string>
     <string name="no_photos">No photos yet</string>
     <string name="photo_info">Photo Info</string>
+    <string name="video_info">Video Info</string>
     <string name="filter">LUT</string>
     <string name="intensity">Intensity</string>
     <string name="original">Original</string>
@@ -106,6 +107,15 @@
     <string name="photo_info_aperture">Aperture</string>
     <string name="photo_info_iso">ISO</string>
     <string name="photo_info_shutter_speed">Shutter Speed</string>
+    <string name="video">Video</string>
+    <string name="yes">Yes</string>
+    <string name="no">No</string>
+    <string name="video_info_duration">Duration</string>
+    <string name="video_info_mime">Format</string>
+    <string name="video_info_frame_rate">Frame Rate</string>
+    <string name="video_info_bitrate">Bitrate</string>
+    <string name="video_info_has_audio">Audio</string>
+    <string name="video_info_rotation">Rotation</string>
 
     <!-- Frame Watermark -->
     <string name="frame">Frame</string>

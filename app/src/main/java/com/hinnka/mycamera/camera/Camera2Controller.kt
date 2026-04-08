@@ -19,6 +19,7 @@ import android.os.HandlerThread
 import android.os.SystemClock
 import android.util.Size
 import android.view.Surface
+import android.net.Uri
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -135,6 +136,7 @@ class Camera2Controller(private val context: Context) {
     // Live Photo 录制器
     val livePhotoRecorder = LivePhotoRecorder(context)
     val videoRecorder = VideoRecorder(context)
+    var onVideoSaved: ((Uri?) -> Unit)? = null
 
     private var videoRecordingStartElapsedMs: Long = 0L
     private val videoRecordingTicker = object : Runnable {
@@ -2243,6 +2245,7 @@ class Camera2Controller(private val context: Context) {
         ) { uri ->
             PLog.i(TAG, "Video saved: $uri")
             _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
+            onVideoSaved?.invoke(uri)
         }
         if (!started) {
             return

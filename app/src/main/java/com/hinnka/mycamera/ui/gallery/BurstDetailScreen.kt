@@ -1,10 +1,6 @@
 package com.hinnka.mycamera.ui.gallery
 
-import android.app.Activity
-import android.net.Uri
 import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -33,7 +29,7 @@ import androidx.compose.ui.draw.clip
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.hinnka.mycamera.R
-import com.hinnka.mycamera.gallery.PhotoManager
+import com.hinnka.mycamera.gallery.MediaManager
 import com.hinnka.mycamera.ui.theme.AccentOrange
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -43,7 +39,6 @@ import me.saket.telephoto.zoomable.coil.ZoomableAsyncImage
 import me.saket.telephoto.zoomable.rememberZoomableImageState
 import me.saket.telephoto.zoomable.rememberZoomableState
 import java.io.File
-import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.compose.animation.AnimatedVisibility
@@ -52,8 +47,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
-import androidx.core.content.FileProvider
-import com.hinnka.mycamera.gallery.PhotoData
+import com.hinnka.mycamera.gallery.MediaData
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -81,7 +75,7 @@ fun BurstDetailScreen(
     // Load burst files
     LaunchedEffect(photoId) {
         withContext(Dispatchers.IO) {
-            burstFiles = PhotoManager.getBurstPhotos(context, photoId)
+            burstFiles = MediaManager.getBurstPhotos(context, photoId)
         }
         isLoading = false
     }
@@ -106,7 +100,7 @@ fun BurstDetailScreen(
     val pagerState = rememberPagerState(pageCount = { burstFiles.size })
     val currentFile = burstFiles.getOrNull(pagerState.currentPage)
 
-    val mainPhotoFile = remember(photoId) { PhotoManager.getPhotoFile(context, photoId) }
+    val mainPhotoFile = remember(photoId) { MediaManager.getPhotoFile(context, photoId) }
     val refreshKey = viewModel.photoRefreshKeys[photoId] ?: 0L
     val isMainPhoto = remember(currentFile, refreshKey) {
         currentFile?.exists() == true && mainPhotoFile.exists() && currentFile.length() == mainPhotoFile.length()
@@ -431,7 +425,7 @@ fun BurstDetailScreen(
                     onClick = {
                         coroutineScope.launch(Dispatchers.IO) {
                             currentFile?.delete()
-                            val updatedFiles = PhotoManager.getBurstPhotos(context, photoId)
+                            val updatedFiles = MediaManager.getBurstPhotos(context, photoId)
                             withContext(Dispatchers.Main) {
                                 burstFiles = updatedFiles
                                 showDeleteDialog = false
@@ -558,7 +552,7 @@ fun BurstDetailScreen(
  */
 @Composable
 private fun ZoomableImage(
-    photo: PhotoData,
+    photo: MediaData,
     photoFile: File,
     showOrigin: Boolean,
     isActive: Boolean,

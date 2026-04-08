@@ -34,7 +34,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -67,7 +66,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.AndroidUiDispatcher
 import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.platform.compositionContext
 import androidx.compose.ui.res.painterResource
@@ -92,16 +90,15 @@ import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.Routes
 import com.hinnka.mycamera.data.ContentRepository
-import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.screencapture.PhantomPipPreviewCoordinator
 import com.hinnka.mycamera.screencapture.ScreenCaptureForegroundServiceState
 import com.hinnka.mycamera.screencapture.ScreenCapturePipState
 import com.hinnka.mycamera.screencapture.ScreenCaptureRenderConfigStore
 import com.hinnka.mycamera.data.UserPreferencesRepository
 import com.hinnka.mycamera.gallery.ExifWriter
-import com.hinnka.mycamera.gallery.PhotoManager
-import com.hinnka.mycamera.gallery.PhotoManager.loadMetadata
-import com.hinnka.mycamera.gallery.PhotoManager.saveMetadata
+import com.hinnka.mycamera.gallery.MediaManager
+import com.hinnka.mycamera.gallery.MediaManager.loadMetadata
+import com.hinnka.mycamera.gallery.MediaManager.saveMetadata
 import com.hinnka.mycamera.livephoto.GoogleLivePhotoCreator
 import com.hinnka.mycamera.livephoto.MotionPhotoWriter
 import com.hinnka.mycamera.livephoto.VivoLivePhotoCreator
@@ -112,17 +109,14 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
-import kotlin.math.roundToInt
 import kotlin.io.copyTo
 import kotlin.io.inputStream
 import kotlin.use
@@ -382,10 +376,10 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         val computationalAperture = preferences?.defaultVirtualAperture?.let { if (it > 0f) it else null }
         val existingPhotoId = if (processingInfo?.uri == uri) processingInfo?.photoId else null
         val photoId =
-            PhotoManager.importPhoto(context, uri, lutId, computationalAperture, existingPhotoId) ?: run {
+            MediaManager.importPhoto(context, uri, lutId, computationalAperture, existingPhotoId) ?: run {
                 return@withContext
             }
-        val metadata = PhotoManager.loadMetadata(context, photoId) ?: run {
+        val metadata = MediaManager.loadMetadata(context, photoId) ?: run {
             return@withContext
         }
         if (!isActive) return@withContext
@@ -410,8 +404,8 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                 0f, 0f, 0f
             ) ?: return@withContext
 
-            val videoFile = PhotoManager.getVideoFile(context, photoId)
-            val photoFile = PhotoManager.getPhotoFile(context, photoId)
+            val videoFile = MediaManager.getVideoFile(context, photoId)
+            val photoFile = MediaManager.getPhotoFile(context, photoId)
 
             FileOutputStream(tempExportFile).use { outputStream ->
                 processedBitmap.compress(Bitmap.CompressFormat.JPEG, 97, outputStream)

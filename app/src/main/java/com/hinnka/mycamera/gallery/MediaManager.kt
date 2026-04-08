@@ -6,6 +6,7 @@ import android.content.Context
 import android.graphics.*
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
+import android.media.MediaMetadataRetriever
 import android.media.ThumbnailUtils
 import android.net.Uri
 import android.os.Build
@@ -60,7 +61,7 @@ import kotlin.use
  * 统一管理照片文件、元数据、缩略图等
  * 存储路径: context.filesDir/photos/<photoId>/
  */
-object PhotoManager {
+object MediaManager {
     private const val TAG = "PhotoManager"
     private const val PHOTOS_DIR = "photos"
     private const val BURST_DIR = "burst"
@@ -75,6 +76,21 @@ object PhotoManager {
     private const val DETAIL_HDR_FILE = "detail_hdr.jpg"
     private const val MULTIPLE_EXPOSURE_DIR = "multiple_exposure_sessions"
     private const val MULTIPLE_EXPOSURE_PREVIEW_FILE = "preview.jpg"
+
+    data class VideoRecordInfo(
+        val uri: Uri,
+        val displayName: String,
+        val dateTaken: Long,
+        val size: Long,
+        val width: Int,
+        val height: Int,
+        val durationMs: Long,
+        val mimeType: String?,
+        val frameRate: Int?,
+        val bitrate: Long?,
+        val rotationDegrees: Int?,
+        val hasAudio: Boolean?
+    )
 
     val processingScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val gainmapProducer = UnifiedGainmapProducer()
@@ -187,6 +203,116 @@ object PhotoManager {
         return File(getPhotoDir(context, photoId), VIDEO_FILE)
     }
 
+    private fun getExistingMediaFile(context: Context, photoId: String): File? {
+        val photoFile = getPhotoFile(context, photoId)
+        if (photoFile.exists()) return photoFile
+        val videoFile = getVideoFile(context, photoId)
+        if (videoFile.exists()) return videoFile
+        return null
+    }
+
+    private fun readVideoRecordInfo(context: Context, uri: Uri): VideoRecordInfo? {
+        return try {
+            val projection = arrayOf(
+                MediaStore.Video.Media.DISPLAY_NAME,
+                MediaStore.Video.Media.DATE_ADDED,
+                MediaStore.Video.Media.SIZE,
+                MediaStore.Video.Media.WIDTH,
+                MediaStore.Video.Media.HEIGHT,
+                MediaStore.Video.Media.DURATION,
+                MediaStore.Video.Media.MIME_TYPE
+            )
+            context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+                if (!cursor.moveToFirst()) return@use null
+                val displayName = cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME))
+                val dateTaken = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_ADDED)) * 1000L
+                val size = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE))
+                val width = cursor.getInt(cursor.getColumnIndexOrThrow(MediaStore.Video.Media.WIDTH))
+                val height = cursor.getInt(cursor.getColumnIndexOrThrow(MediaStore.Video.Media.HEIGHT))
+                val durationMs = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION))
+                val mimeType = cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.Video.Media.MIME_TYPE))
+
+                var frameRate: Int? = null
+                var bitrate: Long? = null
+                var rotationDegrees: Int? = null
+                var hasAudio: Boolean? = null
+                var resolvedWidth = width
+                var resolvedHeight = height
+                var resolvedDurationMs = durationMs
+
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(context, uri)
+                    resolvedWidth = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                        ?.toIntOrNull()
+                        ?.takeIf { it > 0 } ?: resolvedWidth
+                    resolvedHeight = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                        ?.toIntOrNull()
+                        ?.takeIf { it > 0 } ?: resolvedHeight
+                    resolvedDurationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                        ?.toLongOrNull()
+                        ?.takeIf { it > 0L } ?: resolvedDurationMs
+                    frameRate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)
+                        ?.toFloatOrNull()?.roundToInt()
+                    if (frameRate == null) {
+                        val frameCount = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_FRAME_COUNT)
+                            ?.toLongOrNull()
+                        if (frameCount != null && resolvedDurationMs > 0L) {
+                            frameRate = ((frameCount * 1000f) / resolvedDurationMs).roundToInt().takeIf { it > 0 }
+                        }
+                    }
+                    bitrate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toLongOrNull()
+                    rotationDegrees = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull()
+                    hasAudio = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO)?.let {
+                        it == "yes" || it == "true" || it == "1"
+                    }
+                } finally {
+                    retriever.release()
+                }
+
+                VideoRecordInfo(
+                    uri = uri,
+                    displayName = displayName,
+                    dateTaken = dateTaken,
+                    size = size,
+                    width = resolvedWidth,
+                    height = resolvedHeight,
+                    durationMs = resolvedDurationMs,
+                    mimeType = mimeType,
+                    frameRate = frameRate,
+                    bitrate = bitrate,
+                    rotationDegrees = rotationDegrees,
+                    hasAudio = hasAudio
+                )
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to read video record info: $uri", e)
+            null
+        }
+    }
+
+    private fun saveVideoThumbnail(context: Context, uri: Uri, outputFile: File): Boolean {
+        return try {
+            val retriever = MediaMetadataRetriever()
+            val bitmap = try {
+                retriever.setDataSource(context, uri)
+                retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            } finally {
+                retriever.release()
+            } ?: return false
+
+            outputFile.parentFile?.mkdirs()
+            FileOutputStream(outputFile).use { out ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+            }
+            bitmap.recycle()
+            true
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to save video thumbnail for $uri", e)
+            false
+        }
+    }
+
     private fun hasBitmapGainmap(bitmap: Bitmap?): Boolean {
         if (bitmap == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return false
         return try {
@@ -197,7 +323,7 @@ object PhotoManager {
         }
     }
 
-    private fun canReuseEmbeddedGainmap(metadata: PhotoMetadata): Boolean {
+    private fun canReuseEmbeddedGainmap(metadata: MediaMetadata): Boolean {
         return metadata.manualHdrEffectEnabled &&
                 metadata.hasEmbeddedGainmap &&
                 metadata.lutId == null &&
@@ -238,7 +364,7 @@ object PhotoManager {
     suspend fun buildDetailHdrCache(
         context: Context,
         photoId: String,
-        metadata: PhotoMetadata? = null,
+        metadata: MediaMetadata? = null,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f,
@@ -309,7 +435,7 @@ object PhotoManager {
     fun queueDetailHdrCacheBuild(
         context: Context,
         photoId: String,
-        metadata: PhotoMetadata? = null,
+        metadata: MediaMetadata? = null,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f
@@ -340,7 +466,7 @@ object PhotoManager {
         id: String,
         bitmap: Bitmap? = null,
         photoProcessor: PhotoProcessor,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
         sharpeningValue: Float,
         noiseReductionValue: Float,
         chromaNoiseReductionValue: Float,
@@ -551,7 +677,7 @@ object PhotoManager {
         context: Context,
         id: String,
         bitmap: Bitmap,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
         photoQuality: Int,
         suffix: String?,
     ): Boolean {
@@ -599,7 +725,7 @@ object PhotoManager {
         }
     }
 
-    suspend fun exportDng(context: Context, photoId: String, data: ByteArray, metadata: PhotoMetadata) =
+    suspend fun exportDng(context: Context, photoId: String, data: ByteArray, metadata: MediaMetadata) =
         withContext(Dispatchers.IO) {
             try {
                 val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
@@ -637,7 +763,7 @@ object PhotoManager {
             }
         }
 
-    suspend fun exportDng(context: Context, photoId: String, sourceFile: File, metadata: PhotoMetadata) =
+    suspend fun exportDng(context: Context, photoId: String, sourceFile: File, metadata: MediaMetadata) =
         withContext(Dispatchers.IO) {
             try {
                 if (!sourceFile.exists() || sourceFile.length() <= 0L) {
@@ -684,7 +810,7 @@ object PhotoManager {
 
     suspend fun preparePhoto(
         context: Context,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
         captureResult: CaptureResult?,
         thumbnail: Bitmap?,
         useLivePhoto: Boolean,
@@ -781,7 +907,7 @@ object PhotoManager {
         }
     }
 
-    suspend fun generateBokehPhoto(context: Context, photoId: String, metadata: PhotoMetadata, bitmap: Bitmap) {
+    suspend fun generateBokehPhoto(context: Context, photoId: String, metadata: MediaMetadata, bitmap: Bitmap) {
         val aperture = metadata.computationalAperture ?: 0f
         val focusPointX = metadata.focusPointX
         val focusPointY = metadata.focusPointY
@@ -1578,7 +1704,7 @@ object PhotoManager {
         captureResult: CaptureResult,
         rotation: Int,
         thumbnail: Bitmap?,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
         shouldAutoSave: Boolean,
     ): Boolean {
         val tempDngFile = File(dngFile.parentFile, "temp_stacked.dng")
@@ -1912,7 +2038,13 @@ object PhotoManager {
             val metadata = runBlocking {
                 loadMetadata(context, photoId)
             }
-            val exportedUris = metadata?.exportedUris ?: emptyList()
+            val exportedUris = buildList {
+                addAll(metadata?.exportedUris ?: emptyList())
+                val sourceUri = metadata?.sourceUri
+                if (metadata?.mediaType == MediaType.VIDEO && !sourceUri.isNullOrBlank()) {
+                    add(sourceUri)
+                }
+            }
 
             if (exportedUris.isEmpty()) {
                 PLog.d(TAG, "No exported URIs to delete for photo: $photoId")
@@ -1995,12 +2127,12 @@ object PhotoManager {
     /**
      * 加载元数据
      */
-    suspend fun loadMetadata(context: Context, photoId: String): PhotoMetadata? {
+    suspend fun loadMetadata(context: Context, photoId: String): MediaMetadata? {
         return withContext(Dispatchers.IO) {
             try {
                 val file = getMetadataFile(context, photoId)
                 if (file.exists()) {
-                    PhotoMetadata.fromJson(file.readText())
+                    MediaMetadata.fromJson(file.readText())
                 } else {
                     null
                 }
@@ -2014,7 +2146,7 @@ object PhotoManager {
     /**
      * 更新元数据
      */
-    suspend fun saveMetadata(context: Context, photoId: String, metadata: PhotoMetadata): Boolean {
+    suspend fun saveMetadata(context: Context, photoId: String, metadata: MediaMetadata): Boolean {
         return withContext(Dispatchers.IO) {
             try {
                 val dir = getPhotoDir(context, photoId, true)
@@ -2026,6 +2158,109 @@ object PhotoManager {
                 false
             }
         }
+    }
+
+    suspend fun recordVideoCapture(
+        context: Context,
+        uri: Uri,
+        photoId: String = UUID.randomUUID().toString()
+    ): String? = withContext(Dispatchers.IO) {
+        val info = readVideoRecordInfo(context, uri) ?: return@withContext null
+        val metadata = MediaMetadata(
+            mediaType = MediaType.VIDEO,
+            dateTaken = info.dateTaken,
+            width = info.width,
+            height = info.height,
+            sourceUri = uri.toString(),
+            mimeType = info.mimeType,
+            durationMs = info.durationMs,
+            frameRate = info.frameRate,
+            bitrate = info.bitrate,
+            rotationDegrees = info.rotationDegrees,
+            hasAudio = info.hasAudio,
+            videoWidth = info.width,
+            videoHeight = info.height,
+            captureMode = "video"
+        )
+        val dir = getPhotoDir(context, photoId, true)
+        val thumbnailSaved = saveVideoThumbnail(context, uri, getThumbnailFile(context, photoId))
+        if (!thumbnailSaved) {
+            PLog.w(TAG, "Video thumbnail not generated for $uri")
+        }
+        val metadataSaved = saveMetadata(context, photoId, metadata)
+        if (!metadataSaved) {
+            dir.deleteRecursively()
+            return@withContext null
+        }
+        dir.setLastModified(info.dateTaken)
+        photoId
+    }
+
+    suspend fun buildPhotoData(context: Context, photoId: String): MediaData? = withContext(Dispatchers.IO) {
+        val metadata = loadMetadata(context, photoId) ?: return@withContext null
+        val thumbnailFile = getThumbnailFile(context, photoId)
+        val thumbnailUri = when {
+            thumbnailFile.exists() -> Uri.fromFile(thumbnailFile)
+            metadata.sourceUri != null -> Uri.parse(metadata.sourceUri)
+            else -> return@withContext null
+        }
+        if (metadata.mediaType == MediaType.VIDEO) {
+            val sourceUri = metadata.sourceUri?.let(Uri::parse) ?: return@withContext null
+            val info = readVideoRecordInfo(context, sourceUri)
+            val id = photoId
+            val resolvedWidth = info?.width ?: metadata.videoWidth ?: metadata.width
+            val resolvedHeight = info?.height ?: metadata.videoHeight ?: metadata.height
+            val resolvedDurationMs = info?.durationMs ?: metadata.durationMs
+            val resolvedMimeType = info?.mimeType ?: metadata.mimeType
+            val resolvedMetadata = metadata.copy(
+                width = resolvedWidth,
+                height = resolvedHeight,
+                mimeType = resolvedMimeType,
+                durationMs = resolvedDurationMs,
+                frameRate = info?.frameRate ?: metadata.frameRate,
+                bitrate = info?.bitrate ?: metadata.bitrate,
+                rotationDegrees = info?.rotationDegrees ?: metadata.rotationDegrees,
+                hasAudio = info?.hasAudio ?: metadata.hasAudio,
+                videoWidth = resolvedWidth,
+                videoHeight = resolvedHeight
+            )
+            return@withContext MediaData(
+                id = id,
+                uri = sourceUri,
+                thumbnailUri = thumbnailUri,
+                displayName = info?.displayName ?: (sourceUri.lastPathSegment ?: "video_$id"),
+                dateAdded = info?.dateTaken ?: metadata.dateTaken ?: getPhotoDir(context, id).lastModified(),
+                size = info?.size ?: 0L,
+                width = resolvedWidth,
+                height = resolvedHeight,
+                mediaType = MediaType.VIDEO,
+                mimeType = resolvedMimeType,
+                durationMs = resolvedDurationMs,
+                sourceUri = sourceUri,
+                metadata = resolvedMetadata
+            )
+        }
+
+        val photoFile = getPhotoFile(context, photoId)
+        if (!photoFile.exists()) return@withContext null
+        val videoFile = getVideoFile(context, photoId)
+        val isBurstPhoto = hasBurstPhotos(context, photoId)
+        MediaData(
+            id = photoId,
+            uri = Uri.fromFile(photoFile),
+            thumbnailUri = thumbnailUri,
+            displayName = photoFile.name,
+            dateAdded = photoFile.lastModified().takeIf { it > 0 } ?: getPhotoDir(context, photoId).lastModified(),
+            size = photoFile.length(),
+            width = metadata.width,
+            height = metadata.height,
+            mediaType = MediaType.IMAGE,
+            mimeType = metadata.mimeType ?: "image/jpeg",
+            sourceUri = metadata.sourceUri?.let(Uri::parse),
+            isMotionPhoto = videoFile.exists(),
+            isBurstPhoto = isBurstPhoto,
+            metadata = metadata
+        )
     }
 
     fun loadYuvData(context: Context, photoId: String): ByteBuffer? {
@@ -2062,10 +2297,14 @@ object PhotoManager {
             return loadBitmap(context, Uri.fromFile(bokehFile), maxEdge, preserveHdr)
         }
         val photoFile = getPhotoFile(context, photoId)
-        if (!photoFile.exists()) {
-            return null
+        if (photoFile.exists()) {
+            return loadBitmap(context, Uri.fromFile(photoFile), maxEdge, preserveHdr)
         }
-        return loadBitmap(context, Uri.fromFile(photoFile), maxEdge, preserveHdr)
+        val thumbnailFile = getThumbnailFile(context, photoId)
+        if (thumbnailFile.exists()) {
+            return loadBitmap(context, Uri.fromFile(thumbnailFile), maxEdge, preserveHdr)
+        }
+        return null
     }
 
     fun loadOriginalBitmap(
@@ -2198,7 +2437,7 @@ object PhotoManager {
                 }
 
                 // 2. 读取元数据以获取旋转信息
-                val metadata = PhotoMetadata.fromUri(context, uri).copy(
+                val metadata = MediaMetadata.fromUri(context, uri).copy(
                     lutId = lutId,
                     computationalAperture = computationalAperture,
                     sourceUri = uri.toString()
@@ -2293,7 +2532,7 @@ object PhotoManager {
                     val videoFile = File(photoDir, VIDEO_FILE)
                     if (MotionPhotoWriter.extractVideo(photoFile.absolutePath, videoFile.absolutePath)) {
                         PLog.d(TAG, "Extracted video from imported Motion Photo: $photoId")
-                        val metadata = loadMetadata(context, photoId) ?: PhotoMetadata()
+                        val metadata = loadMetadata(context, photoId) ?: MediaMetadata()
                         val timestampUs = MotionPhotoWriter.getPresentationTimestampUs(photoFile.absolutePath)
                         saveMetadata(context, photoId, metadata.copy(presentationTimestampUs = timestampUs))
                     }
@@ -2341,9 +2580,9 @@ object PhotoManager {
                     context,
                     dngFile.absolutePath, metadata?.ratio, metadata?.cropRegion, 0,
                     sharpeningValue = 0.4f,
-                    denoiseValue = (updatedMetadata ?: PhotoMetadata()).rawDenoiseValue,
+                    denoiseValue = (updatedMetadata ?: MediaMetadata()).rawDenoiseValue,
                     onMetadata = { raw ->
-                        updatedMetadata = updatedMetadata?.merge(raw) ?: PhotoMetadata().merge(raw)
+                        updatedMetadata = updatedMetadata?.merge(raw) ?: MediaMetadata().merge(raw)
                     }
                 )
 
@@ -2370,7 +2609,7 @@ object PhotoManager {
     private suspend fun tempImportJpeg(
         uri: Uri,
         context: Context,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
         photoFile: File,
         metadataFile: File,
         thumbnailFile: File

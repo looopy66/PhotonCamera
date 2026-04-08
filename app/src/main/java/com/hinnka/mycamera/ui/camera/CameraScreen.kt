@@ -1049,7 +1049,7 @@ fun Controls(
     state: CameraState,
     viewModel: CameraViewModel,
     galleryViewModel: GalleryViewModel,
-    latestPhoto: com.hinnka.mycamera.gallery.PhotoData?,
+    latestPhoto: com.hinnka.mycamera.gallery.MediaData?,
     useMultipleExposure: Boolean,
     multipleExposureState: com.hinnka.mycamera.viewmodel.MultipleExposureSessionState,
     onGalleryThumbnailBoundsChanged: (Rect) -> Unit,
