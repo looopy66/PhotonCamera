@@ -129,6 +129,9 @@ class Camera2Controller(private val context: Context) {
     private var isHlg10Supported = false
     private var availableAeModes: IntArray = intArrayOf()
     private var availableAwbModes: IntArray = intArrayOf()
+    private var videoCaptureStatsWindowStartMs: Long = 0L
+    private var videoCaptureStatsFrames: Int = 0
+    private var videoCaptureStatsLastTimestampNs: Long = 0L
 
     private val _state = MutableStateFlow(CameraState())
     val state: StateFlow<CameraState> = _state.asStateFlow()
@@ -225,6 +228,7 @@ class Camera2Controller(private val context: Context) {
                 }
             }
             lastCaptureResult = result
+            logVideoCaptureStats(result)
 
             // 处理拍照状态机
             processCaptureState(result)
@@ -270,6 +274,44 @@ class Camera2Controller(private val context: Context) {
     }
 
     private var lastAeState = 0
+
+    private fun logVideoCaptureStats(result: TotalCaptureResult) {
+        if (!_state.value.videoRecordingState.isRecording) return
+
+        val sensorTimestampNs = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: return
+        val nowMs = SystemClock.elapsedRealtime()
+        if (videoCaptureStatsWindowStartMs == 0L) {
+            videoCaptureStatsWindowStartMs = nowMs
+            videoCaptureStatsFrames = 0
+            videoCaptureStatsLastTimestampNs = sensorTimestampNs
+        }
+
+        videoCaptureStatsFrames += 1
+        val elapsedMs = nowMs - videoCaptureStatsWindowStartMs
+        if (elapsedMs < 1000L) {
+            videoCaptureStatsLastTimestampNs = sensorTimestampNs
+            return
+        }
+
+        val sensorElapsedNs = (sensorTimestampNs - videoCaptureStatsLastTimestampNs).coerceAtLeast(0L)
+        val callbackFps = videoCaptureStatsFrames * 1000f / elapsedMs.toFloat()
+        val sensorFps = if (sensorElapsedNs > 0L && videoCaptureStatsFrames > 1) {
+            (videoCaptureStatsFrames - 1) * 1_000_000_000f / sensorElapsedNs.toFloat()
+        } else {
+            0f
+        }
+        val fpsRange = result.get(CaptureResult.CONTROL_AE_TARGET_FPS_RANGE)
+        PLog.i(
+            TAG,
+            "Video capture stats: requested=${_state.value.videoConfig.fps.fps}, " +
+                "aeRange=$fpsRange, callbackFps=${"%.1f".format(callbackFps)}, " +
+                "sensorFps=${"%.1f".format(sensorFps)}, preview=${_state.value.currentPreviewSize.width}x${_state.value.currentPreviewSize.height}"
+        )
+
+        videoCaptureStatsWindowStartMs = nowMs
+        videoCaptureStatsFrames = 0
+        videoCaptureStatsLastTimestampNs = sensorTimestampNs
+    }
 
     /**
      * 处理拍照状态机的核心逻辑
@@ -2234,6 +2276,9 @@ class Camera2Controller(private val context: Context) {
             return
         }
 
+        videoCaptureStatsWindowStartMs = 0L
+        videoCaptureStatsFrames = 0
+        videoCaptureStatsLastTimestampNs = 0L
         val outputSize = _state.value.videoConfig.resolveOutputSize(
             _state.value.videoCapabilities.openGatePortraitAspectRatio
         )
@@ -2259,6 +2304,9 @@ class Camera2Controller(private val context: Context) {
 
     fun stopVideoRecording() {
         if (!_state.value.videoRecordingState.isRecording) return
+        videoCaptureStatsWindowStartMs = 0L
+        videoCaptureStatsFrames = 0
+        videoCaptureStatsLastTimestampNs = 0L
         stopVideoRecordingTicker()
         _state.value = _state.value.copy(
             videoRecordingState = _state.value.videoRecordingState.copy(isRecording = false)

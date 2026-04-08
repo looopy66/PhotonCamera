@@ -335,6 +335,8 @@ class LutRenderer : GLSurfaceView.Renderer {
     var videoRecorder: VideoRecorder? = null
     @Volatile
     var videoLogProfile: VideoLogProfile = VideoLogProfile.OFF
+    private var videoRenderStatsWindowStartMs: Long = 0L
+    private var videoRenderStatsFrames: Int = 0
 
     // 预览帧捕获标志
     private var shouldCapturePreview = false
@@ -522,16 +524,38 @@ class LutRenderer : GLSurfaceView.Renderer {
         if (viewportWidth <= 0 || viewportHeight <= 0) return
 
         // 更新 SurfaceTexture
+        var hasFreshCameraFrame = false
         synchronized(frameSyncObject) {
             if (frameAvailable) {
                 surfaceTexture?.updateTexImage()
                 surfaceTexture?.getTransformMatrix(stMatrix)
                 frameAvailable = false
+                hasFreshCameraFrame = true
             }
         }
 
         val liveRecorder = livePhotoRecorder
         val activeVideoRecorder = videoRecorder?.takeIf { it.isRecording() }
+        if (activeVideoRecorder != null) {
+            val nowMs = android.os.SystemClock.elapsedRealtime()
+            if (videoRenderStatsWindowStartMs == 0L) {
+                videoRenderStatsWindowStartMs = nowMs
+            }
+            videoRenderStatsFrames += 1
+            val elapsedMs = nowMs - videoRenderStatsWindowStartMs
+            if (elapsedMs >= 1000L) {
+                val renderFps = videoRenderStatsFrames * 1000f / elapsedMs.toFloat()
+                PLog.i(
+                    TAG,
+                    "Video GL stats: drawFps=${"%.1f".format(renderFps)}, viewport=${viewportWidth}x${viewportHeight}, preview=${previewWidth}x${previewHeight}"
+                )
+                videoRenderStatsWindowStartMs = nowMs
+                videoRenderStatsFrames = 0
+            }
+        } else {
+            videoRenderStatsWindowStartMs = 0L
+            videoRenderStatsFrames = 0
+        }
         val hdfEnabled = halation > 0.001f
         val bokehNeeded = aperture > 0f && depthMap != null
         val needsFbo = (liveRecorder != null || activeVideoRecorder != null || hdfEnabled || bokehNeeded) &&
@@ -611,14 +635,16 @@ class LutRenderer : GLSurfaceView.Renderer {
                     sharedVideoTextureId = recordTextureId
                     sharedVideoWidth = targetSize.width
                     sharedVideoHeight = targetSize.height
-                    val identityMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
-                    activeVideoRecorder.onPreviewFrame(
-                        textureId = recordTextureId,
-                        transformMatrix = identityMatrix,
-                        timestampNs = surfaceTexture?.timestamp ?: 0L,
-                        sharedContext = EGL14.eglGetCurrentContext(),
-                        sharedDisplay = EGL14.eglGetCurrentDisplay()
-                    )
+                    if (hasFreshCameraFrame) {
+                        val identityMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
+                        activeVideoRecorder.onPreviewFrame(
+                            textureId = recordTextureId,
+                            transformMatrix = identityMatrix,
+                            timestampNs = surfaceTexture?.timestamp ?: 0L,
+                            sharedContext = EGL14.eglGetCurrentContext(),
+                            sharedDisplay = EGL14.eglGetCurrentDisplay()
+                        )
+                    }
                 }
             }
 

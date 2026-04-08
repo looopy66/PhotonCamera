@@ -99,10 +99,19 @@ class VideoRecorder(
     private var videoStartTimestampUs: Long? = null
     private var lastVideoPresentationTimeUs = 0L
     private var lastAcceptedFrameTimestampUs = Long.MIN_VALUE
+    private var frameSelectionStartTimestampUs = Long.MIN_VALUE
+    private var lastAcceptedFrameSlot = Long.MIN_VALUE
     private var lastMuxedVideoPresentationTimeUs = Long.MIN_VALUE
     private var lastMuxedAudioPresentationTimeUs = Long.MIN_VALUE
     private var pendingFrame: PendingFrame? = null
     private var renderLoopRunning = false
+    private var statsWindowStartMs: Long = 0L
+    private var statsIncomingFrames: Int = 0
+    private var statsAcceptedFrames: Int = 0
+    private var statsReplacedPendingFrames: Int = 0
+    private var statsRenderedFrames: Int = 0
+    private var statsRenderTimeTotalMs: Long = 0L
+    private var statsRenderTimeMaxMs: Long = 0L
 
     private var videoDrainJob: Job? = null
     private var audioDrainJob: Job? = null
@@ -127,6 +136,16 @@ class VideoRecorder(
         tempOutputFile = File(context.cacheDir, "video_${System.currentTimeMillis()}.mp4")
         finishCallback = onFinished
         resetMuxerState()
+        frameSelectionStartTimestampUs = Long.MIN_VALUE
+        lastAcceptedFrameSlot = Long.MIN_VALUE
+        lastAcceptedFrameTimestampUs = Long.MIN_VALUE
+        statsWindowStartMs = 0L
+        statsIncomingFrames = 0
+        statsAcceptedFrames = 0
+        statsReplacedPendingFrames = 0
+        statsRenderedFrames = 0
+        statsRenderTimeTotalMs = 0L
+        statsRenderTimeMaxMs = 0L
         stopRequested = false
         isRecording = true
         PLog.d(TAG, "Video recording prepared: ${requestedSize.width}x${requestedSize.height} @ ${requestedFps}fps")
@@ -178,9 +197,14 @@ class VideoRecorder(
         if (textureId == 0 || sharedContext == EGL14.EGL_NO_CONTEXT) return
 
         val frameTimestampUs = timestampNs / 1000
+        statsIncomingFrames += 1
         if (!shouldEncodeFrame(frameTimestampUs)) return
+        statsAcceptedFrames += 1
 
         synchronized(pendingFrameLock) {
+            if (pendingFrame != null) {
+                statsReplacedPendingFrames += 1
+            }
             pendingFrame = PendingFrame(
                 textureId = textureId,
                 transformMatrix = transformMatrix.clone(),
@@ -373,11 +397,26 @@ class VideoRecorder(
     }
 
     private fun shouldEncodeFrame(timestampUs: Long): Boolean {
-        val minFrameIntervalUs = 1_000_000L / requestedFps.coerceAtLeast(1)
-        val lastTimestampUs = lastAcceptedFrameTimestampUs
-        if (lastTimestampUs != Long.MIN_VALUE && timestampUs - lastTimestampUs < minFrameIntervalUs) {
+        if (timestampUs <= 0L) return false
+        if (lastAcceptedFrameTimestampUs != Long.MIN_VALUE && timestampUs <= lastAcceptedFrameTimestampUs) {
             return false
         }
+
+        val fps = requestedFps.coerceAtLeast(1)
+        if (frameSelectionStartTimestampUs == Long.MIN_VALUE) {
+            frameSelectionStartTimestampUs = timestampUs
+            lastAcceptedFrameSlot = 0L
+            lastAcceptedFrameTimestampUs = timestampUs
+            return true
+        }
+
+        val elapsedUs = (timestampUs - frameSelectionStartTimestampUs).coerceAtLeast(0L)
+        val slot = (elapsedUs * fps.toLong()) / 1_000_000L
+        if (slot <= lastAcceptedFrameSlot) {
+            return false
+        }
+
+        lastAcceptedFrameSlot = slot
         lastAcceptedFrameTimestampUs = timestampUs
         return true
     }
@@ -404,11 +443,52 @@ class VideoRecorder(
                 }
                 val videoRenderer = renderer ?: continue
                 val presentationTimeUs = normalizeVideoPresentationTime(frame.timestampUs)
+                val renderStartMs = android.os.SystemClock.elapsedRealtime()
                 videoRenderer.renderFrame(frame.textureId, frame.transformMatrix, presentationTimeUs)
+                val renderCostMs = (android.os.SystemClock.elapsedRealtime() - renderStartMs).coerceAtLeast(0L)
+                statsRenderedFrames += 1
+                statsRenderTimeTotalMs += renderCostMs
+                if (renderCostMs > statsRenderTimeMaxMs) {
+                    statsRenderTimeMaxMs = renderCostMs
+                }
+                logRenderStatsIfNeeded()
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to render frame to encoder", e)
             }
         }
+    }
+
+    private fun logRenderStatsIfNeeded() {
+        val nowMs = android.os.SystemClock.elapsedRealtime()
+        if (statsWindowStartMs == 0L) {
+            statsWindowStartMs = nowMs
+            return
+        }
+        val elapsedMs = nowMs - statsWindowStartMs
+        if (elapsedMs < 1000L) return
+
+        val incomingFps = statsIncomingFrames * 1000f / elapsedMs.toFloat()
+        val acceptedFps = statsAcceptedFrames * 1000f / elapsedMs.toFloat()
+        val renderedFps = statsRenderedFrames * 1000f / elapsedMs.toFloat()
+        val avgRenderMs = if (statsRenderedFrames > 0) {
+            statsRenderTimeTotalMs.toFloat() / statsRenderedFrames.toFloat()
+        } else {
+            0f
+        }
+        PLog.i(
+            TAG,
+            "Video encoder stats: requested=${requestedFps}, incomingFps=${"%.1f".format(incomingFps)}, " +
+                "acceptedFps=${"%.1f".format(acceptedFps)}, renderedFps=${"%.1f".format(renderedFps)}, " +
+                "pendingDrops=$statsReplacedPendingFrames, avgRenderMs=${"%.1f".format(avgRenderMs)}, maxRenderMs=$statsRenderTimeMaxMs"
+        )
+
+        statsWindowStartMs = nowMs
+        statsIncomingFrames = 0
+        statsAcceptedFrames = 0
+        statsReplacedPendingFrames = 0
+        statsRenderedFrames = 0
+        statsRenderTimeTotalMs = 0L
+        statsRenderTimeMaxMs = 0L
     }
 
     private fun startDrains() {
