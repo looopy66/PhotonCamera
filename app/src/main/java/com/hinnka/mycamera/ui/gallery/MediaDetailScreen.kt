@@ -719,8 +719,8 @@ private fun VideoDetailPlayer(
             it.player = exoPlayer
             it.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
             it.useController = true
-            it.controllerAutoShow = true
-            it.setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+            it.controllerAutoShow = false
+            it.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
             it.isVisible = true
         },
         modifier = modifier

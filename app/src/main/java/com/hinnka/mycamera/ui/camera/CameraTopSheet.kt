@@ -88,7 +88,7 @@ fun CameraTopSheet(
                                 .height(44.dp)
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(
-                                    if (isSelected) Color(0xFFFFD700) else Color.White.copy(
+                                    if (isSelected) Color(0xFFFF6B35) else Color.White.copy(
                                         alpha = 0.12f
                                     )
                                 )

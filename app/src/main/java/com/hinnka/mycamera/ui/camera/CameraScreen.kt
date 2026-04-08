@@ -1149,7 +1149,7 @@ fun Controls(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
             CaptureModeSwitcher(
                 captureMode = state.captureMode,
@@ -1325,8 +1325,8 @@ private fun CaptureModeSwitcher(
     Box(
         modifier = Modifier
             .width(100.dp)
-            .height(28.dp)
-            .clip(RoundedCornerShape(14.dp))
+            .height(30.dp)
+            .clip(RoundedCornerShape(16.dp))
             .background(Color.White.copy(alpha = 0.12f))
             .padding(2.dp)
     ) {
@@ -1377,7 +1377,7 @@ private fun ModeSwitcherItem(
     Box(
         modifier = modifier
             .fillMaxHeight()
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(20.dp))
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
@@ -1385,7 +1385,7 @@ private fun ModeSwitcherItem(
             imageVector = icon,
             contentDescription = null,
             tint = if (selected) Color.Black else Color.White,
-            modifier = Modifier.size(16.dp)
+            modifier = Modifier.size(18.dp)
         )
     }
 }
