@@ -17,7 +17,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.platform.LocalContext
-import com.hinnka.mycamera.camera.AspectRatio
 import kotlin.math.abs
 import kotlin.math.atan2
 
@@ -28,7 +27,7 @@ import kotlin.math.atan2
  */
 @Composable
 fun LevelIndicatorOverlay(
-    aspectRatio: AspectRatio,
+    aspectRatio: Float,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -88,7 +87,7 @@ fun LevelIndicatorOverlay(
 
         // --- 比例计算区域 ---
         val containerRatio = 3f / 4f
-        val targetRatio = aspectRatio.getValue(isLandscape = false)
+        val targetRatio = aspectRatio
         val (drawWidth, drawHeight, offsetX, offsetY) = if (targetRatio > containerRatio) {
             val h = canvasWidth / targetRatio
             Quadruple(canvasWidth, h, 0f, (canvasHeight - h) / 2f)

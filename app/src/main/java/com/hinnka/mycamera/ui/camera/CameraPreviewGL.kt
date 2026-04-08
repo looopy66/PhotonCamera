@@ -14,12 +14,13 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.viewinterop.AndroidView
-import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.ui.components.FocusIndicator
 import com.hinnka.mycamera.utils.OrientationObserver
+import com.hinnka.mycamera.video.VideoLogProfile
+import com.hinnka.mycamera.video.VideoRecorder
 
 /**
  * 相机预览组件 - OpenGL ES 版本（Camera2 适配）
@@ -28,7 +29,7 @@ import com.hinnka.mycamera.utils.OrientationObserver
  */
 @Composable
 fun CameraPreviewGL(
-    aspectRatio: AspectRatio,
+    aspectRatio: Float,
     previewSize: Size,
     sensorOrientation: Int,
     lensFacing: Int,
@@ -45,6 +46,8 @@ fun CameraPreviewGL(
     onMeteringUpdated: ((Double, Double) -> Unit)? = null,
     onDepthInputAvailable: ((android.graphics.Bitmap) -> Unit)? = null,
     livePhotoRecorder: LivePhotoRecorder? = null,
+    videoRecorder: VideoRecorder? = null,
+    videoLogProfile: VideoLogProfile = VideoLogProfile.OFF,
     onGLSurfaceViewReady: ((CameraGLSurfaceView) -> Unit)? = null,
     aperture: Float = 0f,
     modifier: Modifier = Modifier
@@ -61,7 +64,7 @@ fun CameraPreviewGL(
         val containerHeight = constraints.maxHeight.toFloat()
 
         // 目标显示比例
-        val targetRatio = aspectRatio.getValue(false)
+        val targetRatio = aspectRatio
 
         // 计算裁切后的显示区域大小
         val displayWidth: Float
@@ -173,6 +176,8 @@ fun CameraPreviewGL(
                         )
                     })
                     glSurfaceView.setLivePhotoRecorder(livePhotoRecorder)
+                    glSurfaceView.setVideoRecorder(videoRecorder)
+                    glSurfaceView.setVideoLogProfile(videoLogProfile)
                 },
                 modifier = Modifier.fillMaxSize()
             )

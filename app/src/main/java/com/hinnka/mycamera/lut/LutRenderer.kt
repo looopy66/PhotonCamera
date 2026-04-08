@@ -5,8 +5,12 @@ import android.graphics.PointF
 import android.graphics.SurfaceTexture
 import android.opengl.*
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
+import com.hinnka.mycamera.raw.ColorSpace
+import com.hinnka.mycamera.raw.LogCurve
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.video.VideoLogProfile
+import com.hinnka.mycamera.video.VideoRecorder
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import javax.microedition.khronos.egl.EGLConfig
@@ -54,6 +58,10 @@ class LutRenderer : GLSurfaceView.Renderer {
     private val METERING_SIZE = 32
     private var captureFboId: Int = 0
     private var captureTextureId: Int = 0
+    private var recordFboId: Int = 0
+    private var recordTextureId: Int = 0
+    private var recordFboWidth: Int = 0
+    private var recordFboHeight: Int = 0
     private var passthroughProgramId: Int = 0
     private var uPassMVPMatrixLocation: Int = 0
     private var uPassSTMatrixLocation: Int = 0
@@ -94,6 +102,9 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var uLutEnabledLocation: Int = 0
     private var uLutCurveLocation: Int = 0
     private var uLutColorSpaceLocation: Int = 0
+    private var uVideoLogEnabledLocation: Int = 0
+    private var uVideoLogCurveLocation: Int = 0
+    private var uVideoColorSpaceLocation: Int = 0
 
     // 色彩配方 Uniform 位置
     private var uColorRecipeEnabledLocation: Int = 0
@@ -320,6 +331,10 @@ class LutRenderer : GLSurfaceView.Renderer {
 
     // Live Photo 录制器
     var livePhotoRecorder: LivePhotoRecorder? = null
+    @Volatile
+    var videoRecorder: VideoRecorder? = null
+    @Volatile
+    var videoLogProfile: VideoLogProfile = VideoLogProfile.OFF
 
     // 预览帧捕获标志
     private var shouldCapturePreview = false
@@ -405,6 +420,10 @@ class LutRenderer : GLSurfaceView.Renderer {
         meteringTextureId = 0
         captureFboId = 0
         captureTextureId = 0
+        recordFboId = 0
+        recordTextureId = 0
+        recordFboWidth = 0
+        recordFboHeight = 0
         passthroughProgramId = 0
         depthInputFboId = 0
         depthInputTextureId = 0
@@ -511,10 +530,12 @@ class LutRenderer : GLSurfaceView.Renderer {
             }
         }
 
-        val recorder = livePhotoRecorder
+        val liveRecorder = livePhotoRecorder
+        val activeVideoRecorder = videoRecorder?.takeIf { it.isRecording() }
         val hdfEnabled = halation > 0.001f
         val bokehNeeded = aperture > 0f && depthMap != null
-        val needsFbo = (recorder != null || hdfEnabled || bokehNeeded) && fboId != 0 && fboTextureId != 0
+        val needsFbo = (liveRecorder != null || activeVideoRecorder != null || hdfEnabled || bokehNeeded) &&
+            fboId != 0 && fboTextureId != 0
 
         if (needsFbo) {
             // 1. 渲染主着色器到 FBO (色彩配方 + LUT + CA)
@@ -540,8 +561,8 @@ class LutRenderer : GLSurfaceView.Renderer {
             // 确保 FBO 内容已刷入显存
             GLES30.glFlush()
 
-            // 3. Live Photo 录制
-            if (recorder != null) {
+            // 4. Live Photo 录制
+            if (liveRecorder != null) {
                 val applyRotation = getApplyRotation()
                 val isSwapped = applyRotation % 180 != 0
                 val targetWidth = if (isSwapped) viewportHeight else viewportWidth
@@ -553,7 +574,7 @@ class LutRenderer : GLSurfaceView.Renderer {
                     Matrix.rotateM(rotationMatrix, 0, applyRotation.toFloat(), 0f, 0f, 1f)
                     Matrix.translateM(rotationMatrix, 0, -0.5f, -0.5f, 0f)
                 }
-                recorder.onPreviewFrame(
+                liveRecorder.onPreviewFrame(
                     textureId = outputTexId,
                     transformMatrix = rotationMatrix,
                     width = targetWidth,
@@ -566,8 +587,56 @@ class LutRenderer : GLSurfaceView.Renderer {
                 )
             }
 
-            // 4. 显示到屏幕
-            if (hdfEnabled) {
+            var sharedVideoTextureId = 0
+            var sharedVideoWidth = 0
+            var sharedVideoHeight = 0
+
+            // 5. 视频录制输出
+            activeVideoRecorder?.targetSize?.let { targetSize ->
+                ensureRecordFbo(targetSize.width, targetSize.height)
+                if (recordFboId != 0 && recordTextureId != 0) {
+                    if (hdfEnabled) {
+                        drawHdfComposite(recordFboId, targetSize.width, targetSize.height, currentTexId)
+                    } else if (bokehNeeded) {
+                        drawFboToScreen(recordFboId, targetSize.width, targetSize.height, currentTexId)
+                    } else {
+                        drawInternal(
+                            recordFboId,
+                            targetSize.width,
+                            targetSize.height,
+                            buildMvpMatrix(targetSize.width, targetSize.height)
+                        )
+                    }
+                    GLES30.glFlush()
+                    sharedVideoTextureId = recordTextureId
+                    sharedVideoWidth = targetSize.width
+                    sharedVideoHeight = targetSize.height
+                    val identityMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
+                    activeVideoRecorder.onPreviewFrame(
+                        textureId = recordTextureId,
+                        transformMatrix = identityMatrix,
+                        timestampNs = surfaceTexture?.timestamp ?: 0L,
+                        sharedContext = EGL14.eglGetCurrentContext(),
+                        sharedDisplay = EGL14.eglGetCurrentDisplay()
+                    )
+                }
+            }
+
+            // 6. 显示到屏幕
+            if (sharedVideoTextureId != 0 && sharedVideoWidth > 0 && sharedVideoHeight > 0) {
+                drawFboToScreen(
+                    fboId = 0,
+                    width = viewportWidth,
+                    height = viewportHeight,
+                    sourceTextureId = sharedVideoTextureId,
+                    targetMvpMatrix = buildTextureMvpMatrix(
+                        sourceWidth = sharedVideoWidth,
+                        sourceHeight = sharedVideoHeight,
+                        targetWidth = viewportWidth,
+                        targetHeight = viewportHeight
+                    )
+                )
+            } else if (hdfEnabled) {
                 drawHdfComposite(0, viewportWidth, viewportHeight, currentTexId)
             } else {
                 drawFboToScreen(0, viewportWidth, viewportHeight, currentTexId)
@@ -581,7 +650,13 @@ class LutRenderer : GLSurfaceView.Renderer {
     /**
      * 将 FBO 纹理绘制到屏幕 (Copy Shader)
      */
-    private fun drawFboToScreen(fboId: Int, width: Int, height: Int, sourceTextureId: Int) {
+    private fun drawFboToScreen(
+        fboId: Int,
+        width: Int,
+        height: Int,
+        sourceTextureId: Int,
+        targetMvpMatrix: FloatArray? = null
+    ) {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fboId)
         GLES30.glViewport(0, 0, width, height)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
@@ -596,7 +671,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         // 或者需要 Identity
         val identity = FloatArray(16)
         Matrix.setIdentityM(identity, 0)
-        GLES30.glUniformMatrix4fv(uCopyMVPMatrixLoc, 1, false, identity, 0)
+        GLES30.glUniformMatrix4fv(uCopyMVPMatrixLoc, 1, false, targetMvpMatrix ?: identity, 0)
 
         // stMatrix 也设为 Identity，因为 FBO 纹理坐标是标准的
         GLES30.glUniformMatrix4fv(uCopySTMatrixLoc, 1, false, identity, 0)
@@ -628,7 +703,12 @@ class LutRenderer : GLSurfaceView.Renderer {
     /**
      * 内部绘图逻辑，支持渲染到 FBO 或屏幕
      */
-    private fun drawInternal(fboId: Int, width: Int, height: Int) {
+    private fun drawInternal(
+        fboId: Int,
+        width: Int,
+        height: Int,
+        targetMvpMatrix: FloatArray = mvpMatrix
+    ) {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fboId)
         GLES30.glViewport(0, 0, width, height)
 
@@ -657,7 +737,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         GLES30.glUniform1i(uLutTextureLocation, 1)
 
         // 设置 MVP 矩阵（用于 center crop）
-        GLES30.glUniformMatrix4fv(uMVPMatrixLocation, 1, false, mvpMatrix, 0)
+        GLES30.glUniformMatrix4fv(uMVPMatrixLocation, 1, false, targetMvpMatrix, 0)
 
         // 设置其他 Uniforms
         GLES30.glUniformMatrix4fv(uSTMatrixLocation, 1, false, stMatrix, 0)
@@ -666,8 +746,11 @@ class LutRenderer : GLSurfaceView.Renderer {
         GLES30.glUniform1f(uLutSizeLocation, lutSize)
         GLES30.glUniform1f(uLutIntensityLocation, lutIntensity)
         GLES30.glUniform1i(uLutEnabledLocation, if (lutEnabled && lutTextureId != 0) 1 else 0)
-        GLES30.glUniform1i(uLutCurveLocation, currentLutConfig?.curve?.ordinal ?: 0)
-        GLES30.glUniform1i(uLutColorSpaceLocation, currentLutConfig?.colorSpace?.ordinal ?: 0)
+        GLES30.glUniform1i(uLutCurveLocation, mapLutCurve(currentLutConfig?.curve))
+        GLES30.glUniform1i(uLutColorSpaceLocation, mapRawColorSpace(currentLutConfig?.colorSpace ?: ColorSpace.SRGB))
+        GLES30.glUniform1i(uVideoLogEnabledLocation, if (videoLogProfile.isEnabled) 1 else 0)
+        GLES30.glUniform1i(uVideoLogCurveLocation, mapLogCurve(videoLogProfile.logCurve))
+        GLES30.glUniform1i(uVideoColorSpaceLocation, mapRawColorSpace(videoLogProfile.colorSpace))
 
         // 设置色彩配方 Uniforms
         GLES30.glUniform1i(uColorRecipeEnabledLocation, if (colorRecipeEnabled) 1 else 0)
@@ -691,7 +774,7 @@ class LutRenderer : GLSurfaceView.Renderer {
             GLES30.glUniform1f(uNoiseLocation, noise)
             GLES30.glUniform1f(uNoiseSeedLocation, (System.currentTimeMillis() % 10000) / 1000f)
             GLES30.glUniform1f(uLowResLocation, lowRes)
-            GLES30.glUniform1f(uAspectRatioLocation, viewportWidth.toFloat() / Math.max(1, viewportHeight).toFloat())
+            GLES30.glUniform1f(uAspectRatioLocation, width.toFloat() / Math.max(1, height).toFloat())
             GLES30.glUniform1fv(uLchHueAdjustmentsLocation, LCH_COLOR_BAND_COUNT, lchHueAdjustments, 0)
             GLES30.glUniform1fv(uLchChromaAdjustmentsLocation, LCH_COLOR_BAND_COUNT, lchChromaAdjustments, 0)
             GLES30.glUniform1fv(uLchLightnessAdjustmentsLocation, LCH_COLOR_BAND_COUNT, lchLightnessAdjustments, 0)
@@ -819,6 +902,9 @@ class LutRenderer : GLSurfaceView.Renderer {
         uLutEnabledLocation = GLES30.glGetUniformLocation(programId, "uLutEnabled")
         uLutCurveLocation = GLES30.glGetUniformLocation(programId, "uLutCurve")
         uLutColorSpaceLocation = GLES30.glGetUniformLocation(programId, "uLutColorSpace")
+        uVideoLogEnabledLocation = GLES30.glGetUniformLocation(programId, "uVideoLogEnabled")
+        uVideoLogCurveLocation = GLES30.glGetUniformLocation(programId, "uVideoLogCurve")
+        uVideoColorSpaceLocation = GLES30.glGetUniformLocation(programId, "uVideoColorSpace")
 
         // 获取色彩配方 Uniform 位置
         uColorRecipeEnabledLocation = GLES30.glGetUniformLocation(programId, "uColorRecipeEnabled")
@@ -1157,6 +1243,49 @@ class LutRenderer : GLSurfaceView.Renderer {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
 
+    private fun ensureRecordFbo(width: Int, height: Int) {
+        if (width <= 0 || height <= 0) return
+        if (recordFboId != 0 && recordFboWidth == width && recordFboHeight == height) return
+
+        if (recordFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(recordFboId), 0)
+            recordFboId = 0
+        }
+        if (recordTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(recordTextureId), 0)
+            recordTextureId = 0
+        }
+
+        val fbos = IntArray(1)
+        val textures = IntArray(1)
+        GLES30.glGenFramebuffers(1, fbos, 0)
+        GLES30.glGenTextures(1, textures, 0)
+        recordFboId = fbos[0]
+        recordTextureId = textures[0]
+        recordFboWidth = width
+        recordFboHeight = height
+
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, recordTextureId)
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA,
+            width, height, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null
+        )
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, recordFboId)
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER,
+            GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D,
+            recordTextureId,
+            0
+        )
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+    }
+
     /**
      * 初始化顶点缓冲
      */
@@ -1345,15 +1474,22 @@ class LutRenderer : GLSurfaceView.Renderer {
      * 当预览尺寸与显示区域比例不匹配时，放大画面并裁切超出部分
      */
     private fun updateMVPMatrix() {
-        if (viewportWidth == 0 || viewportHeight == 0) {
-            Matrix.setIdentityM(mvpMatrix, 0)
-            return
+        val computedMatrix = buildMvpMatrix(viewportWidth, viewportHeight)
+        System.arraycopy(computedMatrix, 0, mvpMatrix, 0, mvpMatrix.size)
+
+//        PLog.d(
+//            TAG,
+//            "MVP matrix updated: viewport=${viewportWidth}x${viewportHeight}, preview=${previewWidth}x${previewHeight}"
+//        )
+    }
+
+    private fun buildMvpMatrix(targetWidth: Int, targetHeight: Int): FloatArray {
+        val matrix = FloatArray(16)
+        Matrix.setIdentityM(matrix, 0)
+        if (targetWidth <= 0 || targetHeight <= 0) {
+            return matrix
         }
 
-        // 计算最终显示方向（硬件方向 + 用户校正）
-        // hardwareSensorOrientation 处理 stMatrix 带来的初步修正
-        // stMatrix 通常已经将画面旋转到了 0 度（竖屏向上）
-        // 我们只需要再应用用户的 calibrationOffset 进行微调
         val isSwapped = (sensorOrientation + calibrationOffset) % 180 != 0
         val cropWidth = (cropRect[2] - cropRect[0]).coerceAtLeast(0.05f)
         val cropHeight = (cropRect[3] - cropRect[1]).coerceAtLeast(0.05f)
@@ -1362,38 +1498,56 @@ class LutRenderer : GLSurfaceView.Renderer {
         } else {
             (previewWidth.toFloat() * cropWidth) / (previewHeight.toFloat() * cropHeight)
         }
-        val viewAspect = viewportWidth.toFloat() / viewportHeight.toFloat()
+        val viewAspect = targetWidth.toFloat() / targetHeight.toFloat()
 
-        Matrix.setIdentityM(mvpMatrix, 0)
-
-        // 应用用户的校正旋转
-        // 注意：stMatrix 已经处理了 sensorOrientation，所以这里不重复旋转 sensorOrientation
         if (calibrationOffset != 0) {
-            Matrix.rotateM(mvpMatrix, 0, (-calibrationOffset).toFloat(), 0f, 0f, 1f)
+            Matrix.rotateM(matrix, 0, (-calibrationOffset).toFloat(), 0f, 0f, 1f)
         }
 
         if (previewAspect != viewAspect) {
             val scaleX: Float
             val scaleY: Float
-
             if (viewAspect > previewAspect) {
-                // 显示区域更宽，需要基于宽度缩放，裁切上下
                 scaleX = 1f
                 scaleY = viewAspect / previewAspect
             } else {
-                // 显示区域更高，需要基于高度缩放，裁切左右
                 scaleX = previewAspect / viewAspect
                 scaleY = 1f
             }
+            Matrix.scaleM(matrix, 0, scaleX, scaleY, 1f)
+        }
+        return matrix
+    }
 
-            // 应用缩放
-            Matrix.scaleM(mvpMatrix, 0, scaleX, scaleY, 1f)
+    private fun buildTextureMvpMatrix(
+        sourceWidth: Int,
+        sourceHeight: Int,
+        targetWidth: Int,
+        targetHeight: Int
+    ): FloatArray {
+        val matrix = FloatArray(16)
+        Matrix.setIdentityM(matrix, 0)
+        if (sourceWidth <= 0 || sourceHeight <= 0 || targetWidth <= 0 || targetHeight <= 0) {
+            return matrix
         }
 
-//        PLog.d(
-//            TAG,
-//            "MVP matrix updated: viewport=${viewportWidth}x${viewportHeight}, preview=${previewWidth}x${previewHeight}"
-//        )
+        val sourceAspect = sourceWidth.toFloat() / sourceHeight.toFloat()
+        val targetAspect = targetWidth.toFloat() / targetHeight.toFloat()
+
+        if (sourceAspect != targetAspect) {
+            val scaleX: Float
+            val scaleY: Float
+            if (targetAspect > sourceAspect) {
+                scaleX = 1f
+                scaleY = targetAspect / sourceAspect
+            } else {
+                scaleX = sourceAspect / targetAspect
+                scaleY = 1f
+            }
+            Matrix.scaleM(matrix, 0, scaleX, scaleY, 1f)
+        }
+
+        return matrix
     }
 
     private fun updateCaptureSize() {
@@ -1780,6 +1934,16 @@ class LutRenderer : GLSurfaceView.Renderer {
             GLES30.glDeleteTextures(1, intArrayOf(captureTextureId), 0)
             captureTextureId = 0
         }
+        if (recordFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(recordFboId), 0)
+            recordFboId = 0
+        }
+        if (recordTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(recordTextureId), 0)
+            recordTextureId = 0
+        }
+        recordFboWidth = 0
+        recordFboHeight = 0
 
         // 删除程序
         GlUtils.deleteProgram(programId)
@@ -1862,6 +2026,45 @@ class LutRenderer : GLSurfaceView.Renderer {
             primaryBlueSaturation = primaryBlueSaturation,
             primaryBlueLightness = primaryBlueLightness,
         )
+    }
+
+    private fun mapLutCurve(curve: LutCurve?): Int {
+        return when (curve ?: LutCurve.SRGB) {
+            LutCurve.SRGB -> 0
+            LutCurve.LINEAR -> 1
+            LutCurve.V_LOG -> 2
+            LutCurve.S_LOG3 -> 3
+            LutCurve.F_LOG2 -> 4
+            LutCurve.LOG_C -> 5
+            LutCurve.APPLE_LOG -> 6
+            LutCurve.HLG -> 7
+        }
+    }
+
+    private fun mapLogCurve(curve: LogCurve): Int {
+        return when (curve) {
+            LogCurve.SRGB -> 0
+            LogCurve.LINEAR -> 1
+            LogCurve.VLOG -> 2
+            LogCurve.SLOG3 -> 3
+            LogCurve.FLOG2 -> 4
+            LogCurve.LOGC4 -> 5
+            LogCurve.APPLE_LOG -> 6
+            LogCurve.ACES_CCT -> 8
+        }
+    }
+
+    private fun mapRawColorSpace(colorSpace: ColorSpace): Int {
+        return when (colorSpace) {
+            ColorSpace.SRGB -> 0
+            ColorSpace.DCI_P3 -> 1
+            ColorSpace.BT2020 -> 2
+            ColorSpace.ARRI4 -> 3
+            ColorSpace.AppleLog2 -> 4
+            ColorSpace.S_GAMUT3_CINE -> 5
+            ColorSpace.ACES_AP1 -> 6
+            ColorSpace.VGamut -> 7
+        }
     }
 
     fun setLchAdjustments(hue: FloatArray, chroma: FloatArray, lightness: FloatArray) {

@@ -10,11 +10,14 @@ import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.DynamicRangeProfiles
 import android.hardware.camera2.params.RggbChannelVector
 import android.hardware.camera2.params.SessionConfiguration
+import android.hardware.camera2.params.TonemapCurve
 import android.media.Image
 import android.media.ImageReader
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.SystemClock
+import android.util.Size
 import android.view.Surface
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.utils.PLog
@@ -24,6 +27,15 @@ import kotlinx.coroutines.flow.asStateFlow
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.utils.DeviceUtil
+import com.hinnka.mycamera.video.CaptureMode
+import com.hinnka.mycamera.video.VideoAspectRatio
+import com.hinnka.mycamera.video.VideoBitratePreset
+import com.hinnka.mycamera.video.VideoCapabilitiesResolver
+import com.hinnka.mycamera.video.VideoFpsPreset
+import com.hinnka.mycamera.video.VideoLogProfile
+import com.hinnka.mycamera.video.VideoRecorder
+import com.hinnka.mycamera.video.VideoResolutionPreset
+import com.hinnka.mycamera.video.VideoRecordingState
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -122,6 +134,19 @@ class Camera2Controller(private val context: Context) {
 
     // Live Photo 录制器
     val livePhotoRecorder = LivePhotoRecorder(context)
+    val videoRecorder = VideoRecorder(context)
+
+    private var videoRecordingStartElapsedMs: Long = 0L
+    private val videoRecordingTicker = object : Runnable {
+        override fun run() {
+            if (!_state.value.videoRecordingState.isRecording) return
+            val elapsed = (SystemClock.elapsedRealtime() - videoRecordingStartElapsedMs).coerceAtLeast(0L)
+            _state.value = _state.value.copy(
+                videoRecordingState = _state.value.videoRecordingState.copy(elapsedMs = elapsed)
+            )
+            cameraHandler?.postDelayed(this, 250L)
+        }
+    }
 
     // 缓存 CaptureResult 和 Image 用于配对 (timestamp -> Data)
     private val pendingResults = ConcurrentHashMap<Long, TotalCaptureResult>()
@@ -155,6 +180,12 @@ class Camera2Controller(private val context: Context) {
     // errorCode: CameraDevice 的错误代码或自定义错误码
     // canRetry: 是否可以重试打开相机
     var onCameraError: ((errorCode: Int, message: String, canRetry: Boolean) -> Unit)? = null
+
+    private val linearToneMapCurve = TonemapCurve(
+        floatArrayOf(0f, 0f, 1f, 1f),
+        floatArrayOf(0f, 0f, 1f, 1f),
+        floatArrayOf(0f, 0f, 1f, 1f)
+    )
 
     fun onImageRelease() {
         val count = openImagesCount.decrementAndGet()
@@ -374,6 +405,50 @@ class Camera2Controller(private val context: Context) {
         )
     }
 
+    private fun refreshVideoCapabilities(characteristics: CameraCharacteristics? = null): Size {
+        val currentCameraId = _state.value.currentCameraId
+        if (currentCameraId.isEmpty()) {
+            return _state.value.currentPreviewSize
+        }
+
+        val resolvedCharacteristics = try {
+            characteristics ?: cachedCharacteristics ?: cameraManager.getCameraCharacteristics(currentCameraId)
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to load video capabilities", e)
+            return _state.value.currentPreviewSize
+        }
+
+        val snapshot = VideoCapabilitiesResolver.resolve(
+            characteristics = resolvedCharacteristics,
+            requestedConfig = _state.value.videoConfig,
+            availableTonemapModes = availableTonemapModes,
+            availableVideoStabilizationModes = availableVideoStabilizationModes,
+            availableOpticalStabilizationModes = availableOpticalStabilizationModes,
+            isFlashSupported = isFlashSupported
+        )
+
+        _state.value = _state.value.copy(
+            videoConfig = snapshot.config,
+            videoCapabilities = snapshot.capabilities,
+            currentPreviewSize = if (_state.value.captureMode == CaptureMode.VIDEO) {
+                snapshot.previewSize
+            } else {
+                _state.value.currentPreviewSize
+            }
+        )
+        return snapshot.previewSize
+    }
+
+    private fun startVideoRecordingTicker() {
+        stopVideoRecordingTicker()
+        videoRecordingStartElapsedMs = SystemClock.elapsedRealtime()
+        cameraHandler?.post(videoRecordingTicker)
+    }
+
+    private fun stopVideoRecordingTicker() {
+        cameraHandler?.removeCallbacks(videoRecordingTicker)
+    }
+
     // ==================== 相机控制 ====================
 
     /**
@@ -393,16 +468,15 @@ class Camera2Controller(private val context: Context) {
         }
 
         val cameraId = _state.value.currentCameraId
-        val aspectRatio = _state.value.aspectRatio
+        val captureMode = _state.value.captureMode
         if (cameraId.isEmpty()) {
             PLog.e(TAG, "No camera ID set")
             return
         }
 
-        PLog.i(TAG, "打开相机: $cameraId, 画面比例: ${aspectRatio.getDisplayName()}")
+        PLog.i(TAG, "打开相机: $cameraId, 模式: ${captureMode.name}")
 
-        val previewSize = CameraUtils.getFixedPreviewSize(context, cameraId, aspectRatio)
-        surfaceTexture.setDefaultBufferSize(previewSize.width, previewSize.height)
+        var previewSize = _state.value.currentPreviewSize
 
         try {
             try {
@@ -472,8 +546,14 @@ class Camera2Controller(private val context: Context) {
                     false
                 }
 
-                // 在相机开启后，如果启用了实况照片，启动录制器（因为 closeCamera 刚才停止了它）
-                if (_state.value.useLivePhoto) {
+                val resolvedVideoPreviewSize = refreshVideoCapabilities(cachedCharacteristics)
+                previewSize = when (captureMode) {
+                    CaptureMode.VIDEO -> resolvedVideoPreviewSize
+                    CaptureMode.PHOTO -> CameraUtils.getFixedPreviewSize(context, cameraId, _state.value.aspectRatio)
+                }
+                surfaceTexture.setDefaultBufferSize(previewSize.width, previewSize.height)
+
+                if (_state.value.useLivePhoto && captureMode == CaptureMode.PHOTO) {
                     livePhotoRecorder.startRecording()
                 }
 
@@ -489,109 +569,110 @@ class Camera2Controller(private val context: Context) {
                     isP010Supported = isP010Supported,
                     isHlg10Supported = isHlg10Supported,
                     currentDynamicRangeProfile = if (shouldUseHlgCapture()) "HLG10" else "STANDARD",
-                    availableNrModes = selectableNrModes
+                    availableNrModes = selectableNrModes,
+                    currentPreviewSize = previewSize
                 )
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to cache camera characteristics", e)
                 cachedCharacteristics = null
                 cachedSensorOrientation = 0
                 cachedLensFacing = CameraCharacteristics.LENS_FACING_BACK
+                surfaceTexture.setDefaultBufferSize(previewSize.width, previewSize.height)
             }
 
             // 配置 SurfaceTexture
             previewSurface = Surface(surfaceTexture)
 
-            // 创建 ImageReader 用于拍照
-            // 开启 RAW 开关且设备支持时，优先使用 RAW 格式（更高质量），否则使用 YUV
-            val effectivelyUseRaw = state.value.useRaw && isRawSupported
-            val captureSize = if (effectivelyUseRaw) {
-                CameraUtils.getRawCaptureSize(context, cameraId) ?: CameraUtils.getBestCaptureSize(
-                    context,
-                    cameraId,
-                    aspectRatio
+            if (captureMode == CaptureMode.PHOTO) {
+                val aspectRatio = state.value.aspectRatio
+                val effectivelyUseRaw = state.value.useRaw && isRawSupported
+                val captureSize = if (effectivelyUseRaw) {
+                    CameraUtils.getRawCaptureSize(context, cameraId) ?: CameraUtils.getBestCaptureSize(
+                        context,
+                        cameraId,
+                        aspectRatio
+                    )
+                } else {
+                    CameraUtils.getBestCaptureSize(context, cameraId, aspectRatio)
+                }
+                val captureFormat = if (effectivelyUseRaw && CameraUtils.getRawCaptureSize(context, cameraId) != null) {
+                    ImageFormat.RAW_SENSOR
+                } else if (isP010Supported && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && state.value.useP010) {
+                    ImageFormat.YCBCR_P010
+                } else {
+                    ImageFormat.YUV_420_888
+                }
+
+                val isP3Supported = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    cachedCharacteristics?.get(CameraCharacteristics.REQUEST_AVAILABLE_COLOR_SPACE_PROFILES)
+                        ?.getSupportedColorSpaces(captureFormat)
+                        ?.contains(ColorSpace.Named.DISPLAY_P3) == true
+                } else false
+
+                _state.value = _state.value.copy(isP3Supported = isP3Supported)
+
+                PLog.d(
+                    TAG,
+                    "拍照尺寸: ${captureSize.width}x${captureSize.height}, 预览尺寸: ${previewSize.width}x${previewSize.height}, 格式: ${
+                        when (captureFormat) {
+                            ImageFormat.RAW_SENSOR -> "RAW"
+                            ImageFormat.YCBCR_P010 -> "P010"
+                            else -> "YUV"
+                        }
+                    }, isP3Supported: $isP3Supported"
                 )
-            } else {
-                CameraUtils.getBestCaptureSize(context, cameraId, aspectRatio)
-            }
-            val captureFormat = if (effectivelyUseRaw && CameraUtils.getRawCaptureSize(context, cameraId) != null) {
-                ImageFormat.RAW_SENSOR
-            } else if (isP010Supported && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && state.value.useP010) {
-                ImageFormat.YCBCR_P010
-            } else {
-                ImageFormat.YUV_420_888
-            }
-
-            val isP3Supported = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                cachedCharacteristics?.get(CameraCharacteristics.REQUEST_AVAILABLE_COLOR_SPACE_PROFILES)
-                    ?.getSupportedColorSpaces(captureFormat)
-                    ?.contains(ColorSpace.Named.DISPLAY_P3) == true
-            } else false
-
-            _state.value = _state.value.copy(isP3Supported = isP3Supported)
-
-            PLog.d(
-                TAG,
-                "拍照尺寸: ${captureSize.width}x${captureSize.height}, 预览尺寸: ${previewSize.width}x${previewSize.height}, 格式: ${
-                    when (captureFormat) {
-                        ImageFormat.RAW_SENSOR -> "RAW"
-                        ImageFormat.YCBCR_P010 -> "P010"
-                        else -> "YUV"
-                    }
-                }, isP3Supported: $isP3Supported"
-            )
-            imageReader = ImageReader.newInstance(
-                captureSize.width,
-                captureSize.height,
-                captureFormat,
-                MAX_IMAGES
-            ).apply {
-                setOnImageAvailableListener({ reader ->
-                    try {
-                        // PLog.d(TAG, "ImageReader onImageAvailableListener triggered")
-                        if (openImagesCount.get() >= MAX_IMAGES) {
-                            PLog.w(TAG, "Too many open images ($openImagesCount), skipping acquire")
-                            return@setOnImageAvailableListener
-                        }
-                        val rawImage = when {
-                            state.value.burstCapturing -> reader.acquireNextImage()
-                            state.value.useMFNR -> reader.acquireNextImage()
-                            state.value.useMFSR -> reader.acquireNextImage()
-                            else -> reader.acquireLatestImage()
-                        }
-                        val image = trackImage(rawImage)
-                        if (image != null) {
-                            if (effectivelyUseRaw) {
-                                val timestamp = image.timestamp
-                                val pendingResult = pendingResults.remove(timestamp)
-                                if (pendingResult != null) {
-                                    // 找到了匹配的结果，触发回调
-                                    processAndTriggerCapture(image, pendingResult)
-                                } else {
-                                    // 还没找到结果，存入缓存
-                                    pendingImages[timestamp] = image
-                                    // 限制缓存大小（防御性，防止内存泄漏）
-                                    if (pendingImages.size > 20) {
-                                        val oldestKey = pendingImages.keys.minOrNull()
-                                        if (oldestKey != null) {
-                                            pendingImages.remove(oldestKey)?.close()
+                imageReader = ImageReader.newInstance(
+                    captureSize.width,
+                    captureSize.height,
+                    captureFormat,
+                    MAX_IMAGES
+                ).apply {
+                    setOnImageAvailableListener({ reader ->
+                        try {
+                            if (openImagesCount.get() >= MAX_IMAGES) {
+                                PLog.w(TAG, "Too many open images ($openImagesCount), skipping acquire")
+                                return@setOnImageAvailableListener
+                            }
+                            val rawImage = when {
+                                state.value.burstCapturing -> reader.acquireNextImage()
+                                state.value.useMFNR -> reader.acquireNextImage()
+                                state.value.useMFSR -> reader.acquireNextImage()
+                                else -> reader.acquireLatestImage()
+                            }
+                            val image = trackImage(rawImage)
+                            if (image != null) {
+                                if (effectivelyUseRaw) {
+                                    val timestamp = image.timestamp
+                                    val pendingResult = pendingResults.remove(timestamp)
+                                    if (pendingResult != null) {
+                                        processAndTriggerCapture(image, pendingResult)
+                                    } else {
+                                        pendingImages[timestamp] = image
+                                        if (pendingImages.size > 20) {
+                                            val oldestKey = pendingImages.keys.minOrNull()
+                                            if (oldestKey != null) {
+                                                pendingImages.remove(oldestKey)?.close()
+                                            }
                                         }
                                     }
+                                } else {
+                                    processAndTriggerCapture(image, null)
                                 }
                             } else {
-                                processAndTriggerCapture(image, null)
+                                PLog.w(TAG, "acquireNextImage() returned null, resetting capture state")
+                                _state.value = _state.value.copy(isCapturing = false)
+                                resetPreviewAfterCapture()
                             }
-                        } else {
-                            PLog.w(TAG, "acquireNextImage() returned null, resetting capture state")
-                        _state.value = _state.value.copy(isCapturing = false)
-                        resetPreviewAfterCapture()
-                    }
-                } catch (e: Exception) {
-                    PLog.e(TAG, "Error in onImageAvailable", e)
+                        } catch (e: Exception) {
+                            PLog.e(TAG, "Error in onImageAvailable", e)
+                        }
+                    }, cameraHandler)
                 }
-            }, cameraHandler)
-        }
-
-
+            } else {
+                safeCloseImageReader(imageReader)
+                imageReader = null
+                _state.value = _state.value.copy(isP3Supported = false)
+            }
 
             PLog.d(TAG, "Opening camera: $cameraId")
 
@@ -604,9 +685,14 @@ class Camera2Controller(private val context: Context) {
 
                 override fun onDisconnected(camera: CameraDevice) {
                     PLog.w(TAG, "Camera disconnected: ${camera.id} - 相机被其他应用或系统接管")
+                    videoRecorder.forceStop()
+                    stopVideoRecordingTicker()
                     camera.close()
                     cameraDevice = null
-                    _state.value = _state.value.copy(isPreviewActive = false)
+                    _state.value = _state.value.copy(
+                        isPreviewActive = false,
+                        videoRecordingState = VideoRecordingState()
+                    )
 
                     // 通知上层：相机断开连接，可以在 onResume 时重试
                     onCameraError?.invoke(
@@ -637,9 +723,14 @@ class Camera2Controller(private val context: Context) {
                     }
 
                     PLog.e(TAG, "Camera error: ${camera.id}, error=$error - $errorMessage")
+                    videoRecorder.forceStop()
+                    stopVideoRecordingTicker()
                     camera.close()
                     cameraDevice = null
-                    _state.value = _state.value.copy(isPreviewActive = false)
+                    _state.value = _state.value.copy(
+                        isPreviewActive = false,
+                        videoRecordingState = VideoRecordingState()
+                    )
 
                     // 判断是否可以重试
                     val canRetry = when (error) {
@@ -775,10 +866,13 @@ class Camera2Controller(private val context: Context) {
     private fun createPreviewSession(forceStandardSession: Boolean = false) {
         val device = cameraDevice ?: return
         val surface = previewSurface ?: return
-        val reader = imageReader ?: return
+        val captureMode = _state.value.captureMode
+        val reader = imageReader
 
         try {
-            previewRequestBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+            previewRequestBuilder = device.createCaptureRequest(
+                if (captureMode == CaptureMode.VIDEO) CameraDevice.TEMPLATE_RECORD else CameraDevice.TEMPLATE_PREVIEW
+            ).apply {
                 addTarget(surface)
                 // 设置连续自动对焦
                 val initialAfMode = CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
@@ -790,12 +884,38 @@ class Camera2Controller(private val context: Context) {
                 applyBaseCameraSettings(this, isCapture = false)
             }
 
-            val surfaces = mutableListOf(surface, reader.surface)
+            val surfaces = mutableListOf(surface)
+            if (captureMode == CaptureMode.PHOTO) {
+                val captureReader = reader ?: return
+                surfaces += captureReader.surface
+            }
+
+            if (captureMode == CaptureMode.VIDEO) {
+                val sessionConfig = SessionConfiguration(
+                    SessionConfiguration.SESSION_REGULAR,
+                    surfaces.map { OutputConfiguration(it) },
+                    Executors.newSingleThreadExecutor(),
+                    object : CameraCaptureSession.StateCallback() {
+                        override fun onConfigured(session: CameraCaptureSession) {
+                            if (_state.value.currentDynamicRangeProfile != "STANDARD") {
+                                _state.value = _state.value.copy(currentDynamicRangeProfile = "STANDARD")
+                            }
+                            onSessionConfigured(session)
+                        }
+
+                        override fun onConfigureFailed(session: CameraCaptureSession) {
+                            PLog.e(TAG, "Video session configuration failed")
+                        }
+                    }
+                )
+                device.createCaptureSession(sessionConfig)
+                return
+            }
 
 
             // Android 9+ 使用 SessionConfiguration
             val useHlgCapture = shouldUseHlgCapture() && !forceStandardSession
-            val readerFormat = reader.imageFormat
+            val readerFormat = reader?.imageFormat ?: ImageFormat.YUV_420_888
             PLog.i(
                 TAG,
                 "Creating preview session: forceStandard=$forceStandardSession, " +
@@ -914,10 +1034,13 @@ class Camera2Controller(private val context: Context) {
         // 6. 图像质量设置（锐化、降噪）
         applyImageQualitySettings(builder, isCapture)
 
-        // 7. 防抖设置
-        applyStabilizationSettings(builder)
+        // 7. 视频 Log / 色调映射设置
+        applyVideoToneMapSettings(builder, currentState)
 
-        // 8. 统计信息设置
+        // 8. 防抖设置
+        applyStabilizationSettings(builder, currentState)
+
+        // 9. 统计信息设置
         if (availableLensShadingMapModes.contains(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON)) {
             builder.set(
                 CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE,
@@ -932,18 +1055,26 @@ class Camera2Controller(private val context: Context) {
      * 统一管理 CONTROL_AE_MODE，确保与闪光灯模式正确配合
      */
     private fun applyExposureSettings(builder: CaptureRequest.Builder, state: CameraState, isCapture: Boolean) {
+        if (state.captureMode == CaptureMode.VIDEO) {
+            applyVideoFpsRange(builder, state.videoConfig.fps.fps)
+        }
+
         // 根据曝光模式和闪光灯模式联合决定 AE_MODE
         val aeMode = when {
             // 1. 全自动曝光：根据闪光灯模式选择对应的 AE_MODE
             state.isIsoAuto && state.isShutterSpeedAuto -> {
-                when (state.flashMode) {
-                    CameraMetadata.FLASH_MODE_SINGLE -> {
-                        if (isCapture) CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH
-                        else CaptureRequest.CONTROL_AE_MODE_ON
-                    }
+                if (state.captureMode == CaptureMode.VIDEO) {
+                    CaptureRequest.CONTROL_AE_MODE_ON
+                } else {
+                    when (state.flashMode) {
+                        CameraMetadata.FLASH_MODE_SINGLE -> {
+                            if (isCapture) CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH
+                            else CaptureRequest.CONTROL_AE_MODE_ON
+                        }
 
-                    CameraMetadata.FLASH_MODE_TORCH -> CaptureRequest.CONTROL_AE_MODE_ON
-                    else -> CaptureRequest.CONTROL_AE_MODE_ON
+                        CameraMetadata.FLASH_MODE_TORCH -> CaptureRequest.CONTROL_AE_MODE_ON
+                        else -> CaptureRequest.CONTROL_AE_MODE_ON
+                    }
                 }
             }
             // 2. 手动曝光或半自动曝光：尝试使用 OFF 模式，如果设备不支持则退而求其次使用 ON
@@ -977,7 +1108,7 @@ class Camera2Controller(private val context: Context) {
             }
 
             // 拍摄时设置低帧率范围以支持长曝光
-            if (isCapture) {
+            if (isCapture && state.captureMode == CaptureMode.PHOTO) {
                 try {
                     val characteristics =
                         cachedCharacteristics ?: cameraManager.getCameraCharacteristics(state.currentCameraId)
@@ -990,6 +1121,48 @@ class Camera2Controller(private val context: Context) {
                 } catch (e: Exception) {
                     PLog.e(TAG, "Failed to set FPS range", e)
                 }
+            }
+        }
+    }
+
+    private fun applyVideoFpsRange(builder: CaptureRequest.Builder, targetFps: Int) {
+        val characteristics = cachedCharacteristics ?: return
+        val availableRanges =
+            characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: return
+        val matchingRange = availableRanges
+            .filter { range -> range.upper >= targetFps && range.lower <= targetFps }
+            .sortedWith(
+                compareBy<android.util.Range<Int>> { kotlin.math.abs(it.upper - targetFps) }
+                    .thenBy { kotlin.math.abs(it.lower - targetFps) }
+            )
+            .firstOrNull()
+        val resolvedRange = matchingRange ?: android.util.Range(targetFps, targetFps).also {
+            PLog.w(
+                TAG,
+                "Camera characteristics do not advertise $targetFps fps, forcing exact range $it. " +
+                    "Advertised ranges=${availableRanges.joinToString()}"
+            )
+        }
+        builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, resolvedRange)
+    }
+
+    private fun applyVideoToneMapSettings(builder: CaptureRequest.Builder, state: CameraState) {
+        if (state.captureMode != CaptureMode.VIDEO || !state.videoConfig.logProfile.isEnabled) {
+            if (availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_FAST)) {
+                builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_FAST)
+            }
+            return
+        }
+
+        when {
+            availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE) -> {
+                builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
+                builder.set(CaptureRequest.TONEMAP_CURVE, linearToneMapCurve)
+            }
+
+            availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_GAMMA_VALUE) -> {
+                builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_GAMMA_VALUE)
+                builder.set(CaptureRequest.TONEMAP_GAMMA, 1.0f)
             }
         }
     }
@@ -1023,6 +1196,18 @@ class Camera2Controller(private val context: Context) {
     private fun applyFlashSettings(builder: CaptureRequest.Builder, state: CameraState, isCapture: Boolean) {
         if (!isFlashSupported) {
             builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
+            return
+        }
+
+        if (state.captureMode == CaptureMode.VIDEO) {
+            builder.set(
+                CaptureRequest.FLASH_MODE,
+                if (state.videoConfig.torchEnabled) {
+                    CameraMetadata.FLASH_MODE_TORCH
+                } else {
+                    CameraMetadata.FLASH_MODE_OFF
+                }
+            )
             return
         }
 
@@ -1080,9 +1265,33 @@ class Camera2Controller(private val context: Context) {
      *
      * 优先开启 OIS (光学防抖)
      */
-    private fun applyStabilizationSettings(builder: CaptureRequest.Builder) {
+    private fun applyStabilizationSettings(builder: CaptureRequest.Builder, state: CameraState) {
         try {
-            // 1. 处理 OIS (光学防抖)
+            if (state.captureMode == CaptureMode.VIDEO) {
+                val enable = state.videoConfig.stabilizationEnabled
+                if (availableVideoStabilizationModes.contains(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON)) {
+                    builder.set(
+                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                        if (enable) {
+                            CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
+                        } else {
+                            CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
+                        }
+                    )
+                }
+                if (availableOpticalStabilizationModes.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)) {
+                    builder.set(
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                        if (enable && !availableVideoStabilizationModes.contains(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON)) {
+                            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
+                        } else {
+                            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
+                        }
+                    )
+                }
+                return
+            }
+
             if (availableOpticalStabilizationModes.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)) {
                 builder.set(
                     CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
@@ -1936,6 +2145,124 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
+    fun setCaptureMode(mode: CaptureMode) {
+        if (_state.value.captureMode == mode || _state.value.videoRecordingState.isRecording) return
+        val nextState = _state.value.copy(
+            captureMode = mode,
+            countdownValue = 0,
+            isCapturingLivePhoto = false
+        )
+        _state.value = nextState
+        if (mode == CaptureMode.VIDEO) {
+            livePhotoRecorder.stopRecording()
+            refreshVideoCapabilities()
+        } else {
+            stopVideoRecordingTicker()
+            _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
+            if (_state.value.useLivePhoto) {
+                livePhotoRecorder.startRecording()
+            }
+        }
+    }
+
+    fun setVideoResolution(resolution: VideoResolutionPreset) {
+        _state.value = _state.value.copy(videoConfig = _state.value.videoConfig.copy(resolution = resolution))
+        refreshVideoCapabilities()
+    }
+
+    fun setVideoFps(fps: VideoFpsPreset) {
+        _state.value = _state.value.copy(videoConfig = _state.value.videoConfig.copy(fps = fps))
+        refreshVideoCapabilities()
+        previewRequestBuilder?.apply {
+            applyBaseCameraSettings(this, isCapture = false)
+            updatePreview()
+        }
+    }
+
+    fun setVideoAspectRatio(aspectRatio: VideoAspectRatio) {
+        _state.value = _state.value.copy(videoConfig = _state.value.videoConfig.copy(aspectRatio = aspectRatio))
+        refreshVideoCapabilities()
+    }
+
+    fun setVideoLogProfile(logProfile: VideoLogProfile) {
+        _state.value = _state.value.copy(videoConfig = _state.value.videoConfig.copy(logProfile = logProfile))
+        refreshVideoCapabilities()
+        previewRequestBuilder?.apply {
+            applyBaseCameraSettings(this, isCapture = false)
+            updatePreview()
+        }
+    }
+
+    fun setVideoStabilizationEnabled(enabled: Boolean) {
+        _state.value = _state.value.copy(
+            videoConfig = _state.value.videoConfig.copy(
+                stabilizationEnabled = enabled && _state.value.videoCapabilities.supportsStabilization
+            )
+        )
+        previewRequestBuilder?.apply {
+            applyBaseCameraSettings(this, isCapture = false)
+            updatePreview()
+        }
+    }
+
+    fun setVideoBitrate(bitrate: VideoBitratePreset) {
+        _state.value = _state.value.copy(videoConfig = _state.value.videoConfig.copy(bitrate = bitrate))
+        refreshVideoCapabilities()
+    }
+
+    fun setVideoCodec(codec: com.hinnka.mycamera.video.VideoCodec) {
+        _state.value = _state.value.copy(videoConfig = _state.value.videoConfig.copy(codec = codec))
+        refreshVideoCapabilities()
+    }
+
+    fun setVideoTorchEnabled(enabled: Boolean) {
+        _state.value = _state.value.copy(
+            videoConfig = _state.value.videoConfig.copy(
+                torchEnabled = enabled && _state.value.videoCapabilities.supportsTorch
+            )
+        )
+        previewRequestBuilder?.apply {
+            applyBaseCameraSettings(this, isCapture = false)
+            updatePreview()
+        }
+    }
+
+    fun startVideoRecording() {
+        if (_state.value.captureMode != CaptureMode.VIDEO || _state.value.videoRecordingState.isRecording) {
+            return
+        }
+
+        val outputSize = _state.value.videoConfig.resolveOutputSize(
+            _state.value.videoCapabilities.openGatePortraitAspectRatio
+        )
+        val started = videoRecorder.startRecording(
+            size = outputSize,
+            fps = _state.value.videoConfig.fps.fps,
+            bitrateMbps = _state.value.videoConfig.bitrate.bitrateMbps,
+            codecMime = _state.value.videoConfig.codec.mimeType
+        ) { uri ->
+            PLog.i(TAG, "Video saved: $uri")
+            _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
+        }
+        if (!started) {
+            return
+        }
+
+        _state.value = _state.value.copy(
+            videoRecordingState = VideoRecordingState(isRecording = true, elapsedMs = 0L)
+        )
+        startVideoRecordingTicker()
+    }
+
+    fun stopVideoRecording() {
+        if (!_state.value.videoRecordingState.isRecording) return
+        stopVideoRecordingTicker()
+        _state.value = _state.value.copy(
+            videoRecordingState = _state.value.videoRecordingState.copy(isRecording = false)
+        )
+        videoRecorder.stopRecording()
+    }
+
 // ==================== 延时拍摄和网格线 ====================
 
     /**
@@ -1987,6 +2314,7 @@ class Camera2Controller(private val context: Context) {
      * 拍照
      */
     fun capture() {
+        if (_state.value.captureMode != CaptureMode.PHOTO) return
         val device = cameraDevice ?: return
         val reader = imageReader ?: return
 
@@ -2348,6 +2676,14 @@ class Camera2Controller(private val context: Context) {
      */
     fun closeCamera() {
         try {
+            if (_state.value.videoRecordingState.isRecording) {
+                stopVideoRecording()
+            } else {
+                videoRecorder.forceStop()
+                stopVideoRecordingTicker()
+                _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
+            }
+
             captureSession?.close()
             captureSession = null
 
@@ -2366,7 +2702,10 @@ class Camera2Controller(private val context: Context) {
             cachedLensFacing = CameraCharacteristics.LENS_FACING_BACK
             cachedHardwareLevel = CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED
 
-            _state.value = _state.value.copy(isPreviewActive = false)
+            _state.value = _state.value.copy(
+                isPreviewActive = false,
+                videoRecordingState = VideoRecordingState()
+            )
 
             // 停止 Live Photo 录制，释放旧环境下的 EGL 资源
             livePhotoRecorder.stopRecording()
@@ -2434,6 +2773,7 @@ class Camera2Controller(private val context: Context) {
      */
     fun release() {
         closeCamera()
+        videoRecorder.release()
         stopBackgroundThread()
         cameraDiscovery.clearCache()
     }
@@ -2443,7 +2783,7 @@ class Camera2Controller(private val context: Context) {
      */
     fun setUseLivePhoto(enabled: Boolean) {
         _state.value = _state.value.copy(useLivePhoto = enabled)
-        if (enabled) {
+        if (enabled && _state.value.captureMode == CaptureMode.PHOTO) {
             livePhotoRecorder.startRecording()
         } else {
             livePhotoRecorder.stopRecording()

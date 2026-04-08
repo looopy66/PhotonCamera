@@ -25,7 +25,7 @@ fun CameraParameterBar(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, top = 8.dp, end = 16.dp),
+            .padding(start = 16.dp, top = 4.dp, end = 16.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -95,7 +95,8 @@ fun ParameterItem(
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier
-            .size(64.dp)
+            .width(60.dp)
+            .height(48.dp)
             .autoRotate()
             .then(
                 if (isEnabled) {

@@ -27,6 +27,27 @@
     <string name="ratio_4_3">4:3</string>
     <string name="ratio_16_9">16:9</string>
     <string name="ratio_1_1">1:1</string>
+    <string name="capture_mode_photo">照片</string>
+    <string name="capture_mode_video">视频</string>
+    <string name="video_torch_chip">补光</string>
+    <string name="video_stabilization_chip">防抖</string>
+    <string name="video_resolution_chip">分辨率</string>
+    <string name="video_fps_chip">帧率</string>
+    <string name="video_aspect_chip">画幅</string>
+    <string name="video_log_chip">Log</string>
+    <string name="video_option_on">开</string>
+    <string name="video_option_off">关</string>
+    <string name="video_aspect_16_9">16:9</string>
+    <string name="video_aspect_21_9">21:9</string>
+    <string name="video_aspect_open_gate">片门全开</string>
+    <string name="video_log_off">关闭</string>
+    <string name="video_log_flog2_bt2020">F-Log2</string>
+    <string name="video_log_logc4_arri4">LogC4</string>
+    <string name="video_log_acescct_ap1">ACEScct</string>
+    <string name="video_codec_chip">编码格式</string>
+    <string name="video_bitrate_chip">码率</string>
+    <string name="video_advanced_settings">视频高级设置</string>
+    <string name="video_rec_label">REC</string>
 
     <!-- Permissions -->
     <string name="camera_permission_required">需要相机和麦克风权限</string>

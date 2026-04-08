@@ -203,8 +203,11 @@ object Shaders {
     uniform float uLutSize;
     uniform float uLutIntensity;
     uniform bool uLutEnabled;
-    uniform int uLutCurve; // 0=sRGB, 1=Linear, 2=V-Log, 3=S-Log3, 4=F-Log2, 5=LogC, 6=AppleLog, 7=HLG
+    uniform int uLutCurve; // 0=sRGB, 1=Linear, 2=V-Log, 3=S-Log3, 4=F-Log2, 5=LogC, 6=AppleLog, 7=HLG, 8=ACEScct
     uniform int uLutColorSpace; // 0=sRGB, 1=DCI-P3, 2=BT2020, 3=ARRI4, 4=AppleLog2, 5=ProPhoto, 6=ACES_AP1
+    uniform bool uVideoLogEnabled;
+    uniform int uVideoLogCurve;
+    uniform int uVideoColorSpace;
 
     // 色彩配方控制
     uniform bool uColorRecipeEnabled;
@@ -539,6 +542,9 @@ object Shaders {
             float hc = 0.5 - ha * log(4.0 * ha);
             return mix(sqrt(3.0 * l), ha * log(12.0 * l - hb) + hc, step(1.0 / 12.0, l));
         }
+        if (curveType == 8) { // ACEScct
+            return mix(10.540237 * l + 0.072905536, 0.18955931 * log10(max(l, vec3(1e-6))) + 0.5547945, step(0.0078125, l));
+        }
         return l;
     }
 
@@ -563,6 +569,9 @@ object Shaders {
         }
         if (colorSpace == 6) { // ACES_AP1
             return mat3(0.613083, 0.070004, 0.020491, 0.341167, 0.918063, 0.106764, 0.045750, 0.011934, 0.872745) * rgb;
+        }
+        if (colorSpace == 7) { // V-Gamut
+            return mat3(0.585196, 0.078589, 0.022794, 0.322642, 0.819627, 0.114217, 0.092162, 0.101784, 0.862989) * rgb;
         }
         return rgb;
     }
@@ -611,7 +620,7 @@ object Shaders {
         }
 
         // Early exit 优化：无任何调整时直接输出
-        if (!uColorRecipeEnabled && !uLutEnabled && uChromaticAberration <= 0.001) {
+        if (!uColorRecipeEnabled && !uLutEnabled && !uVideoLogEnabled && uChromaticAberration <= 0.001) {
             fragColor = color;
             return;
         }
@@ -763,9 +772,14 @@ object Shaders {
             float b = texture(uCurveTexture, vec2(color.b, 0.5)).b;
             color.rgb = sanitizeColor(vec3(r, g, b));
         }
+        
+        if (uVideoLogEnabled) {
+            vec3 outputColorSpace = applyLutColorSpace(color.rgb, uVideoColorSpace);
+            color.rgb = sanitizeColor(applyLutCurve(outputColorSpace, uVideoLogCurve));
+        }
 
         // === LUT 处理（在色彩配方之后） ===
-        if (uLutEnabled && uLutIntensity > 0.0) {
+        if (!uVideoLogEnabled && uLutEnabled && uLutIntensity > 0.0) {
             vec3 linearRGB = srgbToLinear(color.rgb);
             vec3 colorSpaceRGB = applyLutColorSpace(linearRGB, uLutColorSpace);
             vec3 lutInColor = applyLutCurve(colorSpaceRGB, uLutCurve);
@@ -776,6 +790,15 @@ object Shaders {
             if (isLogLutCurve(uLutCurve)) {
                 lutColor.rgb = bt709Gamma24ToSrgb(lutColor.rgb);
             }
+            color.rgb = mix(color.rgb, lutColor.rgb, uLutIntensity);
+            color.rgb = sanitizeColor(color.rgb);
+        }
+        
+        if (uVideoLogEnabled && uLutEnabled && uLutIntensity > 0.0) {
+            float scale = (uLutSize - 1.0) / uLutSize;
+            float offset = 1.0 / (2.0 * uLutSize);
+            vec3 lutCoord = color.rgb * scale + offset;
+            vec4 lutColor = texture(uLutTexture, lutCoord);
             color.rgb = mix(color.rgb, lutColor.rgb, uLutIntensity);
             color.rgb = sanitizeColor(color.rgb);
         }

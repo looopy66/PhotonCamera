@@ -130,7 +130,6 @@ fun ZoomControlBarVerticel(
 
     Box(
         modifier = modifier
-            .fillMaxHeight()
             .padding(8.dp)
             .width(32.dp)
             .pointerInput(minZoom, maxZoom, zoomStops) {
@@ -233,8 +232,7 @@ fun ZoomControlBarVerticel(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = if (isContinuousZooming) 0.dp else 40.dp)
-                .fillMaxHeight(),
+                .padding(vertical = if (isContinuousZooming) 0.dp else 40.dp),
             contentAlignment = Alignment.Center
         ) {
             if (isContinuousZooming) {

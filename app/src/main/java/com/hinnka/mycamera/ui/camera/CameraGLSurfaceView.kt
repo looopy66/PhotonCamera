@@ -14,6 +14,8 @@ import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.video.VideoLogProfile
+import com.hinnka.mycamera.video.VideoRecorder
 
 /**
  * 相机预览 GLSurfaceView
@@ -221,6 +223,15 @@ class CameraGLSurfaceView @JvmOverloads constructor(
      */
     fun setLivePhotoRecorder(recorder: LivePhotoRecorder?) {
         renderer.livePhotoRecorder = recorder
+    }
+
+    fun setVideoRecorder(recorder: VideoRecorder?) {
+        renderer.videoRecorder = recorder
+    }
+
+    fun setVideoLogProfile(profile: VideoLogProfile) {
+        renderer.videoLogProfile = profile
+        requestRender()
     }
 
     /**

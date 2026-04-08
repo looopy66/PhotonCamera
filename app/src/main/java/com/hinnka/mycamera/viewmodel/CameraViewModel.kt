@@ -37,6 +37,12 @@ import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.raw.rawFolder
 import com.hinnka.mycamera.ui.camera.CameraGLSurfaceView
 import com.hinnka.mycamera.utils.*
+import com.hinnka.mycamera.video.CaptureMode
+import com.hinnka.mycamera.video.VideoAspectRatio
+import com.hinnka.mycamera.video.VideoBitratePreset
+import com.hinnka.mycamera.video.VideoFpsPreset
+import com.hinnka.mycamera.video.VideoLogProfile
+import com.hinnka.mycamera.video.VideoResolutionPreset
 import kotlinx.coroutines.*
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.*
@@ -97,6 +103,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     val state: StateFlow<CameraState> = cameraController.state
     val livePhotoRecorder get() = cameraController.livePhotoRecorder
+    val videoRecorder get() = cameraController.videoRecorder
 
     // 照片保存完成事件
     private val _imageSavedEvent = MutableSharedFlow<Unit>()
@@ -244,6 +251,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .map { it.phantomMode }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    val videoCodec: StateFlow<com.hinnka.mycamera.video.VideoCodec> = userPreferencesRepository.userPreferences
+        .map { it.videoCodec }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, com.hinnka.mycamera.video.VideoCodec.H264)
+
     val phantomButtonHidden: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.phantomButtonHidden }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -377,12 +388,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setEdgeLevel(it.edgeLevel)
                 // 同步 RAW 设置到相机控制器
                 cameraController.setUseRaw(it.useRaw)
+                cameraController.setCaptureMode(it.captureMode)
+                cameraController.setVideoResolution(it.videoResolution)
+                cameraController.setVideoFps(it.videoFps)
+                cameraController.setVideoAspectRatio(it.videoAspectRatio)
+                cameraController.setVideoLogProfile(it.videoLogProfile)
+                cameraController.setVideoBitrate(it.videoBitrate)
+                cameraController.setVideoStabilizationEnabled(it.videoStabilizationEnabled)
+                cameraController.setVideoTorchEnabled(it.videoTorchEnabled)
+                cameraController.setVideoCodec(it.videoCodec)
                 multipleExposureState = multipleExposureState.copy(
                     enabled = it.useMultipleExposure,
                     targetCount = it.multipleExposureCount
                 )
                 // 同步 Live Photo 设置到相机控制器
-                cameraController.setUseLivePhoto(it.useLivePhoto)
+                cameraController.setUseLivePhoto(it.useLivePhoto && it.captureMode == CaptureMode.PHOTO)
                 // 同步 Ultra HDR 设置到相机控制器
                 cameraController.setApplyUltraHDR(it.applyUltraHDR)
                 // 同步 RAW 色彩空间和 Log 曲线到解马赛克处理器
@@ -457,6 +477,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 } catch (e: IllegalArgumentException) {
                     // 如果保存的值无效，使用默认值
                 }
+                cameraController.setCaptureMode(prefs.captureMode)
+                cameraController.setVideoResolution(prefs.videoResolution)
+                cameraController.setVideoFps(prefs.videoFps)
+                cameraController.setVideoAspectRatio(prefs.videoAspectRatio)
+                cameraController.setVideoLogProfile(prefs.videoLogProfile)
+                cameraController.setVideoBitrate(prefs.videoBitrate)
+                cameraController.setVideoStabilizationEnabled(prefs.videoStabilizationEnabled)
+                cameraController.setVideoTorchEnabled(prefs.videoTorchEnabled)
+                cameraController.setVideoCodec(prefs.videoCodec)
 
                 // 应用保存的 LUT 配置
                 if (prefs.lutId != null) {
@@ -480,7 +509,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setUseMFNR(prefs.useMFNR)
                 cameraController.setUseMFSR(prefs.useMFSR)
                 cameraController.setMultiFrameCount(prefs.multiFrameCount)
-                cameraController.setUseLivePhoto(prefs.useLivePhoto)
+                cameraController.setUseLivePhoto(prefs.useLivePhoto && prefs.captureMode == CaptureMode.PHOTO)
 
                 // 应用保存的虚拟光圈
                 if (prefs.defaultVirtualAperture > 0f) {
@@ -515,6 +544,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     } else {
                         view.setAperture(0f)
                     }
+                    view.setVideoRecorder(cameraController.videoRecorder)
+                    view.setVideoLogProfile(currentState.videoConfig.logProfile)
                     currentState.focusPoint?.let { fp ->
                         view.setFocusPoint(android.graphics.PointF(fp.first, fp.second))
                     }
@@ -748,6 +779,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun setVideoCodec(codec: com.hinnka.mycamera.video.VideoCodec) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveVideoCodec(codec)
+        }
+    }
+
     private fun refreshMultipleExposurePreview(sessionId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>()
@@ -822,6 +859,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun capture() {
+        if (state.value.captureMode == CaptureMode.VIDEO) {
+            if (state.value.videoRecordingState.isRecording) {
+                cameraController.stopVideoRecording()
+            } else {
+                cameraController.startVideoRecording()
+            }
+            return
+        }
+
         if (userPreferences.value.saveLocation) {
             val location = locationManager.getCurrentLocation()
             cameraController.setLocation(location?.latitude, location?.longitude)
@@ -991,6 +1037,69 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 保存到用户偏好设置
         viewModelScope.launch {
             userPreferencesRepository.saveAspectRatio(ratio.name)
+        }
+    }
+
+    fun setCaptureMode(mode: CaptureMode) {
+        if (state.value.videoRecordingState.isRecording && mode != state.value.captureMode) return
+        cameraController.setCaptureMode(mode)
+        reopenCamera()
+        viewModelScope.launch {
+            userPreferencesRepository.saveCaptureMode(mode)
+        }
+    }
+
+    fun setVideoResolution(resolution: VideoResolutionPreset) {
+        cameraController.setVideoResolution(resolution)
+        reopenCamera()
+        viewModelScope.launch {
+            userPreferencesRepository.saveVideoResolution(resolution)
+        }
+    }
+
+    fun setVideoFps(fps: VideoFpsPreset) {
+        cameraController.setVideoFps(fps)
+        reopenCamera()
+        viewModelScope.launch {
+            userPreferencesRepository.saveVideoFps(fps)
+        }
+    }
+
+    fun setVideoAspectRatio(aspectRatio: VideoAspectRatio) {
+        cameraController.setVideoAspectRatio(aspectRatio)
+        reopenCamera()
+        viewModelScope.launch {
+            userPreferencesRepository.saveVideoAspectRatio(aspectRatio)
+        }
+    }
+
+    fun setVideoLogProfile(logProfile: VideoLogProfile) {
+        cameraController.setVideoLogProfile(logProfile)
+        reopenCamera()
+        viewModelScope.launch {
+            userPreferencesRepository.saveVideoLogProfile(logProfile)
+        }
+    }
+
+    fun setVideoBitrate(bitrate: VideoBitratePreset) {
+        cameraController.setVideoBitrate(bitrate)
+        reopenCamera()
+        viewModelScope.launch {
+            userPreferencesRepository.saveVideoBitrate(bitrate)
+        }
+    }
+
+    fun setVideoStabilizationEnabled(enabled: Boolean) {
+        cameraController.setVideoStabilizationEnabled(enabled)
+        viewModelScope.launch {
+            userPreferencesRepository.saveVideoStabilizationEnabled(enabled)
+        }
+    }
+
+    fun setVideoTorchEnabled(enabled: Boolean) {
+        cameraController.setVideoTorchEnabled(enabled)
+        viewModelScope.launch {
+            userPreferencesRepository.saveVideoTorchEnabled(enabled)
         }
     }
 
