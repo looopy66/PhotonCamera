@@ -37,24 +37,72 @@ jobs:
           echo "org.gradle.configureondemand=true" >> gradle.properties
           echo "org.gradle.jvmargs=-Xmx2g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8 -XX:+UseParallelGC" >> gradle.properties
 
-      - name: Create unsigned release build variant
+      - name: Backup original build.gradle.kts
         run: |
-          # 备份原始文件
-          cp app/build.gradle app/build.gradle.bak
-          
-          # 在build.gradle中添加unsignedRelease构建类型
-          sed -i '/android {/a\
-          buildTypes {\
-              release {\
-                  minifyEnabled false\
-                  proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"\
-                  signingConfig null\
-              }\
-              unsignedRelease {\
-                  initWith release\
-                  matchingFallbacks = ["release"]\
-              }\
-          }' app/build.gradle
+          if [ -f "app/build.gradle.kts" ]; then
+            cp app/build.gradle.kts app/build.gradle.kts.bak
+            echo "Found app/build.gradle.kts"
+          else
+            echo "ERROR: app/build.gradle.kts not found"
+            exit 1
+          fi
+
+      - name: Add unsignedRelease build type to build.gradle.kts
+        run: |
+          # 添加 unsignedRelease 构建类型到 build.gradle.kts
+          # 首先检查是否已经有 buildTypes 块
+          if grep -q "buildTypes" app/build.gradle.kts; then
+            # 如果已存在 buildTypes，我们需要找到合适的位置插入 unsignedRelease
+            awk '
+            /buildTypes\s*{/ {
+                print $0
+                in_build_types = 1
+                next
+            }
+            in_build_types && /^[[:space:]]*}/ && !added_unsigned_release {
+                # 找到 buildTypes 块的结束位置
+                indent = substr($0, 1, match($0, "[^[:space:]]"))
+                printf("%s    create(\"unsignedRelease\") {\n", substr($0, 1, indent))
+                printf("%s        initWith(getByName(\"release\"))\n", substr($0, 1, indent))
+                printf("%s        signingConfig = null\n", substr($0, 1, indent))
+                printf("%s    }\n", substr($0, 1, indent))
+                added_unsigned_release = 1
+            }
+            { print }
+            END { 
+                if (!added_unsigned_release) {
+                    print "create(\"unsignedRelease\") {" > "/dev/stderr"
+                    print "    initWith(getByName(\"release\"))" > "/dev/stderr"
+                    print "    signingConfig = null" > "/dev/stderr"
+                    print "}" > "/dev/stderr"
+                    print "Error: Could not add unsignedRelease block properly" > "/dev/stderr"
+                }
+            }
+            ' app/build.gradle.kts > app/build.gradle.kts.tmp && mv app/build.gradle.kts.tmp app/build.gradle.kts
+          else
+            # 如果没有 buildTypes 块，则添加整个块
+            # 找到 android 块的位置并添加 buildTypes
+            awk '
+            /android\s*{/ {
+                print $0
+                in_android = 1
+                next
+            }
+            in_android && /^[[:space:]]*}/ && !added_build_types {
+                # 在 android 块结束前添加 buildTypes
+                indent = substr($0, 1, match($0, "[^[:space:]]"))
+                printf("%s    buildTypes {\n", substr($0, 1, indent))
+                printf("%s        create(\"unsignedRelease\") {\n", substr($0, 1, indent))
+                printf("%s            initWith(getByName(\"release\"))\n", substr($0, 1, indent))
+                printf("%s            signingConfig = null\n", substr($0, 1, indent))
+                printf("%s        }\n", substr($0, 1, indent))
+                printf("%s}\n", substr($0, 1, indent-4))  # 这个}实际上是android块的
+                added_build_types = 1
+                next
+            }
+            { print }
+            ' app/build.gradle.kts > app/build.gradle.kts.tmp && mv app/build.gradle.kts.tmp app/build.gradle.kts
+          fi
 
       - name: Build Unsigned Release APK
         run: |
@@ -62,9 +110,12 @@ jobs:
             --no-daemon \
             --max-workers=2
 
-      # 恢复原始build.gradle文件
-      - name: Restore original build.gradle
-        run: mv app/build.gradle.bak app/build.gradle || true
+      # 恢复原始build.gradle.kts文件
+      - name: Restore original build.gradle.kts
+        run: |
+          if [ -f "app/build.gradle.kts.bak" ]; then
+            mv app/build.gradle.kts.bak app/build.gradle.kts
+          fi
 
       # 输出当前生成的 APK 产物（文件名、路径、大小）
       - name: List built APK files
