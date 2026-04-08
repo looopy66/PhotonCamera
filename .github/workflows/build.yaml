@@ -1,4 +1,4 @@
-name: Photon Camera Build (32-bit/64-bit Selectable)
+name: Photon Camera Build (64-bit Only)
 
 on:
   workflow_dispatch:
@@ -13,15 +13,6 @@ on:
         - default
         - meitu
         - samsung
-      architecture:
-        description: 'Target Architecture'
-        required: true
-        default: 'both'
-        type: choice
-        options:
-        - both
-        - arm64-v8a
-        - armeabi-v7a
       build_type:
         description: 'Build Type'
         required: true
@@ -70,36 +61,10 @@ jobs:
             echo "android.enableAppCompileTimeRClass=true"
           } >> gradle.properties
 
-      - name: Apply 32-bit compatibility patches
+      - name: Configure for 64-bit only
         run: |
-          # 备份原始文件
-          if [ -f "app/src/main/cpp/stacking_utils.cpp" ]; then
-            cp app/src/main/cpp/stacking_utils.cpp app/src/main/cpp/stacking_utils.cpp.bak
-            echo "Applied backup for stacking_utils.cpp"
-          fi
-          
-          # 应用 NEON 兼容性补丁 - 修复 vaddvq_u32 指令
-          if [ -f "app/src/main/cpp/stacking_utils.cpp" ]; then
-            sed -i 's/vaddvq_u32(vacc)/(vget_lane_u32(vpadd_u32(vget_low_u32(vacc), vget_high_u32(vacc)), 0) + vget_lane_u32(vpadd_u32(vget_low_u32(vacc), vget_high_u32(vacc)), 1))/g' app/src/main/cpp/stacking_utils.cpp
-            echo "Applied NEON compatibility patch for vaddvq_u32"
-          fi
-
-      - name: Configure ABI Filters based on input
-        run: |
-          case "${{ inputs.architecture }}" in
-            "both")
-              echo "Configuring for both architectures: arm64-v8a, armeabi-v7a"
-              sed -i 's/abiFilters += listOf("[^"]*")/abiFilters += listOf("arm64-v8a", "armeabi-v7a")/g' app/build.gradle.kts
-              ;;
-            "arm64-v8a")
-              echo "Configuring for 64-bit only: arm64-v8a"
-              sed -i 's/abiFilters += listOf("[^"]*")/abiFilters += listOf("arm64-v8a")/g' app/build.gradle.kts
-              ;;
-            "armeabi-v7a")
-              echo "Configuring for 32-bit only: armeabi-v7a"
-              sed -i 's/abiFilters += listOf("[^"]*")/abiFilters += listOf("armeabi-v7a")/g' app/build.gradle.kts
-              ;;
-          esac
+          echo "Configuring for 64-bit only: arm64-v8a"
+          sed -i 's/abiFilters += listOf("[^"]*")/abiFilters += listOf("arm64-v8a")/g' app/build.gradle.kts
 
       - name: Show configured ABI filters
         run: |
@@ -111,7 +76,7 @@ jobs:
         run: |
           ./gradlew clean --no-daemon
 
-      - name: Build APK for selected flavor and architecture
+      - name: Build APK for selected flavor (64-bit only)
         run: |
           ./gradlew assemble${{ inputs.flavor }}${{ inputs.build_type }} \
             --no-daemon \
@@ -128,7 +93,7 @@ jobs:
         run: |
           echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "Flavor: ${{ inputs.flavor }}" >> $GITHUB_STEP_SUMMARY
-          echo "Architecture: ${{ inputs.architecture }}" >> $GITHUB_STEP_SUMMARY
+          echo "Architecture: arm64-v8a (64-bit only)" >> $GITHUB_STEP_SUMMARY
           echo "Build Type: ${{ inputs.build_type }}" >> $GITHUB_STEP_SUMMARY
           
           APK_COUNT=$(find . -path "*/build/outputs/apk/*" -name "*.apk" | wc -l)
@@ -144,7 +109,7 @@ jobs:
       - name: Upload APK as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: photon-camera-${{ inputs.flavor }}-${{ inputs.architecture }}-${{ inputs.build_type }}
+          name: photon-camera-${{ inputs.flavor }}-arm64-v8a-${{ inputs.build_type }}
           path: app/build/outputs/apk/**/**/*.apk
           if-no-files-found: warn
           retention-days: 30
@@ -184,7 +149,7 @@ jobs:
             if [ -d "$temp_dir/lib/armeabi-v7a" ]; then
               echo "  armeabi-v7a: $(ls -la $temp_dir/lib/armeabi-v7a/ 2>/dev/null | grep '\.so$' | wc -l) .so files"
             else
-              echo "  armeabi-v7a: Not present"
+              echo "  armeabi-v7a: Not present (as expected for 64-bit build)"
             fi
             
             rm -rf "$temp_dir"
