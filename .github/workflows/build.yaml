@@ -27,7 +27,7 @@ jobs:
 
       - name: Build Default Release APK
         run: |
-          ./gradlew assembleDefaultRelease \
+          ./gradlew assembleDefaultRelease --no-signing \
             -PRELEASE_STORE_FILE=release.keystore \
             -PRELEASE_STORE_PASSWORD=${{ secrets.RELEASE_STORE_PASSWORD }} \
             -PRELEASE_KEY_ALIAS=${{ secrets.RELEASE_KEY_ALIAS }} \
