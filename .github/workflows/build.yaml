@@ -1,4 +1,4 @@
-name: Android Release Build (Multi-Arch Support)
+name: Photon Camera Build Workflow
 
 on:
   workflow_dispatch:
@@ -22,10 +22,20 @@ on:
         - both
         - arm64-v8a
         - armeabi-v7a
+      build_type:
+        description: 'Build Type'
+        required: true
+        default: 'unsignedRelease'
+        type: choice
+        options:
+        - unsignedRelease
+        - release
+        - debug
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    
     steps:
       - uses: actions/checkout@v4
 
@@ -57,43 +67,110 @@ jobs:
             echo "org.gradle.configureondemand=true"
             echo "org.gradle.jvmargs=-Xmx2g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8 -XX:+UseParallelGC"
             echo "android.nonTransitiveRClass=true"
+            echo "android.enableAppCompileTimeRClass=true"
           } >> gradle.properties
 
       - name: Configure ABI Filters based on input
         run: |
           if [ "${{ inputs.architecture }}" == "both" ]; then
             echo "Configuring for both architectures: arm64-v8a, armeabi-v7a"
-            sed -i 's/abiFilters += listOf("arm64-v8a")/abiFilters += listOf("arm64-v8a", "armeabi-v7a")/' app/build.gradle.kts
+            sed -i 's/abiFilters += listOf("[^"]*")/abiFilters += listOf("arm64-v8a", "armeabi-v7a")/' app/build.gradle.kts
           elif [ "${{ inputs.architecture }}" == "arm64-v8a" ]; then
             echo "Configuring for 64-bit only: arm64-v8a"
-            sed -i 's/abiFilters += listOf("arm64-v8a", "armeabi-v7a")/abiFilters += listOf("arm64-v8a")/' app/build.gradle.kts
+            sed -i 's/abiFilters += listOf("[^"]*")/abiFilters += listOf("arm64-v8a")/' app/build.gradle.kts
           elif [ "${{ inputs.architecture }}" == "armeabi-v7a" ]; then
             echo "Configuring for 32-bit only: armeabi-v7a"
-            sed -i 's/abiFilters += listOf("arm64-v8a", "armeabi-v7a")/abiFilters += listOf("armeabi-v7a")/' app/build.gradle.kts
+            sed -i 's/abiFilters += listOf("[^"]*")/abiFilters += listOf("armeabi-v7a")/' app/build.gradle.kts
           fi
 
       - name: Show modified build configuration
         run: |
           echo "=== Current ABI Configuration ==="
-          grep -A 5 "ndk {" app/build.gradle.kts | grep -E "(abiFilters|listOf)"
+          grep -A 10 "ndk {" app/build.gradle.kts | grep -E "(abiFilters|listOf)"
           echo "================================="
 
-      - name: Build Unsigned Release APK for selected flavor and architecture
+      - name: Validate CMake setup for native code
         run: |
-          ./gradlew assemble${{ inputs.flavor }}UnsignedRelease \
-            --no-daemon \
-            --max-workers=2
+          echo "Checking CMake configuration..."
+          if [ -f "src/main/cpp/CMakeLists.txt" ]; then
+            echo "CMakeLists.txt found"
+            cat src/main/cpp/CMakeLists.txt | head -20
+          else
+            echo "CMakeLists.txt not found in expected location"
+          fi
+          
+          echo "Checking externalNativeBuild configuration..."
+          grep -A 10 "externalNativeBuild" app/build.gradle.kts
 
-      # 输出当前生成的 APK 产物（文件名、路径、大小）
+      - name: Build APK for selected flavor and architecture
+        run: |
+          ./gradlew assemble${{ inputs.flavor }}${{ inputs.build_type }} \
+            --no-daemon \
+            --max-workers=2 \
+            --stacktrace
+
+      - name: Run tests (optional)
+        run: |
+          ./gradlew test${{ inputs.flavor }}${{ inputs.build_type }}UnitTest \
+            --continue || echo "Tests failed but continuing..."
+
       - name: List built APK files
         run: |
-          echo "=== Generated Unsigned Release APK Files ==="
-          find . -path "*/build/outputs/apk/*" -name "*.apk" -exec ls -lh {} \; || echo "No APK files found"
-          echo "============================================"
+          echo "=== Generated APK Files ==="
+          find . -path "*/build/outputs/apk/*" -name "*.apk" -exec ls -lh {} \;
+          echo "========================="
 
-      - name: Upload Unsigned APK as artifact
+      - name: Generate build summary
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "Flavor: ${{ inputs.flavor }}" >> $GITHUB_STEP_SUMMARY
+          echo "Architecture: ${{ inputs.architecture }}" >> $GITHUB_STEP_SUMMARY
+          echo "Build Type: ${{ inputs.build_type }}" >> $GITHUB_STEP_SUMMARY
+          
+          APK_COUNT=$(find . -path "*/build/outputs/apk/*" -name "*.apk" | wc -l)
+          echo "Generated APKs: $APK_COUNT" >> $GITHUB_STEP_SUMMARY
+          
+          if [ $APK_COUNT -gt 0 ]; then
+            echo "### Generated Files:" >> $GITHUB_STEP_SUMMARY
+            find . -path "*/build/outputs/apk/*" -name "*.apk" -exec ls -lh {} \; >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload APK as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.flavor }}-unsigned-${{ inputs.architecture }}-apks
+          name: photon-camera-${{ inputs.flavor }}-${{ inputs.architecture }}-${{ inputs.build_type }}
           path: app/build/outputs/apk/**/**/*.apk
-          if-no-files-found: warn
+          if-no-files-found: error
+          retention-days: 30
+
+  validate:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download APK artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded-apks
+
+      - name: Validate APK integrity
+        run: |
+          find downloaded-apks -name "*.apk" -exec echo "Validating: {}" \; -exec file {} \;
+          find downloaded-apks -name "*.apk" -exec ls -lh {} \;
+
+      - name: Verify native libraries
+        run: |
+          for apk_file in $(find downloaded-apks -name "*.apk"); do
+            echo "Checking native libraries in: $apk_file"
+            temp_dir=$(mktemp -d)
+            unzip -q "$apk_file" -d "$temp_dir"
+            
+            if [ -d "$temp_dir/lib/arm64-v8a" ]; then
+              echo "  arm64-v8a: $(ls -la $temp_dir/lib/arm64-v8a/ 2>/dev/null | wc -l) files"
+            fi
+            
+            if [ -d "$temp_dir/lib/armeabi-v7a" ]; then
+              echo "  armeabi-v7a: $(ls -la $temp_dir/lib/armeabi-v7a/ 2>/dev/null | wc -l) files"
+            fi
+            
+            rm -rf "$temp_dir"
+          done
