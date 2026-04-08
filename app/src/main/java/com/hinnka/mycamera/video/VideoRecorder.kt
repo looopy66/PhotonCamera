@@ -81,6 +81,7 @@ class VideoRecorder(
     private var lastSharedDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
     private var requestedBitrateMbps: Int = 30
     private var requestedCodecMime: String = MediaFormat.MIMETYPE_VIDEO_AVC
+    private var requestedOrientationHintDegrees: Int = 0
 
     private var requestedSize = android.util.Size(1080, 1920)
     private var requestedFps = 30
@@ -125,6 +126,7 @@ class VideoRecorder(
         fps: Int,
         bitrateMbps: Int,
         codecMime: String,
+        orientationHintDegrees: Int = 0,
         onFinished: ((Uri?) -> Unit)? = null
     ): Boolean {
         if (isRecording) return false
@@ -133,6 +135,7 @@ class VideoRecorder(
         requestedFps = fps
         requestedBitrateMbps = bitrateMbps
         requestedCodecMime = codecMime
+        requestedOrientationHintDegrees = normalizeOrientationHint(orientationHintDegrees)
         tempOutputFile = File(context.cacheDir, "video_${System.currentTimeMillis()}.mp4")
         finishCallback = onFinished
         resetMuxerState()
@@ -148,7 +151,11 @@ class VideoRecorder(
         statsRenderTimeMaxMs = 0L
         stopRequested = false
         isRecording = true
-        PLog.d(TAG, "Video recording prepared: ${requestedSize.width}x${requestedSize.height} @ ${requestedFps}fps")
+        PLog.d(
+            TAG,
+            "Video recording prepared: ${requestedSize.width}x${requestedSize.height} @ " +
+                "${requestedFps}fps, orientationHint=$requestedOrientationHintDegrees"
+        )
         return true
     }
 
@@ -311,7 +318,9 @@ class VideoRecorder(
 
     private fun createMuxer() {
         val file = tempOutputFile ?: return
-        muxer = MediaMuxer(file.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        muxer = MediaMuxer(file.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4).apply {
+            setOrientationHint(requestedOrientationHintDegrees)
+        }
     }
 
     private fun startAudioLoop() {
@@ -800,4 +809,9 @@ class VideoRecorder(
 
 private fun Int.makeEven(): Int {
     return if (this % 2 == 0) this else this - 1
+}
+
+private fun normalizeOrientationHint(degrees: Int): Int {
+    val normalized = ((degrees % 360) + 360) % 360
+    return (normalized / 90) * 90
 }

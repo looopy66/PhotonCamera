@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.utils.DeviceUtil
+import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.video.CaptureMode
 import com.hinnka.mycamera.video.VideoAspectRatio
 import com.hinnka.mycamera.video.VideoBitratePreset
@@ -2286,7 +2287,8 @@ class Camera2Controller(private val context: Context) {
             size = outputSize,
             fps = _state.value.videoConfig.fps.fps,
             bitrateMbps = _state.value.videoConfig.bitrate.bitrateMbps,
-            codecMime = _state.value.videoConfig.codec.mimeType
+            codecMime = _state.value.videoConfig.codec.mimeType,
+            orientationHintDegrees = resolveVideoOrientationHintDegrees()
         ) { uri ->
             PLog.i(TAG, "Video saved: $uri")
             _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
@@ -2312,6 +2314,11 @@ class Camera2Controller(private val context: Context) {
             videoRecordingState = _state.value.videoRecordingState.copy(isRecording = false)
         )
         videoRecorder.stopRecording()
+    }
+
+    private fun resolveVideoOrientationHintDegrees(): Int {
+        val deviceRotation = OrientationObserver.rotationDegrees.toInt()
+        return ((deviceRotation % 360) + 360) % 360
     }
 
 // ==================== 延时拍摄和网格线 ====================
