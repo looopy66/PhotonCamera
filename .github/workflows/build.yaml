@@ -3,6 +3,17 @@ name: Android Release Build (Unsigned)
 on:
   # 手动触发（推荐）
   workflow_dispatch:
+    inputs:
+      flavor:
+        description: 'Product Flavor to build'
+        required: true
+        default: 'default'
+        type: choice
+        options:
+        - google
+        - default
+        - meitu
+        - samsung
 
 jobs:
   build:
@@ -40,9 +51,9 @@ jobs:
             echo "android.nonTransitiveRClass=true"
           } >> gradle.properties
 
-      - name: Build Unsigned Release APK
+      - name: Build Unsigned Release APK for selected flavor
         run: |
-          ./gradlew assembleUnsignedRelease \
+          ./gradlew assemble${{ inputs.flavor }}UnsignedRelease \
             --no-daemon \
             --max-workers=2
 
@@ -56,6 +67,6 @@ jobs:
       - name: Upload Unsigned APK as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: unsigned-release-apk
+          name: ${{ inputs.flavor }}-unsigned-release-apk
           path: app/build/outputs/apk/**/**/*.apk
           if-no-files-found: warn
