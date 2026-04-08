@@ -57,6 +57,10 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("release")
         }
+        create("unsignedRelease") {
+    initWith(getByName("release"))
+    signingConfig = null
+        }
     }
 
     flavorDimensions += "channel"
