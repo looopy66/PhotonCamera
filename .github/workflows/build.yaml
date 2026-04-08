@@ -1,4 +1,4 @@
-name: Photon Camera Build Workflow
+name: Photon Camera Build (32-bit/64-bit Selectable)
 
 on:
   workflow_dispatch:
@@ -22,6 +22,15 @@ on:
         - both
         - arm64-v8a
         - armeabi-v7a
+      build_type:
+        description: 'Build Type'
+        required: true
+        default: 'unsignedRelease'
+        type: choice
+        options:
+        - unsignedRelease
+        - release
+        - debug
 
 jobs:
   build:
@@ -64,40 +73,119 @@ jobs:
       - name: Apply 32-bit compatibility patches
         run: |
           # 备份原始文件
-          cp app/src/main/cpp/stacking_utils.cpp app/src/main/cpp/stacking_utils.cpp.bak
+          if [ -f "app/src/main/cpp/stacking_utils.cpp" ]; then
+            cp app/src/main/cpp/stacking_utils.cpp app/src/main/cpp/stacking_utils.cpp.bak
+            echo "Applied backup for stacking_utils.cpp"
+          fi
           
-          # 应用 NEON 兼容性补丁
-          sed -i 's/vaddvq_u32(vacc)/(vget_lane_u32(vpadd_u32(vget_low_u32(vacc), vget_high_u32(vacc)), 0) + vget_lane_u32(vpadd_u32(vget_low_u32(vacc), vget_high_u32(vacc)), 1))/g' app/src/main/cpp/stacking_utils.cpp
-          
-          # 检查是否有其他类似的 NEON 指令
-          grep -n "vaddvq_" app/src/main/cpp/stacking_utils.cpp || echo "No more vaddvq_ instructions found"
-
-      - name: Configure ABI Filters
-        run: |
-          if [ "${{ inputs.architecture }}" == "both" ]; then
-            echo "Building for both architectures: arm64-v8a, armeabi-v7a"
-          elif [ "${{ inputs.architecture }}" == "arm64-v8a" ]; then
-            echo "Building for 64-bit only: arm64-v8a"
-          elif [ "${{ inputs.architecture }}" == "armeabi-v7a" ]; then
-            echo "Building for 32-bit only: armeabi-v7a"
+          # 应用 NEON 兼容性补丁 - 修复 vaddvq_u32 指令
+          if [ -f "app/src/main/cpp/stacking_utils.cpp" ]; then
+            sed -i 's/vaddvq_u32(vacc)/(vget_lane_u32(vpadd_u32(vget_low_u32(vacc), vget_high_u32(vacc)), 0) + vget_lane_u32(vpadd_u32(vget_low_u32(vacc), vget_high_u32(vacc)), 1))/g' app/src/main/cpp/stacking_utils.cpp
+            echo "Applied NEON compatibility patch for vaddvq_u32"
           fi
 
-      - name: Build APK
+      - name: Configure ABI Filters based on input
         run: |
-          ./gradlew assemble${{ inputs.flavor }}UnsignedRelease \
+          case "${{ inputs.architecture }}" in
+            "both")
+              echo "Configuring for both architectures: arm64-v8a, armeabi-v7a"
+              sed -i 's/abiFilters += listOf("[^"]*")/abiFilters += listOf("arm64-v8a", "armeabi-v7a")/g' app/build.gradle.kts
+              ;;
+            "arm64-v8a")
+              echo "Configuring for 64-bit only: arm64-v8a"
+              sed -i 's/abiFilters += listOf("[^"]*")/abiFilters += listOf("arm64-v8a")/g' app/build.gradle.kts
+              ;;
+            "armeabi-v7a")
+              echo "Configuring for 32-bit only: armeabi-v7a"
+              sed -i 's/abiFilters += listOf("[^"]*")/abiFilters += listOf("armeabi-v7a")/g' app/build.gradle.kts
+              ;;
+          esac
+
+      - name: Show configured ABI filters
+        run: |
+          echo "=== Configured ABI Filters ==="
+          grep -A 15 "ndk {" app/build.gradle.kts | grep -A 15 -B 15 "abiFilters"
+          echo "============================="
+
+      - name: Clean before build
+        run: |
+          ./gradlew clean --no-daemon
+
+      - name: Build APK for selected flavor and architecture
+        run: |
+          ./gradlew assemble${{ inputs.flavor }}${{ inputs.build_type }} \
             --no-daemon \
-            --max-workers=2
+            --max-workers=2 \
+            --info
 
       - name: List built APK files
         run: |
           echo "=== Generated APK Files ==="
-          find . -path "*/build/outputs/apk/*" -name "*.apk" -exec ls -lh {} \;
+          find . -path "*/build/outputs/apk/*" -name "*.apk" -exec ls -lh {} \; || echo "No APK files found"
           echo "========================="
+
+      - name: Generate build summary
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "Flavor: ${{ inputs.flavor }}" >> $GITHUB_STEP_SUMMARY
+          echo "Architecture: ${{ inputs.architecture }}" >> $GITHUB_STEP_SUMMARY
+          echo "Build Type: ${{ inputs.build_type }}" >> $GITHUB_STEP_SUMMARY
+          
+          APK_COUNT=$(find . -path "*/build/outputs/apk/*" -name "*.apk" | wc -l)
+          echo "Generated APKs: $APK_COUNT" >> $GITHUB_STEP_SUMMARY
+          
+          if [ $APK_COUNT -gt 0 ]; then
+            echo "### Generated Files:" >> $GITHUB_STEP_SUMMARY
+            find . -path "*/build/outputs/apk/*" -name "*.apk" -exec ls -lh {} \; >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No APK files generated" >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Upload APK as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: photon-camera-${{ inputs.flavor }}-${{ inputs.architecture }}-unsignedRelease
+          name: photon-camera-${{ inputs.flavor }}-${{ inputs.architecture }}-${{ inputs.build_type }}
           path: app/build/outputs/apk/**/**/*.apk
           if-no-files-found: warn
           retention-days: 30
+
+  validate:
+    needs: build
+    runs-on: ubuntu-latest
+    if: needs.build.result == 'success'
+    steps:
+      - name: Download APK artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded-apks
+
+      - name: Validate APK integrity
+        run: |
+          for apk_file in $(find downloaded-apks -name "*.apk"); do
+            echo "Validating: $apk_file"
+            file "$apk_file"
+            ls -lh "$apk_file"
+          done
+
+      - name: Verify native libraries
+        run: |
+          for apk_file in $(find downloaded-apks -name "*.apk"); do
+            echo "Checking native libraries in: $apk_file"
+            temp_dir=$(mktemp -d)
+            unzip -q "$apk_file" -d "$temp_dir"
+            
+            echo "Libraries in $apk_file:"
+            if [ -d "$temp_dir/lib/arm64-v8a" ]; then
+              echo "  arm64-v8a: $(ls -la $temp_dir/lib/arm64-v8a/ 2>/dev/null | grep '\.so$' | wc -l) .so files"
+            else
+              echo "  arm64-v8a: Not present"
+            fi
+            
+            if [ -d "$temp_dir/lib/armeabi-v7a" ]; then
+              echo "  armeabi-v7a: $(ls -la $temp_dir/lib/armeabi-v7a/ 2>/dev/null | grep '\.so$' | wc -l) .so files"
+            else
+              echo "  armeabi-v7a: Not present"
+            fi
+            
+            rm -rf "$temp_dir"
+          done
