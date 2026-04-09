@@ -29,6 +29,7 @@ import com.hinnka.mycamera.lut.PhotoTransformation
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.raw.RawProcessingPreferences
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.utils.StartupTrace
 import com.hinnka.mycamera.ui.gallery.CropAspectOption
 import com.hinnka.mycamera.ui.gallery.calculateInitialCropRect
 import kotlinx.coroutines.*
@@ -335,10 +336,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         private set
 
     init {
+        StartupTrace.mark("GalleryViewModel.init start")
         loadPhotos()
 
         // 检查系统相册权限
-        checkGalleryPermission()
+        StartupTrace.measure("GalleryViewModel.checkGalleryPermission") {
+            checkGalleryPermission()
+        }
 
         viewModelScope.launch {
             MediaManager.detailHdrReadyEvents.collect { photoId ->
@@ -378,6 +382,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 availableFrames = sortedFrames
             }
         }
+        StartupTrace.mark("GalleryViewModel.init end")
     }
 
     /**
@@ -462,6 +467,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     fun loadPhotos() {
         viewModelScope.launch {
+            val start = android.os.SystemClock.elapsedRealtime()
             if (_photos.value.isEmpty()) _isLoading.value = true
             try {
                 val context = getApplication<Application>()
@@ -489,9 +495,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 // 3. 两阶段加载：优先刷新前 30 张（确保最新状态），随后补充其余缺失的元数据
                 updateMetadata(mergedList.take(30))
                 updateMetadata(mergedList.drop(30).filter { it.metadata == null })
+                StartupTrace.mark(
+                    "GalleryViewModel.loadPhotos finished",
+                    "count=${mergedList.size}, costMs=${android.os.SystemClock.elapsedRealtime() - start}"
+                )
 
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to load photos", e)
+                StartupTrace.mark(
+                    "GalleryViewModel.loadPhotos failed",
+                    "costMs=${android.os.SystemClock.elapsedRealtime() - start}"
+                )
                 _isLoading.value = false
             }
         }

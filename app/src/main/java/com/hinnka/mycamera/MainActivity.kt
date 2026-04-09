@@ -31,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -74,6 +75,7 @@ import com.hinnka.mycamera.lut.creator.LutCreatorViewModel
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.gallery.MediaManager
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.utils.StartupTrace
 
 /**
  * 路由常量
@@ -127,16 +129,22 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        StartupTrace.mark("MainActivity.onCreate start")
 
         // 启用全屏模式
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
-        )
+        StartupTrace.measure("MainActivity.enableEdgeToEdge") {
+            enableEdgeToEdge(
+                statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+                navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+            )
+        }
         hideSystemUI()
+        StartupTrace.mark("MainActivity.hideSystemUI applied")
         applyPreferredWindowColorMode()
+        StartupTrace.mark("MainActivity.applyPreferredWindowColorMode applied")
 
         OrientationObserver.observe(this)
+        StartupTrace.mark("MainActivity.OrientationObserver.observe applied")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             MediaManager.hdrSdrRatio = display?.hdrSdrRatio ?: 0f
         }
@@ -146,11 +154,15 @@ class MainActivity : ComponentActivity() {
         hasPermissions = permissions.all {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
         }
+        StartupTrace.mark("MainActivity.permissions checked", "hasPermissions=$hasPermissions")
 
         handleIntent(intent)
+        StartupTrace.mark("MainActivity.intent handled", "pendingRoute=$pendingRoute")
 
 
+        StartupTrace.mark("MainActivity.setContent start")
         setContent {
+            StartupComposeReadyEffect()
             val currentRecipeParams by cameraViewModel.currentRecipeParams.collectAsState()
             val phantomPipCrop by cameraViewModel.phantomPipCrop.collectAsState()
             ScreenCaptureRenderConfigStore.save(
@@ -184,6 +196,13 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+        StartupTrace.mark("MainActivity.setContent end")
+        window.decorView.post {
+            StartupTrace.mark("MainActivity.decorView.post")
+            reportFullyDrawn()
+            StartupTrace.reportFullyDrawn("MainActivity.reportFullyDrawn")
+            cameraViewModel.prewarmDepthEstimator()
         }
     }
 
@@ -250,6 +269,13 @@ class MainActivity : ComponentActivity() {
             controller.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
+    }
+}
+
+@Composable
+private fun StartupComposeReadyEffect() {
+    LaunchedEffect(Unit) {
+        StartupTrace.mark("MainActivity.first composition")
     }
 }
 

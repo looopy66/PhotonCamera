@@ -9,6 +9,7 @@ import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.net.Uri
+import android.os.SystemClock
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -371,7 +372,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     var showGhostPermissions by mutableStateOf(false)
 
     init {
-        cameraController.initialize()
+        StartupTrace.mark("CameraViewModel.init start")
+        StartupTrace.measure("CameraViewModel.cameraController.initialize") {
+            cameraController.initialize()
+        }
         cameraController.onImageCaptured = { image, captureInfo, characteristics, captureResult ->
             if (state.value.burstCapturing) {
                 if (burstCaptureInfo == null) {
@@ -432,7 +436,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         // 监听快门声音、震动和软件处理设置
         viewModelScope.launch {
+            var firstPreferencesLogged = false
+            val preferenceCollectStart = SystemClock.elapsedRealtime()
             userPreferencesRepository.userPreferences.collect {
+                if (!firstPreferencesLogged) {
+                    firstPreferencesLogged = true
+                    StartupTrace.mark(
+                        "CameraViewModel.userPreferences first collect",
+                        "costMs=${SystemClock.elapsedRealtime() - preferenceCollectStart}"
+                    )
+                }
                 isShutterSoundEnabled = it.shutterSoundEnabled
                 isVibrationEnabled = it.vibrationEnabled
                 // 同步降噪等级到相机控制器
@@ -632,6 +645,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 glSurfaceView?.setDepthMap(depth)
             }
         }
+        StartupTrace.mark("CameraViewModel.init end")
     }
 
     fun getAvailableRawLutList(context: Context, logCurve: LogCurve): List<String> {
@@ -658,6 +672,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun closeCamera() {
         cameraController.closeCamera()
+    }
+
+    fun prewarmDepthEstimator() {
+        cameraController.previewDepthProcessor.prewarm()
     }
 
     /**

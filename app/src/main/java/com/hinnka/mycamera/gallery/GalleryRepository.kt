@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.ContentUris
 import android.media.MediaMetadataRetriever
 import android.provider.MediaStore
+import com.hinnka.mycamera.utils.StartupTrace
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -78,9 +79,14 @@ class GalleryRepository(private val context: Context) {
      * 查询私有存储中的照片
      */
     private fun queryPhotos(limit: Int = Int.MAX_VALUE): List<MediaData> {
-        return MediaManager.getPhotoIds(context)
-            .mapNotNull { id -> runBlocking { MediaManager.buildPhotoData(context, id) } }
-            .take(limit)
+        val ids = StartupTrace.measure("GalleryRepository.getPhotoIds") {
+            MediaManager.getPhotoIds(context)
+        }
+        val photos = StartupTrace.measure("GalleryRepository.buildPhotoData", "ids=${ids.size}") {
+            ids.mapNotNull { id -> runBlocking { MediaManager.buildPhotoData(context, id) } }
+        }.take(limit)
+        StartupTrace.mark("GalleryRepository.queryPhotos finished", "count=${photos.size}, limit=$limit")
+        return photos
     }
 
     private fun querySystemImages(offset: Int, limit: Int): List<MediaData> {

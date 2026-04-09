@@ -3,6 +3,7 @@ package com.hinnka.mycamera.ml
 import android.content.Context
 import android.graphics.Bitmap
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.utils.StartupTrace
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
 import org.tensorflow.lite.gpu.CompatibilityList
@@ -28,20 +29,30 @@ class DepthEstimator(context: Context) {
 
     init {
         try {
-            val modelFile = FileUtil.loadMappedFile(context, "midas.tflite")
+            val modelFile = StartupTrace.measure("DepthEstimator.loadMappedFile") {
+                FileUtil.loadMappedFile(context, "midas.tflite")
+            }
             
             // Try GPU
             val gpuOptions = Interpreter.Options()
-            val compatList = CompatibilityList()
-            gpuDelegate = if (compatList.isDelegateSupportedOnThisDevice) {
-                val delegateOptions = compatList.bestOptionsForThisDevice
-                GpuDelegate(delegateOptions)
-            } else {
-                GpuDelegate()
+            val compatList = StartupTrace.measure("DepthEstimator.CompatibilityList()") {
+                CompatibilityList()
             }
-            gpuOptions.addDelegate(gpuDelegate)
+            gpuDelegate = StartupTrace.measure("DepthEstimator.GpuDelegate()") {
+                if (compatList.isDelegateSupportedOnThisDevice) {
+                    val delegateOptions = compatList.bestOptionsForThisDevice
+                    GpuDelegate(delegateOptions)
+                } else {
+                    GpuDelegate()
+                }
+            }
+            StartupTrace.measure("DepthEstimator.gpuOptions.addDelegate") {
+                gpuOptions.addDelegate(gpuDelegate)
+            }
             try {
-                interpreter = Interpreter(modelFile, gpuOptions)
+                interpreter = StartupTrace.measure("DepthEstimator.Interpreter(GPU)") {
+                    Interpreter(modelFile, gpuOptions)
+                }
                 isInitialized = true
                 PLog.d(TAG, "Using GPU Delegate for Depth Estimator")
             } catch (e: Exception) {
@@ -53,10 +64,16 @@ class DepthEstimator(context: Context) {
             // Try NNAPI (NPU) if GPU failed or not supported
             if (!isInitialized) {
                 val nnApiOptions = Interpreter.Options()
-                nnApiDelegate = NnApiDelegate()
-                nnApiOptions.addDelegate(nnApiDelegate)
+                nnApiDelegate = StartupTrace.measure("DepthEstimator.NnApiDelegate()") {
+                    NnApiDelegate()
+                }
+                StartupTrace.measure("DepthEstimator.nnApiOptions.addDelegate") {
+                    nnApiOptions.addDelegate(nnApiDelegate)
+                }
                 try {
-                    interpreter = Interpreter(modelFile, nnApiOptions)
+                    interpreter = StartupTrace.measure("DepthEstimator.Interpreter(NNAPI)") {
+                        Interpreter(modelFile, nnApiOptions)
+                    }
                     isInitialized = true
                     PLog.d(TAG, "Using NNAPI (NPU) for Depth Estimator")
                 } catch (e: Exception) {
@@ -70,7 +87,9 @@ class DepthEstimator(context: Context) {
             if (!isInitialized) {
                 val cpuOptions = Interpreter.Options()
                 cpuOptions.setNumThreads(4)
-                interpreter = Interpreter(modelFile, cpuOptions)
+                interpreter = StartupTrace.measure("DepthEstimator.Interpreter(CPU)") {
+                    Interpreter(modelFile, cpuOptions)
+                }
                 isInitialized = true
                 PLog.d(TAG, "Using CPU for Depth Estimator")
             }

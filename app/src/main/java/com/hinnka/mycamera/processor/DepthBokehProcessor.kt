@@ -5,7 +5,6 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import com.hinnka.mycamera.gallery.MediaManager
 import com.hinnka.mycamera.ml.DepthEstimator
-
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -15,8 +14,11 @@ import kotlinx.coroutines.sync.withLock
  * and realistic bokeh convolution.
  */
 class DepthBokehProcessor(context: Context) {
+    private val appContext = context.applicationContext
     private val processor = OglBokehProcessor()
-    private val depthEstimator = DepthEstimator(context)
+    private val depthEstimator by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        DepthEstimator(appContext)
+    }
     private val mutex = Mutex()
 
     /**
@@ -80,4 +82,3 @@ class DepthBokehProcessor(context: Context) {
         depthEstimator.close()
     }
 }
-

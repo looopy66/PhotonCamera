@@ -10,8 +10,10 @@ import com.hinnka.mycamera.phantom.PhantomShortcutActivity
 import com.hinnka.mycamera.screencapture.PhantomPipPreviewCoordinator
 import com.hinnka.mycamera.utils.BuglyHelper
 import com.hinnka.mycamera.utils.DeviceUtil
+import com.hinnka.mycamera.utils.StartupTrace
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
@@ -19,15 +21,27 @@ class MyCameraApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        StartupTrace.mark("Application.onCreate start")
         instance = this
-        BuglyHelper.init(this)
-        ContentRepository.getInstance(this).initialize()
-        phantomService = PhantomService(this)
+        StartupTrace.measure("BuglyHelper.init") {
+            BuglyHelper.init(this)
+        }
+        val contentRepository = ContentRepository.getInstance(this)
+        StartupTrace.measure("ContentRepository.initialize") {
+            contentRepository.initialize()
+        }
+        phantomService = StartupTrace.measure("PhantomService()") {
+            PhantomService(this)
+        }
 
-        val userPreferencesRepository = ContentRepository.getInstance(this).userPreferencesRepository
+        val userPreferencesRepository = contentRepository.userPreferencesRepository
         MainScope().launch {
+            StartupTrace.measure("Application.first userPreferences load") {
+                userPreferencesRepository.userPreferences.first()
+            }
             userPreferencesRepository.userPreferences.map { it.phantomMode }.distinctUntilChanged()
                 .collect { phantomMode ->
+                    StartupTrace.mark("Application.phantomMode collected", "phantomMode=$phantomMode")
                     if (phantomMode) {
                         phantomService.start()
                     } else {
@@ -40,6 +54,7 @@ class MyCameraApplication : Application() {
                     updateWidgets(this@MyCameraApplication)
                 }
         }
+        StartupTrace.mark("Application.onCreate end")
     }
 
     private fun updateShortcuts(isActive: Boolean) {
