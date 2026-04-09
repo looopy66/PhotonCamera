@@ -312,12 +312,12 @@ class Camera2Controller(private val context: Context) {
             0f
         }
         val fpsRange = result.get(CaptureResult.CONTROL_AE_TARGET_FPS_RANGE)
-        PLog.i(
+        /*PLog.i(
             TAG,
             "Video capture stats: requested=${_state.value.videoConfig.fps.fps}, " +
                 "aeRange=$fpsRange, callbackFps=${"%.1f".format(callbackFps)}, " +
                 "sensorFps=${"%.1f".format(sensorFps)}, preview=${_state.value.currentPreviewSize.width}x${_state.value.currentPreviewSize.height}"
-        )
+        )*/
 
         videoCaptureStatsWindowStartMs = nowMs
         videoCaptureStatsFrames = 0
@@ -2456,7 +2456,9 @@ class Camera2Controller(private val context: Context) {
             val captureBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 addTarget(reader.surface)
 
-                previewSurface?.let { addTarget(it) }
+                if (shouldMirrorStillCaptureToPreview()) {
+                    previewSurface?.let { addTarget(it) }
+                }
 
                 // 应用所有相机参数（曝光、白平衡、闪光灯、变焦、色调映射）
                 // isCapture = true 确保使用完整的曝光时间（不限制长曝光）
@@ -2931,7 +2933,9 @@ class Camera2Controller(private val context: Context) {
             // Apply capture intent
             val captureBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 imageReader?.surface?.let { addTarget(it) }
-                previewSurface?.let { addTarget(it) }
+                if (shouldMirrorStillCaptureToPreview()) {
+                    previewSurface?.let { addTarget(it) }
+                }
 
                 applyBaseCameraSettings(this, isCapture = true)
 
@@ -2960,6 +2964,18 @@ class Camera2Controller(private val context: Context) {
             PLog.e(TAG, "Failed to start hardware burst capture", e)
             _state.value = _state.value.copy(burstCapturing = false, isCapturing = false)
         }
+    }
+
+    private fun shouldMirrorStillCaptureToPreview(): Boolean {
+        val isLivePhotoCapture = _state.value.useLivePhoto || _state.value.isCapturingLivePhoto
+        if (isLivePhotoCapture) {
+            PLog.i(
+                TAG,
+                "Skipping preview target on still capture to avoid Live Photo flash frame and preview flicker"
+            )
+            return false
+        }
+        return true
     }
 
     private fun checkBurstCaptureContinue() {
