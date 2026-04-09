@@ -440,6 +440,7 @@
     <string name="input_curve">Input Curve</string>
     <string name="photo_lut">Photo LUT</string>
     <string name="video_lut">Video LUT</string>
+    <string name="video_lut_photo_conversion_hint">Used for color conversion when applying this video LUT to photos.</string>
 
     <!-- Frame Import Help -->
     <string name="help">Help</string>

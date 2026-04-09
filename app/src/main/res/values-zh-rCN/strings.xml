@@ -430,6 +430,7 @@
     <string name="input_curve">输入曲线</string>
     <string name="photo_lut">照片 LUT</string>
     <string name="video_lut">视频 LUT</string>
+    <string name="video_lut_photo_conversion_hint">以下选项用于在照片中使用此视频 LUT 时进行色彩转换。</string>
 
     <!-- 边框导入帮助 -->
     <string name="help">帮助</string>

@@ -888,6 +888,14 @@ fun FilterManagementScreen(
                             var expanded by remember { mutableStateOf(false) }
                             Spacer(modifier = Modifier.height(12.dp))
 
+                            Text(
+                                text = stringResource(R.string.video_lut_photo_conversion_hint),
+                                fontSize = 12.sp,
+                                color = Color.White.copy(alpha = 0.7f),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+
                             ExposedDropdownMenuBox(
                                 expanded = expanded,
                                 onExpandedChange = { expanded = !expanded },
