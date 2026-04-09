@@ -123,6 +123,7 @@ data class VideoCapabilities(
 
 data class VideoRecordingState(
     val isRecording: Boolean = false,
+    val isPaused: Boolean = false,
     val elapsedMs: Long = 0L
 )
 

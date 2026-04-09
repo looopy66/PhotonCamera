@@ -23,6 +23,8 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -1122,6 +1124,7 @@ fun Controls(
                     captureMode = state.captureMode,
                     isCapturing = state.isCapturing,
                     isVideoRecording = state.videoRecordingState.isRecording,
+                    isPaused = state.videoRecordingState.isPaused,
                     allowLongPress = state.captureMode == CaptureMode.PHOTO && !useMultipleExposure,
                     multipleExposureEnabled = useMultipleExposure && state.captureMode == CaptureMode.PHOTO,
                     multipleExposureProgress = multipleExposureState.capturedCount.toFloat() /
@@ -1131,21 +1134,60 @@ fun Controls(
                     onLongPressEnd = { viewModel.stopContinuousCapture() }
                 )
 
-                IconButton(
-                    onClick = { viewModel.switchCamera() },
-                    enabled = !state.videoRecordingState.isRecording,
-                    modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .padding(end = 40.dp)
-                        .size(48.dp)
-                        .autoRotate()
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Cameraswitch,
-                        contentDescription = stringResource(R.string.switch_camera),
-                        tint = Color.White,
-                        modifier = Modifier.size(32.dp)
-                    )
+                if (state.videoRecordingState.isRecording) {
+                    IconButton(
+                        onClick = { viewModel.captureVideoFrame() },
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .padding(end = 40.dp)
+                            .size(48.dp)
+                            .autoRotate()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CameraAlt,
+                            contentDescription = stringResource(R.string.take_photo),
+                            tint = Color.White,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = {
+                            if (state.videoRecordingState.isPaused) {
+                                viewModel.resumeVideoRecording()
+                            } else {
+                                viewModel.pauseVideoRecording()
+                            }
+                        },
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .padding(start = 100.dp)
+                            .size(48.dp)
+                            .autoRotate()
+                    ) {
+                        Icon(
+                            imageVector = if (state.videoRecordingState.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+                } else {
+                    IconButton(
+                        onClick = { viewModel.switchCamera() },
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .padding(end = 40.dp)
+                            .size(48.dp)
+                            .autoRotate()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Cameraswitch,
+                            contentDescription = stringResource(R.string.switch_camera),
+                            tint = Color.White,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
                 }
             }
 
@@ -1174,6 +1216,7 @@ fun CaptureButton(
     captureMode: CaptureMode,
     isCapturing: Boolean,
     isVideoRecording: Boolean,
+    isPaused: Boolean,
     allowLongPress: Boolean,
     multipleExposureEnabled: Boolean,
     multipleExposureProgress: Float,
@@ -1259,7 +1302,10 @@ fun CaptureButton(
         }
 
         val ringColor = when {
-            captureMode == CaptureMode.VIDEO && isVideoRecording -> Color.Red.copy(alpha = pulseAlpha)
+            captureMode == CaptureMode.VIDEO && isVideoRecording -> {
+                if (isPaused) Color.White.copy(alpha = 0.8f)
+                else Color.Red.copy(alpha = pulseAlpha)
+            }
             captureMode == CaptureMode.VIDEO -> Color.White.copy(alpha = 0.8f)
             multipleExposureEnabled -> Color.White.copy(alpha = 0.55f)
             else -> Color(0xFFFFD700)

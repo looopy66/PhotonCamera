@@ -143,14 +143,24 @@ class Camera2Controller(private val context: Context) {
     var onVideoSaved: ((Uri?) -> Unit)? = null
 
     private var videoRecordingStartElapsedMs: Long = 0L
+    private var videoRecordingPausedMs: Long = 0L
+    private var videoRecordingPauseStartElapsedMs: Long = 0L
     private val videoRecordingTicker = object : Runnable {
         override fun run() {
-            if (!_state.value.videoRecordingState.isRecording) return
-            val elapsed = (SystemClock.elapsedRealtime() - videoRecordingStartElapsedMs).coerceAtLeast(0L)
+            val recordingState = _state.value.videoRecordingState
+            if (!recordingState.isRecording) return
+            if (recordingState.isPaused) {
+                cameraHandler?.postDelayed(this, 250)
+                return
+            }
+            val elapsed =
+                (SystemClock.elapsedRealtime() - videoRecordingStartElapsedMs - videoRecordingPausedMs).coerceAtLeast(
+                    0L
+                )
             _state.value = _state.value.copy(
-                videoRecordingState = _state.value.videoRecordingState.copy(elapsedMs = elapsed)
+                videoRecordingState = recordingState.copy(elapsedMs = elapsed)
             )
-            cameraHandler?.postDelayed(this, 250L)
+            cameraHandler?.postDelayed(this, 250)
         }
     }
 
@@ -2301,7 +2311,26 @@ class Camera2Controller(private val context: Context) {
         _state.value = _state.value.copy(
             videoRecordingState = VideoRecordingState(isRecording = true, elapsedMs = 0L)
         )
+        videoRecordingPausedMs = 0L
         startVideoRecordingTicker()
+    }
+
+    fun pauseVideoRecording() {
+        if (!_state.value.videoRecordingState.isRecording || _state.value.videoRecordingState.isPaused) return
+        videoRecorder.pauseRecording()
+        videoRecordingPauseStartElapsedMs = SystemClock.elapsedRealtime()
+        _state.value = _state.value.copy(
+            videoRecordingState = _state.value.videoRecordingState.copy(isPaused = true)
+        )
+    }
+
+    fun resumeVideoRecording() {
+        if (!_state.value.videoRecordingState.isRecording || !_state.value.videoRecordingState.isPaused) return
+        videoRecorder.resumeRecording()
+        videoRecordingPausedMs += SystemClock.elapsedRealtime() - videoRecordingPauseStartElapsedMs
+        _state.value = _state.value.copy(
+            videoRecordingState = _state.value.videoRecordingState.copy(isPaused = false)
+        )
     }
 
     fun stopVideoRecording() {

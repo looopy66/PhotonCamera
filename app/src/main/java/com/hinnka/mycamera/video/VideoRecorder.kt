@@ -25,6 +25,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -69,6 +70,9 @@ class VideoRecorder(
     private var isRecording = false
 
     @Volatile
+    private var isPaused = false
+
+    @Volatile
     private var stopRequested = false
 
     @Volatile
@@ -105,6 +109,8 @@ class VideoRecorder(
     private var lastMuxedVideoPresentationTimeUs = Long.MIN_VALUE
     private var lastMuxedAudioPresentationTimeUs = Long.MIN_VALUE
     private var pendingFrame: PendingFrame? = null
+    private var totalPausedDurationUs: Long = 0L
+    private var pauseStartTimeUs: Long = 0L
     private var renderLoopRunning = false
     private var statsWindowStartMs: Long = 0L
     private var statsIncomingFrames: Int = 0
@@ -142,6 +148,9 @@ class VideoRecorder(
         frameSelectionStartTimestampUs = Long.MIN_VALUE
         lastAcceptedFrameSlot = Long.MIN_VALUE
         lastAcceptedFrameTimestampUs = Long.MIN_VALUE
+        totalPausedDurationUs = 0L
+        pauseStartTimeUs = 0L
+        isPaused = false
         statsWindowStartMs = 0L
         statsIncomingFrames = 0
         statsAcceptedFrames = 0
@@ -193,6 +202,21 @@ class VideoRecorder(
         }
     }
 
+    fun pauseRecording() {
+        if (!isRecording || isPaused || stopRequested) return
+        isPaused = true
+        pauseStartTimeUs = android.os.SystemClock.elapsedRealtimeNanos() / 1000
+        PLog.d(TAG, "Video recording paused")
+    }
+
+    fun resumeRecording() {
+        if (!isRecording || !isPaused || stopRequested) return
+        val nowUs = android.os.SystemClock.elapsedRealtimeNanos() / 1000
+        totalPausedDurationUs += (nowUs - pauseStartTimeUs).coerceAtLeast(0L)
+        isPaused = false
+        PLog.d(TAG, "Video recording resumed")
+    }
+
     fun onPreviewFrame(
         textureId: Int,
         transformMatrix: FloatArray,
@@ -200,7 +224,7 @@ class VideoRecorder(
         sharedContext: EGLContext,
         sharedDisplay: EGLDisplay
     ) {
-        if (!isRecording || stopRequested) return
+        if (!isRecording || stopRequested || isPaused) return
         if (textureId == 0 || sharedContext == EGL14.EGL_NO_CONTEXT) return
 
         val frameTimestampUs = timestampNs / 1000
@@ -329,6 +353,10 @@ class VideoRecorder(
         audioRecordJob = scope.launch {
             val buffer = ByteArray(4096)
             while (isRecording && !stopRequested) {
+                if (isPaused) {
+                    delay(10)
+                    continue
+                }
                 val read = recorder.read(buffer, 0, buffer.size)
                 if (read <= 0) continue
                 if (!queueAudioPcm(encoder, buffer, read)) {
@@ -393,7 +421,7 @@ class VideoRecorder(
         val startTimestampUs = videoStartTimestampUs ?: timestampUs.also {
             videoStartTimestampUs = it
         }
-        val normalized = (timestampUs - startTimestampUs).coerceAtLeast(0L)
+        val normalized = (timestampUs - startTimestampUs - totalPausedDurationUs).coerceAtLeast(0L)
         val minFrameStepUs = 1_000_000L / requestedFps.coerceAtLeast(1)
         val nextPresentationTimeUs = if (lastVideoPresentationTimeUs == 0L) {
             normalized

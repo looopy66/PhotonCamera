@@ -544,11 +544,6 @@ class LutRenderer : GLSurfaceView.Renderer {
             videoRenderStatsFrames += 1
             val elapsedMs = nowMs - videoRenderStatsWindowStartMs
             if (elapsedMs >= 1000L) {
-                val renderFps = videoRenderStatsFrames * 1000f / elapsedMs.toFloat()
-                PLog.i(
-                    TAG,
-                    "Video GL stats: drawFps=${"%.1f".format(renderFps)}, viewport=${viewportWidth}x${viewportHeight}, preview=${previewWidth}x${previewHeight}"
-                )
                 videoRenderStatsWindowStartMs = nowMs
                 videoRenderStatsFrames = 0
             }

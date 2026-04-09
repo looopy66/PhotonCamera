@@ -636,7 +636,7 @@ private fun PhotoGridItem(
         if (photo.isVideo) {
             Box(
                 modifier = Modifier
-                    .align(Alignment.TopStart)
+                    .align(Alignment.BottomStart)
                     .padding(4.dp)
                     .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(999.dp))
                     .padding(horizontal = 6.dp, vertical = 4.dp)
@@ -653,6 +653,7 @@ private fun PhotoGridItem(
                         text = photo.getFormattedDuration(),
                         color = Color.White,
                         fontSize = 10.sp,
+                        lineHeight = 14.sp,
                         fontWeight = FontWeight.SemiBold
                     )
                 }

@@ -144,12 +144,6 @@ object VideoCapabilitiesResolver {
             Int.MAX_VALUE
         }
 
-        PLog.d(
-            TAG,
-            "FPS ranges=${outputRanges.joinToString()}, recording=${recordingSize.width}x${recordingSize.height}, " +
-                "preview=${previewSize.width}x${previewSize.height}, minFrameDurationNs=$minFrameDurationNs, maxFpsByDuration=$maxFpsByDuration"
-        )
-
         val strictAvailableFps = VideoFpsPreset.entries.filter { preset ->
             preset.fps <= maxFpsByDuration && outputRanges.any { range ->
                 supportsFps(range, preset.fps)
@@ -164,11 +158,11 @@ object VideoCapabilitiesResolver {
 
             val optimisticFps = VideoFpsPreset.entries.filter { it.fps > advertisedMaxFps }
             if (optimisticFps.isNotEmpty()) {
-                PLog.w(
+                /*PLog.w(
                     TAG,
                     "Camera reports max $advertisedMaxFps fps only, keeping optimistic presets=${optimisticFps.map { it.fps }} " +
                         "for recording=${recordingSize.width}x${recordingSize.height}"
-                )
+                )*/
                 return (strictAvailableFps + optimisticFps).distinctBy { it.fps }
             }
         }

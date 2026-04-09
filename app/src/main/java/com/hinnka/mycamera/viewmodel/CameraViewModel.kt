@@ -795,6 +795,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun pauseVideoRecording() {
+        cameraController.pauseVideoRecording()
+    }
+
+    fun resumeVideoRecording() {
+        cameraController.resumeVideoRecording()
+    }
+
     private fun refreshMultipleExposurePreview(sessionId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>()
@@ -927,6 +935,33 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             cameraController.capture()
         }
+    }
+
+    fun captureVideoFrame() {
+        val currentState = state.value
+        if (currentState.captureMode != CaptureMode.VIDEO || !currentState.videoRecordingState.isRecording) {
+            return
+        }
+
+        if (userPreferences.value.saveLocation) {
+            val location = locationManager.getCurrentLocation()
+            cameraController.setLocation(location?.latitude, location?.longitude)
+        } else {
+            cameraController.setLocation(null, null)
+        }
+
+        if (isShutterSoundEnabled) {
+            shutterSoundPlayer.play()
+        }
+        if (isVibrationEnabled) {
+            vibrationHelper.vibrate()
+        }
+
+        glSurfaceView?.capturePreviewFrame { bitmap ->
+            viewModelScope.launch {
+                saveVideoSnapshot(bitmap)
+            }
+        } ?: PLog.w(TAG, "captureVideoFrame skipped: glSurfaceView unavailable")
     }
 
     /**
@@ -2201,6 +2236,83 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             _imageSavedEvent.emit(Unit)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save image", e)
+        }
+    }
+
+    private suspend fun saveVideoSnapshot(bitmap: Bitmap) {
+        try {
+            val context = getApplication<Application>()
+            val currentState = state.value
+            val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
+            val sharpeningValue = sharpening.firstOrNull() ?: 0f
+            val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
+            val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
+            val photoQualityValue = photoQuality.firstOrNull() ?: 95
+            val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
+            val shouldMirror = cameraController.getLensFacing() == CameraCharacteristics.LENS_FACING_FRONT &&
+                    (userPrefs?.mirrorFrontCamera ?: true)
+
+            val metadata = MediaMetadata(
+                lutId = currentLutId.value,
+                frameId = currentFrameId,
+                colorRecipeParams = currentRecipeParams.value,
+                sharpening = sharpeningValue,
+                noiseReduction = noiseReductionValue,
+                chromaNoiseReduction = chromaNoiseReductionValue,
+                width = bitmap.width,
+                height = bitmap.height,
+                ratio = mapVideoAspectRatioToPhotoAspectRatio(currentState.videoConfig.aspectRatio),
+                rotation = 0,
+                deviceModel = android.os.Build.MODEL,
+                brand = android.os.Build.MANUFACTURER,
+                dateTaken = System.currentTimeMillis(),
+                latitude = currentState.latitude,
+                longitude = currentState.longitude,
+                exposureBias = currentState.exposureBias,
+                droMode = droMode.value,
+                isMirrored = shouldMirror,
+                dynamicRangeProfile = currentState.currentDynamicRangeProfile,
+                captureMode = "video_snapshot"
+            )
+
+            val photoId = MediaManager.preparePhoto(
+                context,
+                metadata,
+                null,
+                bitmap,
+                false,
+                1.0f,
+                includeCropRegionInOutputSize = false
+            )
+            if (photoId == null) {
+                PLog.e(TAG, "Failed to prepare video snapshot")
+                return
+            }
+
+            withContext(Dispatchers.IO) {
+                MediaManager.saveBitmapPhoto(
+                    context,
+                    photoId,
+                    bitmap,
+                    shouldAutoSave,
+                    contentRepository.photoProcessor,
+                    sharpeningValue,
+                    noiseReductionValue,
+                    chromaNoiseReductionValue,
+                    photoQualityValue
+                )
+            }
+            PLog.d(TAG, "Video snapshot saved: $photoId")
+            _imageSavedEvent.emit(Unit)
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to save video snapshot", e)
+        }
+    }
+
+    private fun mapVideoAspectRatioToPhotoAspectRatio(aspectRatio: VideoAspectRatio): AspectRatio? {
+        return when (aspectRatio) {
+            VideoAspectRatio.RATIO_16_9 -> AspectRatio.RATIO_16_9
+            else -> null
         }
     }
 

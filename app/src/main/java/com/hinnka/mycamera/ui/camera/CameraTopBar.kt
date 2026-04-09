@@ -235,14 +235,14 @@ private fun VideoParameterCluster(
         ) {
             val resLabel = when (videoConfig.resolution) {
                 VideoResolutionPreset.UHD_2160P -> "4K"
-                VideoResolutionPreset.FHD_1080P -> "FHD"
-                VideoResolutionPreset.HD_720P -> "HD"
+                VideoResolutionPreset.FHD_1080P -> "1080p"
+                VideoResolutionPreset.HD_720P -> "720p"
             }
             ParameterText(resLabel, onResolutionClick)
 
             ParameterDivider()
 
-            ParameterText("${videoConfig.fps.fps}P", onFpsClick)
+            ParameterText("${videoConfig.fps.fps} fps", onFpsClick)
         }
     }
 }

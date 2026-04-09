@@ -10,6 +10,9 @@
     <string name="histogram">直方图</string>
     <string name="grid">网格</string>
     <string name="back">返回</string>
+    <string name="take_photo">拍照</string>
+    <string name="pause">暂停</string>
+    <string name="resume">继续</string>
 
     <!-- Exposure Controls -->
     <string name="exposure_compensation">EV</string>
