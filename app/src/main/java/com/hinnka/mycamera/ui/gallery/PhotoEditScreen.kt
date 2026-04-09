@@ -65,6 +65,24 @@ import me.saket.telephoto.zoomable.ZoomSpec
 import java.text.SimpleDateFormat
 import java.util.*
 
+private data class PreviewRenderSignature(
+    val photoId: String,
+    val refreshKey: Long,
+    val editLutId: String?,
+    val recipeParams: ColorRecipeParams?,
+    val editLutConfig: Any?,
+    val editFrameId: String?,
+    val editFrameCustomProperties: Map<String, String>,
+    val editSharpening: Float,
+    val editNoiseReduction: Float,
+    val editChromaNoiseReduction: Float,
+    val editComputationalAperture: Float?,
+    val editFocusX: Float?,
+    val editFocusY: Float?,
+    val showOrigin: Boolean,
+    val editTab: Int
+)
+
 /**
  * 照片编辑界面
  */
@@ -132,6 +150,41 @@ fun PhotoEditScreen(
     var showControls by remember { mutableStateOf(true) }
     var isZoomed by remember { mutableStateOf(false) }
     val refreshKey = currentPhoto?.id?.let { viewModel.photoRefreshKeys[it] } ?: 0L
+    var appliedPreviewSignature by remember(currentPhoto?.id) { mutableStateOf<PreviewRenderSignature?>(null) }
+    var appliedPreviewMaxEdge by remember(currentPhoto?.id) { mutableIntStateOf(0) }
+
+    fun currentPreviewSignature(): PreviewRenderSignature? {
+        val photo = currentPhoto ?: return null
+        return PreviewRenderSignature(
+            photoId = photo.id,
+            refreshKey = refreshKey,
+            editLutId = editLutId,
+            recipeParams = previewRecipeParamsOverride ?: editPhotoRecipeParams ?: editLutRecipeParams,
+            editLutConfig = editLutConfig,
+            editFrameId = editFrameId,
+            editFrameCustomProperties = editFrameCustomProperties.toMap(),
+            editSharpening = editSharpening,
+            editNoiseReduction = editNoiseReduction,
+            editChromaNoiseReduction = editChromaNoiseReduction,
+            editComputationalAperture = editComputationalAperture,
+            editFocusX = editFocusX,
+            editFocusY = editFocusY,
+            showOrigin = showOrigin,
+            editTab = editTab
+        )
+    }
+
+    fun applyPreviewBitmapIfNewer(signature: PreviewRenderSignature, maxEdge: Int, bitmap: Bitmap) {
+        val sameRequest = appliedPreviewSignature == signature
+        val shouldApply = !sameRequest || maxEdge >= appliedPreviewMaxEdge
+        if (!shouldApply) {
+            PLog.d("PhotoEditScreen", "Skip stale preview overwrite: photo=${signature.photoId}, maxEdge=$maxEdge, appliedMaxEdge=$appliedPreviewMaxEdge")
+            return
+        }
+        previewBitmap = bitmap
+        appliedPreviewSignature = signature
+        appliedPreviewMaxEdge = maxEdge
+    }
 
 
     LaunchedEffect(currentPhoto) {
@@ -144,15 +197,11 @@ fun PhotoEditScreen(
     LaunchedEffect(currentPhoto, refreshKey) {
         if (currentPhoto == null) return@LaunchedEffect
         snapshotFlow {
-            listOf(
-                editLutId, previewRecipeParamsOverride ?: editPhotoRecipeParams ?: editLutRecipeParams,
-                editLutConfig, editFrameId, editFrameCustomProperties,
-                editSharpening, editNoiseReduction, editChromaNoiseReduction,
-                editComputationalAperture, editFocusX, editFocusY, showOrigin, editTab
-            )
+            currentPreviewSignature()
         }
+        .filter { it != null }
         .conflate()
-        .collect {
+        .collectLatest { signature ->
             isLoadingPreview = previewBitmap == null
             val fast = withContext(Dispatchers.IO) {
                 viewModel.getPreviewBitmap(
@@ -165,7 +214,7 @@ fun PhotoEditScreen(
                 )
             }
             if (fast != null) {
-                previewBitmap = fast
+                applyPreviewBitmapIfNewer(signature!!, 800, fast)
                 isLoadingPreview = false
             }
         }
@@ -177,17 +226,13 @@ fun PhotoEditScreen(
         snapshotFlow {
             Pair(
                 isAdjusting,
-                listOf(
-                    editLutId, previewRecipeParamsOverride ?: editPhotoRecipeParams ?: editLutRecipeParams,
-                    editLutConfig, editFrameId, editFrameCustomProperties,
-                    editSharpening, editNoiseReduction, editChromaNoiseReduction,
-                    editComputationalAperture, editFocusX, editFocusY, showOrigin, editTab
-                )
+                currentPreviewSignature()
             )
         }
+        .filter { (_, signature) -> signature != null }
         .filter { (adjusting, _) -> !adjusting }  // 手指拖动时跳过，抬起后放行
         .debounce(100)                             // 离散操作的小防抖
-        .collectLatest { _ ->
+        .collectLatest { (_, signature) ->
             val hires = withContext(Dispatchers.IO) {
                 viewModel.getPreviewBitmap(
                     currentPhoto,
@@ -198,7 +243,7 @@ fun PhotoEditScreen(
                 )
             }
             if (hires != null) {
-                previewBitmap = hires
+                applyPreviewBitmapIfNewer(signature!!, 4096, hires)
             }
             isLoadingPreview = false
         }

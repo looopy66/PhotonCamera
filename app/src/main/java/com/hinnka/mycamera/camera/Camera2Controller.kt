@@ -123,6 +123,10 @@ class Camera2Controller(private val context: Context) {
     private var availableEdgeModes: IntArray = intArrayOf()
     private var availableNoiseReductionModes: IntArray = intArrayOf()
     private var availableTonemapModes: IntArray = intArrayOf()
+    private var availableColorCorrectionAberrationModes: IntArray = intArrayOf()
+    private var availableHotPixelModes: IntArray = intArrayOf()
+    private var availableShadingModes: IntArray = intArrayOf()
+    private var availableDistortionCorrectionModes: IntArray = intArrayOf()
     private var availableVideoStabilizationModes: IntArray = intArrayOf()
     private var availableOpticalStabilizationModes: IntArray = intArrayOf()
     private var availableLensShadingMapModes: IntArray = intArrayOf()
@@ -571,6 +575,17 @@ class Camera2Controller(private val context: Context) {
                         ?: intArrayOf()
                 availableTonemapModes =
                     cachedCharacteristics?.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES) ?: intArrayOf()
+                availableColorCorrectionAberrationModes =
+                    cachedCharacteristics?.get(CameraCharacteristics.COLOR_CORRECTION_AVAILABLE_ABERRATION_MODES)
+                        ?: intArrayOf()
+                availableHotPixelModes =
+                    cachedCharacteristics?.get(CameraCharacteristics.HOT_PIXEL_AVAILABLE_HOT_PIXEL_MODES)
+                        ?: intArrayOf()
+                availableShadingModes =
+                    cachedCharacteristics?.get(CameraCharacteristics.SHADING_AVAILABLE_MODES) ?: intArrayOf()
+                availableDistortionCorrectionModes =
+                    cachedCharacteristics?.get(CameraCharacteristics.DISTORTION_CORRECTION_AVAILABLE_MODES)
+                        ?: intArrayOf()
                 availableVideoStabilizationModes =
                     cachedCharacteristics?.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES)
                         ?: intArrayOf()
@@ -1079,7 +1094,7 @@ class Camera2Controller(private val context: Context) {
         applyExposureSettings(builder, currentState, isCapture)
 
         // 2. 白平衡设置
-        applyWhiteBalanceSettings(builder, currentState)
+        applyWhiteBalanceSettings(builder, currentState, isCapture)
 
         // 3. 闪光灯设置（传递 isCapture 参数）
         applyFlashSettings(builder, currentState, isCapture)
@@ -1091,12 +1106,15 @@ class Camera2Controller(private val context: Context) {
         applyImageQualitySettings(builder, isCapture)
 
         // 7. 视频 Log / 色调映射设置
-        applyVideoToneMapSettings(builder, currentState)
+        applyToneMapSettings(builder, currentState, isCapture)
 
         // 8. 防抖设置
         applyStabilizationSettings(builder, currentState)
 
-        // 9. 统计信息设置
+        // 9. 静态拍照后处理质量设置
+        applyStillPostProcessingSettings(builder, currentState, isCapture)
+
+        // 10. 统计信息设置
         if (availableLensShadingMapModes.contains(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON)) {
             builder.set(
                 CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE,
@@ -1202,11 +1220,21 @@ class Camera2Controller(private val context: Context) {
         builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, resolvedRange)
     }
 
-    private fun applyVideoToneMapSettings(builder: CaptureRequest.Builder, state: CameraState) {
+    private fun applyToneMapSettings(builder: CaptureRequest.Builder, state: CameraState, isCapture: Boolean) {
         if (state.captureMode != CaptureMode.VIDEO || !state.videoConfig.logProfile.isEnabled) {
-            if (availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_FAST)) {
-                builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_FAST)
+            val preferredTonemapMode = when {
+                isCapture && state.captureMode == CaptureMode.PHOTO &&
+                    availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_HIGH_QUALITY) -> {
+                    CaptureRequest.TONEMAP_MODE_HIGH_QUALITY
+                }
+
+                availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_FAST) -> {
+                    CaptureRequest.TONEMAP_MODE_FAST
+                }
+
+                else -> null
             }
+            preferredTonemapMode?.let { builder.set(CaptureRequest.TONEMAP_MODE, it) }
             return
         }
 
@@ -1226,7 +1254,11 @@ class Camera2Controller(private val context: Context) {
     /**
      * 应用白平衡设置
      */
-    private fun applyWhiteBalanceSettings(builder: CaptureRequest.Builder, state: CameraState) {
+    private fun applyWhiteBalanceSettings(
+        builder: CaptureRequest.Builder,
+        state: CameraState,
+        isCapture: Boolean
+    ) {
         builder.set(CaptureRequest.CONTROL_AWB_MODE, state.awbMode)
 
         if (state.awbMode == CameraMetadata.CONTROL_AWB_MODE_OFF && supportsManualWhiteBalance()) {
@@ -1235,9 +1267,14 @@ class Camera2Controller(private val context: Context) {
             val gains = kelvinToRggbGains(state.awbTemperature)
             builder.set(CaptureRequest.COLOR_CORRECTION_GAINS, gains)
         } else {
-            // 自动白平衡：尝试使用高质量色彩校正模式，如不支持则不设置（保持模式默认值）
+            // 自动白平衡：拍照优先高质量色彩校正，预览维持快速路径
             if (isManualPostProcessingSupported) {
-                builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
+                val colorCorrectionMode = if (isCapture && state.captureMode == CaptureMode.PHOTO) {
+                    CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY
+                } else {
+                    CaptureRequest.COLOR_CORRECTION_MODE_FAST
+                }
+                builder.set(CaptureRequest.COLOR_CORRECTION_MODE, colorCorrectionMode)
             }
         }
     }
@@ -1418,6 +1455,79 @@ class Camera2Controller(private val context: Context) {
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to apply image quality settings", e)
         }
+    }
+
+    private fun applyStillPostProcessingSettings(
+        builder: CaptureRequest.Builder,
+        state: CameraState,
+        isCapture: Boolean
+    ) {
+        if (!isCapture || state.captureMode != CaptureMode.PHOTO) {
+            applyFastStillPostProcessingSettings(builder)
+            return
+        }
+
+        applyHighQualityStillPostProcessingSettings(builder)
+    }
+
+    private fun applyFastStillPostProcessingSettings(builder: CaptureRequest.Builder) {
+        selectBestMode(
+            availableColorCorrectionAberrationModes,
+            CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_FAST,
+            CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_OFF
+        )?.let { builder.set(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, it) }
+
+        selectBestMode(
+            availableHotPixelModes,
+            CaptureRequest.HOT_PIXEL_MODE_FAST,
+            CaptureRequest.HOT_PIXEL_MODE_OFF
+        )?.let { builder.set(CaptureRequest.HOT_PIXEL_MODE, it) }
+
+        selectBestMode(
+            availableShadingModes,
+            CaptureRequest.SHADING_MODE_FAST,
+            CaptureRequest.SHADING_MODE_OFF
+        )?.let { builder.set(CaptureRequest.SHADING_MODE, it) }
+
+        selectBestMode(
+            availableDistortionCorrectionModes,
+            CaptureRequest.DISTORTION_CORRECTION_MODE_FAST,
+            CaptureRequest.DISTORTION_CORRECTION_MODE_OFF
+        )?.let { builder.set(CaptureRequest.DISTORTION_CORRECTION_MODE, it) }
+    }
+
+    private fun applyHighQualityStillPostProcessingSettings(builder: CaptureRequest.Builder) {
+        selectBestMode(
+            availableColorCorrectionAberrationModes,
+            CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY,
+            CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_FAST,
+            CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_OFF
+        )?.let { builder.set(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, it) }
+
+        selectBestMode(
+            availableHotPixelModes,
+            CaptureRequest.HOT_PIXEL_MODE_HIGH_QUALITY,
+            CaptureRequest.HOT_PIXEL_MODE_FAST,
+            CaptureRequest.HOT_PIXEL_MODE_OFF
+        )?.let { builder.set(CaptureRequest.HOT_PIXEL_MODE, it) }
+
+        selectBestMode(
+            availableShadingModes,
+            CaptureRequest.SHADING_MODE_HIGH_QUALITY,
+            CaptureRequest.SHADING_MODE_FAST,
+            CaptureRequest.SHADING_MODE_OFF
+        )?.let { builder.set(CaptureRequest.SHADING_MODE, it) }
+
+        selectBestMode(
+            availableDistortionCorrectionModes,
+            CaptureRequest.DISTORTION_CORRECTION_MODE_HIGH_QUALITY,
+            CaptureRequest.DISTORTION_CORRECTION_MODE_FAST,
+            CaptureRequest.DISTORTION_CORRECTION_MODE_OFF
+        )?.let { builder.set(CaptureRequest.DISTORTION_CORRECTION_MODE, it) }
+    }
+
+    private fun selectBestMode(availableModes: IntArray, vararg preferredModes: Int): Int? {
+        return preferredModes.firstOrNull { availableModes.contains(it) }
     }
 
     private fun buildSelectableNoiseReductionModes(hardwareModes: IntArray): IntArray {
