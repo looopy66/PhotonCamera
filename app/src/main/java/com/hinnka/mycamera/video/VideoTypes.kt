@@ -98,6 +98,7 @@ data class VideoConfig(
     val logProfile: VideoLogProfile = VideoLogProfile.OFF,
     val bitrate: VideoBitratePreset = VideoBitratePreset.P1,
     val codec: VideoCodec = VideoCodec.H264,
+    val audioInputId: String = VIDEO_AUDIO_INPUT_AUTO,
     val stabilizationEnabled: Boolean = true,
     val torchEnabled: Boolean = false
 ) {

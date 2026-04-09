@@ -31,6 +31,7 @@ import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.video.CaptureMode
 import com.hinnka.mycamera.video.VideoAspectRatio
+import com.hinnka.mycamera.video.VIDEO_AUDIO_INPUT_AUTO
 import com.hinnka.mycamera.video.VideoBitratePreset
 import com.hinnka.mycamera.video.VideoCapabilitiesResolver
 import com.hinnka.mycamera.video.VideoFpsPreset
@@ -2268,6 +2269,14 @@ class Camera2Controller(private val context: Context) {
     fun setVideoCodec(codec: com.hinnka.mycamera.video.VideoCodec) {
         _state.value = _state.value.copy(videoConfig = _state.value.videoConfig.copy(codec = codec))
         refreshVideoCapabilities()
+    }
+
+    fun setVideoAudioInputId(audioInputId: String) {
+        val normalizedAudioInputId = audioInputId.ifBlank { VIDEO_AUDIO_INPUT_AUTO }
+        _state.value = _state.value.copy(
+            videoConfig = _state.value.videoConfig.copy(audioInputId = normalizedAudioInputId)
+        )
+        videoRecorder.setPreferredAudioInputId(normalizedAudioInputId)
     }
 
     fun setVideoTorchEnabled(enabled: Boolean) {

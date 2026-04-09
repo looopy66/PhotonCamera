@@ -39,6 +39,8 @@ import com.hinnka.mycamera.raw.rawFolder
 import com.hinnka.mycamera.ui.camera.CameraGLSurfaceView
 import com.hinnka.mycamera.utils.*
 import com.hinnka.mycamera.video.CaptureMode
+import com.hinnka.mycamera.video.VideoAudioInputManager
+import com.hinnka.mycamera.video.VideoAudioInputOption
 import com.hinnka.mycamera.video.VideoAspectRatio
 import com.hinnka.mycamera.video.VideoBitratePreset
 import com.hinnka.mycamera.video.VideoFpsPreset
@@ -99,6 +101,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     // 震动辅助类
     private val vibrationHelper = VibrationHelper(application)
+    private val videoAudioInputManager = VideoAudioInputManager(application)
 
     private val locationManager = LocationManager(application)
 
@@ -293,6 +296,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val videoCodec: StateFlow<com.hinnka.mycamera.video.VideoCodec> = userPreferencesRepository.userPreferences
         .map { it.videoCodec }
         .stateIn(viewModelScope, SharingStarted.Eagerly, com.hinnka.mycamera.video.VideoCodec.H264)
+    val videoAudioInputOptions: StateFlow<List<VideoAudioInputOption>> = videoAudioInputManager.availableInputs
 
     val phantomButtonHidden: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.phantomButtonHidden }
@@ -443,6 +447,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoAspectRatio(it.videoAspectRatio)
                 cameraController.setVideoLogProfile(it.videoLogProfile)
                 cameraController.setVideoBitrate(it.videoBitrate)
+                cameraController.setVideoAudioInputId(it.videoAudioInputId)
                 cameraController.setVideoStabilizationEnabled(it.videoStabilizationEnabled)
                 cameraController.setVideoTorchEnabled(it.videoTorchEnabled)
                 cameraController.setVideoCodec(it.videoCodec)
@@ -550,6 +555,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoAspectRatio(prefs.videoAspectRatio)
                 cameraController.setVideoLogProfile(prefs.videoLogProfile)
                 cameraController.setVideoBitrate(prefs.videoBitrate)
+                cameraController.setVideoAudioInputId(prefs.videoAudioInputId)
                 cameraController.setVideoStabilizationEnabled(prefs.videoStabilizationEnabled)
                 cameraController.setVideoTorchEnabled(prefs.videoTorchEnabled)
                 cameraController.setVideoCodec(prefs.videoCodec)
@@ -1210,6 +1216,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         reopenCamera()
         viewModelScope.launch {
             userPreferencesRepository.saveVideoBitrate(bitrate)
+        }
+    }
+
+    fun setVideoAudioInputId(audioInputId: String) {
+        cameraController.setVideoAudioInputId(audioInputId)
+        viewModelScope.launch {
+            userPreferencesRepository.saveVideoAudioInputId(audioInputId)
         }
     }
 
@@ -2785,6 +2798,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         contentRepository.lutManager.clearCache()
         contentRepository.frameManager.clearCache()
         shutterSoundPlayer.release()
+        videoAudioInputManager.release()
 
         // 清理未处理的连拍图片
         stackingImages.forEach {

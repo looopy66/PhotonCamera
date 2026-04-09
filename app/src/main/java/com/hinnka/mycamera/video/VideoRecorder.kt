@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
+import android.media.AudioManager
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
@@ -61,6 +62,7 @@ class VideoRecorder(
     )
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private val audioManager = context.getSystemService(AudioManager::class.java)
     private val renderDispatcher: ExecutorCoroutineDispatcher =
         Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     private val muxerLock = Any()
@@ -86,6 +88,7 @@ class VideoRecorder(
     private var requestedBitrateMbps: Int = 30
     private var requestedCodecMime: String = MediaFormat.MIMETYPE_VIDEO_AVC
     private var requestedOrientationHintDegrees: Int = 0
+    private var preferredAudioInputId: String = VIDEO_AUDIO_INPUT_AUTO
 
     private var requestedSize = android.util.Size(1080, 1920)
     private var requestedFps = 30
@@ -254,6 +257,10 @@ class VideoRecorder(
 
     fun isRecording(): Boolean = isRecording && !stopRequested
 
+    fun setPreferredAudioInputId(audioInputId: String) {
+        preferredAudioInputId = audioInputId.ifBlank { VIDEO_AUDIO_INPUT_AUTO }
+    }
+
     private fun initEncoders(sharedContext: EGLContext, sharedDisplay: EGLDisplay) {
         val width = requestedSize.width
         val height = requestedSize.height
@@ -316,6 +323,7 @@ class VideoRecorder(
                     release()
                     throw IllegalStateException("AudioRecord not initialized")
                 }
+                applyPreferredAudioInput(this)
                 startRecording()
             }
 
@@ -338,6 +346,24 @@ class VideoRecorder(
             audioEncoder = null
             false
         }
+    }
+
+    private fun applyPreferredAudioInput(audioRecord: AudioRecord) {
+        if (preferredAudioInputId == VIDEO_AUDIO_INPUT_AUTO) {
+            PLog.d(TAG, "Use system default audio input routing")
+            return
+        }
+        val preferredDevice = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
+            .firstOrNull { it.isSource && it.toVideoAudioInputId() == preferredAudioInputId }
+        if (preferredDevice == null) {
+            PLog.w(TAG, "Preferred audio input not found, fallback to system routing: $preferredAudioInputId")
+            return
+        }
+        val routed = audioRecord.setPreferredDevice(preferredDevice)
+        PLog.i(
+            TAG,
+            "Apply preferred audio input=${preferredDevice.toVideoAudioInputId()}, type=${preferredDevice.type}, success=$routed"
+        )
     }
 
     private fun createMuxer() {

@@ -71,6 +71,7 @@ import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import com.hinnka.mycamera.video.CaptureMode
+import com.hinnka.mycamera.video.VideoAudioInputOption
 import com.hinnka.mycamera.video.VideoAspectRatio
 import com.hinnka.mycamera.video.VideoFpsPreset
 import com.hinnka.mycamera.video.VideoLogProfile
@@ -114,6 +115,7 @@ fun CameraScreen(
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
     val phantomMode by viewModel.phantomMode.collectAsState()
     val videoCodec by viewModel.videoCodec.collectAsState()
+    val videoAudioInputOptions by viewModel.videoAudioInputOptions.collectAsState()
     val phantomPipPreview by viewModel.phantomPipPreview.collectAsState()
     val multipleExposureState = viewModel.multipleExposureState
     var previewRecipeParamsOverride by remember(currentLutId) { mutableStateOf<ColorRecipeParams?>(null) }
@@ -912,6 +914,9 @@ fun CameraScreen(
             onVideoBitrateChange = { viewModel.setVideoBitrate(it) },
             videoCodec = videoCodec,
             onVideoCodecChange = { viewModel.setVideoCodec(it) },
+            videoAudioInputId = state.videoConfig.audioInputId,
+            videoAudioInputOptions = videoAudioInputOptions,
+            onVideoAudioInputChange = { viewModel.setVideoAudioInputId(it) },
             useRaw = useRaw && state.isRawSupported,
             onRawToggle = { viewModel.toggleRaw() },
             isRawSupported = state.isRawSupported,

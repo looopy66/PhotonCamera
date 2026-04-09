@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.map
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.video.CaptureMode
 import com.hinnka.mycamera.video.VideoAspectRatio
+import com.hinnka.mycamera.video.VIDEO_AUDIO_INPUT_AUTO
 import com.hinnka.mycamera.video.VideoBitratePreset
 import com.hinnka.mycamera.video.VideoFpsPreset
 import com.hinnka.mycamera.video.VideoLogProfile
@@ -98,6 +99,7 @@ data class UserPreferences(
     val videoAspectRatio: VideoAspectRatio = VideoAspectRatio.RATIO_16_9,
     val videoLogProfile: VideoLogProfile = VideoLogProfile.OFF,
     val videoBitrate: VideoBitratePreset = VideoBitratePreset.P1,
+    val videoAudioInputId: String = VIDEO_AUDIO_INPUT_AUTO,
     val videoStabilizationEnabled: Boolean = true,
     val videoTorchEnabled: Boolean = false,
     val videoCodec: com.hinnka.mycamera.video.VideoCodec = com.hinnka.mycamera.video.VideoCodec.H264,
@@ -186,6 +188,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val VIDEO_ASPECT_RATIO = stringPreferencesKey("video_aspect_ratio")
         private val VIDEO_LOG_PROFILE = stringPreferencesKey("video_log_profile")
         private val VIDEO_BITRATE = stringPreferencesKey("video_bitrate")
+        private val VIDEO_AUDIO_INPUT_ID = stringPreferencesKey("video_audio_input_id")
         private val VIDEO_STABILIZATION_ENABLED = booleanPreferencesKey("video_stabilization_enabled")
         private val VIDEO_TORCH_ENABLED = booleanPreferencesKey("video_torch_enabled")
         private val VIDEO_CODEC = stringPreferencesKey("video_codec")
@@ -281,6 +284,7 @@ class UserPreferencesRepository(private val context: Context) {
                 videoBitrate = VideoBitratePreset.valueOf(
                     preferences[VIDEO_BITRATE] ?: VideoBitratePreset.P1.name
                 ),
+                videoAudioInputId = preferences[VIDEO_AUDIO_INPUT_ID] ?: VIDEO_AUDIO_INPUT_AUTO,
                 videoStabilizationEnabled = preferences[VIDEO_STABILIZATION_ENABLED] ?: true,
                 videoTorchEnabled = preferences[VIDEO_TORCH_ENABLED] ?: false,
                 videoCodec = com.hinnka.mycamera.video.VideoCodec.valueOf(
@@ -821,6 +825,12 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveVideoBitrate(bitrate: VideoBitratePreset) {
         context.dataStore.edit { preferences ->
             preferences[VIDEO_BITRATE] = bitrate.name
+        }
+    }
+
+    suspend fun saveVideoAudioInputId(audioInputId: String) {
+        context.dataStore.edit { preferences ->
+            preferences[VIDEO_AUDIO_INPUT_ID] = audioInputId
         }
     }
 
