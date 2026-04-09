@@ -31,6 +31,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.paint
 import androidx.compose.ui.draw.scale
@@ -76,6 +77,7 @@ import com.hinnka.mycamera.video.VideoAspectRatio
 import com.hinnka.mycamera.video.VideoFpsPreset
 import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.video.VideoResolutionPreset
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.*
 
@@ -124,6 +126,12 @@ fun CameraScreen(
     var zoomBarBounds by remember { mutableStateOf<Rect?>(null) }
     var galleryThumbnailBounds by remember { mutableStateOf<Rect?>(null) }
     var captureAnimationSnapshot by remember { mutableStateOf<CaptureAnimationSnapshot?>(null) }
+    var previewTransitionActive by remember { mutableStateOf(true) }
+    var previewTransitionRevealing by remember { mutableStateOf(false) }
+    var previewTransitionToken by remember { mutableIntStateOf(0) }
+    var previewTransitionAwaitingResume by remember { mutableStateOf(false) }
+    var previewTransitionSawPause by remember { mutableStateOf(false) }
+    var hasPlayedInitialPreviewTransition by remember { mutableStateOf(false) }
 
     // 标记相机是否已打开
     var cameraOpened by remember { mutableStateOf(false) }
@@ -227,6 +235,67 @@ fun CameraScreen(
 
     val previewSize = state.currentPreviewSize
     val previewAspectRatio = state.getPreviewAspectRatio()
+    val previewTransitionCoverFraction by animateFloatAsState(
+        targetValue = when {
+            previewTransitionActive && !previewTransitionRevealing -> 1f
+            previewTransitionActive -> 0f
+            else -> 0f
+        },
+        animationSpec = if (previewTransitionActive && !previewTransitionRevealing) {
+            snap()
+        } else {
+            tween(durationMillis = 500, easing = FastOutSlowInEasing)
+        },
+        label = "previewTransitionCoverFraction"
+    )
+
+    fun runPreviewTransition(onSwitch: () -> Unit) {
+        previewTransitionActive = true
+        previewTransitionRevealing = false
+        previewTransitionToken += 1
+        previewTransitionAwaitingResume = true
+        previewTransitionSawPause = false
+        onSwitch()
+    }
+
+    LaunchedEffect(previewTransitionToken, state.isPreviewActive, previewTransitionAwaitingResume) {
+        if (!previewTransitionAwaitingResume) return@LaunchedEffect
+
+        if (!state.isPreviewActive) {
+            previewTransitionSawPause = true
+            return@LaunchedEffect
+        }
+
+        if (previewTransitionSawPause) {
+            delay(80)
+            previewTransitionRevealing = true
+            delay(220)
+            previewTransitionActive = false
+            previewTransitionAwaitingResume = false
+            previewTransitionSawPause = false
+        }
+    }
+
+    LaunchedEffect(previewTransitionToken) {
+        if (previewTransitionToken == 0) return@LaunchedEffect
+        delay(700)
+        if (previewTransitionAwaitingResume) {
+            previewTransitionRevealing = true
+            delay(220)
+            previewTransitionActive = false
+            previewTransitionAwaitingResume = false
+            previewTransitionSawPause = false
+        }
+    }
+
+    LaunchedEffect(state.isPreviewActive, hasPlayedInitialPreviewTransition) {
+        if (hasPlayedInitialPreviewTransition || !state.isPreviewActive) return@LaunchedEffect
+        previewTransitionActive = true
+        previewTransitionRevealing = true
+        delay(220)
+        previewTransitionActive = false
+        hasPlayedInitialPreviewTransition = true
+    }
 
     var showGhostPermissionDialog by remember { mutableStateOf(false) }
 
@@ -545,6 +614,26 @@ fun CameraScreen(
                         aperture = if (state.isVirtualApertureEnabled) state.virtualAperture else 0f,
                         modifier = Modifier.fillMaxSize()
                     )
+
+                    if (previewTransitionActive || previewTransitionCoverFraction > 0.001f) {
+                        val shutterHeightFraction = (previewTransitionCoverFraction / 2f).coerceIn(0f, 0.5f)
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .fillMaxHeight(shutterHeightFraction)
+                                    .align(Alignment.TopCenter)
+                                    .background(Color.Black)
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .fillMaxHeight(shutterHeightFraction)
+                                    .align(Alignment.BottomCenter)
+                                    .background(Color.Black)
+                            )
+                        }
+                    }
 
                     // Live Photo Indicator
                     if (state.captureMode == CaptureMode.PHOTO && useLivePhoto) {
@@ -905,9 +994,9 @@ fun CameraScreen(
             visible = activePanel == ActivePanel.SETTINGS,
             captureMode = state.captureMode,
             aspectRatio = state.aspectRatio,
-            onAspectRatioChange = { viewModel.setAspectRatio(it) },
+            onAspectRatioChange = { runPreviewTransition { viewModel.setAspectRatio(it) } },
             videoAspectRatio = state.videoConfig.aspectRatio,
-            onVideoAspectRatioChange = { viewModel.setVideoAspectRatio(it) },
+            onVideoAspectRatioChange = { runPreviewTransition { viewModel.setVideoAspectRatio(it) } },
             videoLogProfile = state.videoConfig.logProfile,
             onVideoLogProfileChange = { viewModel.setVideoLogProfile(it) },
             videoBitrate = state.videoConfig.bitrate,

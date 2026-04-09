@@ -87,6 +87,7 @@ fun CameraPreviewGL(
 
         // 标记是否已经通知过 SurfaceTexture
         var surfaceTextureNotified by remember { mutableStateOf(false) }
+        var notifiedPreviewSize by remember { mutableStateOf<Size?>(null) }
         // 标记 Surface 是否已经准备好
         var surfaceAvailable by remember { mutableStateOf(false) }
 
@@ -106,81 +107,84 @@ fun CameraPreviewGL(
                 }
         ) {
             // GLSurfaceView 用于相机预览
-            AndroidView(
-                factory = { ctx ->
-                    CameraGLSurfaceView(ctx).apply {
-                        // 通知 GLSurfaceView 已准备好
-                        onGLSurfaceViewReady?.invoke(this)
-                    }
-                },
-                update = { glSurfaceView ->
-                    // 更新闭包捕获的状态
-                    glSurfaceView.onSurfaceReady = { _ ->
-                        // SurfaceTexture 已经准备好，可以开始预览
-                        surfaceAvailable = true
-                        glSurfaceView.getSurfaceTexture()?.let { surfaceTexture ->
-                            glSurfaceView.setPreviewSize(previewSize.width, previewSize.height)
-                            // 取消从这里回调，统一在 update 中处理
+            key(previewSize.width, previewSize.height) {
+                AndroidView(
+                    factory = { ctx ->
+                        CameraGLSurfaceView(ctx).apply {
+                            // 通知 GLSurfaceView 已准备好
+                            onGLSurfaceViewReady?.invoke(this)
                         }
-                    }
-
-                    glSurfaceView.onSurfaceDestroyed = {
-                        surfaceAvailable = false
-                        surfaceTextureNotified = false
-                        onSurfaceDestroyed()
-                    }
-
-                    glSurfaceView.onHistogramUpdated = { onHistogramUpdated?.invoke(it) }
-                    glSurfaceView.onMeteringUpdated = { w, l -> onMeteringUpdated?.invoke(w, l) }
-                    glSurfaceView.onDepthInputAvailable = { onDepthInputAvailable?.invoke(it) }
-
-                    viewWidth = glSurfaceView.width
-                    viewHeight = glSurfaceView.height
-                    glSurfaceView.setSensorOrientation(sensorOrientation)
-                    glSurfaceView.setLensFacing(lensFacing)
-                    glSurfaceView.setDeviceRotation(rotationDegrees.toInt())
-                    glSurfaceView.setCalibrationOffset(calibrationOffset)
-
-                    // 统一控制逻辑：
-                    // 当 SurfaceTexture 准备好，且尺寸已准备好，我们通知外部。
-                    // 但是如果 previewSize.width 或 previewSize.height 发了改变（被代理到了这里），
-                    // 我们只需更新 glSurfaceView 的参数，不需要重新打开相机，否则会打断正在开启的相机。
-                    // 因此，只要 surfaceTextureNotified 为 true，就不会再触发 onSurfaceTextureReady。
-                    // 如果需要重新打开相机，由外部自己掌控，这里只负责 GL 的同步。
-                    if (viewWidth > 0 && viewHeight > 0 && surfaceAvailable) {
-                        glSurfaceView.getSurfaceTexture()?.let { surfaceTexture ->
-                            glSurfaceView.setPreviewSize(previewSize.width, previewSize.height)
-                            if (!surfaceTextureNotified) {
-                                surfaceTextureNotified = true
-                                onSurfaceTextureReady(surfaceTexture)
+                    },
+                    update = { glSurfaceView ->
+                        // 更新闭包捕获的状态
+                        glSurfaceView.onSurfaceReady = { _ ->
+                            // SurfaceTexture 已经准备好，可以开始预览
+                            surfaceAvailable = true
+                            glSurfaceView.getSurfaceTexture()?.let { surfaceTexture ->
+                                glSurfaceView.setPreviewSize(previewSize.width, previewSize.height)
+                                // 取消从这里回调，统一在 update 中处理
                             }
                         }
-                    }
-                    val colorRecipeEnabled = !colorRecipeParams.isDefault()
-                    val baselineColorRecipeEnabled = !baselineColorRecipeParams.isDefault()
-                    // 更新 LUT 设置
-                    glSurfaceView.setBaselineLut(baselineLut)
-                    glSurfaceView.setBaselineLutEnabled(baselineLut != null)
-                    glSurfaceView.setLut(currentLut)
-                    glSurfaceView.setLutEnabled(currentLut != null)
-                    glSurfaceView.setBaselineColorRecipeEnabled(baselineColorRecipeEnabled)
-                    glSurfaceView.setColorRecipeEnabled(colorRecipeEnabled)
 
-                    glSurfaceView.setBaselineParams(baselineColorRecipeParams)
-                    glSurfaceView.setParams(colorRecipeParams, aperture)
+                        glSurfaceView.onSurfaceDestroyed = {
+                            surfaceAvailable = false
+                            surfaceTextureNotified = false
+                            notifiedPreviewSize = null
+                            onSurfaceDestroyed()
+                        }
 
-                    glSurfaceView.setFocusPoint(focusPoint?.let {
-                        android.graphics.PointF(
-                            it.first / viewWidth,
-                            it.second / viewHeight
-                        )
-                    })
-                    glSurfaceView.setLivePhotoRecorder(livePhotoRecorder)
-                    glSurfaceView.setVideoRecorder(videoRecorder)
-                    glSurfaceView.setVideoLogProfile(videoLogProfile)
-                },
-                modifier = Modifier.fillMaxSize()
-            )
+                        glSurfaceView.onHistogramUpdated = { onHistogramUpdated?.invoke(it) }
+                        glSurfaceView.onMeteringUpdated = { w, l -> onMeteringUpdated?.invoke(w, l) }
+                        glSurfaceView.onDepthInputAvailable = { onDepthInputAvailable?.invoke(it) }
+
+                        viewWidth = glSurfaceView.width
+                        viewHeight = glSurfaceView.height
+                        glSurfaceView.setSensorOrientation(sensorOrientation)
+                        glSurfaceView.setLensFacing(lensFacing)
+                        glSurfaceView.setDeviceRotation(rotationDegrees.toInt())
+                        glSurfaceView.setCalibrationOffset(calibrationOffset)
+
+                        // 当 SurfaceTexture 准备好且尺寸已就绪时，通知外部打开相机。
+                        // 对 previewSize 变化使用 key 重建 GLSurfaceView，避免旧 SurfaceTexture
+                        // 的残留帧在新尺寸矩阵下继续显示几帧。
+                        if (viewWidth > 0 && viewHeight > 0 && surfaceAvailable) {
+                            glSurfaceView.getSurfaceTexture()?.let { surfaceTexture ->
+                                glSurfaceView.setPreviewSize(previewSize.width, previewSize.height)
+                                val shouldNotifySurfaceTexture =
+                                    !surfaceTextureNotified || notifiedPreviewSize != previewSize
+                                if (shouldNotifySurfaceTexture) {
+                                    surfaceTextureNotified = true
+                                    notifiedPreviewSize = previewSize
+                                    onSurfaceTextureReady(surfaceTexture)
+                                }
+                            }
+                        }
+                        val colorRecipeEnabled = !colorRecipeParams.isDefault()
+                        val baselineColorRecipeEnabled = !baselineColorRecipeParams.isDefault()
+                        // 更新 LUT 设置
+                        glSurfaceView.setBaselineLut(baselineLut)
+                        glSurfaceView.setBaselineLutEnabled(baselineLut != null)
+                        glSurfaceView.setLut(currentLut)
+                        glSurfaceView.setLutEnabled(currentLut != null)
+                        glSurfaceView.setBaselineColorRecipeEnabled(baselineColorRecipeEnabled)
+                        glSurfaceView.setColorRecipeEnabled(colorRecipeEnabled)
+
+                        glSurfaceView.setBaselineParams(baselineColorRecipeParams)
+                        glSurfaceView.setParams(colorRecipeParams, aperture)
+
+                        glSurfaceView.setFocusPoint(focusPoint?.let {
+                            android.graphics.PointF(
+                                it.first / viewWidth,
+                                it.second / viewHeight
+                            )
+                        })
+                        glSurfaceView.setLivePhotoRecorder(livePhotoRecorder)
+                        glSurfaceView.setVideoRecorder(videoRecorder)
+                        glSurfaceView.setVideoLogProfile(videoLogProfile)
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
 
             // 对焦指示器
             FocusIndicator(
