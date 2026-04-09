@@ -807,6 +807,10 @@ object Shaders {
     }
     """.trimIndent()
 
+    val FRAGMENT_SHADER_COLOR_RECIPE_2D = FRAGMENT_SHADER_COLOR_RECIPE
+        .replace("#extension GL_OES_EGL_image_external_essl3 : require\n", "")
+        .replace("uniform samplerExternalOES uCameraTexture;", "uniform sampler2D uCameraTexture;")
+
     /**
      * 全屏四边形的顶点坐标
      * 覆盖整个屏幕 (-1, -1) 到 (1, 1)

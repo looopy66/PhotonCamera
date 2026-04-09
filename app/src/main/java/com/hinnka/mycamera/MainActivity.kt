@@ -154,8 +154,10 @@ class MainActivity : ComponentActivity() {
             val currentRecipeParams by cameraViewModel.currentRecipeParams.collectAsState()
             val phantomPipCrop by cameraViewModel.phantomPipCrop.collectAsState()
             ScreenCaptureRenderConfigStore.save(
-                lutConfig = cameraViewModel.currentLutConfig,
-                colorRecipeParams = currentRecipeParams,
+                baselineLutConfig = cameraViewModel.currentBaselineLutConfig,
+                baselineColorRecipeParams = cameraViewModel.currentBaselineRecipeParams.value,
+                creativeLutConfig = cameraViewModel.currentLutConfig,
+                creativeColorRecipeParams = currentRecipeParams,
                 crop = phantomPipCrop
             )
 

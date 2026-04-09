@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hinnka.mycamera.R
+import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.model.ColorPaletteState
 import com.hinnka.mycamera.model.ColorRecipeParams
@@ -33,6 +34,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 enum class RecipeScope { LUT_GLOBAL, PHOTO_LOCAL }
+
+enum class LutEditorTarget(val baselineTarget: BaselineColorCorrectionTarget? = null) {
+    CREATIVE_GLOBAL(),
+    BASELINE_JPG(BaselineColorCorrectionTarget.JPG),
+    BASELINE_RAW(BaselineColorCorrectionTarget.RAW),
+    BASELINE_PHANTOM(BaselineColorCorrectionTarget.PHANTOM)
+}
 
 /**
  * LUT编辑底部弹窗
@@ -53,6 +61,7 @@ fun LutEditBottomSheet(
     photoRecipeParams: ColorRecipeParams? = null,
     onPhotoParamsChange: ((ColorRecipeParams?) -> Unit)? = null,
     defaultScope: RecipeScope = RecipeScope.LUT_GLOBAL,
+    editorTarget: LutEditorTarget = LutEditorTarget.CREATIVE_GLOBAL,
     modifier: Modifier = Modifier
 ) {
     val lutEditViewModel: LutEditViewModel = viewModel()
@@ -86,13 +95,13 @@ fun LutEditBottomSheet(
         saveJob?.cancel()
         saveJob = coroutineScope.launch {
             delay(250)
-            lutEditViewModel.saveLutColorRecipe(lutId, params)
+            lutEditViewModel.saveLutColorRecipe(lutId, params, editorTarget.baselineTarget)
         }
     }
 
     fun flushLutSave() {
         saveJob?.cancel()
-        lutEditViewModel.saveLutColorRecipe(lutId, editingParams)
+        lutEditViewModel.saveLutColorRecipe(lutId, editingParams, editorTarget.baselineTarget)
     }
 
     fun onParamsUpdated(newParams: ColorRecipeParams) {
@@ -106,7 +115,7 @@ fun LutEditBottomSheet(
 
     // 初始加载
     LaunchedEffect(lutId) {
-        val lutParams = openingInitialParams ?: lutEditViewModel.getColorRecipe(lutId)
+        val lutParams = openingInitialParams ?: lutEditViewModel.getColorRecipe(lutId, editorTarget.baselineTarget)
         loadParamsForScope(currentScope, lutParams)
     }
 
@@ -141,7 +150,7 @@ fun LutEditBottomSheet(
                                     if (currentScope == RecipeScope.LUT_GLOBAL) flushLutSave()
                                     currentScope = scope
                                     coroutineScope.launch {
-                                        val lutParams = lutEditViewModel.getColorRecipe(lutId)
+                                        val lutParams = lutEditViewModel.getColorRecipe(lutId, editorTarget.baselineTarget)
                                         loadParamsForScope(scope, lutParams)
                                         // 切换后预览也跟着刷新
                                         onParamsPreviewChange?.invoke(editingParams)
@@ -196,7 +205,7 @@ fun LutEditBottomSheet(
                                     .clickable {
                                         onPhotoParamsChange.invoke(null)
                                         coroutineScope.launch {
-                                            val lutParams = lutEditViewModel.getColorRecipe(lutId)
+                                            val lutParams = lutEditViewModel.getColorRecipe(lutId, editorTarget.baselineTarget)
                                             loadParamsForScope(RecipeScope.PHOTO_LOCAL, lutParams)
                                             onParamsPreviewChange?.invoke(editingParams)
                                         }

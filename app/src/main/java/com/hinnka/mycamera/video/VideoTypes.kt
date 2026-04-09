@@ -62,11 +62,12 @@ enum class VideoFpsPreset(val fps: Int) {
     fun getDisplayName(): String = fps.toString()
 }
 
-enum class VideoBitratePreset(val displayName: String, val bitrateMbps: Int) {
-    LOW("Standard", 30),
-    MEDIUM("High", 60),
-    HIGH("Pro", 120),
-    ULTRA("Master", 250);
+enum class VideoBitratePreset(val bitrateMbps: Int) {
+    P1(30),
+    P2(60),
+    P3(90),
+    P4(120),
+    P5(250);
 }
 
 enum class VideoCodec(val displayName: String, val mimeType: String) {
@@ -80,7 +81,7 @@ enum class VideoLogProfile(
     val colorSpace: ColorSpace
 ) {
     OFF("Off", LogCurve.SRGB, ColorSpace.SRGB),
-    APPLE_LOG2("Apple Log", LogCurve.APPLE_LOG, ColorSpace.AppleLog2),
+    APPLE_LOG2("Apple-Log2", LogCurve.APPLE_LOG, ColorSpace.AppleLog2),
     FLOG2_BT2020("F-Log2", LogCurve.FLOG2, ColorSpace.BT2020),
     V_LOG("V-Log", LogCurve.VLOG, ColorSpace.VGamut),
     LOGC4_ARRI4("LogC4", LogCurve.LOGC4, ColorSpace.ARRI4),
@@ -95,7 +96,7 @@ data class VideoConfig(
     val fps: VideoFpsPreset = VideoFpsPreset.FPS_30,
     val aspectRatio: VideoAspectRatio = VideoAspectRatio.RATIO_16_9,
     val logProfile: VideoLogProfile = VideoLogProfile.OFF,
-    val bitrate: VideoBitratePreset = VideoBitratePreset.LOW,
+    val bitrate: VideoBitratePreset = VideoBitratePreset.P1,
     val codec: VideoCodec = VideoCodec.H264,
     val stabilizationEnabled: Boolean = true,
     val torchEnabled: Boolean = false

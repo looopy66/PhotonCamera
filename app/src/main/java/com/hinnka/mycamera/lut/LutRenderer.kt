@@ -27,6 +27,57 @@ import kotlin.math.hypot
  */
 class LutRenderer : GLSurfaceView.Renderer {
 
+    private data class ColorPassLocations(
+        val programId: Int,
+        val uMVPMatrixLocation: Int,
+        val uSTMatrixLocation: Int,
+        val uCameraTextureLocation: Int,
+        val uLutTextureLocation: Int,
+        val uLutSizeLocation: Int,
+        val uLutIntensityLocation: Int,
+        val uLutEnabledLocation: Int,
+        val uLutCurveLocation: Int,
+        val uLutColorSpaceLocation: Int,
+        val uVideoLogEnabledLocation: Int,
+        val uVideoLogCurveLocation: Int,
+        val uVideoColorSpaceLocation: Int,
+        val uColorRecipeEnabledLocation: Int,
+        val uExposureLocation: Int,
+        val uContrastLocation: Int,
+        val uSaturationLocation: Int,
+        val uTemperatureLocation: Int,
+        val uTintLocation: Int,
+        val uFadeLocation: Int,
+        val uVibranceLocation: Int,
+        val uHighlightsLocation: Int,
+        val uShadowsLocation: Int,
+        val uToneToeLocation: Int,
+        val uToneShoulderLocation: Int,
+        val uTonePivotLocation: Int,
+        val uFilmGrainLocation: Int,
+        val uVignetteLocation: Int,
+        val uBleachBypassLocation: Int,
+        val uChromaticAberrationLocation: Int,
+        val uNoiseLocation: Int,
+        val uNoiseSeedLocation: Int,
+        val uLowResLocation: Int,
+        val uAspectRatioLocation: Int,
+        val uLchHueAdjustmentsLocation: Int,
+        val uLchChromaAdjustmentsLocation: Int,
+        val uLchLightnessAdjustmentsLocation: Int,
+        val uPrimaryHueLocation: Int,
+        val uPrimarySaturationLocation: Int,
+        val uPrimaryLightnessLocation: Int,
+        val uSTMatrixFragLocation: Int,
+        val uCropRectLocation: Int,
+        val uApertureLocation: Int,
+        val uFocusPointLocation: Int,
+        val uCurveTextureLocation: Int,
+        val uCurveEnabledLocation: Int,
+        val aPositionLocation: Int,
+        val aTexCoordLocation: Int,
+    )
+
     companion object {
         private const val TAG = "LutRenderer"
         private const val LCH_COLOR_BAND_COUNT = 9
@@ -44,6 +95,7 @@ class LutRenderer : GLSurfaceView.Renderer {
     // 纹理 ID
     private var cameraTextureId: Int = 0
     private var lutTextureId: Int = 0
+    private var baselineLutTextureId: Int = 0
 
     // 缓冲区
     private var vertexBufferId: Int = 0
@@ -82,15 +134,20 @@ class LutRenderer : GLSurfaceView.Renderer {
     // FBO 相关
     private var fboId: Int = 0
     private var fboTextureId: Int = 0
+    private var stackFboId: Int = 0
+    private var stackTextureId: Int = 0
 
     // Copy Shader (FBO -> Screen)
     private var copyProgramId: Int = 0
+    private var secondPassProgramId: Int = 0
     private var uCopyTextureLoc: Int = 0
     private var uCopyMVPMatrixLoc: Int = 0
     private var uCopySTMatrixLoc: Int = 0
     private var uCopyCropRectLoc: Int = 0
     private var aCopyPositionLoc: Int = 0
     private var aCopyTexCoordLoc: Int = 0
+    private var mainPassLocations: ColorPassLocations? = null
+    private var secondPassLocations: ColorPassLocations? = null
 
     // Uniform 位置
     private var uMVPMatrixLocation: Int = 0
@@ -143,12 +200,19 @@ class LutRenderer : GLSurfaceView.Renderer {
 
     // 曲线纹理
     private var curveTextureId: Int = 0
+    private var baselineCurveTextureId: Int = 0
 
     @Volatile
     var curveEnabled: Boolean = false
 
     @Volatile
+    var baselineCurveEnabled: Boolean = false
+
+    @Volatile
     var pendingCurveBuffer: java.nio.ByteBuffer? = null
+
+    @Volatile
+    var baselinePendingCurveBuffer: java.nio.ByteBuffer? = null
 
     @Volatile
     var masterCurvePoints: FloatArray? = null
@@ -161,6 +225,10 @@ class LutRenderer : GLSurfaceView.Renderer {
 
     @Volatile
     var blueCurvePoints: FloatArray? = null
+
+    @Volatile
+    var baselineRecipeParams: com.hinnka.mycamera.model.ColorRecipeParams =
+        com.hinnka.mycamera.model.ColorRecipeParams.DEFAULT
 
     // HDF 实时预览资源
     private var hdfExtractBlurHProgram: Int = 0
@@ -212,10 +280,13 @@ class LutRenderer : GLSurfaceView.Renderer {
 
     // 待处理的 LUT 配置（Surface 创建前设置的 LUT）
     private var pendingLutConfig: LutConfig? = null
+    private var pendingBaselineLutConfig: LutConfig? = null
 
     // LUT 配置
     private var currentLutConfig: LutConfig? = null
+    private var currentBaselineLutConfig: LutConfig? = null
     private var lutSize: Float = 32f
+    private var baselineLutSize: Float = 32f
 
     // LUT 强度 (0.0 - 1.0)
     @Volatile
@@ -225,9 +296,15 @@ class LutRenderer : GLSurfaceView.Renderer {
     @Volatile
     var lutEnabled: Boolean = false
 
+    @Volatile
+    var baselineLutEnabled: Boolean = false
+
     // 色彩配方参数
     @Volatile
     var colorRecipeEnabled: Boolean = false
+
+    @Volatile
+    var baselineColorRecipeEnabled: Boolean = false
 
     @Volatile
     var focusPoint: PointF? = null
@@ -397,6 +474,10 @@ class LutRenderer : GLSurfaceView.Renderer {
             pendingLutConfig = null
             setLutInternal(config)
         }
+        (pendingBaselineLutConfig ?: currentBaselineLutConfig)?.let { config ->
+            pendingBaselineLutConfig = null
+            setBaselineLutInternal(config)
+        }
 
         // 通知调用者 SurfaceTexture 已准备好
         surfaceTexture?.let { onSurfaceTextureAvailable?.invoke(it) }
@@ -411,8 +492,12 @@ class LutRenderer : GLSurfaceView.Renderer {
      */
     private fun resetGlResourceState() {
         programId = 0
+        secondPassProgramId = 0
+        mainPassLocations = null
+        secondPassLocations = null
         cameraTextureId = 0
         lutTextureId = 0
+        baselineLutTextureId = 0
         vertexBufferId = 0
         texCoordBufferId = 0
         indexBufferId = 0
@@ -432,6 +517,8 @@ class LutRenderer : GLSurfaceView.Renderer {
         depthInputPboId = 0
         fboId = 0
         fboTextureId = 0
+        stackFboId = 0
+        stackTextureId = 0
         copyProgramId = 0
         hdfExtractBlurHProgram = 0
         hdfBlurVProgram = 0
@@ -452,6 +539,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         viewportWidth = 0
         viewportHeight = 0
         curveTextureId = 0
+        baselineCurveTextureId = 0
     }
 
     /**
@@ -484,6 +572,14 @@ class LutRenderer : GLSurfaceView.Renderer {
             GLES30.glDeleteTextures(1, intArrayOf(fboTextureId), 0)
             fboTextureId = 0
         }
+        if (stackFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(stackFboId), 0)
+            stackFboId = 0
+        }
+        if (stackTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(stackTextureId), 0)
+            stackTextureId = 0
+        }
 
         val ids = IntArray(1)
         GLES30.glGenFramebuffers(1, ids, 0)
@@ -515,6 +611,225 @@ class LutRenderer : GLSurfaceView.Renderer {
 
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+
+        GLES30.glGenFramebuffers(1, ids, 0)
+        stackFboId = ids[0]
+        GLES30.glGenTextures(1, ids, 0)
+        stackTextureId = ids[0]
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stackTextureId)
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA, width, height,
+            0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null
+        )
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, stackFboId)
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D, stackTextureId, 0
+        )
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+    }
+
+    private fun hasBaselineLayer(): Boolean {
+        return (baselineLutEnabled && currentBaselineLutConfig != null) ||
+            baselineColorRecipeEnabled ||
+            !baselineRecipeParams.isDefault()
+    }
+
+    private fun hasCreativeLayer(): Boolean {
+        return (lutEnabled && currentLutConfig != null) || colorRecipeEnabled
+    }
+
+    private fun ensureCurveTextureUploaded(
+        textureId: Int,
+        pendingBuffer: ByteBuffer?
+    ): Int {
+        var currentTextureId = textureId
+        pendingBuffer?.let { buf ->
+            if (currentTextureId == 0) {
+                val ids = IntArray(1)
+                GLES30.glGenTextures(1, ids, 0)
+                currentTextureId = ids[0]
+            }
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, currentTextureId)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexImage2D(
+                GLES30.GL_TEXTURE_2D,
+                0,
+                GLES30.GL_RGBA8,
+                256,
+                1,
+                0,
+                GLES30.GL_RGBA,
+                GLES30.GL_UNSIGNED_BYTE,
+                buf
+            )
+        }
+        return currentTextureId
+    }
+
+    private fun drawColorPass(
+        locations: ColorPassLocations,
+        targetFboId: Int,
+        width: Int,
+        height: Int,
+        sourceTextureTarget: Int,
+        sourceTextureId: Int,
+        sourceStMatrix: FloatArray,
+        sourceCropRect: FloatArray,
+        targetMvpMatrix: FloatArray,
+        lutConfig: LutConfig?,
+        lutTextureId: Int,
+        lutSize: Float,
+        lutEnabled: Boolean,
+        params: com.hinnka.mycamera.model.ColorRecipeParams,
+        curveTextureId: Int,
+        curveEnabled: Boolean,
+        enableVideoLog: Boolean,
+        apertureOverride: Float = aperture,
+        focusPointOverride: PointF? = focusPoint,
+    ) {
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+        GLES30.glUseProgram(locations.programId)
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(sourceTextureTarget, sourceTextureId)
+        GLES30.glUniform1i(locations.uCameraTextureLocation, 0)
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+        GLES30.glBindTexture(
+            GLES30.GL_TEXTURE_3D,
+            if (lutEnabled && lutTextureId != 0) lutTextureId else 0
+        )
+        GLES30.glUniform1i(locations.uLutTextureLocation, 1)
+
+        GLES30.glUniformMatrix4fv(locations.uMVPMatrixLocation, 1, false, targetMvpMatrix, 0)
+        GLES30.glUniformMatrix4fv(locations.uSTMatrixLocation, 1, false, sourceStMatrix, 0)
+        GLES30.glUniformMatrix4fv(locations.uSTMatrixFragLocation, 1, false, sourceStMatrix, 0)
+        GLES30.glUniform4f(
+            locations.uCropRectLocation,
+            sourceCropRect[0],
+            sourceCropRect[1],
+            sourceCropRect[2],
+            sourceCropRect[3]
+        )
+        GLES30.glUniform1f(locations.uLutSizeLocation, lutSize)
+        GLES30.glUniform1f(locations.uLutIntensityLocation, params.lutIntensity)
+        GLES30.glUniform1i(locations.uLutEnabledLocation, if (lutEnabled && lutTextureId != 0) 1 else 0)
+        GLES30.glUniform1i(locations.uLutCurveLocation, mapLutCurve(lutConfig?.curve))
+        GLES30.glUniform1i(locations.uLutColorSpaceLocation, mapRawColorSpace(lutConfig?.colorSpace ?: ColorSpace.SRGB))
+        GLES30.glUniform1i(locations.uVideoLogEnabledLocation, if (enableVideoLog && videoLogProfile.isEnabled) 1 else 0)
+        GLES30.glUniform1i(locations.uVideoLogCurveLocation, mapLogCurve(videoLogProfile.logCurve))
+        GLES30.glUniform1i(locations.uVideoColorSpaceLocation, mapRawColorSpace(videoLogProfile.colorSpace))
+
+        val recipeEnabled = !params.isDefault()
+        GLES30.glUniform1i(locations.uColorRecipeEnabledLocation, if (recipeEnabled) 1 else 0)
+        if (recipeEnabled) {
+            GLES30.glUniform1f(locations.uExposureLocation, params.exposure)
+            GLES30.glUniform1f(locations.uContrastLocation, params.contrast)
+            GLES30.glUniform1f(locations.uSaturationLocation, params.saturation)
+            GLES30.glUniform1f(locations.uTemperatureLocation, params.temperature)
+            GLES30.glUniform1f(locations.uTintLocation, params.tint)
+            GLES30.glUniform1f(locations.uFadeLocation, params.fade)
+            GLES30.glUniform1f(locations.uVibranceLocation, params.color)
+            GLES30.glUniform1f(locations.uHighlightsLocation, params.highlights)
+            GLES30.glUniform1f(locations.uShadowsLocation, params.shadows)
+            GLES30.glUniform1f(locations.uToneToeLocation, params.toneToe)
+            GLES30.glUniform1f(locations.uToneShoulderLocation, params.toneShoulder)
+            GLES30.glUniform1f(locations.uTonePivotLocation, params.tonePivot)
+            GLES30.glUniform1f(locations.uFilmGrainLocation, params.filmGrain)
+            GLES30.glUniform1f(locations.uVignetteLocation, params.vignette)
+            GLES30.glUniform1f(locations.uBleachBypassLocation, params.bleachBypass)
+            GLES30.glUniform1f(locations.uNoiseLocation, params.noise)
+            GLES30.glUniform1f(locations.uNoiseSeedLocation, (System.currentTimeMillis() % 10000) / 1000f)
+            GLES30.glUniform1f(locations.uLowResLocation, params.lowRes)
+            GLES30.glUniform1f(locations.uAspectRatioLocation, width.toFloat() / maxOf(1, height).toFloat())
+            val lch = buildLchArrays(params)
+            GLES30.glUniform1fv(locations.uLchHueAdjustmentsLocation, LCH_COLOR_BAND_COUNT, lch.first, 0)
+            GLES30.glUniform1fv(locations.uLchChromaAdjustmentsLocation, LCH_COLOR_BAND_COUNT, lch.second, 0)
+            GLES30.glUniform1fv(locations.uLchLightnessAdjustmentsLocation, LCH_COLOR_BAND_COUNT, lch.third, 0)
+            GLES30.glUniform3f(
+                locations.uPrimaryHueLocation,
+                params.primaryRedHue,
+                params.primaryGreenHue,
+                params.primaryBlueHue
+            )
+            GLES30.glUniform3f(
+                locations.uPrimarySaturationLocation,
+                params.primaryRedSaturation,
+                params.primaryGreenSaturation,
+                params.primaryBlueSaturation
+            )
+            GLES30.glUniform3f(
+                locations.uPrimaryLightnessLocation,
+                params.primaryRedLightness,
+                params.primaryGreenLightness,
+                params.primaryBlueLightness
+            )
+        }
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, if (curveEnabled && curveTextureId != 0) curveTextureId else 0)
+        GLES30.glUniform1i(locations.uCurveTextureLocation, 2)
+        GLES30.glUniform1i(locations.uCurveEnabledLocation, if (curveEnabled && curveTextureId != 0) 1 else 0)
+
+        GLES30.glUniform1f(locations.uApertureLocation, apertureOverride)
+        val fp = focusPointOverride ?: PointF(0.5f, 0.5f)
+        GLES30.glUniform2f(locations.uFocusPointLocation, fp.x, 1.0f - fp.y)
+        GLES30.glUniform1f(locations.uChromaticAberrationLocation, params.chromaticAberration)
+
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)
+        GLES30.glEnableVertexAttribArray(locations.aPositionLocation)
+        GLES30.glVertexAttribPointer(locations.aPositionLocation, POSITION_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
+
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, texCoordBufferId)
+        GLES30.glEnableVertexAttribArray(locations.aTexCoordLocation)
+        GLES30.glVertexAttribPointer(locations.aTexCoordLocation, TEXTURE_COORD_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
+
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, indexBufferId)
+        GLES30.glDrawElements(GLES30.GL_TRIANGLES, Shaders.DRAW_ORDER.size, GLES30.GL_UNSIGNED_SHORT, 0)
+
+        GLES30.glDisableVertexAttribArray(locations.aPositionLocation)
+        GLES30.glDisableVertexAttribArray(locations.aTexCoordLocation)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
+    }
+
+    private fun buildLchArrays(params: com.hinnka.mycamera.model.ColorRecipeParams): Triple<FloatArray, FloatArray, FloatArray> {
+        return Triple(
+            floatArrayOf(
+                params.skinHue, params.redHue, params.orangeHue, params.yellowHue,
+                params.greenHue, params.cyanHue, params.blueHue, params.purpleHue, params.magentaHue,
+            ),
+            floatArrayOf(
+                params.skinChroma, params.redChroma, params.orangeChroma, params.yellowChroma,
+                params.greenChroma, params.cyanChroma, params.blueChroma, params.purpleChroma, params.magentaChroma,
+            ),
+            floatArrayOf(
+                params.skinLightness, params.redLightness, params.orangeLightness, params.yellowLightness,
+                params.greenLightness, params.cyanLightness, params.blueLightness, params.purpleLightness, params.magentaLightness,
+            )
+        )
+    }
+
+    private fun uploadPendingCurveTextures() {
+        if (pendingCurveBuffer != null) {
+            curveTextureId = ensureCurveTextureUploaded(curveTextureId, pendingCurveBuffer)
+            pendingCurveBuffer = null
+        }
+        if (baselinePendingCurveBuffer != null) {
+            baselineCurveTextureId = ensureCurveTextureUploaded(baselineCurveTextureId, baselinePendingCurveBuffer)
+            baselinePendingCurveBuffer = null
+        }
     }
 
     /**
@@ -553,22 +868,59 @@ class LutRenderer : GLSurfaceView.Renderer {
         }
         val hdfEnabled = halation > 0.001f
         val bokehNeeded = aperture > 0f && depthMap != null
-        val needsFbo = (liveRecorder != null || activeVideoRecorder != null || hdfEnabled || bokehNeeded) &&
+        val hasBaselineLayer = hasBaselineLayer()
+        val hasCreativeLayer = hasCreativeLayer()
+        val hasDualLayer = hasBaselineLayer && hasCreativeLayer
+        uploadPendingCurveTextures()
+        val needsFbo = (liveRecorder != null || activeVideoRecorder != null || hdfEnabled || bokehNeeded || hasDualLayer) &&
             fboId != 0 && fboTextureId != 0
 
         if (needsFbo) {
-            // 1. 渲染主着色器到 FBO (色彩配方 + LUT + CA)
-            drawInternal(fboId, viewportWidth, viewportHeight)
+            val identityMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
+            val fullCropRect = floatArrayOf(0f, 0f, 1f, 1f)
+
+            // 1. 渲染色彩链路到 FBO
+            drawInternal(
+                fboId = fboId,
+                width = viewportWidth,
+                height = viewportHeight,
+                preferBaselineLayer = hasDualLayer
+            )
+
+            var currentTexId = fboTextureId
+            if (hasDualLayer && stackFboId != 0 && stackTextureId != 0 && secondPassLocations != null) {
+                drawColorPass(
+                    locations = secondPassLocations ?: return,
+                    targetFboId = stackFboId,
+                    width = viewportWidth,
+                    height = viewportHeight,
+                    sourceTextureTarget = GLES30.GL_TEXTURE_2D,
+                    sourceTextureId = fboTextureId,
+                    sourceStMatrix = identityMatrix,
+                    sourceCropRect = fullCropRect,
+                    targetMvpMatrix = identityMatrix,
+                    lutConfig = currentLutConfig,
+                    lutTextureId = lutTextureId,
+                    lutSize = lutSize,
+                    lutEnabled = lutEnabled && currentLutConfig != null,
+                    params = getCurrentRecipeParams(),
+                    curveTextureId = curveTextureId,
+                    curveEnabled = curveEnabled && curveTextureId != 0,
+                    enableVideoLog = false,
+                    apertureOverride = 0f,
+                    focusPointOverride = null
+                )
+                currentTexId = stackTextureId
+            }
 
             // 深度采集（按需，从刚刚渲染好的 FBO 纹理读取）
             if (aperture > 0f) {
-                runDepthInputCaptureInternal(fboTextureId)
+                runDepthInputCaptureInternal(currentTexId)
             }
 
             // 2. Bokeh 处理
-            var currentTexId = fboTextureId
             if (bokehNeeded) {
-                currentTexId = renderBokehPreview(fboTextureId, viewportWidth, viewportHeight)
+                currentTexId = renderBokehPreview(currentTexId, viewportWidth, viewportHeight)
             }
 
             // 3. HDF 多 Pass 处理
@@ -619,11 +971,17 @@ class LutRenderer : GLSurfaceView.Renderer {
                     } else if (bokehNeeded) {
                         drawFboToScreen(recordFboId, targetSize.width, targetSize.height, currentTexId)
                     } else {
-                        drawInternal(
-                            recordFboId,
-                            targetSize.width,
-                            targetSize.height,
-                            buildMvpMatrix(targetSize.width, targetSize.height)
+                        drawFboToScreen(
+                            fboId = recordFboId,
+                            width = targetSize.width,
+                            height = targetSize.height,
+                            sourceTextureId = currentTexId,
+                            targetMvpMatrix = buildTextureMvpMatrix(
+                                sourceWidth = viewportWidth,
+                                sourceHeight = viewportHeight,
+                                targetWidth = targetSize.width,
+                                targetHeight = targetSize.height
+                            )
                         )
                     }
                     GLES30.glFlush()
@@ -631,7 +989,6 @@ class LutRenderer : GLSurfaceView.Renderer {
                     sharedVideoWidth = targetSize.width
                     sharedVideoHeight = targetSize.height
                     if (hasFreshCameraFrame) {
-                        val identityMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
                         activeVideoRecorder.onPreviewFrame(
                             textureId = recordTextureId,
                             transformMatrix = identityMatrix,
@@ -661,6 +1018,27 @@ class LutRenderer : GLSurfaceView.Renderer {
                 drawHdfComposite(0, viewportWidth, viewportHeight, currentTexId)
             } else {
                 drawFboToScreen(0, viewportWidth, viewportHeight, currentTexId)
+            }
+            val finalDisplayTextureId = if (sharedVideoTextureId != 0) sharedVideoTextureId else currentTexId
+            val finalDisplayWidth = if (sharedVideoTextureId != 0) sharedVideoWidth else viewportWidth
+            val finalDisplayHeight = if (sharedVideoTextureId != 0) sharedVideoHeight else viewportHeight
+            val needsHdfCompositeForSampling = hdfEnabled && sharedVideoTextureId == 0
+            if (shouldCapturePreview) {
+                shouldCapturePreview = false
+                capturePreviewFrameInternal(
+                    sourceTextureId = finalDisplayTextureId,
+                    sourceWidth = finalDisplayWidth,
+                    sourceHeight = finalDisplayHeight,
+                    compositeWithHdf = needsHdfCompositeForSampling
+                )
+            }
+            if (meteringEnabled) {
+                runMeteringInternal(
+                    sourceTextureId = finalDisplayTextureId,
+                    sourceWidth = finalDisplayWidth,
+                    sourceHeight = finalDisplayHeight,
+                    compositeWithHdf = needsHdfCompositeForSampling
+                )
             }
         } else {
             // 直接渲染到屏幕
@@ -714,11 +1092,6 @@ class LutRenderer : GLSurfaceView.Renderer {
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
         GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
 
-        // 捕获预览帧 (如果需要)
-        if (fboId == 0 && shouldCapturePreview) {
-            shouldCapturePreview = false
-            capturePreviewFrameInternal()
-        }
     }
 
     /**
@@ -728,153 +1101,45 @@ class LutRenderer : GLSurfaceView.Renderer {
         fboId: Int,
         width: Int,
         height: Int,
-        targetMvpMatrix: FloatArray = mvpMatrix
+        targetMvpMatrix: FloatArray = mvpMatrix,
+        preferBaselineLayer: Boolean = false
     ) {
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fboId)
-        GLES30.glViewport(0, 0, width, height)
-
-        // 清屏
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-
-        // 使用着色器程序
-        GLES30.glUseProgram(programId)
-
-        // 绑定相机纹理
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, cameraTextureId)
-        GLES30.glUniform1i(uCameraTextureLocation, 0)
-
-        // 绑定 LUT 纹理到 Unit 1
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
-        if (lutEnabled && lutTextureId != 0) {
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, lutTextureId)
+        val locations = mainPassLocations ?: return
+        val useCreativeLayer = hasCreativeLayer() && !preferBaselineLayer
+        val layerLutConfig = if (useCreativeLayer) currentLutConfig else currentBaselineLutConfig
+        val layerLutTextureId = if (useCreativeLayer) lutTextureId else baselineLutTextureId
+        val layerLutSize = if (useCreativeLayer) lutSize else baselineLutSize
+        val layerLutEnabled = if (useCreativeLayer) {
+            lutEnabled && currentLutConfig != null
         } else {
-            // 如果未启用 LUT，也可以解绑，或者绑定一个默认的空纹理
-            // 这里我们只是确保 Unit 1 不会处于未知状态
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, 0)
+            baselineLutEnabled && currentBaselineLutConfig != null
         }
-        // 始终设置 uLutTexture 指向 Unit 1
-        // 即使 lutEnabled 为 false，Shader 内部可能不会采样它，但 Uniform 的值必须有效
-        GLES30.glUniform1i(uLutTextureLocation, 1)
-
-        // 设置 MVP 矩阵（用于 center crop）
-        GLES30.glUniformMatrix4fv(uMVPMatrixLocation, 1, false, targetMvpMatrix, 0)
-
-        // 设置其他 Uniforms
-        GLES30.glUniformMatrix4fv(uSTMatrixLocation, 1, false, stMatrix, 0)
-        GLES30.glUniformMatrix4fv(uSTMatrixFragLocation, 1, false, stMatrix, 0)
-        GLES30.glUniform4f(uCropRectLocation, cropRect[0], cropRect[1], cropRect[2], cropRect[3])
-        GLES30.glUniform1f(uLutSizeLocation, lutSize)
-        GLES30.glUniform1f(uLutIntensityLocation, lutIntensity)
-        GLES30.glUniform1i(uLutEnabledLocation, if (lutEnabled && lutTextureId != 0) 1 else 0)
-        GLES30.glUniform1i(uLutCurveLocation, mapLutCurve(currentLutConfig?.curve))
-        GLES30.glUniform1i(uLutColorSpaceLocation, mapRawColorSpace(currentLutConfig?.colorSpace ?: ColorSpace.SRGB))
-        GLES30.glUniform1i(uVideoLogEnabledLocation, if (videoLogProfile.isEnabled) 1 else 0)
-        GLES30.glUniform1i(uVideoLogCurveLocation, mapLogCurve(videoLogProfile.logCurve))
-        GLES30.glUniform1i(uVideoColorSpaceLocation, mapRawColorSpace(videoLogProfile.colorSpace))
-
-        // 设置色彩配方 Uniforms
-        GLES30.glUniform1i(uColorRecipeEnabledLocation, if (colorRecipeEnabled) 1 else 0)
-        if (colorRecipeEnabled) {
-            // 优化：仅在有显著变化时更新，或者简单地减少 CPU 消耗
-            GLES30.glUniform1f(uExposureLocation, exposure)
-            GLES30.glUniform1f(uContrastLocation, contrast)
-            GLES30.glUniform1f(uSaturationLocation, saturation)
-            GLES30.glUniform1f(uTemperatureLocation, temperature)
-            GLES30.glUniform1f(uTintLocation, tint)
-            GLES30.glUniform1f(uFadeLocation, fade)
-            GLES30.glUniform1f(uVibranceLocation, vibrance)
-            GLES30.glUniform1f(uHighlightsLocation, highlights)
-            GLES30.glUniform1f(uShadowsLocation, shadows)
-            GLES30.glUniform1f(uToneToeLocation, toneToe)
-            GLES30.glUniform1f(uToneShoulderLocation, toneShoulder)
-            GLES30.glUniform1f(uTonePivotLocation, tonePivot)
-            GLES30.glUniform1f(uFilmGrainLocation, filmGrain)
-            GLES30.glUniform1f(uVignetteLocation, vignette)
-            GLES30.glUniform1f(uBleachBypassLocation, bleachBypass)
-            GLES30.glUniform1f(uNoiseLocation, noise)
-            GLES30.glUniform1f(uNoiseSeedLocation, (System.currentTimeMillis() % 10000) / 1000f)
-            GLES30.glUniform1f(uLowResLocation, lowRes)
-            GLES30.glUniform1f(uAspectRatioLocation, width.toFloat() / Math.max(1, height).toFloat())
-            GLES30.glUniform1fv(uLchHueAdjustmentsLocation, LCH_COLOR_BAND_COUNT, lchHueAdjustments, 0)
-            GLES30.glUniform1fv(uLchChromaAdjustmentsLocation, LCH_COLOR_BAND_COUNT, lchChromaAdjustments, 0)
-            GLES30.glUniform1fv(uLchLightnessAdjustmentsLocation, LCH_COLOR_BAND_COUNT, lchLightnessAdjustments, 0)
-            
-            GLES30.glUniform3f(uPrimaryHueLocation, primaryRedHue, primaryGreenHue, primaryBlueHue)
-            GLES30.glUniform3f(uPrimarySaturationLocation, primaryRedSaturation, primaryGreenSaturation, primaryBlueSaturation)
-            GLES30.glUniform3f(uPrimaryLightnessLocation, primaryRedLightness, primaryGreenLightness, primaryBlueLightness)
-        }
-
-        // 曲线纹理上传（如有待处理数据）
-        pendingCurveBuffer?.let { buf ->
-            pendingCurveBuffer = null
-            if (curveTextureId == 0) {
-                val ids = IntArray(1)
-                GLES30.glGenTextures(1, ids, 0)
-                curveTextureId = ids[0]
-            }
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, curveTextureId)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, 256, 1, 0,
-                GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, buf)
-        }
-        // 绑定曲线纹理到 Unit 2
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
-        if (curveEnabled && curveTextureId != 0) {
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, curveTextureId)
+        val layerParams = if (useCreativeLayer) getCurrentRecipeParams() else baselineRecipeParams
+        val layerCurveTextureId = if (useCreativeLayer) curveTextureId else baselineCurveTextureId
+        val layerCurveEnabled = if (useCreativeLayer) {
+            curveEnabled && curveTextureId != 0
         } else {
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+            baselineCurveEnabled && baselineCurveTextureId != 0
         }
-        GLES30.glUniform1i(uCurveTextureLocation, 2)
-        GLES30.glUniform1i(uCurveEnabledLocation, if (curveEnabled && curveTextureId != 0) 1 else 0)
-
-        // 虚化预览和色散效果始终更新（如果启用）
-        GLES30.glUniform1f(uApertureLocation, aperture)
-        val fp = focusPoint ?: PointF(0.5f, 0.5f)
-        GLES30.glUniform2f(uFocusPointLocation, fp.x, 1.0f - fp.y) // Y-flip to match texture coords
-        GLES30.glUniform1f(uChromaticAberrationLocation, chromaticAberration)
-
-        // 绑定顶点缓冲
-        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)
-        GLES30.glEnableVertexAttribArray(aPositionLocation)
-        GLES30.glVertexAttribPointer(
-            aPositionLocation,
-            POSITION_COMPONENT_COUNT,
-            GLES30.GL_FLOAT,
-            false,
-            0,
-            0
+        drawColorPass(
+            locations = locations,
+            targetFboId = fboId,
+            width = width,
+            height = height,
+            sourceTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
+            sourceTextureId = cameraTextureId,
+            sourceStMatrix = stMatrix,
+            sourceCropRect = cropRect,
+            targetMvpMatrix = targetMvpMatrix,
+            lutConfig = layerLutConfig,
+            lutTextureId = layerLutTextureId,
+            lutSize = layerLutSize,
+            lutEnabled = layerLutEnabled,
+            params = layerParams,
+            curveTextureId = layerCurveTextureId,
+            curveEnabled = layerCurveEnabled,
+            enableVideoLog = true
         )
-
-        // 绑定纹理坐标缓冲
-        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, texCoordBufferId)
-        GLES30.glEnableVertexAttribArray(aTexCoordLocation)
-        GLES30.glVertexAttribPointer(
-            aTexCoordLocation,
-            TEXTURE_COORD_COMPONENT_COUNT,
-            GLES30.GL_FLOAT,
-            false,
-            0,
-            0
-        )
-
-        // 绘制
-        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, indexBufferId)
-        GLES30.glDrawElements(
-            GLES30.GL_TRIANGLES,
-            Shaders.DRAW_ORDER.size,
-            GLES30.GL_UNSIGNED_SHORT,
-            0
-        )
-
-        // 清理状态
-        GLES30.glDisableVertexAttribArray(aPositionLocation)
-        GLES30.glDisableVertexAttribArray(aTexCoordLocation)
-        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
-        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
 
         // 捕获预览帧（如果需要）
         if (fboId == 0 && shouldCapturePreview) {
@@ -893,6 +1158,59 @@ class LutRenderer : GLSurfaceView.Renderer {
     /**
      * 初始化着色器程序
      */
+    private fun queryColorPassLocations(program: Int): ColorPassLocations {
+        return ColorPassLocations(
+            programId = program,
+            uMVPMatrixLocation = GLES30.glGetUniformLocation(program, "uMVPMatrix"),
+            uSTMatrixLocation = GLES30.glGetUniformLocation(program, "uSTMatrix"),
+            uCameraTextureLocation = GLES30.glGetUniformLocation(program, "uCameraTexture"),
+            uLutTextureLocation = GLES30.glGetUniformLocation(program, "uLutTexture"),
+            uLutSizeLocation = GLES30.glGetUniformLocation(program, "uLutSize"),
+            uLutIntensityLocation = GLES30.glGetUniformLocation(program, "uLutIntensity"),
+            uLutEnabledLocation = GLES30.glGetUniformLocation(program, "uLutEnabled"),
+            uLutCurveLocation = GLES30.glGetUniformLocation(program, "uLutCurve"),
+            uLutColorSpaceLocation = GLES30.glGetUniformLocation(program, "uLutColorSpace"),
+            uVideoLogEnabledLocation = GLES30.glGetUniformLocation(program, "uVideoLogEnabled"),
+            uVideoLogCurveLocation = GLES30.glGetUniformLocation(program, "uVideoLogCurve"),
+            uVideoColorSpaceLocation = GLES30.glGetUniformLocation(program, "uVideoColorSpace"),
+            uColorRecipeEnabledLocation = GLES30.glGetUniformLocation(program, "uColorRecipeEnabled"),
+            uExposureLocation = GLES30.glGetUniformLocation(program, "uExposure"),
+            uContrastLocation = GLES30.glGetUniformLocation(program, "uContrast"),
+            uSaturationLocation = GLES30.glGetUniformLocation(program, "uSaturation"),
+            uTemperatureLocation = GLES30.glGetUniformLocation(program, "uTemperature"),
+            uTintLocation = GLES30.glGetUniformLocation(program, "uTint"),
+            uFadeLocation = GLES30.glGetUniformLocation(program, "uFade"),
+            uVibranceLocation = GLES30.glGetUniformLocation(program, "uVibrance"),
+            uHighlightsLocation = GLES30.glGetUniformLocation(program, "uHighlights"),
+            uShadowsLocation = GLES30.glGetUniformLocation(program, "uShadows"),
+            uToneToeLocation = GLES30.glGetUniformLocation(program, "uToneToe"),
+            uToneShoulderLocation = GLES30.glGetUniformLocation(program, "uToneShoulder"),
+            uTonePivotLocation = GLES30.glGetUniformLocation(program, "uTonePivot"),
+            uFilmGrainLocation = GLES30.glGetUniformLocation(program, "uFilmGrain"),
+            uVignetteLocation = GLES30.glGetUniformLocation(program, "uVignette"),
+            uBleachBypassLocation = GLES30.glGetUniformLocation(program, "uBleachBypass"),
+            uChromaticAberrationLocation = GLES30.glGetUniformLocation(program, "uChromaticAberration"),
+            uNoiseLocation = GLES30.glGetUniformLocation(program, "uNoise"),
+            uNoiseSeedLocation = GLES30.glGetUniformLocation(program, "uNoiseSeed"),
+            uLowResLocation = GLES30.glGetUniformLocation(program, "uLowRes"),
+            uAspectRatioLocation = GLES30.glGetUniformLocation(program, "uAspectRatio"),
+            uLchHueAdjustmentsLocation = GLES30.glGetUniformLocation(program, "uLchHueAdjustments"),
+            uLchChromaAdjustmentsLocation = GLES30.glGetUniformLocation(program, "uLchChromaAdjustments"),
+            uLchLightnessAdjustmentsLocation = GLES30.glGetUniformLocation(program, "uLchLightnessAdjustments"),
+            uPrimaryHueLocation = GLES30.glGetUniformLocation(program, "uPrimaryHue"),
+            uPrimarySaturationLocation = GLES30.glGetUniformLocation(program, "uPrimarySaturation"),
+            uPrimaryLightnessLocation = GLES30.glGetUniformLocation(program, "uPrimaryLightness"),
+            uSTMatrixFragLocation = GLES30.glGetUniformLocation(program, "uSTMatrix"),
+            uCropRectLocation = GLES30.glGetUniformLocation(program, "uCropRect"),
+            uApertureLocation = GLES30.glGetUniformLocation(program, "uAperture"),
+            uFocusPointLocation = GLES30.glGetUniformLocation(program, "uFocusPoint"),
+            uCurveTextureLocation = GLES30.glGetUniformLocation(program, "uCurveTexture"),
+            uCurveEnabledLocation = GLES30.glGetUniformLocation(program, "uCurveEnabled"),
+            aPositionLocation = GLES30.glGetAttribLocation(program, "aPosition"),
+            aTexCoordLocation = GLES30.glGetAttribLocation(program, "aTexCoord"),
+        )
+    }
+
     private fun initShaderProgram() {
         val vertexShader = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, Shaders.VERTEX_SHADER)
         val fragmentShader = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.FRAGMENT_SHADER_COLOR_RECIPE)
@@ -965,6 +1283,18 @@ class LutRenderer : GLSurfaceView.Renderer {
         // Attribute 位置
         aPositionLocation = GLES30.glGetAttribLocation(programId, "aPosition")
         aTexCoordLocation = GLES30.glGetAttribLocation(programId, "aTexCoord")
+        mainPassLocations = queryColorPassLocations(programId)
+
+        val secondVertexShader = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, Shaders.VERTEX_SHADER)
+        val secondFragmentShader = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.FRAGMENT_SHADER_COLOR_RECIPE_2D)
+        secondPassProgramId = GlUtils.linkProgram(secondVertexShader, secondFragmentShader)
+        GLES30.glDeleteShader(secondVertexShader)
+        GLES30.glDeleteShader(secondFragmentShader)
+        if (secondPassProgramId == 0) {
+            PLog.e(TAG, "Failed to link second pass color recipe program")
+        } else {
+            secondPassLocations = queryColorPassLocations(secondPassProgramId)
+        }
 
         // === 初始化 Passthrough Shader (用于深度采集) ===
         if (passthroughProgramId == 0) {
@@ -1116,14 +1446,6 @@ class LutRenderer : GLSurfaceView.Renderer {
         GLES30.glUniform1i(GLES30.glGetUniformLocation(hdfCompositeProgram, "uBloomTexture"), 1)
         GLES30.glUniform1f(GLES30.glGetUniformLocation(hdfCompositeProgram, "uHalation"), halation)
         drawSimpleQuad(hdfCompositeProgram)
-        // 捕获预览帧/测光
-        if (targetFboId == 0 && shouldCapturePreview) {
-            shouldCapturePreview = false
-            capturePreviewFrameInternal()
-        }
-        if (targetFboId == 0 && meteringEnabled) {
-            runMeteringInternal()
-        }
     }
 
     /** 使用 VBO 绘制全屏四边形（用于 HDF Pass，使用 SIMPLE_VERTEX_SHADER） */
@@ -1373,6 +1695,14 @@ class LutRenderer : GLSurfaceView.Renderer {
         setLutInternal(lutConfig)
     }
 
+    fun setBaselineLut(lutConfig: LutConfig?) {
+        if (!surfaceReady) {
+            pendingBaselineLutConfig = lutConfig
+            return
+        }
+        setBaselineLutInternal(lutConfig)
+    }
+
     /**
      * 内部方法：实际设置 LUT
      * 仅在 Surface 已创建后调用
@@ -1393,6 +1723,23 @@ class LutRenderer : GLSurfaceView.Renderer {
 //            PLog.d(TAG, "LUT set: ${lutConfig.title}, size: ${lutConfig.size}")
         } else {
             lutEnabled = false
+        }
+    }
+
+    private fun setBaselineLutInternal(lutConfig: LutConfig?) {
+        if (baselineLutTextureId != 0) {
+            GlUtils.deleteTexture(baselineLutTextureId)
+            baselineLutTextureId = 0
+        }
+
+        currentBaselineLutConfig = lutConfig
+
+        if (lutConfig != null && lutConfig.isValid()) {
+            baselineLutTextureId = GlUtils.create3DTexture(lutConfig)
+            baselineLutSize = lutConfig.size.toFloat()
+            baselineLutEnabled = true
+        } else {
+            baselineLutEnabled = false
         }
     }
 
@@ -1600,7 +1947,12 @@ class LutRenderer : GLSurfaceView.Renderer {
      * 内部方法：捕获当前帧为小尺寸 Bitmap
      * 必须在 GL 线程中调用
      */
-    private fun capturePreviewFrameInternal() {
+    private fun capturePreviewFrameInternal(
+        sourceTextureId: Int? = null,
+        sourceWidth: Int = viewportWidth,
+        sourceHeight: Int = viewportHeight,
+        compositeWithHdf: Boolean = false
+    ) {
         try {
             if (captureWidth != lastCaptureWidth || captureHeight != lastCaptureHeight) {
                 initCaptureFbo()
@@ -1608,45 +1960,31 @@ class LutRenderer : GLSurfaceView.Renderer {
                 lastCaptureHeight = captureHeight
             }
 
-            // 1. 渲染无効果的原图到 capture FBO
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, captureFboId)
-            GLES30.glViewport(0, 0, captureWidth, captureHeight)
-            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-
-            GLES30.glUseProgram(passthroughProgramId)
-
-            // 使用最终输出旋转。由于这里是顶点变换（MVP），顺时针旋转图像使用负角度。
-            val captureMvp = FloatArray(16)
-            Matrix.setIdentityM(captureMvp, 0)
-            val applyRotation = getApplyRotation()
-            if (applyRotation != 0) {
-                Matrix.rotateM(captureMvp, 0, (-applyRotation).toFloat(), 0f, 0f, 1f)
+            if (sourceTextureId != null && sourceTextureId != 0) {
+                if (compositeWithHdf) {
+                    drawHdfComposite(captureFboId, captureWidth, captureHeight, sourceTextureId)
+                } else {
+                    drawFboToScreen(
+                        fboId = captureFboId,
+                        width = captureWidth,
+                        height = captureHeight,
+                        sourceTextureId = sourceTextureId,
+                        targetMvpMatrix = buildTextureMvpMatrix(
+                            sourceWidth = sourceWidth,
+                            sourceHeight = sourceHeight,
+                            targetWidth = captureWidth,
+                            targetHeight = captureHeight
+                        )
+                    )
+                }
+            } else {
+                drawInternal(
+                    fboId = captureFboId,
+                    width = captureWidth,
+                    height = captureHeight,
+                    targetMvpMatrix = buildMvpMatrix(captureWidth, captureHeight)
+                )
             }
-            GLES30.glUniformMatrix4fv(uPassMVPMatrixLocation, 1, false, captureMvp, 0)
-
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-            GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, cameraTextureId)
-            GLES30.glUniform1i(uPassCameraTextureLocation, 0)
-            GLES30.glUniformMatrix4fv(uPassSTMatrixLocation, 1, false, stMatrix, 0)
-            GLES30.glUniform4f(uPassCropRectLocation, 0f, 0f, 1f, 1f)
-
-            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)
-            GLES30.glEnableVertexAttribArray(aPassPositionLocation)
-            GLES30.glVertexAttribPointer(aPassPositionLocation, POSITION_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
-
-            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, texCoordBufferId)
-            GLES30.glEnableVertexAttribArray(aPassTexCoordLocation)
-            GLES30.glVertexAttribPointer(
-                aPassTexCoordLocation,
-                TEXTURE_COORD_COMPONENT_COUNT,
-                GLES30.GL_FLOAT,
-                false,
-                0,
-                0
-            )
-
-            GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, indexBufferId)
-            GLES30.glDrawElements(GLES30.GL_TRIANGLES, Shaders.DRAW_ORDER.size, GLES30.GL_UNSIGNED_SHORT, 0)
 
             // 2. 读取像素
             val pixelSize = captureWidth * captureHeight * 4
@@ -1681,10 +2019,6 @@ class LutRenderer : GLSurfaceView.Renderer {
             onPreviewFrameCaptured?.invoke(finalBitmap)
 
             // 3. 恢复环境
-            GLES30.glDisableVertexAttribArray(aPassPositionLocation)
-            GLES30.glDisableVertexAttribArray(aPassTexCoordLocation)
-            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
-            GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
             GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
             GLES30.glViewport(0, 0, viewportWidth, viewportHeight)
@@ -1698,40 +2032,41 @@ class LutRenderer : GLSurfaceView.Renderer {
         ByteBuffer.allocateDirect(METERING_SIZE * METERING_SIZE * 4).order(ByteOrder.nativeOrder())
     private var lastRunMeteringTime = 0L
 
-    private fun runMeteringInternal() {
+    private fun runMeteringInternal(
+        sourceTextureId: Int? = null,
+        sourceWidth: Int = viewportWidth,
+        sourceHeight: Int = viewportHeight,
+        compositeWithHdf: Boolean = false
+    ) {
         val now = System.currentTimeMillis()
         if (now - lastRunMeteringTime < 100) return // 限制频率，每秒约 10 次
         lastRunMeteringTime = now
 
-        // 1. 渲染 OES 纹理到小 FBO
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, meteringFboId)
-        GLES30.glViewport(0, 0, METERING_SIZE, METERING_SIZE)
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-
-        GLES30.glUseProgram(passthroughProgramId)
-        // 使用与主渲染相同的 MVP 矩阵，确保测光区域和预览区域（带 Crop）一致
-        GLES30.glUniformMatrix4fv(uPassMVPMatrixLocation, 1, false, mvpMatrix, 0)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, cameraTextureId)
-        GLES30.glUniform1i(uPassCameraTextureLocation, 0)
-        GLES30.glUniformMatrix4fv(uPassSTMatrixLocation, 1, false, stMatrix, 0)
-        GLES30.glUniform4f(uPassCropRectLocation, 0f, 0f, 1f, 1f)
-
-        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)
-        GLES30.glEnableVertexAttribArray(aPassPositionLocation)
-        GLES30.glVertexAttribPointer(aPassPositionLocation, POSITION_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
-
-        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, texCoordBufferId)
-        GLES30.glEnableVertexAttribArray(aPassTexCoordLocation)
-        GLES30.glVertexAttribPointer(aPassTexCoordLocation, TEXTURE_COORD_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
-
-        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, indexBufferId)
-        GLES30.glDrawElements(GLES30.GL_TRIANGLES, Shaders.DRAW_ORDER.size, GLES30.GL_UNSIGNED_SHORT, 0)
-
-        GLES30.glDisableVertexAttribArray(aPassPositionLocation)
-        GLES30.glDisableVertexAttribArray(aPassTexCoordLocation)
-        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
-        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
+        if (sourceTextureId != null && sourceTextureId != 0) {
+            if (compositeWithHdf) {
+                drawHdfComposite(meteringFboId, METERING_SIZE, METERING_SIZE, sourceTextureId)
+            } else {
+                drawFboToScreen(
+                    fboId = meteringFboId,
+                    width = METERING_SIZE,
+                    height = METERING_SIZE,
+                    sourceTextureId = sourceTextureId,
+                    targetMvpMatrix = buildTextureMvpMatrix(
+                        sourceWidth = sourceWidth,
+                        sourceHeight = sourceHeight,
+                        targetWidth = METERING_SIZE,
+                        targetHeight = METERING_SIZE
+                    )
+                )
+            }
+        } else {
+            drawInternal(
+                fboId = meteringFboId,
+                width = METERING_SIZE,
+                height = METERING_SIZE,
+                targetMvpMatrix = buildMvpMatrix(METERING_SIZE, METERING_SIZE)
+            )
+        }
 
         // 2. 使用 PBO 读取像素 (减少 CPU 阻塞)
         val pixelSize = METERING_SIZE * METERING_SIZE * 4
@@ -1904,6 +2239,18 @@ class LutRenderer : GLSurfaceView.Renderer {
             GlUtils.deleteTexture(lutTextureId)
             lutTextureId = 0
         }
+        if (baselineLutTextureId != 0) {
+            GlUtils.deleteTexture(baselineLutTextureId)
+            baselineLutTextureId = 0
+        }
+        if (curveTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(curveTextureId), 0)
+            curveTextureId = 0
+        }
+        if (baselineCurveTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(baselineCurveTextureId), 0)
+            baselineCurveTextureId = 0
+        }
 
         // 释放 HDF 实时预览资源
         if (hdfExtractBlurHProgram != 0) GLES30.glDeleteProgram(hdfExtractBlurHProgram)
@@ -1963,14 +2310,34 @@ class LutRenderer : GLSurfaceView.Renderer {
             GLES30.glDeleteTextures(1, intArrayOf(recordTextureId), 0)
             recordTextureId = 0
         }
+        if (fboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(fboId), 0)
+            fboId = 0
+        }
+        if (fboTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(fboTextureId), 0)
+            fboTextureId = 0
+        }
+        if (stackFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(stackFboId), 0)
+            stackFboId = 0
+        }
+        if (stackTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(stackTextureId), 0)
+            stackTextureId = 0
+        }
         recordFboWidth = 0
         recordFboHeight = 0
 
         // 删除程序
         GlUtils.deleteProgram(programId)
         programId = 0
+        GlUtils.deleteProgram(secondPassProgramId)
+        secondPassProgramId = 0
         GlUtils.deleteProgram(passthroughProgramId)
         passthroughProgramId = 0
+        GlUtils.deleteProgram(copyProgramId)
+        copyProgramId = 0
 
         // 释放 SurfaceTexture
         surfaceTexture?.release()
@@ -1979,6 +2346,11 @@ class LutRenderer : GLSurfaceView.Renderer {
         // 重置状态
         surfaceReady = false
         pendingLutConfig = null
+        pendingBaselineLutConfig = null
+        currentLutConfig = null
+        currentBaselineLutConfig = null
+        mainPassLocations = null
+        secondPassLocations = null
     }
 
     /**
@@ -2155,6 +2527,23 @@ class LutRenderer : GLSurfaceView.Renderer {
         curveEnabled = !CurveUtils.isIdentity(masterPts, redPts, greenPts, bluePts)
         if (curveEnabled) {
             pendingCurveBuffer = CurveUtils.buildCurveTextureBuffer(masterPts, redPts, greenPts, bluePts)
+        } else {
+            pendingCurveBuffer = null
+        }
+    }
+
+    fun updateBaselineRecipeParams(params: com.hinnka.mycamera.model.ColorRecipeParams) {
+        baselineRecipeParams = params
+        baselineColorRecipeEnabled = !params.isDefault()
+        val masterPts = params.masterCurvePoints
+        val redPts = params.redCurvePoints
+        val greenPts = params.greenCurvePoints
+        val bluePts = params.blueCurvePoints
+        baselineCurveEnabled = !CurveUtils.isIdentity(masterPts, redPts, greenPts, bluePts)
+        baselinePendingCurveBuffer = if (baselineCurveEnabled) {
+            CurveUtils.buildCurveTextureBuffer(masterPts, redPts, greenPts, bluePts)
+        } else {
+            null
         }
     }
 

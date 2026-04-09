@@ -91,14 +91,20 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.media3.common.DeviceInfo
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
+import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
+import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.raw.RawProfile
+import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
+import com.hinnka.mycamera.ui.camera.LutEditorTarget
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.components.LogViewerDialog
 import com.hinnka.mycamera.ui.components.PaymentDialog
 import com.hinnka.mycamera.ui.components.SliderSettingItem
+import com.hinnka.mycamera.ui.components.LutSelector
 import com.hinnka.mycamera.ui.components.rememberBackgroundPainter
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.viewmodel.CameraViewModel
@@ -163,6 +169,11 @@ fun SettingsScreen(
     val isFetchingAIModels by viewModel.isFetchingAIModels.collectAsState()
     val phantomSaveAsNew by viewModel.phantomSaveAsNew.collectAsState()
     val defaultVirtualAperture by viewModel.defaultVirtualAperture.collectAsState(initial = 0f)
+    val jpgBaselineLutId by viewModel.jpgBaselineLutId.collectAsState()
+    val rawBaselineLutId by viewModel.rawBaselineLutId.collectAsState()
+    val phantomBaselineLutId by viewModel.phantomBaselineLutId.collectAsState()
+    val availableLuts = viewModel.availableLutList
+    val previewThumbnail = viewModel.previewThumbnail
 
     var selectedTab by remember { mutableStateOf(SettingsTab.GENERAL) }
 
@@ -215,6 +226,8 @@ fun SettingsScreen(
     var calibrationExpanded by remember { mutableStateOf(false) }
     var showGhostPermissionDialog by remember { mutableStateOf(false) }
     var isGhostPermissionFlowActive by remember { mutableStateOf(false) }
+    var baselinePickerTarget by remember { mutableStateOf<BaselineColorCorrectionTarget?>(null) }
+    var baselineRecipeEditorTarget by remember { mutableStateOf<BaselineColorCorrectionTarget?>(null) }
 
     val ghostLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult(),
@@ -649,6 +662,43 @@ fun SettingsScreen(
                             value = openAIApiKey ?: "",
                             onValueChange = { viewModel.setOpenAIApiKey(it) }
                         )
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    SettingsSection(title = stringResource(R.string.settings_section_baseline_color_correction)) {
+                        BaselineColorCorrectionSettingItem(
+                            title = stringResource(R.string.settings_baseline_jpg_title),
+                            description = stringResource(R.string.settings_baseline_jpg_description),
+                            selectedLut = availableLuts.find { it.id == jpgBaselineLutId },
+                            onClick = { baselinePickerTarget = BaselineColorCorrectionTarget.JPG }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        BaselineColorCorrectionSettingItem(
+                            title = stringResource(R.string.settings_baseline_raw_title),
+                            description = stringResource(R.string.settings_baseline_raw_description),
+                            selectedLut = availableLuts.find { it.id == rawBaselineLutId },
+                            onClick = { baselinePickerTarget = BaselineColorCorrectionTarget.RAW }
+                        )
+
+                        if (DeviceUtil.canShowPhantom) {
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 12.dp)
+                            )
+
+                            BaselineColorCorrectionSettingItem(
+                                title = stringResource(R.string.settings_baseline_phantom_title),
+                                description = stringResource(R.string.settings_baseline_phantom_description),
+                                selectedLut = availableLuts.find { it.id == phantomBaselineLutId },
+                                onClick = { baselinePickerTarget = BaselineColorCorrectionTarget.PHANTOM }
+                            )
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(24.dp))
@@ -1128,6 +1178,97 @@ fun SettingsScreen(
             onDismiss = { showLogViewerDialog = false }
         )
     }
+
+    baselinePickerTarget?.let { target ->
+        val currentBaselineLutId = when (target) {
+            BaselineColorCorrectionTarget.JPG -> jpgBaselineLutId
+            BaselineColorCorrectionTarget.RAW -> rawBaselineLutId
+            BaselineColorCorrectionTarget.PHANTOM -> phantomBaselineLutId
+        }
+        AlertDialog(
+            onDismissRequest = { baselinePickerTarget = null },
+            title = {
+                Text(
+                    text = when (target) {
+                        BaselineColorCorrectionTarget.JPG -> stringResource(R.string.settings_baseline_jpg_title)
+                        BaselineColorCorrectionTarget.RAW -> stringResource(R.string.settings_baseline_raw_title)
+                        BaselineColorCorrectionTarget.PHANTOM -> stringResource(R.string.settings_baseline_phantom_title)
+                    }
+                )
+            },
+            text = {
+                Column {
+                    Text(
+                        text = stringResource(R.string.settings_baseline_dialog_description),
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    LutSelector(
+                        availableLuts = availableLuts,
+                        currentLutId = currentBaselineLutId,
+                        thumbnail = previewThumbnail,
+                        onLutSelected = { selected ->
+                            viewModel.setBaselineLut(target, selected)
+                            baselinePickerTarget = null
+                        }
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        baselinePickerTarget = null
+                        if (currentBaselineLutId != null) {
+                            baselineRecipeEditorTarget = target
+                        }
+                    },
+                    enabled = currentBaselineLutId != null
+                ) {
+                    Text(stringResource(R.string.settings_baseline_edit_recipe))
+                }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(
+                        onClick = {
+                            viewModel.setBaselineLut(target, null)
+                            baselinePickerTarget = null
+                        }
+                    ) {
+                        Text(stringResource(R.string.settings_baseline_clear))
+                    }
+                    TextButton(onClick = { baselinePickerTarget = null }) {
+                        Text(stringResource(R.string.cancel))
+                    }
+                }
+            }
+        )
+    }
+
+    baselineRecipeEditorTarget?.let { target ->
+        val currentBaselineLutId = when (target) {
+            BaselineColorCorrectionTarget.JPG -> jpgBaselineLutId
+            BaselineColorCorrectionTarget.RAW -> rawBaselineLutId
+            BaselineColorCorrectionTarget.PHANTOM -> phantomBaselineLutId
+        }
+        LaunchedEffect(target, currentBaselineLutId) {
+            if (currentBaselineLutId == null) {
+                baselineRecipeEditorTarget = null
+            }
+        }
+        currentBaselineLutId?.let { lutId ->
+            LutEditBottomSheet(
+                lutId = lutId,
+                editorTarget = when (target) {
+                    BaselineColorCorrectionTarget.JPG -> LutEditorTarget.BASELINE_JPG
+                    BaselineColorCorrectionTarget.RAW -> LutEditorTarget.BASELINE_RAW
+                    BaselineColorCorrectionTarget.PHANTOM -> LutEditorTarget.BASELINE_PHANTOM
+                },
+                onDismiss = { baselineRecipeEditorTarget = null }
+            )
+        }
+    }
 }
 
 /**
@@ -1466,6 +1607,56 @@ fun DropdownSettingItem(
                 }
             }
         }
+    }
+}
+
+@Composable
+fun BaselineColorCorrectionSettingItem(
+    title: String,
+    description: String,
+    selectedLut: LutInfo?,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Normal
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = description,
+                color = Color.White.copy(alpha = 0.6f),
+                fontSize = 13.sp,
+                lineHeight = 18.sp
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = selectedLut?.getName() ?: stringResource(R.string.none),
+                color = if (selectedLut != null) Color(0xFFE5A324) else Color.White.copy(alpha = 0.45f),
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        Spacer(modifier = Modifier.width(16.dp))
+
+        Icon(
+            imageVector = Icons.Default.ChevronRight,
+            contentDescription = null,
+            tint = Color.White.copy(alpha = 0.6f)
+        )
     }
 }
 

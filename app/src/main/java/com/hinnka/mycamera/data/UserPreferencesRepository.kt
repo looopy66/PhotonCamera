@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.LogCurve
 import com.hinnka.mycamera.raw.RawProfile
@@ -48,6 +49,10 @@ data class UserPreferences(
     val captureMode: CaptureMode = CaptureMode.PHOTO,
     val aspectRatio: String = "RATIO_4_3",
     val lutId: String? = null,  // 默认为 null，由 CameraViewModel 根据配置文件设置
+    val phantomLutId: String? = null,
+    val jpgBaselineLutId: String? = null,
+    val rawBaselineLutId: String? = null,
+    val phantomBaselineLutId: String? = null,
     val frameId: String? = null,
     val showHistogram: Boolean = true,
     val showGrid: Boolean = false,  // 网格线显示
@@ -92,7 +97,7 @@ data class UserPreferences(
     val videoFps: VideoFpsPreset = VideoFpsPreset.FPS_30,
     val videoAspectRatio: VideoAspectRatio = VideoAspectRatio.RATIO_16_9,
     val videoLogProfile: VideoLogProfile = VideoLogProfile.OFF,
-    val videoBitrate: VideoBitratePreset = VideoBitratePreset.LOW,
+    val videoBitrate: VideoBitratePreset = VideoBitratePreset.P1,
     val videoStabilizationEnabled: Boolean = true,
     val videoTorchEnabled: Boolean = false,
     val videoCodec: com.hinnka.mycamera.video.VideoCodec = com.hinnka.mycamera.video.VideoCodec.H264,
@@ -125,6 +130,10 @@ class UserPreferencesRepository(private val context: Context) {
         private val CAPTURE_MODE = stringPreferencesKey("capture_mode")
         private val ASPECT_RATIO_KEY = stringPreferencesKey("aspect_ratio")
         private val LUT_ID_KEY = stringPreferencesKey("lut_id")
+        private val PHANTOM_LUT_ID_KEY = stringPreferencesKey("phantom_lut_id")
+        private val JPG_BASELINE_LUT_ID_KEY = stringPreferencesKey("jpg_baseline_lut_id")
+        private val RAW_BASELINE_LUT_ID_KEY = stringPreferencesKey("raw_baseline_lut_id")
+        private val PHANTOM_BASELINE_LUT_ID_KEY = stringPreferencesKey("phantom_baseline_lut_id")
         private val FRAME_ID_KEY = stringPreferencesKey("frame_id")
         private val SHOW_HISTOGRAM = booleanPreferencesKey("show_histogram")
         private val SHOW_GRID = booleanPreferencesKey("show_grid")
@@ -210,6 +219,10 @@ class UserPreferencesRepository(private val context: Context) {
                 captureMode = CaptureMode.valueOf(preferences[CAPTURE_MODE] ?: CaptureMode.PHOTO.name),
                 aspectRatio = preferences[ASPECT_RATIO_KEY] ?: "RATIO_4_3",
                 lutId = preferences[LUT_ID_KEY],  // 不提供默认值，由 CameraViewModel 处理
+                phantomLutId = preferences[PHANTOM_LUT_ID_KEY],
+                jpgBaselineLutId = preferences[JPG_BASELINE_LUT_ID_KEY],
+                rawBaselineLutId = preferences[RAW_BASELINE_LUT_ID_KEY],
+                phantomBaselineLutId = preferences[PHANTOM_BASELINE_LUT_ID_KEY],
                 frameId = preferences[FRAME_ID_KEY],
                 showHistogram = preferences[SHOW_HISTOGRAM] ?: true,
                 showGrid = preferences[SHOW_GRID] ?: false,
@@ -266,7 +279,7 @@ class UserPreferencesRepository(private val context: Context) {
                     preferences[VIDEO_LOG_PROFILE] ?: VideoLogProfile.OFF.name
                 ),
                 videoBitrate = VideoBitratePreset.valueOf(
-                    preferences[VIDEO_BITRATE] ?: VideoBitratePreset.LOW.name
+                    preferences[VIDEO_BITRATE] ?: VideoBitratePreset.P1.name
                 ),
                 videoStabilizationEnabled = preferences[VIDEO_STABILIZATION_ENABLED] ?: true,
                 videoTorchEnabled = preferences[VIDEO_TORCH_ENABLED] ?: false,
@@ -371,6 +384,34 @@ class UserPreferencesRepository(private val context: Context) {
                 preferences[LUT_ID_KEY] = lutId
             } else {
                 preferences.remove(LUT_ID_KEY)
+            }
+        }
+    }
+
+    suspend fun savePhantomLutConfig(lutId: String?) {
+        context.dataStore.edit { preferences ->
+            if (lutId != null) {
+                preferences[PHANTOM_LUT_ID_KEY] = lutId
+            } else {
+                preferences.remove(PHANTOM_LUT_ID_KEY)
+            }
+        }
+    }
+
+    suspend fun saveBaselineLutConfig(
+        target: BaselineColorCorrectionTarget,
+        lutId: String?
+    ) {
+        val key = when (target) {
+            BaselineColorCorrectionTarget.JPG -> JPG_BASELINE_LUT_ID_KEY
+            BaselineColorCorrectionTarget.RAW -> RAW_BASELINE_LUT_ID_KEY
+            BaselineColorCorrectionTarget.PHANTOM -> PHANTOM_BASELINE_LUT_ID_KEY
+        }
+        context.dataStore.edit { preferences ->
+            if (lutId != null) {
+                preferences[key] = lutId
+            } else {
+                preferences.remove(key)
             }
         }
     }

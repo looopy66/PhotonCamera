@@ -140,11 +140,23 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
     }
 
+    fun setBaselineLut(lutConfig: LutConfig?) {
+        queueEvent {
+            renderer.setBaselineLut(lutConfig)
+            requestRender()
+        }
+    }
+
     /**
      * 设置 LUT 是否启用
      */
     fun setLutEnabled(enabled: Boolean) {
         renderer.lutEnabled = enabled
+        requestRender()
+    }
+
+    fun setBaselineLutEnabled(enabled: Boolean) {
+        renderer.baselineLutEnabled = enabled
         requestRender()
     }
 
@@ -166,6 +178,11 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         requestRender()
     }
 
+    fun setBaselineColorRecipeEnabled(enabled: Boolean) {
+        renderer.baselineColorRecipeEnabled = enabled
+        requestRender()
+    }
+
     /**
      * 设置参数
      */
@@ -177,6 +194,12 @@ class CameraGLSurfaceView @JvmOverloads constructor(
 
         renderer.setRecipeParams(effectiveParams)
         renderer.aperture = aperture
+        requestRender()
+    }
+
+    fun setBaselineParams(params: ColorRecipeParams) {
+        val effectiveParams = ColorPaletteMapper.mergeIntoEffectiveParams(params)
+        renderer.updateBaselineRecipeParams(effectiveParams)
         requestRender()
     }
 

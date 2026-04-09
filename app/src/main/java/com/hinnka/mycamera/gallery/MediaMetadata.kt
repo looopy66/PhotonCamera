@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.PLog
 import org.json.JSONObject
@@ -21,12 +22,15 @@ import kotlin.math.log2
  * 保存 LUT、边框水印、编辑信息和拍摄参数，用于非破坏性编辑和边框水印渲染
  */
 data class MediaMetadata(
-    val version: Int = 12,  // Added video media metadata
+    val version: Int = 13,  // Added baseline color correction metadata
     val mediaType: MediaType = MediaType.IMAGE,
     // 编辑配置
     val lutId: String? = null,
     // 色彩配方配置
     val colorRecipeParams: ColorRecipeParams? = null,
+    val baselineTarget: BaselineColorCorrectionTarget? = null,
+    val baselineLutId: String? = null,
+    val baselineColorRecipeParams: ColorRecipeParams? = null,
     // 软件处理参数（降噪/锐化）
     val sharpening: Float? = null,
     val noiseReduction: Float? = null,
@@ -152,6 +156,13 @@ data class MediaMetadata(
                 put("colorRecipeParams", JSONObject(colorRecipeParams.toJson()))
             } else {
                 put("colorRecipeParams", JSONObject.NULL)
+            }
+            put("baselineTarget", baselineTarget?.name ?: JSONObject.NULL)
+            put("baselineLutId", baselineLutId ?: JSONObject.NULL)
+            if (baselineColorRecipeParams != null) {
+                put("baselineColorRecipeParams", JSONObject(baselineColorRecipeParams.toJson()))
+            } else {
+                put("baselineColorRecipeParams", JSONObject.NULL)
             }
             // 软件处理参数
             put("sharpening", sharpening?.toDouble() ?: JSONObject.NULL)
@@ -294,6 +305,13 @@ data class MediaMetadata(
                 } else {
                     null
                 }
+                val baselineColorRecipeParamsObj = obj.optJSONObject("baselineColorRecipeParams")
+                val baselineColorRecipeParams =
+                    if (baselineColorRecipeParamsObj != null && !obj.isNull("baselineColorRecipeParams")) {
+                        ColorRecipeParams.fromJson(baselineColorRecipeParamsObj.toString())
+                    } else {
+                        null
+                    }
 
                 MediaMetadata(
                     version = obj.optInt("version", 1),
@@ -304,6 +322,11 @@ data class MediaMetadata(
                     },
                     lutId = if (obj.isNull("lutId")) null else obj.optString("lutId"),
                     colorRecipeParams = colorRecipeParams,
+                    baselineTarget = if (obj.isNull("baselineTarget")) null else runCatching {
+                        BaselineColorCorrectionTarget.valueOf(obj.optString("baselineTarget"))
+                    }.getOrNull(),
+                    baselineLutId = if (obj.isNull("baselineLutId")) null else obj.optString("baselineLutId"),
+                    baselineColorRecipeParams = baselineColorRecipeParams,
                     sharpening = if (obj.isNull("sharpening")) null else obj.optDouble("sharpening").toFloat(),
                     noiseReduction = if (obj.isNull("noiseReduction")) null else obj.optDouble("noiseReduction")
                         .toFloat(),

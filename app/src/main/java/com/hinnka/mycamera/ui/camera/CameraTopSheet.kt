@@ -253,23 +253,16 @@ fun CameraTopSheet(
                                         .height(36.dp)
                                         .clip(RoundedCornerShape(8.dp))
                                         .background(
-                                            if (isSelected) Color(0xFFE5A324).copy(alpha = 0.2f) else Color.White.copy(
-                                                alpha = 0.08f
+                                            if (isSelected) Color(0xFFFFD700) else Color.White.copy(
+                                                alpha = 0.12f
                                             )
-                                        )
-                                        .border(
-                                            width = 1.dp,
-                                            color = if (isSelected) Color(0xFFE5A324) else Color.Transparent,
-                                            shape = RoundedCornerShape(8.dp)
                                         )
                                         .clickable { onVideoLogProfileChange(profile) },
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
                                         text = videoLogProfileLabel(profile),
-                                        color = if (isSelected) Color.White else Color.White.copy(
-                                            alpha = 0.5f
-                                        ),
+                                        color = if (isSelected) Color.Black else Color.White,
                                         fontSize = 12.sp,
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                                         modifier = Modifier.padding(horizontal = 4.dp)
@@ -290,7 +283,7 @@ fun CameraTopSheet(
                                 val isSelected = videoBitrate == bitrate
                                 Box(
                                     modifier = Modifier
-                                        .height(44.dp)
+                                        .height(36.dp)
                                         .clip(RoundedCornerShape(8.dp))
                                         .background(
                                             if (isSelected) Color(0xFFFFD700) else Color.White.copy(
@@ -304,7 +297,7 @@ fun CameraTopSheet(
                                         horizontalAlignment = Alignment.CenterHorizontally,
                                         modifier = Modifier
                                             .padding(horizontal = 4.dp)
-                                            .widthIn(min = 48.dp)
+                                            .widthIn(min = 44.dp)
                                     ) {
                                         Text(
                                             text = "${bitrate.bitrateMbps}M",
@@ -329,21 +322,22 @@ fun CameraTopSheet(
                                 val isSelected = videoCodec == codec
                                 Box(
                                     modifier = Modifier
-                                        .weight(1f)
-                                        .height(44.dp)
-                                        .clip(RoundedCornerShape(12.dp))
+                                        .widthIn(min = 44.dp)
+                                        .height(36.dp)
+                                        .clip(RoundedCornerShape(8.dp))
                                         .background(
                                             if (isSelected) Color(0xFFFFD700) else Color.White.copy(
                                                 alpha = 0.12f
                                             )
                                         )
+                                        .padding(horizontal = 4.dp)
                                         .clickable { onVideoCodecChange(codec) },
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
                                         text = codec.displayName,
                                         color = if (isSelected) Color.Black else Color.White,
-                                        fontSize = 13.sp,
+                                        fontSize = 12.sp,
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                                     )
                                 }

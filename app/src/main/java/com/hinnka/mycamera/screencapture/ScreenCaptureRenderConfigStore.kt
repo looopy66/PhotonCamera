@@ -1,41 +1,48 @@
 package com.hinnka.mycamera.screencapture
 
 import android.content.Context
+import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
+import com.hinnka.mycamera.lut.ColorCorrectionPipelineResolver
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.model.ColorRecipeParams
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
-import kotlinx.coroutines.withContext
 
 object ScreenCaptureRenderConfigStore {
     data class RenderConfig(
-        val lutConfig: LutConfig?,
-        val colorRecipeParams: ColorRecipeParams,
+        val baselineLutConfig: LutConfig?,
+        val baselineColorRecipeParams: ColorRecipeParams,
+        val creativeLutConfig: LutConfig?,
+        val creativeColorRecipeParams: ColorRecipeParams,
         val crop: PhantomPipCrop
     )
 
     private val _config = MutableStateFlow(
         RenderConfig(
-            lutConfig = null,
-            colorRecipeParams = ColorRecipeParams.DEFAULT,
+            baselineLutConfig = null,
+            baselineColorRecipeParams = ColorRecipeParams.DEFAULT,
+            creativeLutConfig = null,
+            creativeColorRecipeParams = ColorRecipeParams.DEFAULT,
             crop = PhantomPipCrop()
         )
     )
     val config: StateFlow<RenderConfig> = _config.asStateFlow()
 
     fun save(
-        lutConfig: LutConfig?,
-        colorRecipeParams: ColorRecipeParams,
+        baselineLutConfig: LutConfig?,
+        baselineColorRecipeParams: ColorRecipeParams,
+        creativeLutConfig: LutConfig?,
+        creativeColorRecipeParams: ColorRecipeParams,
         crop: PhantomPipCrop
     ) {
         _config.value = RenderConfig(
-            lutConfig = lutConfig,
-            colorRecipeParams = colorRecipeParams,
+            baselineLutConfig = baselineLutConfig,
+            baselineColorRecipeParams = baselineColorRecipeParams,
+            creativeLutConfig = creativeLutConfig,
+            creativeColorRecipeParams = creativeColorRecipeParams,
             crop = crop.normalized()
         )
     }
@@ -47,21 +54,27 @@ object ScreenCaptureRenderConfigStore {
     ) {
         val repository = ContentRepository.getInstance(context.applicationContext)
         val preferences = repository.userPreferencesRepository.userPreferences.firstOrNull()
-        val effectiveLutId = lutIdOverride
-            ?: preferences?.lutId
-            ?: repository.getAvailableLuts().firstOrNull { it.isDefault }?.id
-
-        val lutManager = repository.lutManager
-        val lutConfig = effectiveLutId?.let { lutId ->
-            withContext(Dispatchers.IO) { lutManager.loadLut(lutId) }
+        val effectivePreferences = preferences?.let {
+            if (lutIdOverride == null) {
+                it
+            } else {
+                it.copy(phantomLutId = lutIdOverride)
+            }
         }
-        val colorRecipeParams = effectiveLutId?.let { lutId ->
-            lutManager.getColorRecipeParams(lutId).first()
-        } ?: ColorRecipeParams.DEFAULT
+        val colorCorrection = effectivePreferences?.let {
+            ColorCorrectionPipelineResolver(repository.lutManager).resolveFromPreferences(
+                target = BaselineColorCorrectionTarget.PHANTOM,
+                preferences = it
+            )
+        }
+        val baselineLayer = colorCorrection?.baselineLayer
+        val creativeLayer = colorCorrection?.creativeLayer
 
         save(
-            lutConfig = lutConfig,
-            colorRecipeParams = colorRecipeParams,
+            baselineLutConfig = baselineLayer?.lutConfig,
+            baselineColorRecipeParams = baselineLayer?.colorRecipeParams ?: ColorRecipeParams.DEFAULT,
+            creativeLutConfig = creativeLayer?.lutConfig,
+            creativeColorRecipeParams = creativeLayer?.colorRecipeParams ?: ColorRecipeParams.DEFAULT,
             crop = cropOverride ?: preferences?.phantomPipCrop ?: _config.value.crop
         )
     }

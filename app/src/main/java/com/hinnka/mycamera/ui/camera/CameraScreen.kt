@@ -104,6 +104,7 @@ fun CameraScreen(
     val showLevelIndicator by viewModel.showLevelIndicator.collectAsState(initial = false)
     val currentLutId by viewModel.currentLutId.collectAsState()
     val currentRecipeParams by viewModel.currentRecipeParams.collectAsState()
+    val currentBaselineRecipeParams by viewModel.currentBaselineRecipeParams.collectAsState()
     val categoryOrder by viewModel.categoryOrder.collectAsState(emptyList())
     val useRaw by viewModel.useRaw.collectAsState()
     val useMFNR by viewModel.useMFNR.collectAsState()
@@ -506,7 +507,9 @@ fun CameraScreen(
                         sensorOrientation = state.getCurrentCameraInfo()?.sensorOrientation ?: 0,
                         lensFacing = if (state.getCurrentCameraInfo()?.lensFacing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT) 0 else 1,
                         calibrationOffset = calibrationOffset,
+                        baselineLut = viewModel.currentBaselineLutConfig,
                         currentLut = viewModel.currentLutConfig,
+                        baselineColorRecipeParams = currentBaselineRecipeParams,
                         colorRecipeParams = previewRecipeParamsOverride ?: currentRecipeParams,
                         focusPoint = state.focusPoint,
                         isFocusing = state.isFocusing,
@@ -958,6 +961,9 @@ fun CameraScreen(
                     .then(
                         if (isXpan) {
                             Modifier.fillMaxHeight()
+                        } else if (isVideoMode) {
+                            //val bottomPadding = (maxHeight - 160.dp).coerceIn(16.dp, 40.dp)
+                            Modifier.height(maxHeight - 170.dp)
                         } else {
                             Modifier.padding(top = 80.dp)
                                 .height(cardHeight - 48.dp)

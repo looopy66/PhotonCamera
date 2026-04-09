@@ -102,6 +102,7 @@ import com.hinnka.mycamera.gallery.MediaManager.saveMetadata
 import com.hinnka.mycamera.livephoto.GoogleLivePhotoCreator
 import com.hinnka.mycamera.livephoto.MotionPhotoWriter
 import com.hinnka.mycamera.livephoto.VivoLivePhotoCreator
+import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -371,17 +372,36 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         val availableLutList = ContentRepository.getInstance(context).getAvailableLuts()
         val photoProcessor = ContentRepository.getInstance(context).photoProcessor
         val preferences = userPreferencesRepository.userPreferences.firstOrNull()
-        val lutId = preferences?.lutId ?: availableLutList.firstOrNull { it.isDefault }?.id
+        val lutId = preferences?.phantomLutId ?: availableLutList.firstOrNull { it.isDefault }?.id
         val saveAsNew = preferences?.phantomSaveAsNew ?: false
         val computationalAperture = preferences?.defaultVirtualAperture?.let { if (it > 0f) it else null }
         val existingPhotoId = if (processingInfo?.uri == uri) processingInfo?.photoId else null
         val photoId =
             MediaManager.importPhoto(context, uri, lutId, computationalAperture, existingPhotoId) ?: run {
                 return@withContext
-            }
+        }
         val metadata = MediaManager.loadMetadata(context, photoId) ?: run {
             return@withContext
         }
+        val phantomBaselineLutId = preferences?.phantomBaselineLutId
+        val updatedMetadata = if (phantomBaselineLutId != null) {
+            metadata.copy(
+                lutId = lutId,
+                baselineTarget = BaselineColorCorrectionTarget.PHANTOM,
+                baselineLutId = phantomBaselineLutId,
+                baselineColorRecipeParams = ContentRepository.getInstance(context)
+                    .lutManager
+                    .loadColorRecipeParams(phantomBaselineLutId, BaselineColorCorrectionTarget.PHANTOM)
+            )
+        } else {
+            metadata.copy(
+                lutId = lutId,
+                baselineTarget = null,
+                baselineLutId = null,
+                baselineColorRecipeParams = null,
+            )
+        }
+        saveMetadata(context, photoId, updatedMetadata)
         if (!isActive) return@withContext
 
         if (uri != processingInfo?.uri) {
@@ -400,7 +420,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         try {
             // 读取照片
             val processedBitmap = photoProcessor.process(
-                context, photoId, metadata,
+                context, photoId, updatedMetadata,
                 0f, 0f, 0f
             ) ?: return@withContext
 
@@ -707,7 +727,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                             val availableLuts = sortedLutData.first
                             val categoryOrder = sortedLutData.second
                             val currentLutIdFlow = remember {
-                                userPreferencesRepository.userPreferences.map { it.lutId }
+                                userPreferencesRepository.userPreferences.map { it.phantomLutId }
                             }
                             val currentLutId by currentLutIdFlow.collectAsState(initial = null)
                             val listState = rememberLazyListState()
@@ -859,7 +879,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                                         )
                                                         .clickable {
                                                             scope.launch {
-                                                                userPreferencesRepository.saveLutConfig(lut.id)
+                                                                userPreferencesRepository.savePhantomLutConfig(lut.id)
                                                                 syncScreenCaptureRenderConfig(lut.id)
                                                                 showFilterPicker = false
                                                                 updateWindowParams(false)

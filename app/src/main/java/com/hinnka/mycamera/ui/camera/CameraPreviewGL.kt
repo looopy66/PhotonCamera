@@ -34,7 +34,9 @@ fun CameraPreviewGL(
     sensorOrientation: Int,
     lensFacing: Int,
     calibrationOffset: Int,
+    baselineLut: LutConfig?,
     currentLut: LutConfig?,
+    baselineColorRecipeParams: ColorRecipeParams,
     colorRecipeParams: ColorRecipeParams,
     focusPoint: Pair<Float, Float>?,
     isFocusing: Boolean,
@@ -155,19 +157,17 @@ fun CameraPreviewGL(
                         }
                     }
                     val colorRecipeEnabled = !colorRecipeParams.isDefault()
+                    val baselineColorRecipeEnabled = !baselineColorRecipeParams.isDefault()
                     // 更新 LUT 设置
-                    if (currentLut != null) {
-                        glSurfaceView.setLut(currentLut)
-                        glSurfaceView.setLutEnabled(true)
-                    } else {
-                        glSurfaceView.setLutEnabled(false)
-                    }
+                    glSurfaceView.setBaselineLut(baselineLut)
+                    glSurfaceView.setBaselineLutEnabled(baselineLut != null)
+                    glSurfaceView.setLut(currentLut)
+                    glSurfaceView.setLutEnabled(currentLut != null)
+                    glSurfaceView.setBaselineColorRecipeEnabled(baselineColorRecipeEnabled)
                     glSurfaceView.setColorRecipeEnabled(colorRecipeEnabled)
 
-                    glSurfaceView.setParams(
-                        params = colorRecipeParams,
-                        aperture = aperture,
-                    )
+                    glSurfaceView.setBaselineParams(baselineColorRecipeParams)
+                    glSurfaceView.setParams(colorRecipeParams, aperture)
 
                     glSurfaceView.setFocusPoint(focusPoint?.let {
                         android.graphics.PointF(
