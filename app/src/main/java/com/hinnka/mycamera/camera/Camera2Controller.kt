@@ -517,9 +517,9 @@ class Camera2Controller(private val context: Context) {
      * @param surfaceTexture SurfaceTexture 用于预览
      */
     @SuppressLint("MissingPermission")
-    fun openCamera(surfaceTexture: SurfaceTexture) {
+    fun openCamera(surfaceTexture: SurfaceTexture, preserveVideoRecording: Boolean = false) {
         // 先关闭旧的相机和资源，防止资源泄漏
-        closeCamera()
+        closeCamera(preserveVideoRecording = preserveVideoRecording)
 
         // 确保在权限已授予后才发现相机（延迟初始化）
         if (_state.value.availableCameras.isEmpty()) {
@@ -1683,7 +1683,7 @@ class Camera2Controller(private val context: Context) {
             PLog.d(TAG, "Switching to lens: $lensType, cameraId: ${cam.cameraId}")
 
             // 关闭当前相机
-            closeCamera()
+            closeCamera(preserveVideoRecording = true)
 
             // 更新状态
             _state.value = _state.value.copy(
@@ -1707,7 +1707,7 @@ class Camera2Controller(private val context: Context) {
             PLog.d(TAG, "Switching to camera ID: $cameraId")
 
             // 关闭当前相机
-            closeCamera()
+            closeCamera(preserveVideoRecording = true)
 
             // 更新状态
             _state.value = _state.value.copy(
@@ -2893,11 +2893,15 @@ class Camera2Controller(private val context: Context) {
     /**
      * 关闭相机
      */
-    fun closeCamera() {
+    fun closeCamera(preserveVideoRecording: Boolean = false) {
         try {
-            if (_state.value.videoRecordingState.isRecording) {
+            val keepVideoRecording = preserveVideoRecording && _state.value.videoRecordingState.isRecording
+            if (keepVideoRecording) {
+                PLog.d(TAG, "Closing camera while keeping active video recording")
+            }
+            if (_state.value.videoRecordingState.isRecording && !keepVideoRecording) {
                 stopVideoRecording()
-            } else {
+            } else if (!keepVideoRecording) {
                 videoRecorder.forceStop()
                 stopVideoRecordingTicker()
                 _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
@@ -2921,10 +2925,14 @@ class Camera2Controller(private val context: Context) {
             cachedLensFacing = CameraCharacteristics.LENS_FACING_BACK
             cachedHardwareLevel = CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED
 
-            _state.value = _state.value.copy(
-                isPreviewActive = false,
-                videoRecordingState = VideoRecordingState()
-            )
+            _state.value = if (keepVideoRecording) {
+                _state.value.copy(isPreviewActive = false)
+            } else {
+                _state.value.copy(
+                    isPreviewActive = false,
+                    videoRecordingState = VideoRecordingState()
+                )
+            }
 
             // 停止 Live Photo 录制，释放旧环境下的 EGL 资源
             livePhotoRecorder.stopRecording()

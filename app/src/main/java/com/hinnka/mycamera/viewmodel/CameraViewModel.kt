@@ -1103,7 +1103,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun switchCamera() {
         cameraController.switchCamera()
-        reopenCamera()
+        reopenCamera(preserveVideoRecording = true)
         zoomRatioByMain = 1f
     }
 
@@ -1112,15 +1112,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun switchToLens(cameraId: String) {
         cameraController.switchToCameraId(cameraId)
-        reopenCamera()
+        reopenCamera(preserveVideoRecording = true)
     }
 
     /**
      * 重新打开相机（切换摄像头后使用）
      */
-    private fun reopenCamera() {
+    private fun reopenCamera(preserveVideoRecording: Boolean = false) {
         currentSurfaceTexture?.let { texture ->
-            cameraController.openCamera(texture)
+            cameraController.openCamera(
+                surfaceTexture = texture,
+                preserveVideoRecording = preserveVideoRecording
+            )
         }
     }
 
