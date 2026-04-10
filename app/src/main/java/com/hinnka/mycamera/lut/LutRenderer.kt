@@ -1771,6 +1771,30 @@ class LutRenderer : GLSurfaceView.Renderer {
     }
 
     /**
+     * App 从后台恢复时，GLSurfaceView 可能保留了 Kotlin 层的 LUT 选择状态，
+     * 但底层 GL texture 已随 Surface/Context 生命周期失效。按当前配置强制重建，
+     * 避免 UI 仍显示已选 LUT 而预览实际走无 LUT 路径。
+     */
+    fun restoreLutTexturesAfterResume() {
+        if (!surfaceReady) {
+            pendingLutConfig = currentLutConfig
+            pendingBaselineLutConfig = currentBaselineLutConfig
+            PLog.d(TAG, "restore LUT deferred: surface not ready")
+            return
+        }
+
+        currentBaselineLutConfig?.let { config ->
+            PLog.d(TAG, "restore baseline LUT texture after resume: ${config.title}")
+            setBaselineLutInternal(config)
+        }
+
+        currentLutConfig?.let { config ->
+            PLog.d(TAG, "restore LUT texture after resume: ${config.title}")
+            setLutInternal(config)
+        }
+    }
+
+    /**
      * 设置预览尺寸
      */
     fun setPreviewSize(width: Int, height: Int) {

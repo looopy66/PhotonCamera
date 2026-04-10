@@ -282,6 +282,13 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         PLog.d(TAG, "onResume")
     }
 
+    fun restoreRenderStateAfterResume() {
+        queueEvent {
+            renderer.restoreLutTexturesAfterResume()
+            requestRender()
+        }
+    }
+
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         PLog.d(TAG, "onDetachedFromWindow")

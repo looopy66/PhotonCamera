@@ -14,6 +14,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.model.ColorRecipeParams
@@ -55,6 +58,26 @@ fun CameraPreviewGL(
     modifier: Modifier = Modifier
 ) {
     val rotationDegrees = OrientationObserver.rotationDegrees
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var glSurfaceViewRef by remember { mutableStateOf<CameraGLSurfaceView?>(null) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_PAUSE -> glSurfaceViewRef?.onPause()
+                Lifecycle.Event.ON_RESUME -> {
+                    glSurfaceViewRef?.onResume()
+                    glSurfaceViewRef?.restoreRenderStateAfterResume()
+                }
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     // 计算预览区域尺寸，保持目标比例
     BoxWithConstraints(
         modifier = modifier
@@ -111,6 +134,7 @@ fun CameraPreviewGL(
                 AndroidView(
                     factory = { ctx ->
                         CameraGLSurfaceView(ctx).apply {
+                            glSurfaceViewRef = this
                             // 通知 GLSurfaceView 已准备好
                             onGLSurfaceViewReady?.invoke(this)
                         }

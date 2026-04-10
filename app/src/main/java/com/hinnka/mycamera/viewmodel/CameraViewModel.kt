@@ -133,6 +133,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         initialValue = ColorRecipeParams.DEFAULT
     )
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     val currentBaselineRecipeParams: StateFlow<ColorRecipeParams> =
         userPreferencesRepository.userPreferences.flatMapLatest { prefs ->
             val target = if (prefs.useRaw) {
@@ -686,6 +687,36 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         currentSurfaceTexture?.let { texture ->
             if (!state.value.isPreviewActive) {
                 cameraController.openCamera(texture)
+            }
+        }
+        restorePreviewLutAfterResume()
+    }
+
+    private fun restorePreviewLutAfterResume() {
+        val lutId = currentLutId.value
+        PLog.d(TAG, "restorePreviewLutAfterResume: lutId=$lutId")
+        viewModelScope.launch {
+            val loadedLut = withContext(Dispatchers.IO) {
+                contentRepository.lutManager.loadLut(lutId)
+            }
+            currentLutConfig = loadedLut
+            cameraController.setLutEnabled(loadedLut != null)
+            glSurfaceView?.let { view ->
+                val currentState = state.value
+                view.setBaselineLut(currentBaselineLutConfig)
+                view.setBaselineLutEnabled(currentBaselineLutConfig != null)
+                view.setBaselineParams(currentBaselineRecipeParams.value)
+                view.setLut(loadedLut)
+                view.setLutEnabled(loadedLut != null)
+                view.setParams(currentRecipeParams.value, if (currentState.isVirtualApertureEnabled) {
+                    currentState.virtualAperture
+                } else {
+                    0f
+                })
+                view.setColorRecipeEnabled(!currentRecipeParams.value.isDefault())
+                view.setVideoRecorder(cameraController.videoRecorder)
+                view.setVideoLogProfile(currentState.videoConfig.logProfile)
+                view.restoreRenderStateAfterResume()
             }
         }
     }
