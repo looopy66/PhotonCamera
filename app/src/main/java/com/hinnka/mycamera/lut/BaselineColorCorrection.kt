@@ -48,7 +48,7 @@ fun UserPreferences.getPrimaryLutId(
     target: BaselineColorCorrectionTarget
 ): String? {
     return when (target) {
-        BaselineColorCorrectionTarget.PHANTOM -> phantomLutId
+        BaselineColorCorrectionTarget.PHANTOM -> lutId ?: phantomLutId
         BaselineColorCorrectionTarget.JPG,
         BaselineColorCorrectionTarget.RAW -> lutId
     }
