@@ -868,7 +868,8 @@ class LutRenderer : GLSurfaceView.Renderer {
         }
         val hdfEnabled = halation > 0.001f
         val bokehNeeded = aperture > 0f && depthMap != null
-        val hasBaselineLayer = hasBaselineLayer()
+        val suppressBaselineLayerForVideoLog = videoLogProfile.isEnabled
+        val hasBaselineLayer = hasBaselineLayer() && !suppressBaselineLayerForVideoLog
         val hasCreativeLayer = hasCreativeLayer()
         val hasDualLayer = hasBaselineLayer && hasCreativeLayer
         uploadPendingCurveTextures()
@@ -884,7 +885,8 @@ class LutRenderer : GLSurfaceView.Renderer {
                 fboId = fboId,
                 width = viewportWidth,
                 height = viewportHeight,
-                preferBaselineLayer = hasDualLayer
+                preferBaselineLayer = hasDualLayer,
+                suppressBaselineLayer = suppressBaselineLayerForVideoLog
             )
 
             var currentTexId = fboTextureId
@@ -1042,7 +1044,12 @@ class LutRenderer : GLSurfaceView.Renderer {
             }
         } else {
             // 直接渲染到屏幕
-            drawInternal(0, viewportWidth, viewportHeight)
+            drawInternal(
+                fboId = 0,
+                width = viewportWidth,
+                height = viewportHeight,
+                suppressBaselineLayer = suppressBaselineLayerForVideoLog
+            )
         }
     }
 
@@ -1102,24 +1109,44 @@ class LutRenderer : GLSurfaceView.Renderer {
         width: Int,
         height: Int,
         targetMvpMatrix: FloatArray = mvpMatrix,
-        preferBaselineLayer: Boolean = false
+        preferBaselineLayer: Boolean = false,
+        suppressBaselineLayer: Boolean = false
     ) {
         val locations = mainPassLocations ?: return
-        val useCreativeLayer = hasCreativeLayer() && !preferBaselineLayer
-        val layerLutConfig = if (useCreativeLayer) currentLutConfig else currentBaselineLutConfig
-        val layerLutTextureId = if (useCreativeLayer) lutTextureId else baselineLutTextureId
-        val layerLutSize = if (useCreativeLayer) lutSize else baselineLutSize
+        val baselineLayerAvailable = hasBaselineLayer() && !suppressBaselineLayer
+        val creativeLayerAvailable = hasCreativeLayer()
+        val useCreativeLayer = creativeLayerAvailable && (!preferBaselineLayer || !baselineLayerAvailable)
+        val useBaselineLayer = !useCreativeLayer && baselineLayerAvailable
+        val layerLutConfig = when {
+            useCreativeLayer -> currentLutConfig
+            useBaselineLayer -> currentBaselineLutConfig
+            else -> null
+        }
+        val layerLutTextureId = when {
+            useCreativeLayer -> lutTextureId
+            useBaselineLayer -> baselineLutTextureId
+            else -> 0
+        }
+        val layerLutSize = if (useBaselineLayer) baselineLutSize else lutSize
         val layerLutEnabled = if (useCreativeLayer) {
             lutEnabled && currentLutConfig != null
-        } else {
+        } else if (useBaselineLayer) {
             baselineLutEnabled && currentBaselineLutConfig != null
+        } else {
+            false
         }
-        val layerParams = if (useCreativeLayer) getCurrentRecipeParams() else baselineRecipeParams
-        val layerCurveTextureId = if (useCreativeLayer) curveTextureId else baselineCurveTextureId
+        val layerParams = when {
+            useCreativeLayer -> getCurrentRecipeParams()
+            useBaselineLayer -> baselineRecipeParams
+            else -> com.hinnka.mycamera.model.ColorRecipeParams.DEFAULT
+        }
+        val layerCurveTextureId = if (useBaselineLayer) baselineCurveTextureId else curveTextureId
         val layerCurveEnabled = if (useCreativeLayer) {
             curveEnabled && curveTextureId != 0
-        } else {
+        } else if (useBaselineLayer) {
             baselineCurveEnabled && baselineCurveTextureId != 0
+        } else {
+            false
         }
         drawColorPass(
             locations = locations,
