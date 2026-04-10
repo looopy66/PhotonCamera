@@ -202,12 +202,6 @@ class Camera2Controller(private val context: Context) {
     // canRetry: 是否可以重试打开相机
     var onCameraError: ((errorCode: Int, message: String, canRetry: Boolean) -> Unit)? = null
 
-    private val linearToneMapCurve = TonemapCurve(
-        floatArrayOf(0f, 0f, 1f, 1f),
-        floatArrayOf(0f, 0f, 1f, 1f),
-        floatArrayOf(0f, 0f, 1f, 1f)
-    )
-
     fun onImageRelease() {
         val count = openImagesCount.decrementAndGet()
         if (MAX_IMAGES - count >= state.value.multiFrameCount) {
@@ -1229,34 +1223,19 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun applyToneMapSettings(builder: CaptureRequest.Builder, state: CameraState, isCapture: Boolean) {
-        if (state.captureMode != CaptureMode.VIDEO || !state.videoConfig.logProfile.isEnabled) {
-            val preferredTonemapMode = when {
-                isCapture && state.captureMode == CaptureMode.PHOTO &&
+        val preferredTonemapMode = when {
+            isCapture && state.captureMode == CaptureMode.PHOTO &&
                     availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_HIGH_QUALITY) -> {
-                    CaptureRequest.TONEMAP_MODE_HIGH_QUALITY
-                }
-
-                availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_FAST) -> {
-                    CaptureRequest.TONEMAP_MODE_FAST
-                }
-
-                else -> null
+                CaptureRequest.TONEMAP_MODE_HIGH_QUALITY
             }
-            preferredTonemapMode?.let { builder.set(CaptureRequest.TONEMAP_MODE, it) }
-            return
+
+            availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_FAST) -> {
+                CaptureRequest.TONEMAP_MODE_FAST
+            }
+
+            else -> null
         }
-
-        when {
-            availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE) -> {
-                builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
-                builder.set(CaptureRequest.TONEMAP_CURVE, linearToneMapCurve)
-            }
-
-            availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_GAMMA_VALUE) -> {
-                builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_GAMMA_VALUE)
-                builder.set(CaptureRequest.TONEMAP_GAMMA, 1.0f)
-            }
-        }
+        preferredTonemapMode?.let { builder.set(CaptureRequest.TONEMAP_MODE, it) }
     }
 
     /**

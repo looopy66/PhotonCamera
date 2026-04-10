@@ -269,15 +269,16 @@ object Shaders {
     }
 
     vec3 applyExposureInLinearSpace(vec3 srgbColor, float exposureEv) {
-        vec3 linearColor = srgbToLinear(clamp(srgbColor, 0.0, 1.0));
+        vec3 linearColor = srgbToLinear(max(srgbColor, vec3(0.0)));
         linearColor *= exp2(exposureEv);
         return linearToSrgb(linearColor);
     }
 
+    // NaN 保护
     float sanitizeFloat(float value) {
         if (value != value) return 0.0;
-        if (value > 1.0) return 1.0;
-        if (value < 0.0) return 0.0;
+//        if (value > 1.0) return 1.0;
+//        if (value < 0.0) return 0.0;
         return value;
     }
 
@@ -314,14 +315,14 @@ object Shaders {
         if (abs(toe) < 0.001 && abs(shoulder) < 0.001 && abs(pivot) < 0.001) {
             return color;
         }
-        vec3 safeColor = clamp(color, 0.0, 1.0);
+        vec3 safeColor = clamp(color, 0.0, 1.0); // 曲线数学需要 [0,1] 输入
         float luma = dot(safeColor, W);
         float curvedLuma = applyToneCurveToLuma(luma, toe, shoulder, pivot);
         if (luma < 0.0001) {
             return safeColor;
         }
         vec3 scaled = safeColor * (curvedLuma / luma);
-        return clamp(mix(vec3(curvedLuma), scaled, 0.92), 0.0, 1.0);
+        return mix(vec3(curvedLuma), scaled, 0.92);
     }
 
     bool isLogLutCurve(int curveType) {
@@ -329,8 +330,8 @@ object Shaders {
     }
 
     vec3 bt709Gamma24ToSrgb(vec3 gammaColor) {
-        vec3 linearColor = pow(clamp(gammaColor, 0.0, 1.0), vec3(2.4));
-        return clamp(linearToSrgb(linearColor), 0.0, 1.0);
+        vec3 linearColor = pow(max(gammaColor, vec3(0.0)), vec3(2.4));
+        return linearToSrgb(linearColor);
     }
 
     vec3 linearRgbToOklab(vec3 c) {
@@ -391,7 +392,7 @@ object Shaders {
             return srgbColor;
         }
 
-        vec3 linearColor = srgbToLinear(clamp(srgbColor, 0.0, 1.0));
+        vec3 linearColor = srgbToLinear(max(srgbColor, vec3(0.0)));
         vec3 lab = linearRgbToOklab(linearColor);
         float chroma = length(lab.yz);
         float hue = atan(lab.z, lab.y);
@@ -399,14 +400,14 @@ object Shaders {
         float densityScale = max(0.0, 1.0 + density * CHROMA_BIAS);
         float newChroma = chroma * densityScale;
         const float DENSITY_K = 1.85;
-        float newLightness = clamp(lab.x * exp(-DENSITY_K * density * chroma), 0.0, 1.0);
+        float newLightness = clamp(lab.x * exp(-DENSITY_K * density * chroma), 0.0, 1.0); // OkLab L ∈ [0,1]
         vec3 denseLab = vec3(newLightness, cos(hue) * newChroma, sin(hue) * newChroma);
         vec3 denseLinear = max(oklabToLinearRgb(denseLab), vec3(0.0));
-        return clamp(linearToSrgb(denseLinear), 0.0, 1.0);
+        return linearToSrgb(denseLinear);
     }
 
     vec3 applyLchColorMixer(vec3 srgbColor) {
-        vec3 linearColor = srgbToLinear(clamp(srgbColor, 0.0, 1.0));
+        vec3 linearColor = srgbToLinear(max(srgbColor, vec3(0.0)));
         vec3 lab = linearRgbToOklab(linearColor);
         float chroma = length(lab.yz);
         float hue = atan(lab.z, lab.y);
@@ -462,10 +463,10 @@ object Shaders {
 
         float newHue = hue + hueShift;
         float newChroma = max(0.0, chroma * max(0.0, chromaScale));
-        float newLightness = clamp(lab.x + lightnessShift, 0.0, 1.0);
+        float newLightness = clamp(lab.x + lightnessShift, 0.0, 1.0); // OkLab L ∈ [0,1]
         vec3 mixedLab = vec3(newLightness, cos(newHue) * newChroma, sin(newHue) * newChroma);
         vec3 mixedLinear = max(oklabToLinearRgb(mixedLab), vec3(0.0));
-        return clamp(linearToSrgb(mixedLinear), 0.0, 1.0);
+        return linearToSrgb(mixedLinear);
     }
 
     vec3 applyPrimaryCalibration(vec3 color) {
@@ -513,7 +514,7 @@ object Shaders {
         float bL = uPrimaryLightness.z * 0.5;
         vec3 light_add = vec3(rgb.r * rL + rgb.g * gL + rgb.b * bL);
 
-        return clamp(vec3(minC) + mixed + light_add, 0.0, 1.0);
+        return vec3(minC) + mixed + light_add;
     }
 
     vec3 applyLutCurve(vec3 l, int curveType) {
@@ -767,20 +768,22 @@ object Shaders {
 
         // === 曲线调整（色彩配方之后、LUT 之前） ===
         if (uCurveEnabled) {
-            float r = texture(uCurveTexture, vec2(color.r, 0.5)).r;
-            float g = texture(uCurveTexture, vec2(color.g, 0.5)).g;
-            float b = texture(uCurveTexture, vec2(color.b, 0.5)).b;
+            vec3 clamped = clamp(color.rgb, 0.0, 1.0); // 纹理坐标需要 [0,1]
+            float r = texture(uCurveTexture, vec2(clamped.r, 0.5)).r;
+            float g = texture(uCurveTexture, vec2(clamped.g, 0.5)).g;
+            float b = texture(uCurveTexture, vec2(clamped.b, 0.5)).b;
             color.rgb = sanitizeColor(vec3(r, g, b));
         }
         
         if (uVideoLogEnabled) {
-            vec3 outputColorSpace = applyLutColorSpace(color.rgb, uVideoColorSpace);
+            vec3 linearColor = srgbToLinear(max(color.rgb, vec3(0.0)));
+            vec3 outputColorSpace = applyLutColorSpace(linearColor, uVideoColorSpace);
             color.rgb = sanitizeColor(applyLutCurve(outputColorSpace, uVideoLogCurve));
         }
 
         // === LUT 处理（在色彩配方之后） ===
         if (!uVideoLogEnabled && uLutEnabled && uLutIntensity > 0.0) {
-            vec3 linearRGB = srgbToLinear(color.rgb);
+            vec3 linearRGB = srgbToLinear(max(color.rgb, vec3(0.0)));
             vec3 colorSpaceRGB = applyLutColorSpace(linearRGB, uLutColorSpace);
             vec3 lutInColor = applyLutCurve(colorSpaceRGB, uLutCurve);
             float scale = (uLutSize - 1.0) / uLutSize;
@@ -803,7 +806,7 @@ object Shaders {
             color.rgb = sanitizeColor(color.rgb);
         }
 
-        fragColor = vec4(sanitizeColor(color.rgb), color.a);
+        fragColor = vec4(clamp(sanitizeColor(color.rgb), 0.0, 1.0), color.a);
     }
     """.trimIndent()
 

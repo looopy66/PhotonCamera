@@ -908,7 +908,7 @@ fun SettingsScreen(
 
                         if (isHdrSettingsSupported) {
 
-                            if (state.isHlg10Supported) {
+                            /*if (state.isHlg10Supported) {
                                 HorizontalDivider(
                                     color = Color.White.copy(alpha = 0.1f),
                                     modifier = Modifier.padding(vertical = 12.dp)
@@ -920,7 +920,7 @@ fun SettingsScreen(
                                     checked = useHlg10,
                                     onCheckedChange = { viewModel.setUseHlg10(it) }
                                 )
-                            }
+                            }*/
 
                             HorizontalDivider(
                                 color = Color.White.copy(alpha = 0.1f),
