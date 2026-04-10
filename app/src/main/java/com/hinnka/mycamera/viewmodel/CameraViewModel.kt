@@ -1190,10 +1190,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setCaptureMode(mode: CaptureMode) {
         if (state.value.videoRecordingState.isRecording && mode != state.value.captureMode) return
+        val shouldDisableVideoLog = mode == CaptureMode.PHOTO &&
+            state.value.videoConfig.logProfile != VideoLogProfile.OFF
         cameraController.setCaptureMode(mode)
         reopenCamera()
         viewModelScope.launch {
             userPreferencesRepository.saveCaptureMode(mode)
+            if (shouldDisableVideoLog) {
+                userPreferencesRepository.saveVideoLogProfile(VideoLogProfile.OFF)
+            }
         }
     }
 

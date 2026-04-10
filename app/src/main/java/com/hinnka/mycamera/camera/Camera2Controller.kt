@@ -2313,8 +2313,14 @@ class Camera2Controller(private val context: Context) {
 
     fun setCaptureMode(mode: CaptureMode) {
         if (_state.value.captureMode == mode || _state.value.videoRecordingState.isRecording) return
+        val nextVideoConfig = if (mode == CaptureMode.VIDEO) {
+            _state.value.videoConfig
+        } else {
+            _state.value.videoConfig.copy(logProfile = VideoLogProfile.OFF)
+        }
         val nextState = _state.value.copy(
             captureMode = mode,
+            videoConfig = nextVideoConfig,
             countdownValue = 0,
             isCapturingLivePhoto = false
         )
@@ -2351,7 +2357,12 @@ class Camera2Controller(private val context: Context) {
     }
 
     fun setVideoLogProfile(logProfile: VideoLogProfile) {
-        _state.value = _state.value.copy(videoConfig = _state.value.videoConfig.copy(logProfile = logProfile))
+        val resolvedProfile = if (_state.value.captureMode == CaptureMode.VIDEO) {
+            logProfile
+        } else {
+            VideoLogProfile.OFF
+        }
+        _state.value = _state.value.copy(videoConfig = _state.value.videoConfig.copy(logProfile = resolvedProfile))
         refreshVideoCapabilities()
         previewRequestBuilder?.apply {
             applyBaseCameraSettings(this, isCapture = false)
