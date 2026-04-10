@@ -90,6 +90,9 @@ enum class ActivePanel {
     FILTERS,
 }
 
+private const val InitialPreviewTransitionDelayMillis = 500L
+private const val PreviewTransitionRevealDurationMillis = 800
+
 @Composable
 fun CameraScreen(
     viewModel: CameraViewModel,
@@ -244,7 +247,10 @@ fun CameraScreen(
         animationSpec = if (previewTransitionActive && !previewTransitionRevealing) {
             snap()
         } else {
-            tween(durationMillis = 500, easing = FastOutSlowInEasing)
+            tween(
+                durationMillis = PreviewTransitionRevealDurationMillis,
+                easing = FastOutSlowInEasing
+            )
         },
         label = "previewTransitionCoverFraction"
     )
@@ -256,6 +262,25 @@ fun CameraScreen(
         previewTransitionAwaitingResume = true
         previewTransitionSawPause = false
         onSwitch()
+    }
+
+    fun switchToLensWithPreviewTransition(cameraId: String) {
+        if (cameraId == state.getCurrentCameraInfo()?.cameraId) return
+        runPreviewTransition { viewModel.switchToLens(cameraId) }
+    }
+
+    fun switchCameraWithPreviewTransition() {
+        runPreviewTransition { viewModel.switchCamera() }
+    }
+
+    fun setCaptureModeWithPreviewTransition(mode: CaptureMode) {
+        if (mode == state.captureMode) return
+        runPreviewTransition {
+            if (mode == CaptureMode.VIDEO && state.aspectRatio == AspectRatio.XPAN) {
+                viewModel.setAspectRatio(AspectRatio.RATIO_4_3)
+            }
+            viewModel.setCaptureMode(mode)
+        }
     }
 
     LaunchedEffect(previewTransitionToken, state.isPreviewActive, previewTransitionAwaitingResume) {
@@ -291,8 +316,9 @@ fun CameraScreen(
     LaunchedEffect(state.isPreviewActive, hasPlayedInitialPreviewTransition) {
         if (hasPlayedInitialPreviewTransition || !state.isPreviewActive) return@LaunchedEffect
         previewTransitionActive = true
+        delay(InitialPreviewTransitionDelayMillis)
         previewTransitionRevealing = true
-        delay(220)
+        delay(PreviewTransitionRevealDurationMillis.toLong())
         previewTransitionActive = false
         hasPlayedInitialPreviewTransition = true
     }
@@ -453,7 +479,7 @@ fun CameraScreen(
                     availableCameras = state.availableCameras,
                     currentCameraId = state.getCurrentCameraInfo()?.cameraId ?: "0",
                     onZoomChange = { viewModel.setZoomRatio(it) },
-                    onLensSwitch = { lenId -> viewModel.switchToLens(lenId) },
+                    onLensSwitch = { lensId -> switchToLensWithPreviewTransition(lensId) },
                     onFilterClick = {
                         activePanel = if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
                     },
@@ -533,7 +559,7 @@ fun CameraScreen(
                                                 info?.cameraId ?: "0"
                                             )
                                             if (camera != null && camera.cameraId != info?.cameraId) {
-                                                viewModel.switchToLens(camera.cameraId)
+                                                switchToLensWithPreviewTransition(camera.cameraId)
                                             }
                                             viewModel.setZoomRatio(nextZoom)
                                         }
@@ -824,7 +850,7 @@ fun CameraScreen(
                             availableCameras = state.availableCameras,
                             currentCameraId = state.getCurrentCameraInfo()?.cameraId ?: "0",
                             onZoomChange = { viewModel.setZoomRatio(it) },
-                            onLensSwitch = { lenId -> viewModel.switchToLens(lenId) },
+                            onLensSwitch = { lensId -> switchToLensWithPreviewTransition(lensId) },
                             onFilterClick = {
                                 // Toggle Filter Panel
                                 activePanel =
@@ -863,6 +889,8 @@ fun CameraScreen(
                 onGalleryThumbnailBoundsChanged = { bounds ->
                     galleryThumbnailBounds = bounds
                 },
+                onSwitchCameraClick = ::switchCameraWithPreviewTransition,
+                onCaptureModeSelected = ::setCaptureModeWithPreviewTransition,
                 onCaptureTap = {
                     if (enableDevelopAnimation && state.captureMode == CaptureMode.PHOTO) {
                         viewModel.glSurfaceView?.capturePreviewFrame { bitmap ->
@@ -1185,6 +1213,8 @@ fun Controls(
     useMultipleExposure: Boolean,
     multipleExposureState: com.hinnka.mycamera.viewmodel.MultipleExposureSessionState,
     onGalleryThumbnailBoundsChanged: (Rect) -> Unit,
+    onSwitchCameraClick: () -> Unit,
+    onCaptureModeSelected: (CaptureMode) -> Unit,
     onCaptureTap: () -> Unit,
     onGalleryClick: () -> Unit,
     modifier: Modifier = Modifier.fillMaxSize()
@@ -1274,7 +1304,7 @@ fun Controls(
                     }
                 } else {
                     IconButton(
-                        onClick = { viewModel.switchCamera() },
+                        onClick = onSwitchCameraClick,
                         modifier = Modifier
                             .align(Alignment.CenterEnd)
                             .padding(end = 40.dp)
@@ -1296,12 +1326,7 @@ fun Controls(
             CaptureModeSwitcher(
                 captureMode = state.captureMode,
                 enabled = !state.videoRecordingState.isRecording,
-                onModeSelected = { mode ->
-                    if (mode == CaptureMode.VIDEO && state.aspectRatio == AspectRatio.XPAN) {
-                        viewModel.setAspectRatio(AspectRatio.RATIO_4_3)
-                    }
-                    viewModel.setCaptureMode(mode)
-                }
+                onModeSelected = onCaptureModeSelected
             )
         }
     }
