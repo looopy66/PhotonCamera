@@ -1,10 +1,12 @@
 package com.hinnka.mycamera.ui.gallery
 
 import android.app.Activity
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.ColorSpace
 import android.net.Uri
 import android.os.Build
+import android.provider.OpenableColumns
 import android.view.LayoutInflater
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -53,10 +55,13 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import coil.request.ImageRequest
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.viewmodel.GalleryTab
+import kotlinx.coroutines.Dispatchers
 import me.saket.telephoto.zoomable.ZoomSpec
 import me.saket.telephoto.zoomable.coil.ZoomableAsyncImage
 import me.saket.telephoto.zoomable.rememberZoomableImageState
 import me.saket.telephoto.zoomable.rememberZoomableState
+import kotlinx.coroutines.withContext
+import java.io.File
 import kotlin.math.min
 
 /**
@@ -183,6 +188,24 @@ fun MediaDetailScreen(
     }
 
     val currentPhoto = photos.getOrNull(pagerState.currentPage)
+    var displayPhotoSize by remember(currentPhoto?.id) { mutableLongStateOf(currentPhoto?.size ?: 0L) }
+
+    LaunchedEffect(currentPhoto?.id, currentPhoto?.size, currentPhoto?.uri, currentPhoto?.sourceUri) {
+        val photo = currentPhoto ?: return@LaunchedEffect
+        displayPhotoSize = photo.size
+        if (displayPhotoSize > 0L) return@LaunchedEffect
+
+        repeat(20) {
+            val resolvedSize = withContext(Dispatchers.IO) {
+                resolveCurrentMediaSize(context, photo)
+            }
+            if (resolvedSize > 0L) {
+                displayPhotoSize = resolvedSize
+                return@LaunchedEffect
+            }
+            delay(300L)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -355,7 +378,7 @@ fun MediaDetailScreen(
                     // 导出
                     if (currentPhoto?.isImage == true && (viewModel.selectedTab == GalleryTab.PHOTON || currentPhoto.relatedPhoto != null)) {
                         IconButton(
-                            onClick = { currentPhoto?.let { showExportDialog = true } },
+                            onClick = { showExportDialog = true },
                             modifier = Modifier
                                 .size(56.dp)
                                 .background(Color.White.copy(alpha = 0.1f), CircleShape)
@@ -621,7 +644,7 @@ fun MediaDetailScreen(
                     }
                     InfoRow(stringResource(R.string.photo_info_date), currentPhoto.getFormattedDate())
                     InfoRow(stringResource(R.string.photo_info_resolution), currentPhoto.getResolution())
-                    InfoRow(stringResource(R.string.photo_info_size), currentPhoto.getFormattedSize())
+                    InfoRow(stringResource(R.string.photo_info_size), currentPhoto.copy(size = displayPhotoSize).getFormattedSize())
                     currentPhoto.metadata?.let {
                         if (currentPhoto.isVideo) {
                             InfoRow(stringResource(R.string.video_info_duration), currentPhoto.getFormattedDuration())
@@ -678,6 +701,49 @@ private fun InfoRow(label: String, value: String) {
             fontSize = 14.sp
         )
     }
+}
+
+private fun resolveCurrentMediaSize(context: Context, photo: MediaData): Long {
+    if (photo.size > 0L) return photo.size
+
+    val candidates = listOfNotNull(photo.uri, photo.sourceUri).distinctBy { it.toString() }
+    candidates.forEach { uri ->
+        val size = resolveUriSize(context, uri)
+        if (size > 0L) return size
+    }
+
+    return photo.size
+}
+
+private fun resolveUriSize(context: Context, uri: Uri): Long {
+    if (uri.scheme == null || uri.scheme == "file") {
+        return uri.path?.let { File(it).takeIf(File::exists)?.length() } ?: 0L
+    }
+
+    if (uri.scheme == "content") {
+        val queriedSize = runCatching {
+            context.contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.SIZE),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                if (!cursor.moveToFirst()) return@use 0L
+                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (sizeIndex != -1 && !cursor.isNull(sizeIndex)) cursor.getLong(sizeIndex) else 0L
+            } ?: 0L
+        }.getOrDefault(0L)
+        if (queriedSize > 0L) return queriedSize
+
+        return runCatching {
+            context.contentResolver.openFileDescriptor(uri, "r")?.use { descriptor ->
+                descriptor.statSize.takeIf { it > 0L } ?: 0L
+            } ?: 0L
+        }.getOrDefault(0L)
+    }
+
+    return 0L
 }
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
