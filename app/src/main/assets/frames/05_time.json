@@ -1,0 +1,27 @@
+{
+    "id": "time",
+    "name": {
+        "en": "Time",
+        "zh": "时间"
+    },
+    "version": 1,
+    "editable": true,
+    "layout": {
+        "position": "OVERLAY",
+        "backgroundColor": "#00000000",
+        "height": 160,
+        "padding": 80
+    },
+    "elements": [
+        {
+            "type": "text",
+            "textType": "DATE",
+            "alignment": "END",
+            "fontSize": 18,
+            "color": "#FFA600",
+            "fontWeight": "BOLD",
+            "fontFamily": "digital-7.ttf",
+            "format": "\"yy MM dd"
+        }
+    ]
+}
