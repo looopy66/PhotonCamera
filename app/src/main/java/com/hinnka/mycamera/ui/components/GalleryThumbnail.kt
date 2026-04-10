@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -21,7 +22,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
-import com.hinnka.mycamera.gallery.PhotoData
+import com.hinnka.mycamera.gallery.MediaData
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 
 /**
@@ -30,7 +31,7 @@ import com.hinnka.mycamera.viewmodel.GalleryViewModel
  */
 @Composable
 fun GalleryThumbnail(
-    latestPhoto: PhotoData?,
+    latestPhoto: MediaData?,
     viewModel: GalleryViewModel,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -64,6 +65,14 @@ fun GalleryThumbnail(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
             )
+            if (latestPhoto.isVideo) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
         } else {
             // 没有照片时显示图标
             Icon(

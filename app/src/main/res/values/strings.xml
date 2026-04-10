@@ -10,6 +10,9 @@
     <string name="histogram">Histogram</string>
     <string name="grid">Grid</string>
     <string name="back">Back</string>
+    <string name="take_photo">Take Photo</string>
+    <string name="pause">Pause</string>
+    <string name="resume">Resume</string>
 
     <!-- Exposure Controls -->
     <string name="exposure_compensation">EV</string>
@@ -27,6 +30,39 @@
     <string name="ratio_4_3">4:3</string>
     <string name="ratio_16_9">16:9</string>
     <string name="ratio_1_1">1:1</string>
+    <string name="capture_mode_photo">Photo</string>
+    <string name="capture_mode_video">Video</string>
+    <string name="video_torch_chip">Torch</string>
+    <string name="video_stabilization_chip">Stab</string>
+    <string name="video_resolution_chip">Res</string>
+    <string name="video_fps_chip">FPS</string>
+    <string name="video_aspect_chip">Aspect</string>
+    <string name="video_log_chip">Log</string>
+    <string name="video_option_on">On</string>
+    <string name="video_option_off">Off</string>
+    <string name="video_aspect_16_9">16:9</string>
+    <string name="video_aspect_21_9">21:9</string>
+    <string name="video_aspect_open_gate">Open Gate</string>
+    <string name="video_log_off">OFF</string>
+    <string name="video_log_flog2_bt2020">F-Log2</string>
+    <string name="video_log_logc4_arri4">LogC4</string>
+    <string name="video_log_acescct_ap1">ACEScct</string>
+    <string name="video_codec_chip">Encoding</string>
+    <string name="video_microphone_title">Microphone</string>
+    <string name="video_microphone_auto">Auto</string>
+    <string name="video_microphone_disconnected">Disconnected</string>
+    <string name="video_microphone_builtin">Built-in</string>
+    <string name="video_microphone_wired">Wired</string>
+    <string name="video_microphone_bluetooth">Bluetooth</string>
+    <string name="video_microphone_ble">BLE</string>
+    <string name="video_microphone_usb">USB</string>
+    <string name="video_microphone_hdmi">HDMI Input</string>
+    <string name="video_microphone_line_in">Line In</string>
+    <string name="video_microphone_telephony">Call Audio</string>
+    <string name="video_microphone_external">External</string>
+    <string name="video_bitrate_chip">Bitrate</string>
+    <string name="video_advanced_settings">Advanced Video Settings</string>
+    <string name="video_rec_label">REC</string>
 
     <!-- Permissions -->
     <string name="camera_permission_required">Camera and Microphone permissions are required</string>
@@ -70,6 +106,7 @@
     <string name="delete_exported_photos">Also delete from system gallery</string>
     <string name="no_photos">No photos yet</string>
     <string name="photo_info">Photo Info</string>
+    <string name="video_info">Video Info</string>
     <string name="filter">LUT</string>
     <string name="intensity">Intensity</string>
     <string name="original">Original</string>
@@ -85,6 +122,15 @@
     <string name="photo_info_aperture">Aperture</string>
     <string name="photo_info_iso">ISO</string>
     <string name="photo_info_shutter_speed">Shutter Speed</string>
+    <string name="video">Video</string>
+    <string name="yes">Yes</string>
+    <string name="no">No</string>
+    <string name="video_info_duration">Duration</string>
+    <string name="video_info_mime">Format</string>
+    <string name="video_info_frame_rate">Frame Rate</string>
+    <string name="video_info_bitrate">Bitrate</string>
+    <string name="video_info_has_audio">Audio</string>
+    <string name="video_info_rotation">Rotation</string>
 
     <!-- Frame Watermark -->
     <string name="frame">Frame</string>
@@ -150,7 +196,17 @@
     <string name="settings_frame_description">Add decorative frame and watermark to photos</string>
     <string name="settings_section_operation">Operations</string>
     <string name="settings_section_image_processing">Image Processing</string>
+    <string name="settings_section_baseline_color_correction">Baseline Color Correction</string>
     <string name="settings_section_software_processing">Fine Tuning</string>
+    <string name="settings_baseline_jpg_title">JPG Baseline Color Correction</string>
+    <string name="settings_baseline_jpg_description">Choose the baseline LUT and recipe applied before the regular JPG creative LUT.</string>
+    <string name="settings_baseline_raw_title">RAW Baseline Color Correction</string>
+    <string name="settings_baseline_raw_description">Choose the baseline LUT and recipe used for RAW rendering, export, and reprocessing.</string>
+    <string name="settings_baseline_phantom_title">Phantom Baseline Color Correction</string>
+    <string name="settings_baseline_phantom_description">Choose the baseline LUT and recipe used before Phantom mode creative LUT processing.</string>
+    <string name="settings_baseline_dialog_description">Select a baseline LUT for this target. It will be applied before the regular creative LUT.</string>
+    <string name="settings_baseline_edit_recipe">Edit Recipe</string>
+    <string name="settings_baseline_clear">Clear</string>
     <string name="settings_shutter_sound">Shutter Sound</string>
     <string name="settings_shutter_sound_description">Play sound when taking a photo</string>
     <string name="settings_vibration">Vibration</string>
@@ -382,6 +438,9 @@
     <string name="no_filters">No custom LUTs</string>
     <string name="no_frames">No custom frames</string>
     <string name="input_curve">Input Curve</string>
+    <string name="photo_lut">Photo LUT</string>
+    <string name="video_lut">Video LUT</string>
+    <string name="video_lut_photo_conversion_hint">Used for color conversion when applying this video LUT to photos.</string>
 
     <!-- Frame Import Help -->
     <string name="help">Help</string>
@@ -408,6 +467,8 @@
     <string name="settings_donation_description">Support the development of Photon Camera</string>
     <string name="settings_default_focal_length">Default Focal Length</string>
     <string name="settings_default_focal_length_description">Set the focal length to automatically switch to when the app starts.</string>
+    <string name="settings_custom_lens_ids">Custom Lens IDs</string>
+    <string name="settings_custom_lens_ids_description">Add camera IDs manually, separated by commas. Available IDs will appear in the lens list with a special marker.</string>
     <string name="settings_custom_focal_length_add">Add Custom Focal Length</string>
     <string name="settings_custom_focal_length_hint">e.g. 35, 50, 85</string>
     <string name="settings_custom_focal_length_max">Maximum 8 custom focal lengths</string>

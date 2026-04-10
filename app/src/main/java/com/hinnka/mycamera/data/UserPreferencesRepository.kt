@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.LogCurve
 import com.hinnka.mycamera.raw.RawProfile
@@ -16,6 +17,13 @@ import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import com.hinnka.mycamera.utils.DeviceUtil
+import com.hinnka.mycamera.video.CaptureMode
+import com.hinnka.mycamera.video.VideoAspectRatio
+import com.hinnka.mycamera.video.VIDEO_AUDIO_INPUT_AUTO
+import com.hinnka.mycamera.video.VideoBitratePreset
+import com.hinnka.mycamera.video.VideoFpsPreset
+import com.hinnka.mycamera.video.VideoLogProfile
+import com.hinnka.mycamera.video.VideoResolutionPreset
 
 /**
  * DataStore 扩展属性
@@ -39,8 +47,13 @@ enum class WidgetTheme {
  * 用户偏好设置数据类
  */
 data class UserPreferences(
+    val captureMode: CaptureMode = CaptureMode.PHOTO,
     val aspectRatio: String = "RATIO_4_3",
     val lutId: String? = null,  // 默认为 null，由 CameraViewModel 根据配置文件设置
+    val phantomLutId: String? = null,
+    val jpgBaselineLutId: String? = null,
+    val rawBaselineLutId: String? = null,
+    val phantomBaselineLutId: String? = null,
     val frameId: String? = null,
     val showHistogram: Boolean = true,
     val showGrid: Boolean = false,  // 网格线显示
@@ -81,6 +94,15 @@ data class UserPreferences(
     val useP010: Boolean = false,
     val useHlg10: Boolean = false,
     val useP3ColorSpace: Boolean = false,
+    val videoResolution: VideoResolutionPreset = VideoResolutionPreset.FHD_1080P,
+    val videoFps: VideoFpsPreset = VideoFpsPreset.FPS_30,
+    val videoAspectRatio: VideoAspectRatio = VideoAspectRatio.RATIO_16_9,
+    val videoLogProfile: VideoLogProfile = VideoLogProfile.OFF,
+    val videoBitrate: VideoBitratePreset = VideoBitratePreset.P1,
+    val videoAudioInputId: String = VIDEO_AUDIO_INPUT_AUTO,
+    val videoStabilizationEnabled: Boolean = true,
+    val videoTorchEnabled: Boolean = false,
+    val videoCodec: com.hinnka.mycamera.video.VideoCodec = com.hinnka.mycamera.video.VideoCodec.H264,
     val autoEnableHdr: Boolean = false,
     val phantomMode: Boolean = false,
     val phantomButtonHidden: Boolean = false,
@@ -96,7 +118,8 @@ data class UserPreferences(
     val useBuiltInAiService: Boolean = false,
     val phantomSaveAsNew: Boolean = false,
     val defaultVirtualAperture: Float = 0f, // 默认虚化光圈，0表示关闭
-    val customFocalLengths: List<Float> = emptyList() // 自定义焦段 (35mm等效)，最多8个
+    val customFocalLengths: List<Float> = emptyList(), // 自定义焦段 (35mm等效)，最多8个
+    val customLensIds: List<String> = emptyList() // 自定义镜头 ID，逗号分隔存储
 )
 
 /**
@@ -107,8 +130,13 @@ class UserPreferencesRepository(private val context: Context) {
 
     companion object {
         // DataStore Keys
+        private val CAPTURE_MODE = stringPreferencesKey("capture_mode")
         private val ASPECT_RATIO_KEY = stringPreferencesKey("aspect_ratio")
         private val LUT_ID_KEY = stringPreferencesKey("lut_id")
+        private val PHANTOM_LUT_ID_KEY = stringPreferencesKey("phantom_lut_id")
+        private val JPG_BASELINE_LUT_ID_KEY = stringPreferencesKey("jpg_baseline_lut_id")
+        private val RAW_BASELINE_LUT_ID_KEY = stringPreferencesKey("raw_baseline_lut_id")
+        private val PHANTOM_BASELINE_LUT_ID_KEY = stringPreferencesKey("phantom_baseline_lut_id")
         private val FRAME_ID_KEY = stringPreferencesKey("frame_id")
         private val SHOW_HISTOGRAM = booleanPreferencesKey("show_histogram")
         private val SHOW_GRID = booleanPreferencesKey("show_grid")
@@ -156,6 +184,15 @@ class UserPreferencesRepository(private val context: Context) {
         private val USE_P010 = booleanPreferencesKey("use_p010")
         private val USE_HLG10 = booleanPreferencesKey("use_hlg10")
         private val USE_P3_COLOR_SPACE = booleanPreferencesKey("use_p3_color_space")
+        private val VIDEO_RESOLUTION = stringPreferencesKey("video_resolution")
+        private val VIDEO_FPS = stringPreferencesKey("video_fps")
+        private val VIDEO_ASPECT_RATIO = stringPreferencesKey("video_aspect_ratio")
+        private val VIDEO_LOG_PROFILE = stringPreferencesKey("video_log_profile")
+        private val VIDEO_BITRATE = stringPreferencesKey("video_bitrate")
+        private val VIDEO_AUDIO_INPUT_ID = stringPreferencesKey("video_audio_input_id")
+        private val VIDEO_STABILIZATION_ENABLED = booleanPreferencesKey("video_stabilization_enabled")
+        private val VIDEO_TORCH_ENABLED = booleanPreferencesKey("video_torch_enabled")
+        private val VIDEO_CODEC = stringPreferencesKey("video_codec")
         private val AUTO_ENABLE_HDR_FOR_HDR_CAPTURE = booleanPreferencesKey("auto_enable_hdr_for_hdr_capture")
         private val PHANTOM_MODE = booleanPreferencesKey("phantom_mode")
         private val PHANTOM_BUTTON_HIDDEN = booleanPreferencesKey("phantom_button_hidden")
@@ -175,6 +212,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val PHANTOM_SAVE_AS_NEW = booleanPreferencesKey("phantom_save_as_new")
         private val DEFAULT_VIRTUAL_APERTURE = floatPreferencesKey("default_virtual_aperture")
         private val CUSTOM_FOCAL_LENGTHS = stringPreferencesKey("custom_focal_lengths")
+        private val CUSTOM_LENS_IDS = stringPreferencesKey("custom_lens_ids")
     }
 
     /**
@@ -183,8 +221,13 @@ class UserPreferencesRepository(private val context: Context) {
     val userPreferences: Flow<UserPreferences> = context.dataStore.data
         .map { preferences ->
             UserPreferences(
+                captureMode = CaptureMode.valueOf(preferences[CAPTURE_MODE] ?: CaptureMode.PHOTO.name),
                 aspectRatio = preferences[ASPECT_RATIO_KEY] ?: "RATIO_4_3",
                 lutId = preferences[LUT_ID_KEY],  // 不提供默认值，由 CameraViewModel 处理
+                phantomLutId = preferences[PHANTOM_LUT_ID_KEY],
+                jpgBaselineLutId = preferences[JPG_BASELINE_LUT_ID_KEY],
+                rawBaselineLutId = preferences[RAW_BASELINE_LUT_ID_KEY],
+                phantomBaselineLutId = preferences[PHANTOM_BASELINE_LUT_ID_KEY],
                 frameId = preferences[FRAME_ID_KEY],
                 showHistogram = preferences[SHOW_HISTOGRAM] ?: true,
                 showGrid = preferences[SHOW_GRID] ?: false,
@@ -228,6 +271,27 @@ class UserPreferencesRepository(private val context: Context) {
                 useP010 = preferences[USE_P010] ?: false,
                 useHlg10 = preferences[USE_HLG10] ?: false,
                 useP3ColorSpace = preferences[USE_P3_COLOR_SPACE] ?: false,
+                videoResolution = VideoResolutionPreset.valueOf(
+                    preferences[VIDEO_RESOLUTION] ?: VideoResolutionPreset.FHD_1080P.name
+                ),
+                videoFps = VideoFpsPreset.valueOf(
+                    preferences[VIDEO_FPS] ?: VideoFpsPreset.FPS_30.name
+                ),
+                videoAspectRatio = VideoAspectRatio.valueOf(
+                    preferences[VIDEO_ASPECT_RATIO] ?: VideoAspectRatio.RATIO_16_9.name
+                ),
+                videoLogProfile = VideoLogProfile.valueOf(
+                    preferences[VIDEO_LOG_PROFILE] ?: VideoLogProfile.OFF.name
+                ),
+                videoBitrate = VideoBitratePreset.valueOf(
+                    preferences[VIDEO_BITRATE] ?: VideoBitratePreset.P1.name
+                ),
+                videoAudioInputId = preferences[VIDEO_AUDIO_INPUT_ID] ?: VIDEO_AUDIO_INPUT_AUTO,
+                videoStabilizationEnabled = preferences[VIDEO_STABILIZATION_ENABLED] ?: true,
+                videoTorchEnabled = preferences[VIDEO_TORCH_ENABLED] ?: false,
+                videoCodec = com.hinnka.mycamera.video.VideoCodec.valueOf(
+                    preferences[VIDEO_CODEC] ?: com.hinnka.mycamera.video.VideoCodec.H264.name
+                ),
                 autoEnableHdr = preferences[AUTO_ENABLE_HDR_FOR_HDR_CAPTURE] ?: false,
                 phantomMode = preferences[PHANTOM_MODE] ?: false,
                 phantomButtonHidden = preferences[PHANTOM_BUTTON_HIDDEN] ?: false,
@@ -251,7 +315,8 @@ class UserPreferencesRepository(private val context: Context) {
                 customFocalLengths = preferences[CUSTOM_FOCAL_LENGTHS]
                     ?.split(",")?.filter { it.isNotEmpty() }
                     ?.mapNotNull { it.toFloatOrNull() }
-                    ?: listOf(35f, 50f, 85f, 200f)
+                    ?: listOf(35f, 50f, 85f, 200f),
+                customLensIds = parseCustomLensIds(preferences[CUSTOM_LENS_IDS])
             )
         }
 
@@ -284,6 +349,14 @@ class UserPreferencesRepository(private val context: Context) {
             .joinToString(",") { "${it.key}:${it.value}" }
     }
 
+    private fun parseCustomLensIds(value: String?): List<String> {
+        if (value.isNullOrBlank()) return emptyList()
+        return value.split(",")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+    }
+
     private fun parseRawLuts(preferences: Preferences): Map<String, String> {
         val result = mutableMapOf<String, String>()
         LogCurve.entries.forEach { entry ->
@@ -297,6 +370,15 @@ class UserPreferencesRepository(private val context: Context) {
             result[entry.name] = value
         }
         return result
+    }
+
+    /**
+     * 保存最近拍摄模式
+     */
+    suspend fun saveCaptureMode(captureMode: CaptureMode) {
+        context.dataStore.edit { preferences ->
+            preferences[CAPTURE_MODE] = captureMode.name
+        }
     }
 
     /**
@@ -317,6 +399,34 @@ class UserPreferencesRepository(private val context: Context) {
                 preferences[LUT_ID_KEY] = lutId
             } else {
                 preferences.remove(LUT_ID_KEY)
+            }
+        }
+    }
+
+    suspend fun savePhantomLutConfig(lutId: String?) {
+        context.dataStore.edit { preferences ->
+            if (lutId != null) {
+                preferences[PHANTOM_LUT_ID_KEY] = lutId
+            } else {
+                preferences.remove(PHANTOM_LUT_ID_KEY)
+            }
+        }
+    }
+
+    suspend fun saveBaselineLutConfig(
+        target: BaselineColorCorrectionTarget,
+        lutId: String?
+    ) {
+        val key = when (target) {
+            BaselineColorCorrectionTarget.JPG -> JPG_BASELINE_LUT_ID_KEY
+            BaselineColorCorrectionTarget.RAW -> RAW_BASELINE_LUT_ID_KEY
+            BaselineColorCorrectionTarget.PHANTOM -> PHANTOM_BASELINE_LUT_ID_KEY
+        }
+        context.dataStore.edit { preferences ->
+            if (lutId != null) {
+                preferences[key] = lutId
+            } else {
+                preferences.remove(key)
             }
         }
     }
@@ -526,6 +636,16 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun saveCustomLensIds(lensIds: List<String>) {
+        context.dataStore.edit { preferences ->
+            preferences[CUSTOM_LENS_IDS] = lensIds
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+                .joinToString(",")
+        }
+    }
+
     /**
      * 保存是否使用多帧合成
      */
@@ -696,6 +816,60 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveUseP3ColorSpace(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[USE_P3_COLOR_SPACE] = enabled
+        }
+    }
+
+    suspend fun saveVideoResolution(resolution: VideoResolutionPreset) {
+        context.dataStore.edit { preferences ->
+            preferences[VIDEO_RESOLUTION] = resolution.name
+        }
+    }
+
+    suspend fun saveVideoFps(fps: VideoFpsPreset) {
+        context.dataStore.edit { preferences ->
+            preferences[VIDEO_FPS] = fps.name
+        }
+    }
+
+    suspend fun saveVideoAspectRatio(aspectRatio: VideoAspectRatio) {
+        context.dataStore.edit { preferences ->
+            preferences[VIDEO_ASPECT_RATIO] = aspectRatio.name
+        }
+    }
+
+    suspend fun saveVideoLogProfile(logProfile: VideoLogProfile) {
+        context.dataStore.edit { preferences ->
+            preferences[VIDEO_LOG_PROFILE] = logProfile.name
+        }
+    }
+
+    suspend fun saveVideoBitrate(bitrate: VideoBitratePreset) {
+        context.dataStore.edit { preferences ->
+            preferences[VIDEO_BITRATE] = bitrate.name
+        }
+    }
+
+    suspend fun saveVideoAudioInputId(audioInputId: String) {
+        context.dataStore.edit { preferences ->
+            preferences[VIDEO_AUDIO_INPUT_ID] = audioInputId
+        }
+    }
+
+    suspend fun saveVideoStabilizationEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[VIDEO_STABILIZATION_ENABLED] = enabled
+        }
+    }
+
+    suspend fun saveVideoTorchEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[VIDEO_TORCH_ENABLED] = enabled
+        }
+    }
+
+    suspend fun saveVideoCodec(codec: com.hinnka.mycamera.video.VideoCodec) {
+        context.dataStore.edit { preferences ->
+            preferences[VIDEO_CODEC] = codec.name
         }
     }
 

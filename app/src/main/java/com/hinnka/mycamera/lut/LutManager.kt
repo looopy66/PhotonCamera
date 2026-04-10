@@ -37,7 +37,10 @@ class LutManager(private val context: Context) {
         private const val BUILT_IN_LUT_FOLDER = "luts"
 
         // 色彩配方 DataStore Key（每个 LUT ID 存一条 JSON）
-        private fun recipeKey(lutId: String) = stringPreferencesKey("${lutId}_recipe")
+        private fun recipeKey(lutId: String, target: BaselineColorCorrectionTarget? = null) =
+            stringPreferencesKey(
+                target?.let { "${it.name.lowercase()}_${lutId}_recipe" } ?: "${lutId}_recipe"
+            )
 
         // 旧版逐字段 Key（仅用于迁移读取，新数据不再写入）
         private val legacyFieldNames = listOf(
@@ -136,11 +139,14 @@ class LutManager(private val context: Context) {
     /**
      * 获取指定 LUT 的色彩配方参数 Flow
      */
-    fun getColorRecipeParams(lutId: String): Flow<ColorRecipeParams> {
+    fun getColorRecipeParams(
+        lutId: String,
+        target: BaselineColorCorrectionTarget? = null
+    ): Flow<ColorRecipeParams> {
         return context.colorRecipeDataStore.data.map { preferences ->
-            val json = preferences[recipeKey(lutId)]
+            val json = preferences[recipeKey(lutId, target)]
             if (json != null) ColorRecipeParams.fromJson(json)
-            else readLegacyParams(preferences, lutId)
+            else if (target == null) readLegacyParams(preferences, lutId) else ColorRecipeParams.DEFAULT
         }
     }
 
@@ -262,10 +268,16 @@ class LutManager(private val context: Context) {
      * @param lutId LUT ID
      * @param params 色彩配方参数
      */
-    suspend fun saveColorRecipeParams(lutId: String, params: ColorRecipeParams) {
+    suspend fun saveColorRecipeParams(
+        lutId: String,
+        params: ColorRecipeParams,
+        target: BaselineColorCorrectionTarget? = null
+    ) {
         context.colorRecipeDataStore.edit { preferences ->
-            preferences[recipeKey(lutId)] = params.toJson()
-            preferences.removeLegacyKeys(lutId)
+            preferences[recipeKey(lutId, target)] = params.toJson()
+            if (target == null) {
+                preferences.removeLegacyKeys(lutId)
+            }
         }
 //        PLog.d(TAG, "Color recipe params saved for LUT [$lutId]: $params")
     }
@@ -276,11 +288,14 @@ class LutManager(private val context: Context) {
      * @param lutId LUT ID
      * @return 色彩配方参数，如果未设置则返回默认值
      */
-    suspend fun loadColorRecipeParams(lutId: String): ColorRecipeParams {
+    suspend fun loadColorRecipeParams(
+        lutId: String,
+        target: BaselineColorCorrectionTarget? = null
+    ): ColorRecipeParams {
         return context.colorRecipeDataStore.data.map { preferences ->
-            val json = preferences[recipeKey(lutId)]
+            val json = preferences[recipeKey(lutId, target)]
             if (json != null) ColorRecipeParams.fromJson(json)
-            else readLegacyParams(preferences, lutId)
+            else if (target == null) readLegacyParams(preferences, lutId) else ColorRecipeParams.DEFAULT
         }.firstOrNull() ?: ColorRecipeParams.DEFAULT
     }
 
@@ -289,8 +304,11 @@ class LutManager(private val context: Context) {
      *
      * @param lutId LUT ID
      */
-    suspend fun resetColorRecipeParams(lutId: String) {
-        saveColorRecipeParams(lutId, ColorRecipeParams.DEFAULT)
+    suspend fun resetColorRecipeParams(
+        lutId: String,
+        target: BaselineColorCorrectionTarget? = null
+    ) {
+        saveColorRecipeParams(lutId, ColorRecipeParams.DEFAULT, target)
         PLog.d(TAG, "Color recipe params reset to default for LUT [$lutId]")
     }
 
@@ -299,10 +317,15 @@ class LutManager(private val context: Context) {
      *
      * @param lutId LUT ID
      */
-    suspend fun deleteColorRecipeParams(lutId: String) {
+    suspend fun deleteColorRecipeParams(
+        lutId: String,
+        target: BaselineColorCorrectionTarget? = null
+    ) {
         context.colorRecipeDataStore.edit { preferences ->
-            preferences.remove(recipeKey(lutId))
-            preferences.removeLegacyKeys(lutId)
+            preferences.remove(recipeKey(lutId, target))
+            if (target == null) {
+                preferences.removeLegacyKeys(lutId)
+            }
         }
         PLog.d(TAG, "Color recipe params deleted for LUT [$lutId]")
     }

@@ -3,11 +3,8 @@ package com.hinnka.mycamera.processor
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.PointF
-import com.hinnka.mycamera.gallery.PhotoManager
+import com.hinnka.mycamera.gallery.MediaManager
 import com.hinnka.mycamera.ml.DepthEstimator
-import com.hinnka.mycamera.utils.PLog
-
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -17,8 +14,11 @@ import kotlinx.coroutines.sync.withLock
  * and realistic bokeh convolution.
  */
 class DepthBokehProcessor(context: Context) {
+    private val appContext = context.applicationContext
     private val processor = OglBokehProcessor()
-    private val depthEstimator = DepthEstimator(context)
+    private val depthEstimator by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        DepthEstimator(appContext)
+    }
     private val mutex = Mutex()
 
     /**
@@ -44,7 +44,7 @@ class DepthBokehProcessor(context: Context) {
         var depthMap: Bitmap? = null
         var depthFile: java.io.File? = null
         if (photoId != null) {
-            depthFile = PhotoManager.getDepthFile(context, photoId)
+            depthFile = MediaManager.getDepthFile(context, photoId)
             if (depthFile.exists()) {
                 depthMap = BitmapFactory.decodeFile(depthFile.absolutePath)
             }
@@ -82,4 +82,3 @@ class DepthBokehProcessor(context: Context) {
         depthEstimator.close()
     }
 }
-

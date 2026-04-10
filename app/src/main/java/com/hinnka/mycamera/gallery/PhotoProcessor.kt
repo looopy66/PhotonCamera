@@ -12,6 +12,8 @@ import com.hinnka.mycamera.hdr.GainmapSourceSet
 import com.hinnka.mycamera.hdr.HlgImageProcessor
 import com.hinnka.mycamera.hdr.HdrBuffer
 import com.hinnka.mycamera.hdr.SourceKind
+import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
+import com.hinnka.mycamera.lut.ColorCorrectionPipelineResolver
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutManager
 import com.hinnka.mycamera.processor.DepthBokehProcessor
@@ -38,11 +40,12 @@ class PhotoProcessor(
     private val depthBokehProcessor: DepthBokehProcessor,
 ) {
     private val hlgImageProcessor = HlgImageProcessor()
+    private val colorCorrectionPipelineResolver = ColorCorrectionPipelineResolver(lutManager)
 
     suspend fun prepareUltraHdrSource(
         context: Context,
         photoId: String,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f
@@ -51,7 +54,7 @@ class PhotoProcessor(
             return null
         }
 
-        val dngFile = PhotoManager.getDngFile(context, photoId)
+        val dngFile = MediaManager.getDngFile(context, photoId)
         if (dngFile.exists()) {
             return processDngForUltraHdr(
                 context = context,
@@ -64,12 +67,12 @@ class PhotoProcessor(
             )
         }
 
-        val yuvFile = PhotoManager.getYuvFile(context, photoId)
+        val yuvFile = MediaManager.getYuvFile(context, photoId)
         if (hlgImageProcessor.isHlgCapture(metadata)) {
             val prepareStart = System.currentTimeMillis()
-            val hdrData = PhotoManager.loadHdrData(context, photoId)
+            val hdrData = MediaManager.loadHdrData(context, photoId)
             if (hdrData != null) {
-                val photoFile = PhotoManager.getPhotoFile(context, photoId)
+                val photoFile = MediaManager.getPhotoFile(context, photoId)
                 val photoBitmap = BitmapFactory.decodeFile(photoFile.absolutePath) ?: return null
                 val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
                 val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
@@ -111,15 +114,16 @@ class PhotoProcessor(
             if (!yuvFile.exists()) {
                 return null
             }
-            val data = PhotoManager.loadYuvData(context, photoId) ?: return null
+            val data = MediaManager.loadYuvData(context, photoId) ?: return null
             return try {
                 val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
                 val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
                 val finalChromaNoiseReduction =
                     metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
-                val lutConfig = metadata.lutId?.let { lutManager.loadLut(it) }
-                val colorRecipeParams = metadata.colorRecipeParams
-                    ?: metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
+                val colorCorrection = resolveColorCorrection(
+                    metadata = metadata,
+                    fallbackTarget = BaselineColorCorrectionTarget.JPG
+                )
                 var source: GainmapSourceSet
                 val sourceElapsed = measureTimeMillis {
                     source = hlgImageProcessor.createSourceFromCompressedArgb(
@@ -130,10 +134,10 @@ class PhotoProcessor(
                 }
                 var sdrBitmap = source.sdrBase
                 val sdrPostElapsed = measureTimeMillis {
-                    sdrBitmap = lutImageProcessor.applyLut(
+                    sdrBitmap = lutImageProcessor.applyLutStack(
                         sdrBitmap,
-                        lutConfig,
-                        colorRecipeParams,
+                        colorCorrection.baselineLayer,
+                        colorCorrection.creativeLayer,
                         finalSharpening,
                         finalNoiseReduction,
                         finalChromaNoiseReduction
@@ -163,7 +167,7 @@ class PhotoProcessor(
             }
         }
 
-        val photoFile = PhotoManager.getPhotoFile(context, photoId)
+        val photoFile = MediaManager.getPhotoFile(context, photoId)
         if (photoFile.exists()) {
             val bitmap = BitmapFactory.decodeFile(photoFile.absolutePath) ?: return null
             val sdrBitmap = processBitmap(
@@ -188,17 +192,17 @@ class PhotoProcessor(
         return null
     }
 
-    fun hasDeferredHlgSource(metadata: PhotoMetadata): Boolean {
+    fun hasDeferredHlgSource(metadata: MediaMetadata): Boolean {
         return hlgImageProcessor.isHlgCapture(metadata)
     }
 
-    private fun readDisplayHdrSdrRatio(): Float = PhotoManager.hdrSdrRatio
+    private fun readDisplayHdrSdrRatio(): Float = MediaManager.hdrSdrRatio
 
     suspend fun prepareUltraHdrSourceFromRawResult(
         context: Context,
         photoId: String?,
         rawResult: RawHdrRenderResult,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f,
@@ -210,9 +214,10 @@ class PhotoProcessor(
         val finalChromaNoiseReduction =
             metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
 
-        val lutConfig = metadata.lutId?.let { lutManager.loadLut(it) }
-        val colorRecipeParams = metadata.colorRecipeParams
-            ?: metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
+        val colorCorrection = resolveColorCorrection(
+            metadata = metadata,
+            fallbackTarget = BaselineColorCorrectionTarget.RAW
+        )
 
         var sdrBitmap = rawResult.sdrBitmap
         var hdrReferenceBitmap = rawResult.hdrReferenceBitmap
@@ -241,13 +246,13 @@ class PhotoProcessor(
                     aperture
                 )
             }
-            photoId?.let { id -> PhotoManager.saveBokehPhoto(context, id, sdrBitmap) }
+            photoId?.let { id -> MediaManager.saveBokehPhoto(context, id, sdrBitmap) }
         }
 
-        sdrBitmap = lutImageProcessor.applyLut(
+        sdrBitmap = lutImageProcessor.applyLutStack(
             sdrBitmap,
-            lutConfig,
-            colorRecipeParams,
+            colorCorrection.baselineLayer,
+            colorCorrection.creativeLayer,
             finalSharpening,
             finalNoiseReduction,
             finalChromaNoiseReduction
@@ -272,14 +277,14 @@ class PhotoProcessor(
     }
 
     suspend fun process(
-        context: Context, photoId: String, metadata: PhotoMetadata,
+        context: Context, photoId: String, metadata: MediaMetadata,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f
     ): Bitmap? {
-        val dngFile = PhotoManager.getDngFile(context, photoId)
-        val yuvFile = PhotoManager.getYuvFile(context, photoId)
-        val photoFile = PhotoManager.getPhotoFile(context, photoId)
+        val dngFile = MediaManager.getDngFile(context, photoId)
+        val yuvFile = MediaManager.getYuvFile(context, photoId)
+        val photoFile = MediaManager.getPhotoFile(context, photoId)
 
         if (dngFile.exists()) {
             return processDng(
@@ -292,7 +297,7 @@ class PhotoProcessor(
                 chromaNoiseReduction
             )
         } else if (yuvFile.exists()) {
-            val data = PhotoManager.loadYuvData(context, photoId) ?: return null
+            val data = MediaManager.loadYuvData(context, photoId) ?: return null
             return processYuv(
                 context,
                 photoId,
@@ -322,7 +327,7 @@ class PhotoProcessor(
         context: Context,
         photoId: String?,
         dngPath: String,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f
@@ -361,7 +366,7 @@ class PhotoProcessor(
         context: Context,
         photoId: String?,
         dngPath: String,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f
@@ -376,9 +381,10 @@ class PhotoProcessor(
             metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
 
         // 1. 应用 LUT
-        val lutConfig = metadata.lutId?.let { lutManager.loadLut(it) }
-        val colorRecipeParams = metadata.colorRecipeParams
-            ?: metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
+        val colorCorrection = resolveColorCorrection(
+            metadata = metadata,
+            fallbackTarget = BaselineColorCorrectionTarget.RAW
+        )
         val cropRegion = metadata.cropRegion
 
         val bitmap = RawDemosaicProcessor.getInstance().process(
@@ -399,13 +405,13 @@ class PhotoProcessor(
                     context, photoId, b,
                     metadata.focusPointX, metadata.focusPointY, aperture
                 )
-                photoId?.let { photoId -> PhotoManager.saveBokehPhoto(context, photoId, b) }
+                photoId?.let { photoId -> MediaManager.saveBokehPhoto(context, photoId, b) }
             }
 
-            lutImageProcessor.applyLut(
+            lutImageProcessor.applyLutStack(
                 b,
-                lutConfig,
-                colorRecipeParams,
+                colorCorrection.baselineLayer,
+                colorCorrection.creativeLayer,
                 finalSharpening,
                 finalNoiseReduction,
                 finalChromaNoiseReduction
@@ -432,7 +438,7 @@ class PhotoProcessor(
         context: Context,
         photoId: String?,
         input: ByteBuffer,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f
@@ -445,18 +451,19 @@ class PhotoProcessor(
         val finalChromaNoiseReduction =
             metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
 
-        val lutConfig = metadata.lutId?.let { lutManager.loadLut(it) }
-        val colorRecipeParams = metadata.colorRecipeParams
-            ?: metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
+        val colorCorrection = resolveColorCorrection(
+            metadata = metadata,
+            fallbackTarget = BaselineColorCorrectionTarget.JPG
+        )
 
         // 1. 应用 LUT
-        var result = lutImageProcessor.applyLut(
+        var result = lutImageProcessor.applyLutStack(
             input.asShortBuffer(),
             metadata.width,
             metadata.height,
             ColorSpace.get(metadata.colorSpace),
-            lutConfig,
-            colorRecipeParams,
+            colorCorrection.baselineLayer,
+            colorCorrection.creativeLayer,
             finalSharpening,
             finalNoiseReduction,
             finalChromaNoiseReduction
@@ -488,7 +495,7 @@ class PhotoProcessor(
         context: Context,
         photoId: String?,
         input: Bitmap,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f,
@@ -496,9 +503,10 @@ class PhotoProcessor(
     ): Bitmap = withContext(Dispatchers.IO) {
         var result = input
 
-        val lutConfig = metadata.lutId?.let { lutManager.loadLut(it) }
-        val colorRecipeParams = metadata.colorRecipeParams
-            ?: metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
+        val colorCorrection = resolveColorCorrection(
+            metadata = metadata,
+            fallbackTarget = BaselineColorCorrectionTarget.JPG
+        )
 
         if (useComputationalAperture) {
             metadata.computationalAperture?.let { aperture ->
@@ -506,15 +514,15 @@ class PhotoProcessor(
                     context, photoId, result,
                     metadata.focusPointX, metadata.focusPointY, aperture
                 )
-                photoId?.let { photoId -> PhotoManager.saveBokehPhoto(context, photoId, result) }
+                photoId?.let { photoId -> MediaManager.saveBokehPhoto(context, photoId, result) }
             }
         }
 
         // 1. 应用 LUT
-        result = lutImageProcessor.applyLut(
+        result = lutImageProcessor.applyLutStack(
             result,
-            lutConfig,
-            colorRecipeParams,
+            colorCorrection.baselineLayer,
+            colorCorrection.creativeLayer,
             sharpening,
             noiseReduction,
             chromaNoiseReduction
@@ -527,7 +535,7 @@ class PhotoProcessor(
     }
 
 
-    private fun applyCrop(input: Bitmap, metadata: PhotoMetadata): Bitmap {
+    private fun applyCrop(input: Bitmap, metadata: MediaMetadata): Bitmap {
         val cropRegion = metadata.postCropRegion ?: return input
         if (cropRegion.width() <= 0 || cropRegion.height() <= 0) return input
         
@@ -553,9 +561,22 @@ class PhotoProcessor(
         return cropped
     }
 
+    private suspend fun resolveColorCorrection(
+        metadata: MediaMetadata,
+        fallbackTarget: BaselineColorCorrectionTarget
+    ) = colorCorrectionPipelineResolver.resolveFromMetadata(
+        fallbackTarget = fallbackTarget,
+        metadata = metadata
+    ).also { stack ->
+        PLog.d(
+            "PhotoProcessor",
+            "Color correction target=${stack.target} baseline=${stack.baselineLutId} creative=${stack.creativeLutId} stacked=${stack.hasStackedLayers}"
+        )
+    }
+
     private suspend fun applyFrame(
         input: Bitmap,
-        metadata: PhotoMetadata,
+        metadata: MediaMetadata,
     ): Bitmap {
         var result = input
         // 2. 应用边框水印

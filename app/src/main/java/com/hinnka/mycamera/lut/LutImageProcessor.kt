@@ -283,6 +283,63 @@ class LutImageProcessor {
         outputBitmap
     }
 
+    suspend fun applyLutStack(
+        argbData: ShortBuffer,
+        width: Int,
+        height: Int,
+        colorSpace: ColorSpace,
+        baselineLayer: LutRenderLayer?,
+        creativeLayer: LutRenderLayer?,
+        sharpeningValue: Float = 0f,
+        noiseReductionValue: Float = 0f,
+        chromaNoiseReductionValue: Float = 0f,
+    ): Bitmap {
+        val hasBaseline = baselineLayer?.lutConfig != null || baselineLayer?.colorRecipeParams != null
+        val hasCreative = creativeLayer?.lutConfig != null || creativeLayer?.colorRecipeParams != null
+        return when {
+            hasBaseline && hasCreative -> {
+                val baseBitmap = applyLut(
+                    argbData = argbData,
+                    width = width,
+                    height = height,
+                    colorSpace = colorSpace,
+                    lutConfig = baselineLayer?.lutConfig,
+                    colorRecipeParams = baselineLayer?.colorRecipeParams,
+                )
+                applyLut(
+                    bitmap = baseBitmap,
+                    lutConfig = creativeLayer?.lutConfig,
+                    colorRecipeParams = creativeLayer?.colorRecipeParams,
+                    sharpeningValue = sharpeningValue,
+                    noiseReductionValue = noiseReductionValue,
+                    chromaNoiseReductionValue = chromaNoiseReductionValue
+                )
+            }
+            hasBaseline -> applyLut(
+                argbData = argbData,
+                width = width,
+                height = height,
+                colorSpace = colorSpace,
+                lutConfig = baselineLayer?.lutConfig,
+                colorRecipeParams = baselineLayer?.colorRecipeParams,
+                sharpeningValue = sharpeningValue,
+                noiseReductionValue = noiseReductionValue,
+                chromaNoiseReductionValue = chromaNoiseReductionValue
+            )
+            else -> applyLut(
+                argbData = argbData,
+                width = width,
+                height = height,
+                colorSpace = colorSpace,
+                lutConfig = creativeLayer?.lutConfig,
+                colorRecipeParams = creativeLayer?.colorRecipeParams,
+                sharpeningValue = sharpeningValue,
+                noiseReductionValue = noiseReductionValue,
+                chromaNoiseReductionValue = chromaNoiseReductionValue
+            )
+        }
+    }
+
     /**
      * 应用 LUT 到 Bitmap
      *
@@ -360,6 +417,51 @@ class LutImageProcessor {
         )
 
         outputBitmap
+    }
+
+    suspend fun applyLutStack(
+        bitmap: Bitmap,
+        baselineLayer: LutRenderLayer?,
+        creativeLayer: LutRenderLayer?,
+        sharpeningValue: Float = 0f,
+        noiseReductionValue: Float = 0f,
+        chromaNoiseReductionValue: Float = 0f,
+    ): Bitmap {
+        val hasBaseline = baselineLayer?.lutConfig != null || baselineLayer?.colorRecipeParams != null
+        val hasCreative = creativeLayer?.lutConfig != null || creativeLayer?.colorRecipeParams != null
+        return when {
+            hasBaseline && hasCreative -> {
+                val baseBitmap = applyLut(
+                    bitmap = bitmap,
+                    lutConfig = baselineLayer?.lutConfig,
+                    colorRecipeParams = baselineLayer?.colorRecipeParams,
+                )
+                applyLut(
+                    bitmap = baseBitmap,
+                    lutConfig = creativeLayer?.lutConfig,
+                    colorRecipeParams = creativeLayer?.colorRecipeParams,
+                    sharpeningValue = sharpeningValue,
+                    noiseReductionValue = noiseReductionValue,
+                    chromaNoiseReductionValue = chromaNoiseReductionValue
+                )
+            }
+            hasBaseline -> applyLut(
+                bitmap = bitmap,
+                lutConfig = baselineLayer?.lutConfig,
+                colorRecipeParams = baselineLayer?.colorRecipeParams,
+                sharpeningValue = sharpeningValue,
+                noiseReductionValue = noiseReductionValue,
+                chromaNoiseReductionValue = chromaNoiseReductionValue
+            )
+            else -> applyLut(
+                bitmap = bitmap,
+                lutConfig = creativeLayer?.lutConfig,
+                colorRecipeParams = creativeLayer?.colorRecipeParams,
+                sharpeningValue = sharpeningValue,
+                noiseReductionValue = noiseReductionValue,
+                chromaNoiseReductionValue = chromaNoiseReductionValue
+            )
+        }
     }
 
     private fun buildLchAdjustmentArrays(params: ColorRecipeParams?): Triple<FloatArray, FloatArray, FloatArray> {

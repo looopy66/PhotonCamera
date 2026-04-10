@@ -337,7 +337,7 @@ private fun DrawScope.drawCurrentValueIndicator(
 private fun getScaleValues(parameter: CameraParameter, minValue: Float, maxValue: Float): List<Float> {
     return when (parameter) {
         CameraParameter.EXPOSURE_COMPENSATION -> {
-            generateSequence(minValue) { it + 1 / 3f }
+            generateSequence(minValue) { it + 0.333f }
                 .takeWhile { it <= maxValue }
                 .filter { it in minValue..maxValue }
                 .toList()

@@ -60,6 +60,11 @@ enum class LogCurve(
         // Sony S-Log3 params
         5.263158f, 0.052632f, 0.255621f, 0.410557f, 6.621944f, 0.092864f,
         0.01125f, 0.167361f, 0.410557f, 38.42f, 0
+    ),
+    VLOG(
+        // Panasonic V-Log params
+        1.0f, 0.00873f, 0.241514f, 0.598206f, 5.6f, 0.125f,
+        0.01f, 0.181f, 0.4233f, 46.08f, 0
     );
 
     fun linearToLog(reflection: Float): Float {
@@ -113,6 +118,7 @@ val LogCurve.rawFolder: String?
             LogCurve.APPLE_LOG -> "raw/apple"
             LogCurve.ACES_CCT -> "raw/aces"
             LogCurve.SLOG3 -> "raw/slog3"
+            LogCurve.VLOG -> "raw/vlog"
             LogCurve.SRGB -> "raw/srgb"
             else -> null
         }

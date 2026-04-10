@@ -1,6 +1,5 @@
 package com.hinnka.mycamera.ui.camera
 
-import android.R.attr.orientation
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -20,14 +19,19 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Undo
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.paint
 import androidx.compose.ui.draw.scale
@@ -41,6 +45,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
@@ -60,14 +65,19 @@ import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraState
-import com.hinnka.mycamera.camera.CameraUtils
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.ui.components.*
 import com.hinnka.mycamera.utils.OrientationObserver
-import com.hinnka.mycamera.screencapture.PhantomPipPreviewCoordinator
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
+import com.hinnka.mycamera.video.CaptureMode
+import com.hinnka.mycamera.video.VideoAudioInputOption
+import com.hinnka.mycamera.video.VideoAspectRatio
+import com.hinnka.mycamera.video.VideoFpsPreset
+import com.hinnka.mycamera.video.VideoLogProfile
+import com.hinnka.mycamera.video.VideoResolutionPreset
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.*
 
@@ -79,6 +89,9 @@ enum class ActivePanel {
     SETTINGS,
     FILTERS,
 }
+
+private const val InitialPreviewTransitionDelayMillis = 500L
+private const val PreviewTransitionRevealDurationMillis = 800
 
 @Composable
 fun CameraScreen(
@@ -97,6 +110,7 @@ fun CameraScreen(
     val showLevelIndicator by viewModel.showLevelIndicator.collectAsState(initial = false)
     val currentLutId by viewModel.currentLutId.collectAsState()
     val currentRecipeParams by viewModel.currentRecipeParams.collectAsState()
+    val currentBaselineRecipeParams by viewModel.currentBaselineRecipeParams.collectAsState()
     val categoryOrder by viewModel.categoryOrder.collectAsState(emptyList())
     val useRaw by viewModel.useRaw.collectAsState()
     val useMFNR by viewModel.useMFNR.collectAsState()
@@ -105,13 +119,22 @@ fun CameraScreen(
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
     val phantomMode by viewModel.phantomMode.collectAsState()
+    val videoCodec by viewModel.videoCodec.collectAsState()
+    val videoAudioInputOptions by viewModel.videoAudioInputOptions.collectAsState()
     val phantomPipPreview by viewModel.phantomPipPreview.collectAsState()
     val multipleExposureState = viewModel.multipleExposureState
     var previewRecipeParamsOverride by remember(currentLutId) { mutableStateOf<ColorRecipeParams?>(null) }
     var pendingCaptureAnimationBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var previewBounds by remember { mutableStateOf<Rect?>(null) }
+    var zoomBarBounds by remember { mutableStateOf<Rect?>(null) }
     var galleryThumbnailBounds by remember { mutableStateOf<Rect?>(null) }
     var captureAnimationSnapshot by remember { mutableStateOf<CaptureAnimationSnapshot?>(null) }
+    var previewTransitionActive by remember { mutableStateOf(true) }
+    var previewTransitionRevealing by remember { mutableStateOf(false) }
+    var previewTransitionToken by remember { mutableIntStateOf(0) }
+    var previewTransitionAwaitingResume by remember { mutableStateOf(false) }
+    var previewTransitionSawPause by remember { mutableStateOf(false) }
+    var hasPlayedInitialPreviewTransition by remember { mutableStateOf(false) }
 
     // 标记相机是否已打开
     var cameraOpened by remember { mutableStateOf(false) }
@@ -213,15 +236,91 @@ fun CameraScreen(
         }
     }
 
-    val previewSize by remember(state.currentCameraId, state.aspectRatio) {
-        val cameraId = state.currentCameraId
-        val size = if (cameraId.isNotEmpty()) {
-            CameraUtils.getFixedPreviewSize(context, cameraId, state.aspectRatio)
+    val previewSize = state.currentPreviewSize
+    val previewAspectRatio = state.getPreviewAspectRatio()
+    val previewTransitionCoverFraction by animateFloatAsState(
+        targetValue = when {
+            previewTransitionActive && !previewTransitionRevealing -> 1f
+            previewTransitionActive -> 0f
+            else -> 0f
+        },
+        animationSpec = if (previewTransitionActive && !previewTransitionRevealing) {
+            snap()
         } else {
-            // 相机未初始化时使用默认尺寸（4:3 = 1440x1080）
-            android.util.Size(1440, 1080)
+            tween(
+                durationMillis = PreviewTransitionRevealDurationMillis,
+                easing = FastOutSlowInEasing
+            )
+        },
+        label = "previewTransitionCoverFraction"
+    )
+
+    fun runPreviewTransition(onSwitch: () -> Unit) {
+        previewTransitionActive = true
+        previewTransitionRevealing = false
+        previewTransitionToken += 1
+        previewTransitionAwaitingResume = true
+        previewTransitionSawPause = false
+        onSwitch()
+    }
+
+    fun switchToLensWithPreviewTransition(cameraId: String) {
+        if (cameraId == state.getCurrentCameraInfo()?.cameraId) return
+        runPreviewTransition { viewModel.switchToLens(cameraId) }
+    }
+
+    fun switchCameraWithPreviewTransition() {
+        runPreviewTransition { viewModel.switchCamera() }
+    }
+
+    fun setCaptureModeWithPreviewTransition(mode: CaptureMode) {
+        if (mode == state.captureMode) return
+        runPreviewTransition {
+            if (mode == CaptureMode.VIDEO && state.aspectRatio == AspectRatio.XPAN) {
+                viewModel.setAspectRatio(AspectRatio.RATIO_4_3)
+            }
+            viewModel.setCaptureMode(mode)
         }
-        mutableStateOf(size)
+    }
+
+    LaunchedEffect(previewTransitionToken, state.isPreviewActive, previewTransitionAwaitingResume) {
+        if (!previewTransitionAwaitingResume) return@LaunchedEffect
+
+        if (!state.isPreviewActive) {
+            previewTransitionSawPause = true
+            return@LaunchedEffect
+        }
+
+        if (previewTransitionSawPause) {
+            delay(80)
+            previewTransitionRevealing = true
+            delay(220)
+            previewTransitionActive = false
+            previewTransitionAwaitingResume = false
+            previewTransitionSawPause = false
+        }
+    }
+
+    LaunchedEffect(previewTransitionToken) {
+        if (previewTransitionToken == 0) return@LaunchedEffect
+        delay(700)
+        if (previewTransitionAwaitingResume) {
+            previewTransitionRevealing = true
+            delay(220)
+            previewTransitionActive = false
+            previewTransitionAwaitingResume = false
+            previewTransitionSawPause = false
+        }
+    }
+
+    LaunchedEffect(state.isPreviewActive, hasPlayedInitialPreviewTransition) {
+        if (hasPlayedInitialPreviewTransition || !state.isPreviewActive) return@LaunchedEffect
+        previewTransitionActive = true
+        delay(InitialPreviewTransitionDelayMillis)
+        previewTransitionRevealing = true
+        delay(PreviewTransitionRevealDurationMillis.toLong())
+        previewTransitionActive = false
+        hasPlayedInitialPreviewTransition = true
     }
 
     var showGhostPermissionDialog by remember { mutableStateOf(false) }
@@ -318,6 +417,10 @@ fun CameraScreen(
 
         val backgroundPainter = rememberBackgroundPainter(viewModel)
 
+        val isVideoMode = state.captureMode == CaptureMode.VIDEO
+        val videoAspectRatio =
+            state.videoConfig.aspectRatio.getPortraitAspectRatio(state.videoCapabilities.openGatePortraitAspectRatio)
+
         val width = with(LocalDensity.current) { constraints.maxWidth.toDp() }
         val height = with(LocalDensity.current) { constraints.maxHeight.toDp() }
         val cardWidth = if (isXpan) {
@@ -327,19 +430,17 @@ fun CameraScreen(
         }
         val cardHeight = if (isXpan) {
             height - 224.dp
+        } else if (isVideoMode) {
+            width / videoAspectRatio
         } else {
-            (width - 24.dp) * 4 / 3 + 56.dp
+            (width - 24.dp) * 4 / 3 + 50.dp
         }
 
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .paint(backgroundPainter, contentScale = ContentScale.Crop)
-                .navigationBarsPadding(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            // 顶部控制条
+        val topBar = @Composable {
             CameraTopBar(
+                captureMode = state.captureMode,
+                isRecording = state.videoRecordingState.isRecording,
+                recordingElapsedMs = state.videoRecordingState.elapsedMs,
                 flashMode = state.flashMode,
                 onFlashToggle = {
                     viewModel.toggleFlash()
@@ -352,242 +453,322 @@ fun CameraScreen(
                 },
                 useLivePhoto = useLivePhoto,
                 onLivePhotoToggle = { viewModel.setUseLivePhoto(!state.useLivePhoto) },
+                videoConfig = state.videoConfig,
+                videoCapabilities = state.videoCapabilities,
+                onVideoTorchToggle = { viewModel.setVideoTorchEnabled(!state.videoConfig.torchEnabled) },
+                onVideoStabilizationToggle = {
+                    viewModel.setVideoStabilizationEnabled(!state.videoConfig.stabilizationEnabled)
+                },
+                onVideoResolutionClick = {
+                    cycleVideoResolution(state)?.let(viewModel::setVideoResolution)
+                },
+                onVideoFpsClick = {
+                    cycleVideoFps(state)?.let(viewModel::setVideoFps)
+                },
                 onSettingsClick = {
                     activePanel = if (activePanel == ActivePanel.SETTINGS) ActivePanel.NONE else ActivePanel.SETTINGS
                 }
             )
+        }
 
-            Box(
-                modifier = Modifier.fillMaxWidth().height(cardHeight),
-                contentAlignment = Alignment.Center
-            ) {
-                Card(
+        val zoomBar = @Composable {
+            if (activePanel == ActivePanel.NONE && !isXpan) {
+                ZoomControlBar(
+                    viewModel = viewModel,
+                    zoomRatio = viewModel.zoomRatioByMain,
+                    availableCameras = state.availableCameras,
+                    currentCameraId = state.getCurrentCameraInfo()?.cameraId ?: "0",
+                    onZoomChange = { viewModel.setZoomRatio(it) },
+                    onLensSwitch = { lensId -> switchToLensWithPreviewTransition(lensId) },
+                    onFilterClick = {
+                        activePanel = if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
+                    },
                     modifier = Modifier
-                        .animateContentSize(alignment = Alignment.Center)
-                        .width(cardWidth)
-                        .height(cardHeight)
-                        .padding(horizontal = if (isXpan) 0.dp else 8.dp),
-                    shape = RoundedCornerShape(4.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color.Black
-                    )
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .padding(4.dp)
-                            .weight(1f)
-                            .background(Color.Black)
-                            .onGloballyPositioned { coordinates ->
-                                previewBounds = coordinates.boundsInRoot()
-                            }
-                            .pointerInput(state.availableCameras) {
-                                var totalDrag = 0f
-                                awaitEachGesture {
-                                    while (true) {
-                                        val event = awaitPointerEvent()
-                                        if (event.changes.size >= 2) {
-                                            // Pinch to zoom
-                                            viewModel.isZooming = true
-                                            val zoom = event.calculateZoom()
-                                            if (zoom != 1f) {
-                                                val nextZoom = (viewModel.zoomRatioByMain * zoom).coerceIn(viewModel.globalMinZoom, viewModel.globalMaxZoom)
-                                                // Check for lens switch
-                                                val info = state.getCurrentCameraInfo()
-                                                val camera = viewModel.findOptimalLens(nextZoom, state.availableCameras, info?.cameraId ?: "0")
-                                                if (camera != null && camera.cameraId != info?.cameraId) {
-                                                    viewModel.switchToLens(camera.cameraId)
-                                                }
-                                                viewModel.setZoomRatio(nextZoom)
-                                            }
-                                            event.changes.forEach { it.consume() }
-                                        } else if (event.changes.size == 1) {
-                                            // Single finger -> horizontal drag for LUT switch
-                                            val change = event.changes[0]
-                                            if (change.pressed) {
-                                                val dragAmount = change.position.x - change.previousPosition.x
-                                                totalDrag += dragAmount
+                        .fillMaxWidth()
+                        .onGloballyPositioned { coordinates ->
+                            zoomBarBounds = coordinates.boundsInRoot()
+                        }
+                )
+            } else {
+                SideEffect {
+                    zoomBarBounds = null
+                }
+            }
+        }
+
+        val viewfinder = @Composable {
+            Card(
+                modifier = Modifier
+                    .animateContentSize(alignment = Alignment.Center)
+                    .width(cardWidth)
+                    .height(cardHeight)
+                    .padding(horizontal = if (isXpan || isVideoMode) 0.dp else 8.dp),
+                shape = RoundedCornerShape(if (isVideoMode) 0.dp else 4.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color.Black
+                )
+            ) {
+                Box(
+                    modifier = Modifier
+                        .padding(if (isVideoMode) 0.dp else 4.dp)
+                        .weight(1f)
+                        .background(Color.Black)
+                        .onGloballyPositioned { coordinates ->
+                            previewBounds = coordinates.boundsInRoot()
+                        }
+                        .pointerInput(state.availableCameras) {
+                            var totalDrag = 0f
+                            awaitEachGesture {
+                                var gestureStartedInZoomBar: Boolean? = null
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    if (gestureStartedInZoomBar == null) {
+                                        val firstPressedChange = event.changes.firstOrNull { it.pressed }
+                                        val currentPreviewBounds = previewBounds
+                                        gestureStartedInZoomBar =
+                                            if (firstPressedChange != null && currentPreviewBounds != null) {
+                                                val positionInRoot =
+                                                    currentPreviewBounds.topLeft + firstPressedChange.position
+                                                zoomBarBounds?.contains(positionInRoot) == true
                                             } else {
-                                                // onDragEnd logic
-                                                if (abs(totalDrag) > 100) {
-                                                    if (totalDrag > 0) {
-                                                        viewModel.switchToPreviousLut()
-                                                    } else {
-                                                        viewModel.switchToNextLut()
-                                                    }
-                                                }
-                                                totalDrag = 0f
-                                                viewModel.isZooming = false
+                                                false
                                             }
-                                        }
-                                        
+                                    }
+                                    if (gestureStartedInZoomBar == true) {
                                         if (event.changes.all { !it.pressed }) {
                                             viewModel.isZooming = false
                                             totalDrag = 0f
                                             break
                                         }
+                                        continue
+                                    }
+                                    if (event.changes.size >= 2) {
+                                        // Pinch to zoom
+                                        viewModel.isZooming = true
+                                        val zoom = event.calculateZoom()
+                                        if (zoom != 1f) {
+                                            val nextZoom = (viewModel.zoomRatioByMain * zoom).coerceIn(
+                                                viewModel.globalMinZoom,
+                                                viewModel.globalMaxZoom
+                                            )
+                                            // Check for lens switch
+                                            val info = state.getCurrentCameraInfo()
+                                            val camera = viewModel.findOptimalLens(
+                                                nextZoom,
+                                                state.availableCameras,
+                                                info?.cameraId ?: "0"
+                                            )
+                                            if (camera != null && camera.cameraId != info?.cameraId) {
+                                                switchToLensWithPreviewTransition(camera.cameraId)
+                                            }
+                                            viewModel.setZoomRatio(nextZoom)
+                                        }
+                                        event.changes.forEach { it.consume() }
+                                    } else if (event.changes.size == 1) {
+                                        // Single finger -> horizontal drag for LUT switch
+                                        val change = event.changes[0]
+                                        if (change.pressed) {
+                                            val dragAmount = change.position.x - change.previousPosition.x
+                                            totalDrag += dragAmount
+                                        } else {
+                                            // onDragEnd logic
+                                            if (abs(totalDrag) > 100) {
+                                                if (totalDrag > 0) {
+                                                    viewModel.switchToPreviousLut()
+                                                } else {
+                                                    viewModel.switchToNextLut()
+                                                }
+                                            }
+                                            totalDrag = 0f
+                                            viewModel.isZooming = false
+                                        }
+                                    }
+
+                                    if (event.changes.all { !it.pressed }) {
+                                        viewModel.isZooming = false
+                                        totalDrag = 0f
+                                        break
                                     }
                                 }
-                            },
-                    ) {
-                        val currentCameraId = state.currentCameraId
-                        val calibrationOffset by viewModel.getCameraOrientationOffset(currentCameraId)
-                            .collectAsState(initial = 0)
+                            }
+                        },
+                ) {
+                    val currentCameraId = state.currentCameraId
+                    val calibrationOffset by viewModel.getCameraOrientationOffset(currentCameraId)
+                        .collectAsState(initial = 0)
 
-                        // 相机预览
-                        CameraPreviewGL(
-                            aspectRatio = state.aspectRatio,
-                            previewSize = previewSize,
-                            sensorOrientation = state.getCurrentCameraInfo()?.sensorOrientation ?: 0,
-                            lensFacing = if (state.getCurrentCameraInfo()?.lensFacing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT) 0 else 1,
-                            calibrationOffset = calibrationOffset,
-                            currentLut = viewModel.currentLutConfig,
-                            colorRecipeParams = previewRecipeParamsOverride ?: currentRecipeParams,
-                            focusPoint = state.focusPoint,
-                            isFocusing = state.isFocusing,
-                            focusSuccess = state.focusSuccess,
-                            onSurfaceTextureReady = { surfaceTexture ->
-                                viewModel.openCamera(surfaceTexture)
-                                cameraOpened = true
-                            },
-                            onSurfaceDestroyed = {
-                                viewModel.closeCamera()
-                                cameraOpened = false
-                            },
-                            onTap = { x, y, w, h ->
-                                // 如果 LUT 面板打开，点击预览区域关闭面板
-                                if (activePanel != ActivePanel.NONE) {
-                                    activePanel = ActivePanel.NONE
-                                } else {
-                                    // 否则执行对焦
-                                    viewModel.focusOnPoint(x, y, w, h)
-                                }
-                            },
-                            onHistogramUpdated = { viewModel.handleHistogramUpdate(it) },
-                            onMeteringUpdated = { w, l -> viewModel.handleMeteringUpdate(w, l) },
-                            onDepthInputAvailable = { viewModel.handleDepthMapUpdate(it) },
-                            onGLSurfaceViewReady = {
-                                viewModel.glSurfaceView = it
-                            },
-                            livePhotoRecorder = viewModel.livePhotoRecorder,
-                            aperture = if (state.isVirtualApertureEnabled) state.virtualAperture else 0f,
-                            modifier = Modifier.fillMaxSize()
-                        )
+                    // 相机预览
+                    CameraPreviewGL(
+                        aspectRatio = previewAspectRatio,
+                        previewSize = previewSize,
+                        sensorOrientation = state.getCurrentCameraInfo()?.sensorOrientation ?: 0,
+                        lensFacing = if (state.getCurrentCameraInfo()?.lensFacing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT) 0 else 1,
+                        calibrationOffset = calibrationOffset,
+                        baselineLut = viewModel.currentBaselineLutConfig,
+                        currentLut = viewModel.currentLutConfig,
+                        baselineColorRecipeParams = currentBaselineRecipeParams,
+                        colorRecipeParams = previewRecipeParamsOverride ?: currentRecipeParams,
+                        focusPoint = state.focusPoint,
+                        isFocusing = state.isFocusing,
+                        focusSuccess = state.focusSuccess,
+                        onSurfaceTextureReady = { surfaceTexture ->
+                            viewModel.openCamera(surfaceTexture)
+                            cameraOpened = true
+                        },
+                        onSurfaceDestroyed = {
+                            viewModel.closeCamera()
+                            cameraOpened = false
+                        },
+                        onTap = { x, y, w, h ->
+                            // 如果 LUT 面板打开，点击预览区域关闭面板
+                            if (activePanel != ActivePanel.NONE) {
+                                activePanel = ActivePanel.NONE
+                            } else {
+                                // 否则执行对焦
+                                viewModel.focusOnPoint(x, y, w, h)
+                            }
+                        },
+                        onHistogramUpdated = { viewModel.handleHistogramUpdate(it) },
+                        onMeteringUpdated = { w, l -> viewModel.handleMeteringUpdate(w, l) },
+                        onDepthInputAvailable = { viewModel.handleDepthMapUpdate(it) },
+                        onGLSurfaceViewReady = {
+                            viewModel.glSurfaceView = it
+                        },
+                        livePhotoRecorder = viewModel.livePhotoRecorder,
+                        videoRecorder = viewModel.videoRecorder,
+                        videoLogProfile = state.videoConfig.logProfile,
+                        aperture = if (state.isVirtualApertureEnabled) state.virtualAperture else 0f,
+                        modifier = Modifier.fillMaxSize()
+                    )
 
-                        // Live Photo Indicator
-                        if (useLivePhoto) {
-                            Surface(
+                    if (previewTransitionActive || previewTransitionCoverFraction > 0.001f) {
+                        val shutterHeightFraction = (previewTransitionCoverFraction / 2f).coerceIn(0f, 0.5f)
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            Box(
                                 modifier = Modifier
-                                    .padding(12.dp)
-                                    .align(Alignment.TopEnd),
-                                color = Color.Black.copy(alpha = 0.8f),
-                                shape = CircleShape
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        painterResource(R.drawable.ic_live_photo),
-                                        contentDescription = null,
-                                        tint = Color.White,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            }
+                                    .fillMaxWidth()
+                                    .fillMaxHeight(shutterHeightFraction)
+                                    .align(Alignment.TopCenter)
+                                    .background(Color.Black)
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .fillMaxHeight(shutterHeightFraction)
+                                    .align(Alignment.BottomCenter)
+                                    .background(Color.Black)
+                            )
                         }
-
-
-                        Box(
-                            modifier = Modifier.fillMaxSize()
-                        ) {
-                            multipleExposureState.previewBitmap?.let { previewBitmap ->
-                                Image(
-                                    bitmap = previewBitmap.asImageBitmap(),
-                                    contentDescription = null,
-                                    modifier = Modifier.fillMaxSize(),
-                                    alpha = 0.45f,
-                                    contentScale = ContentScale.Crop
-                                )
-                            }
-
-                            // 实时直方图 (Overlaid on preview if enabled)
-                            if (state.histogram != null && viewModel.showHistogram) {
-                                HistogramView(
-                                    histogram = state.histogram,
-                                    modifier = Modifier
-                                        .padding(8.dp)
-                                        .size(80.dp, 40.dp)
-                                        .align(Alignment.TopStart)
-                                        .autoRotate(dx = -20.dp, dy = 20.dp)
-                                )
-                            }
-
-                            // 网格线覆盖
-                            if (state.showGrid) {
-                                GridOverlay(
-                                    aspectRatio = state.aspectRatio,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
-
-                            // 水平仪覆盖
-                            if (showLevelIndicator) {
-                                LevelIndicatorOverlay(
-                                    aspectRatio = state.aspectRatio,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
-
-                            if (activePanel == ActivePanel.NONE && !isXpan) {
-                                // Zoom Control Bar (Overlay at bottom of preview)
-                                ZoomControlBar(
-                                    viewModel = viewModel,
-                                    zoomRatio = viewModel.zoomRatioByMain,
-                                    availableCameras = state.availableCameras,
-                                    currentCameraId = state.getCurrentCameraInfo()?.cameraId ?: "0",
-                                    onZoomChange = { viewModel.setZoomRatio(it) },
-                                    onLensSwitch = { lenId -> viewModel.switchToLens(lenId) },
-                                    onFilterClick = {
-                                        // Toggle Filter Panel
-                                        activePanel =
-                                            if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
-                                    },
-                                    modifier = Modifier.align(Alignment.BottomCenter)
-                                )
-                            }
-
-                            // 倒计时覆盖
-                            if (state.countdownValue > 0) {
-                                CountdownOverlay(
-                                    countdownValue = state.countdownValue,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
-
-                            if (burstCapturingCount > 0) {
-                                BurstCaptureOverlay(
-                                    count = burstCapturingCount,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
-
-                            if (useMultipleExposure) {
-                                MultipleExposureOverlay(
-                                    state = multipleExposureState,
-                                    onFinish = { viewModel.finishMultipleExposureSession() },
-                                    onUndo = { viewModel.undoLastMultipleExposureFrame() },
-                                    onCancel = { viewModel.cancelMultipleExposureSession() },
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
-                        }
-
-                        CornerOverlay(
-                            modifier = Modifier.fillMaxSize(),
-                            radius = 4.dp,
-                            color = Color.Black
-                        )
                     }
+
+                    // Live Photo Indicator
+                    if (state.captureMode == CaptureMode.PHOTO && useLivePhoto) {
+                        Surface(
+                            modifier = Modifier
+                                .padding(12.dp)
+                                .align(Alignment.TopEnd),
+                            color = Color.Black.copy(alpha = 0.8f),
+                            shape = CircleShape
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    painterResource(R.drawable.ic_live_photo),
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+
+
+                    Box(
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        multipleExposureState.previewBitmap?.let { previewBitmap ->
+                            Image(
+                                bitmap = previewBitmap.asImageBitmap(),
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxSize(),
+                                alpha = 0.45f,
+                                contentScale = ContentScale.Crop
+                            )
+                        }
+
+                        // 实时直方图 (Overlaid on preview if enabled)
+                        if (state.captureMode == CaptureMode.PHOTO && state.histogram != null && viewModel.showHistogram) {
+                            HistogramView(
+                                histogram = state.histogram,
+                                modifier = Modifier
+                                    .padding(8.dp)
+                                    .size(80.dp, 40.dp)
+                                    .align(Alignment.TopStart)
+                                    .autoRotate(dx = -20.dp, dy = 20.dp)
+                            )
+                        }
+
+                        // 网格线覆盖
+                        if (state.showGrid) {
+                            GridOverlay(
+                                aspectRatio = previewAspectRatio,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+
+                        // 水平仪覆盖
+                        if (showLevelIndicator) {
+                            LevelIndicatorOverlay(
+                                aspectRatio = previewAspectRatio,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+
+                        // 倒计时覆盖
+                        if (state.countdownValue > 0) {
+                            CountdownOverlay(
+                                countdownValue = state.countdownValue,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+
+                        if (burstCapturingCount > 0) {
+                            BurstCaptureOverlay(
+                                count = burstCapturingCount,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+
+                        if (useMultipleExposure) {
+                            MultipleExposureOverlay(
+                                state = multipleExposureState,
+                                onFinish = { viewModel.finishMultipleExposureSession() },
+                                onUndo = { viewModel.undoLastMultipleExposureFrame() },
+                                onCancel = { viewModel.cancelMultipleExposureSession() },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+
+                        // Zoom bar overlaid on preview (only in Photo mode)
+                        if (state.captureMode == CaptureMode.PHOTO) {
+                            Box(
+                                modifier = Modifier.fillMaxSize().padding(bottom = 8.dp),
+                                contentAlignment = Alignment.BottomCenter
+                            ) {
+                                zoomBar()
+                            }
+                        }
+                    }
+
+                    CornerOverlay(
+                        modifier = Modifier.fillMaxSize(),
+                        radius = if (isVideoMode) 0.dp else 4.dp,
+                        color = Color.Black
+                    )
+                }
+                if (state.captureMode == CaptureMode.PHOTO) {
                     ParameterRuler(
                         parameter = selectedParameter,
                         currentValue = when (selectedParameter) {
@@ -601,14 +782,14 @@ fun CameraScreen(
                             CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().lower * state.getExposureCompensationStep()
                             CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().lower.toFloat()
                             CameraParameter.ISO -> state.getIsoRange().lower.toFloat()
-                            CameraParameter.APERTURE -> 1f // Min synthetic aperture
+                            CameraParameter.APERTURE -> 1f
                             CameraParameter.WHITE_BALANCE -> 2000f
                         },
                         maxValue = when (selectedParameter) {
                             CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().upper * state.getExposureCompensationStep()
                             CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().upper.toFloat()
                             CameraParameter.ISO -> state.getIsoRange().upper.toFloat()
-                            CameraParameter.APERTURE -> 16.0f // Max synthetic aperture
+                            CameraParameter.APERTURE -> 16.0f
                             CameraParameter.WHITE_BALANCE -> 10000f
                         },
                         isAdjustable = when (selectedParameter) {
@@ -649,11 +830,19 @@ fun CameraScreen(
                         },
                     )
                 }
+            }
 
-                if (isXpan) {
-                    Box(modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .width((width - cardWidth) / 2)
+            if (isXpan) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(cardHeight),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .width((width - cardWidth) / 2)
                     ) {
                         ZoomControlBarVerticel(
                             viewModel = viewModel,
@@ -661,7 +850,7 @@ fun CameraScreen(
                             availableCameras = state.availableCameras,
                             currentCameraId = state.getCurrentCameraInfo()?.cameraId ?: "0",
                             onZoomChange = { viewModel.setZoomRatio(it) },
-                            onLensSwitch = { lenId -> viewModel.switchToLens(lenId) },
+                            onLensSwitch = { lensId -> switchToLensWithPreviewTransition(lensId) },
                             onFilterClick = {
                                 // Toggle Filter Panel
                                 activePanel =
@@ -670,9 +859,10 @@ fun CameraScreen(
                             modifier = Modifier.align(Alignment.Center)
                         )
                     }
-                    Box(modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .width((width - cardWidth) / 2)
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .width((width - cardWidth) / 2)
                     ) {
                         CameraParameterBarVerticel(
                             state = state,
@@ -685,58 +875,114 @@ fun CameraScreen(
                     }
                 }
             }
+        }
 
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .then(if (isXpan) Modifier.height(144.dp) else Modifier.weight(1f))
-            ) {
-                AnimatedVisibility(
-                    visible = !isXpan,
-                ) {
-                    CameraParameterBar(
-                        state = state,
-                        selectedParameter = selectedParameter,
-                        onParameterClick = { param ->
-                            selectedParameter = param
+        val controls = @Composable { modifier: Modifier ->
+            Controls(
+                state = state,
+                viewModel = viewModel,
+                galleryViewModel = galleryViewModel,
+                latestPhoto = latestPhoto,
+                useMultipleExposure = useMultipleExposure,
+                multipleExposureState = multipleExposureState,
+                onGalleryThumbnailBoundsChanged = { bounds ->
+                    galleryThumbnailBounds = bounds
+                },
+                onSwitchCameraClick = ::switchCameraWithPreviewTransition,
+                onCaptureModeSelected = ::setCaptureModeWithPreviewTransition,
+                onCaptureTap = {
+                    if (enableDevelopAnimation && state.captureMode == CaptureMode.PHOTO) {
+                        viewModel.glSurfaceView?.capturePreviewFrame { bitmap ->
+                            pendingCaptureAnimationBitmap = bitmap
                         }
-                    )
-                }
+                    }
+                    viewModel.capture()
+                },
+                onGalleryClick = {
+                    galleryViewModel.loadPhotos()
+                    onGalleryClick()
+                },
+                modifier = modifier
+            )
+        }
 
+        if (isVideoMode) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .paint(backgroundPainter, contentScale = ContentScale.Crop)
+                    .navigationBarsPadding(),
+            ) {
+                // Viewfinder centered
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .then(if (isXpan) Modifier.height(144.dp) else Modifier.weight(1f)),
+                        .height(cardHeight)
+                        .align(Alignment.Center),
                     contentAlignment = Alignment.Center
                 ) {
-                    // 底部控制层
-                    Controls(
-                        state = state,
-                        viewModel = viewModel,
-                        galleryViewModel = galleryViewModel,
-                        latestPhoto = latestPhoto,
-                        useMultipleExposure = useMultipleExposure,
-                        multipleExposureState = multipleExposureState,
-                        onGalleryThumbnailBoundsChanged = { bounds ->
-                            galleryThumbnailBounds = bounds
-                        },
-                        onCaptureTap = {
-                            if (enableDevelopAnimation) {
-                                viewModel.glSurfaceView?.capturePreviewFrame { bitmap ->
-                                    pendingCaptureAnimationBitmap = bitmap
-                                }
-                            }
-                            viewModel.capture()
-                        },
-                        onGalleryClick = {
-                            galleryViewModel.loadPhotos()
-                            onGalleryClick()
-                        }
-                    )
+                    viewfinder()
+                }
+
+                // UI Overlays
+                topBar()
+
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        zoomBar()
+                        Spacer(modifier = Modifier.height(8.dp))
+                        controls(Modifier.fillMaxWidth().wrapContentHeight())
+                    }
                 }
             }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .paint(backgroundPainter, contentScale = ContentScale.Crop)
+                    .navigationBarsPadding(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                topBar()
 
+                Box(
+                    modifier = Modifier.fillMaxWidth().height(cardHeight),
+                    contentAlignment = Alignment.Center
+                ) {
+                    viewfinder()
+                }
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(if (isXpan) Modifier.height(144.dp) else Modifier.weight(1f)),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+
+
+                    AnimatedVisibility(
+                        visible = !isXpan && state.captureMode == CaptureMode.PHOTO,
+                    ) {
+                        CameraParameterBar(
+                            state = state,
+                            selectedParameter = selectedParameter,
+                            onParameterClick = { param ->
+                                selectedParameter = param
+                            }
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .then(if (isXpan) Modifier.height(144.dp) else Modifier.weight(1f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        controls(Modifier.fillMaxSize())
+                    }
+                }
+            }
         }
 
         // 全屏遮罩层，用于点击关闭 LutControlPanel
@@ -774,8 +1020,20 @@ fun CameraScreen(
         // TopSheet for settings
         CameraTopSheet(
             visible = activePanel == ActivePanel.SETTINGS,
+            captureMode = state.captureMode,
             aspectRatio = state.aspectRatio,
-            onAspectRatioChange = { viewModel.setAspectRatio(it) },
+            onAspectRatioChange = { runPreviewTransition { viewModel.setAspectRatio(it) } },
+            videoAspectRatio = state.videoConfig.aspectRatio,
+            onVideoAspectRatioChange = { runPreviewTransition { viewModel.setVideoAspectRatio(it) } },
+            videoLogProfile = state.videoConfig.logProfile,
+            onVideoLogProfileChange = { viewModel.setVideoLogProfile(it) },
+            videoBitrate = state.videoConfig.bitrate,
+            onVideoBitrateChange = { viewModel.setVideoBitrate(it) },
+            videoCodec = videoCodec,
+            onVideoCodecChange = { viewModel.setVideoCodec(it) },
+            videoAudioInputId = state.videoConfig.audioInputId,
+            videoAudioInputOptions = videoAudioInputOptions,
+            onVideoAudioInputChange = { viewModel.setVideoAudioInputId(it) },
             useRaw = useRaw && state.isRawSupported,
             onRawToggle = { viewModel.toggleRaw() },
             isRawSupported = state.isRawSupported,
@@ -814,7 +1072,6 @@ fun CameraScreen(
             }
         )
 
-        // LutControlPanel 显示在遮罩层之上，确保能接收点击事件
         AnimatedVisibility(
             activePanel == ActivePanel.FILTERS,
             enter = if (isXpan) {slideInVertically(initialOffsetY = { it })} else fadeIn(),
@@ -826,6 +1083,9 @@ fun CameraScreen(
                     .then(
                         if (isXpan) {
                             Modifier.fillMaxHeight()
+                        } else if (isVideoMode) {
+                            //val bottomPadding = (maxHeight - 160.dp).coerceIn(16.dp, 40.dp)
+                            Modifier.height(maxHeight - 170.dp)
                         } else {
                             Modifier.padding(top = 80.dp)
                                 .height(cardHeight - 48.dp)
@@ -849,6 +1109,8 @@ fun CameraScreen(
                 )
             }
         }
+
+
     }
 }
 
@@ -947,69 +1209,125 @@ fun Controls(
     state: CameraState,
     viewModel: CameraViewModel,
     galleryViewModel: GalleryViewModel,
-    latestPhoto: com.hinnka.mycamera.gallery.PhotoData?,
+    latestPhoto: com.hinnka.mycamera.gallery.MediaData?,
     useMultipleExposure: Boolean,
     multipleExposureState: com.hinnka.mycamera.viewmodel.MultipleExposureSessionState,
     onGalleryThumbnailBoundsChanged: (Rect) -> Unit,
+    onSwitchCameraClick: () -> Unit,
+    onCaptureModeSelected: (CaptureMode) -> Unit,
     onCaptureTap: () -> Unit,
-    onGalleryClick: () -> Unit
+    onGalleryClick: () -> Unit,
+    modifier: Modifier = Modifier.fillMaxSize()
 ) {
     BoxWithConstraints(
-        modifier = Modifier.fillMaxSize(),
+        modifier = modifier,
         contentAlignment = Alignment.Center
     ) {
-        val bottomPadding = (maxHeight - 80.dp).coerceIn(0.dp, 32.dp)
-        Box(
+        val bottomPadding = (maxHeight - 160.dp).coerceIn(16.dp, 40.dp)
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(bottom = bottomPadding),
-            contentAlignment = Alignment.Center
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-        // 相册入口 (Left)
-        Box(
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .padding(start = 32.dp)
-                .onGloballyPositioned { coordinates ->
-                    onGalleryThumbnailBoundsChanged(coordinates.boundsInRoot())
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = 32.dp)
+                        .onGloballyPositioned { coordinates ->
+                            onGalleryThumbnailBoundsChanged(coordinates.boundsInRoot())
+                        }
+                        .autoRotate()
+                ) {
+                    GalleryThumbnail(
+                        latestPhoto = latestPhoto,
+                        viewModel = galleryViewModel,
+                        onClick = onGalleryClick
+                    )
                 }
-                .autoRotate()
-        ) {
-            GalleryThumbnail(
-                latestPhoto = latestPhoto,
-                viewModel = galleryViewModel,
-                onClick = onGalleryClick
-            )
-        }
 
-        // 拍照按钮 (Center)
-        CaptureButton(
-            isCapturing = state.isCapturing,
-            allowLongPress = !useMultipleExposure,
-            multipleExposureEnabled = useMultipleExposure,
-            multipleExposureProgress = multipleExposureState.capturedCount.toFloat() /
-                multipleExposureState.targetCount.coerceAtLeast(1).toFloat(),
-            onTap = onCaptureTap,
-            onLongPressStart = { viewModel.startContinuousCapture() },
-            onLongPressEnd = { viewModel.stopContinuousCapture() }
-        )
+                CaptureButton(
+                    captureMode = state.captureMode,
+                    isCapturing = state.isCapturing,
+                    isVideoRecording = state.videoRecordingState.isRecording,
+                    isPaused = state.videoRecordingState.isPaused,
+                    allowLongPress = state.captureMode == CaptureMode.PHOTO && !useMultipleExposure,
+                    multipleExposureEnabled = useMultipleExposure && state.captureMode == CaptureMode.PHOTO,
+                    multipleExposureProgress = multipleExposureState.capturedCount.toFloat() /
+                            multipleExposureState.targetCount.coerceAtLeast(1).toFloat(),
+                    onTap = onCaptureTap,
+                    onLongPressStart = { viewModel.startContinuousCapture() },
+                    onLongPressEnd = { viewModel.stopContinuousCapture() }
+                )
 
-        // 切换摄像头按钮 (Right)
-        IconButton(
-            onClick = { viewModel.switchCamera() },
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(end = 40.dp)
-                .size(48.dp)
-                .autoRotate()
-        ) {
-            Icon(
-                imageVector = Icons.Default.Cameraswitch,
-                contentDescription = stringResource(R.string.switch_camera),
-                tint = Color.White,
-                modifier = Modifier.size(32.dp)
+                if (state.videoRecordingState.isRecording) {
+                    IconButton(
+                        onClick = { viewModel.captureVideoFrame() },
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .padding(end = 40.dp)
+                            .size(48.dp)
+                            .autoRotate()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CameraAlt,
+                            contentDescription = stringResource(R.string.take_photo),
+                            tint = Color.White,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = {
+                            if (state.videoRecordingState.isPaused) {
+                                viewModel.resumeVideoRecording()
+                            } else {
+                                viewModel.pauseVideoRecording()
+                            }
+                        },
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .padding(start = 100.dp)
+                            .size(48.dp)
+                            .autoRotate()
+                    ) {
+                        Icon(
+                            imageVector = if (state.videoRecordingState.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+                } else {
+                    IconButton(
+                        onClick = onSwitchCameraClick,
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .padding(end = 40.dp)
+                            .size(48.dp)
+                            .autoRotate()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Cameraswitch,
+                            contentDescription = stringResource(R.string.switch_camera),
+                            tint = Color.White,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            CaptureModeSwitcher(
+                captureMode = state.captureMode,
+                enabled = !state.videoRecordingState.isRecording,
+                onModeSelected = onCaptureModeSelected
             )
-        }
         }
     }
 }
@@ -1020,7 +1338,10 @@ fun Controls(
  */
 @Composable
 fun CaptureButton(
+    captureMode: CaptureMode,
     isCapturing: Boolean,
+    isVideoRecording: Boolean,
+    isPaused: Boolean,
     allowLongPress: Boolean,
     multipleExposureEnabled: Boolean,
     multipleExposureProgress: Float,
@@ -1032,11 +1353,20 @@ fun CaptureButton(
     val infiniteTransition = rememberInfiniteTransition(label = "infinite transition")
 
     val scale by animateFloatAsState(
-        targetValue = if (isCapturing) 0.9f else 1f,
+        targetValue = if (isCapturing || isVideoRecording) 0.95f else 1f,
         animationSpec = spring(dampingRatio = 0.5f),
         label = "captureScale"
     )
 
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1200),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "videoPulse"
+    )
 
     val rotation by infiniteTransition.animateFloat(
         initialValue = 0f,
@@ -1045,7 +1375,7 @@ fun CaptureButton(
         label = "livePhotoRotation"
     )
 
-    val currentIsCapturing by rememberUpdatedState(isCapturing)
+    val currentDisabled by rememberUpdatedState(isCapturing || (captureMode == CaptureMode.VIDEO && isVideoRecording))
 
     Box(
         modifier = modifier
@@ -1055,12 +1385,12 @@ fun CaptureButton(
                 var isLongPressStarted = false
                 detectTapGestures(
                     onTap = {
-                        if (!currentIsCapturing) {
+                        if (!isCapturing) {
                             onTap()
                         }
                     },
                     onLongPress = {
-                        if (allowLongPress && !currentIsCapturing) {
+                        if (allowLongPress && !currentDisabled) {
                             isLongPressStarted = true
                             onLongPressStart()
                         }
@@ -1096,18 +1426,28 @@ fun CaptureButton(
             }
         }
 
-        // Inner Yellow Ring
+        val ringColor = when {
+            captureMode == CaptureMode.VIDEO && isVideoRecording -> {
+                if (isPaused) Color.White.copy(alpha = 0.8f)
+                else Color.Red.copy(alpha = pulseAlpha)
+            }
+            captureMode == CaptureMode.VIDEO -> Color.White.copy(alpha = 0.8f)
+            multipleExposureEnabled -> Color.White.copy(alpha = 0.55f)
+            else -> Color(0xFFFFD700)
+        }
+
+        val ringWidth = if (multipleExposureEnabled) 1.dp else 2.dp
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .border(
-                    width = if (multipleExposureEnabled) 1.dp else 2.dp,
-                    color = if (multipleExposureEnabled) Color.White.copy(alpha = 0.55f) else Color(0xFFFFD700),
+                    width = ringWidth,
+                    color = ringColor,
                     shape = CircleShape
                 )
         )
 
-        // Live Photo Indicator (Spinning dash)
         if (isCapturing) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val strokeWidth = 3.dp.toPx()
@@ -1125,13 +1465,125 @@ fun CaptureButton(
         }
 
         // Center Solid Button
+        val centerPadding by animateDpAsState(
+            targetValue = if (captureMode == CaptureMode.VIDEO && isVideoRecording) 24.dp else 6.dp,
+            animationSpec = spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessLow),
+            label = "centerPadding"
+        )
+        val centerCorner by animateDpAsState(
+            targetValue = if (captureMode == CaptureMode.VIDEO && isVideoRecording) 8.dp else 36.dp,
+            label = "centerCorner"
+        )
+        val centerColor = if (captureMode == CaptureMode.VIDEO) Color(0xFFFF4D4F) else Color.White
+
         Box(
             modifier = Modifier
-                .padding(4.dp)
+                .padding(centerPadding)
                 .fillMaxSize()
-                .clip(CircleShape)
+                .clip(RoundedCornerShape(centerCorner))
+                .background(centerColor)
+        )
+    }
+}
+
+@Composable
+private fun CaptureModeSwitcher(
+    captureMode: CaptureMode,
+    enabled: Boolean,
+    onModeSelected: (CaptureMode) -> Unit
+) {
+
+    Box(
+        modifier = Modifier
+            .width(100.dp)
+            .height(30.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.White.copy(alpha = 0.12f))
+            .padding(2.dp)
+    ) {
+        val knobWidth = 48.dp
+        val knobOffset by animateDpAsState(
+            targetValue = if (captureMode == CaptureMode.PHOTO) 0.dp else 48.dp,
+            animationSpec = tween(durationMillis = 220),
+            label = "modeSwitcher"
+        )
+        Box(
+            modifier = Modifier
+                .offset(x = knobOffset)
+                .width(knobWidth)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(12.dp))
                 .background(Color.White)
         )
+        Row(
+            modifier = Modifier.fillMaxSize(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            ModeSwitcherItem(
+                icon = Icons.Default.CameraAlt,
+                selected = captureMode == CaptureMode.PHOTO,
+                enabled = enabled,
+                onClick = { onModeSelected(CaptureMode.PHOTO) },
+                modifier = Modifier.weight(1f)
+            )
+            ModeSwitcherItem(
+                icon = Icons.Default.Videocam,
+                selected = captureMode == CaptureMode.VIDEO,
+                enabled = enabled,
+                onClick = { onModeSelected(CaptureMode.VIDEO) },
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ModeSwitcherItem(
+    icon: ImageVector,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(20.dp))
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = if (selected) Color.Black else Color.White,
+            modifier = Modifier.size(18.dp)
+        )
+    }
+}
+
+private fun cycleVideoResolution(state: CameraState): VideoResolutionPreset? {
+    return nextOption(state.videoConfig.resolution, state.videoCapabilities.availableResolutions)
+}
+
+private fun cycleVideoFps(state: CameraState): VideoFpsPreset? {
+    return nextOption(state.videoConfig.fps, state.videoCapabilities.availableFps)
+}
+
+private fun cycleVideoAspectRatio(state: CameraState): VideoAspectRatio? {
+    return nextOption(state.videoConfig.aspectRatio, state.videoCapabilities.availableAspectRatios)
+}
+
+private fun cycleVideoLogProfile(state: CameraState): VideoLogProfile? {
+    return nextOption(state.videoConfig.logProfile, state.videoCapabilities.availableLogProfiles)
+}
+
+private fun <T> nextOption(current: T, options: List<T>): T? {
+    if (options.isEmpty()) return null
+    val currentIndex = options.indexOf(current)
+    return if (currentIndex == -1) {
+        options.firstOrNull()
+    } else {
+        options[(currentIndex + 1) % options.size]
     }
 }
 

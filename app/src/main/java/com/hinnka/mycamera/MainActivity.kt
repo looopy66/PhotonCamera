@@ -31,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,7 +59,7 @@ import com.hinnka.mycamera.ui.settings.PhantomPipCropScreen
 import com.hinnka.mycamera.ui.camera.CameraScreen
 import com.hinnka.mycamera.ui.gallery.BurstDetailScreen
 import com.hinnka.mycamera.ui.gallery.GalleryScreen
-import com.hinnka.mycamera.ui.gallery.PhotoDetailScreen
+import com.hinnka.mycamera.ui.gallery.MediaDetailScreen
 import com.hinnka.mycamera.ui.gallery.PhotoEditScreen
 import com.hinnka.mycamera.ui.settings.FilterManagementScreen
 import com.hinnka.mycamera.ui.settings.FrameManagementScreen
@@ -72,8 +73,9 @@ import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import com.hinnka.mycamera.lut.creator.LutCreatorScreen
 import com.hinnka.mycamera.lut.creator.LutCreatorViewModel
 import com.hinnka.mycamera.utils.DeviceUtil
-import com.hinnka.mycamera.gallery.PhotoManager
+import com.hinnka.mycamera.gallery.MediaManager
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.utils.StartupTrace
 
 /**
  * 路由常量
@@ -127,35 +129,47 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        StartupTrace.mark("MainActivity.onCreate start")
 
         // 启用全屏模式
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
-        )
+        StartupTrace.measure("MainActivity.enableEdgeToEdge") {
+            enableEdgeToEdge(
+                statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+                navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+            )
+        }
         hideSystemUI()
+        StartupTrace.mark("MainActivity.hideSystemUI applied")
         applyPreferredWindowColorMode()
+        StartupTrace.mark("MainActivity.applyPreferredWindowColorMode applied")
 
         OrientationObserver.observe(this)
+        StartupTrace.mark("MainActivity.OrientationObserver.observe applied")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            PhotoManager.hdrSdrRatio = display?.hdrSdrRatio ?: 0f
+            MediaManager.hdrSdrRatio = display?.hdrSdrRatio ?: 0f
         }
-        PLog.d("MainActivity", "hdrSdrRatio=${PhotoManager.hdrSdrRatio}")
+        PLog.d("MainActivity", "hdrSdrRatio=${MediaManager.hdrSdrRatio}")
 
         // 检查权限
         hasPermissions = permissions.all {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
         }
+        StartupTrace.mark("MainActivity.permissions checked", "hasPermissions=$hasPermissions")
 
         handleIntent(intent)
+        StartupTrace.mark("MainActivity.intent handled", "pendingRoute=$pendingRoute")
 
 
+        StartupTrace.mark("MainActivity.setContent start")
         setContent {
+            StartupComposeReadyEffect()
             val currentRecipeParams by cameraViewModel.currentRecipeParams.collectAsState()
             val phantomPipCrop by cameraViewModel.phantomPipCrop.collectAsState()
             ScreenCaptureRenderConfigStore.save(
-                lutConfig = cameraViewModel.currentLutConfig,
-                colorRecipeParams = currentRecipeParams,
+                baselineLutConfig = cameraViewModel.currentBaselineLutConfig,
+                baselineColorRecipeParams = cameraViewModel.currentBaselineRecipeParams.value,
+                creativeLutConfig = cameraViewModel.currentLutConfig,
+                creativeColorRecipeParams = currentRecipeParams,
                 crop = phantomPipCrop
             )
 
@@ -182,6 +196,13 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+        StartupTrace.mark("MainActivity.setContent end")
+        window.decorView.post {
+            StartupTrace.mark("MainActivity.decorView.post")
+            reportFullyDrawn()
+            StartupTrace.reportFullyDrawn("MainActivity.reportFullyDrawn")
+            cameraViewModel.prewarmDepthEstimator()
         }
     }
 
@@ -252,6 +273,13 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
+private fun StartupComposeReadyEffect() {
+    LaunchedEffect(Unit) {
+        StartupTrace.mark("MainActivity.first composition")
+    }
+}
+
+@Composable
 fun NavigationHost(
     cameraViewModel: CameraViewModel,
     galleryViewModel: GalleryViewModel,
@@ -316,7 +344,7 @@ fun NavigationHost(
                             },
                             modifier = Modifier.weight(1f)
                         )
-                        PhotoDetailScreen(
+                        MediaDetailScreen(
                             viewModel = galleryViewModel,
                             isExpanded = true,
                             onEdit = {
@@ -381,7 +409,7 @@ fun NavigationHost(
                 val tab = backStackEntry.arguments?.getString("tab") ?: GalleryTab.PHOTON.name
                 val photoId = backStackEntry.arguments?.getString("photoId")
                 galleryViewModel.selectTab(GalleryTab.valueOf(tab))
-                PhotoDetailScreen(
+                MediaDetailScreen(
                     viewModel = galleryViewModel,
                     initialIndex = index,
                     photoId = photoId,

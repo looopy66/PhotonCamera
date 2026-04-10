@@ -2,10 +2,15 @@ package com.hinnka.mycamera.gallery
 
 import android.net.Uri
 
+enum class MediaType {
+    IMAGE,
+    VIDEO
+}
+
 /**
  * 照片数据模型
  */
-data class PhotoData(
+data class MediaData(
     val id: String,
     val uri: Uri,
     val thumbnailUri: Uri,
@@ -14,11 +19,21 @@ data class PhotoData(
     val size: Long,
     val width: Int = 0,
     val height: Int = 0,
+    val mediaType: MediaType = MediaType.IMAGE,
+    val mimeType: String? = null,
+    val durationMs: Long? = null,
+    val sourceUri: Uri? = null,
     var isMotionPhoto: Boolean = false,
     var isBurstPhoto: Boolean = false,
-    var metadata: PhotoMetadata? = null,
-    var relatedPhoto: PhotoData? = null
+    var metadata: MediaMetadata? = null,
+    var relatedPhoto: MediaData? = null
 ) {
+    val isVideo: Boolean
+        get() = mediaType == MediaType.VIDEO
+
+    val isImage: Boolean
+        get() = mediaType == MediaType.IMAGE
+
     /**
      * 格式化的拍摄时间
      */
@@ -43,4 +58,16 @@ data class PhotoData(
      * 分辨率字符串
      */
     fun getResolution(): String = "${width}x${height}"
+
+    fun getFormattedDuration(): String {
+        val totalSeconds = ((durationMs ?: 0L) / 1000L).coerceAtLeast(0L)
+        val hours = totalSeconds / 3600L
+        val minutes = (totalSeconds % 3600L) / 60L
+        val seconds = totalSeconds % 60L
+        return if (hours > 0L) {
+            String.format("%d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            String.format("%02d:%02d", minutes, seconds)
+        }
+    }
 }

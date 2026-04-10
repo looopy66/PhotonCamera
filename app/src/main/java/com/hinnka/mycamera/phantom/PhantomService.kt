@@ -34,7 +34,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -67,7 +66,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.AndroidUiDispatcher
 import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.platform.compositionContext
 import androidx.compose.ui.res.painterResource
@@ -92,19 +90,19 @@ import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.Routes
 import com.hinnka.mycamera.data.ContentRepository
-import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.screencapture.PhantomPipPreviewCoordinator
 import com.hinnka.mycamera.screencapture.ScreenCaptureForegroundServiceState
 import com.hinnka.mycamera.screencapture.ScreenCapturePipState
 import com.hinnka.mycamera.screencapture.ScreenCaptureRenderConfigStore
 import com.hinnka.mycamera.data.UserPreferencesRepository
 import com.hinnka.mycamera.gallery.ExifWriter
-import com.hinnka.mycamera.gallery.PhotoManager
-import com.hinnka.mycamera.gallery.PhotoManager.loadMetadata
-import com.hinnka.mycamera.gallery.PhotoManager.saveMetadata
+import com.hinnka.mycamera.gallery.MediaManager
+import com.hinnka.mycamera.gallery.MediaManager.loadMetadata
+import com.hinnka.mycamera.gallery.MediaManager.saveMetadata
 import com.hinnka.mycamera.livephoto.GoogleLivePhotoCreator
 import com.hinnka.mycamera.livephoto.MotionPhotoWriter
 import com.hinnka.mycamera.livephoto.VivoLivePhotoCreator
+import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -112,17 +110,14 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
-import kotlin.math.roundToInt
 import kotlin.io.copyTo
 import kotlin.io.inputStream
 import kotlin.use
@@ -377,17 +372,38 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         val availableLutList = ContentRepository.getInstance(context).getAvailableLuts()
         val photoProcessor = ContentRepository.getInstance(context).photoProcessor
         val preferences = userPreferencesRepository.userPreferences.firstOrNull()
-        val lutId = preferences?.lutId ?: availableLutList.firstOrNull { it.isDefault }?.id
+        val lutId = preferences?.lutId
+            ?: preferences?.phantomLutId
+            ?: availableLutList.firstOrNull { it.isDefault }?.id
         val saveAsNew = preferences?.phantomSaveAsNew ?: false
         val computationalAperture = preferences?.defaultVirtualAperture?.let { if (it > 0f) it else null }
         val existingPhotoId = if (processingInfo?.uri == uri) processingInfo?.photoId else null
         val photoId =
-            PhotoManager.importPhoto(context, uri, lutId, computationalAperture, existingPhotoId) ?: run {
+            MediaManager.importPhoto(context, uri, lutId, computationalAperture, existingPhotoId) ?: run {
                 return@withContext
-            }
-        val metadata = PhotoManager.loadMetadata(context, photoId) ?: run {
+        }
+        val metadata = MediaManager.loadMetadata(context, photoId) ?: run {
             return@withContext
         }
+        val phantomBaselineLutId = preferences?.phantomBaselineLutId
+        val updatedMetadata = if (phantomBaselineLutId != null) {
+            metadata.copy(
+                lutId = lutId,
+                baselineTarget = BaselineColorCorrectionTarget.PHANTOM,
+                baselineLutId = phantomBaselineLutId,
+                baselineColorRecipeParams = ContentRepository.getInstance(context)
+                    .lutManager
+                    .loadColorRecipeParams(phantomBaselineLutId, BaselineColorCorrectionTarget.PHANTOM)
+            )
+        } else {
+            metadata.copy(
+                lutId = lutId,
+                baselineTarget = null,
+                baselineLutId = null,
+                baselineColorRecipeParams = null,
+            )
+        }
+        saveMetadata(context, photoId, updatedMetadata)
         if (!isActive) return@withContext
 
         if (uri != processingInfo?.uri) {
@@ -406,12 +422,12 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         try {
             // 读取照片
             val processedBitmap = photoProcessor.process(
-                context, photoId, metadata,
+                context, photoId, updatedMetadata,
                 0f, 0f, 0f
             ) ?: return@withContext
 
-            val videoFile = PhotoManager.getVideoFile(context, photoId)
-            val photoFile = PhotoManager.getPhotoFile(context, photoId)
+            val videoFile = MediaManager.getVideoFile(context, photoId)
+            val photoFile = MediaManager.getPhotoFile(context, photoId)
 
             FileOutputStream(tempExportFile).use { outputStream ->
                 processedBitmap.compress(Bitmap.CompressFormat.JPEG, 97, outputStream)
@@ -713,7 +729,9 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                             val availableLuts = sortedLutData.first
                             val categoryOrder = sortedLutData.second
                             val currentLutIdFlow = remember {
-                                userPreferencesRepository.userPreferences.map { it.lutId }
+                                userPreferencesRepository.userPreferences.map {
+                                    it.lutId ?: it.phantomLutId
+                                }
                             }
                             val currentLutId by currentLutIdFlow.collectAsState(initial = null)
                             val listState = rememberLazyListState()
@@ -866,6 +884,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                                         .clickable {
                                                             scope.launch {
                                                                 userPreferencesRepository.saveLutConfig(lut.id)
+                                                                userPreferencesRepository.savePhantomLutConfig(lut.id)
                                                                 syncScreenCaptureRenderConfig(lut.id)
                                                                 showFilterPicker = false
                                                                 updateWindowParams(false)

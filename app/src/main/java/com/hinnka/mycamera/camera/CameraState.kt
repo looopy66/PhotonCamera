@@ -2,6 +2,11 @@ package com.hinnka.mycamera.camera
 
 import android.graphics.Rect
 import android.util.Range
+import android.util.Size
+import com.hinnka.mycamera.video.CaptureMode
+import com.hinnka.mycamera.video.VideoCapabilities
+import com.hinnka.mycamera.video.VideoConfig
+import com.hinnka.mycamera.video.VideoRecordingState
 
 /**
  * 画面比例枚举
@@ -68,19 +73,21 @@ data class CameraInfo(
     val intrinsicZoomRatio: Float = 1f,  // 固有变焦比例 (CameraX 1.3.0+)
     val hardwareLevel: Int = -1,  // 硬件支持级别
     val supportsManualProcessing: Boolean = false, // 是否支持手动处理（关闭系统锐化/降噪）
-    val supportsRaw: Boolean = false // 是否支持 RAW 格式
+    val supportsRaw: Boolean = false, // 是否支持 RAW 格式
+    val isCustomLensId: Boolean = false // 是否来自用户手动添加的镜头 ID
 ) {
     /**
      * 获取镜头类型显示名称
      */
     fun getLensDisplayName(): String {
-        return when (lensType) {
+        val name = when (lensType) {
             LensType.FRONT -> "前置"
             LensType.BACK_MAIN -> "主摄 (1x)"
             LensType.BACK_ULTRA_WIDE -> "广角 (0.5x)"
             LensType.BACK_TELEPHOTO -> "长焦 (${String.format("%.1f", focalLength35mmEquivalent / 24f)}x)"
             LensType.BACK_MACRO -> "微距"
         }
+        return if (isCustomLensId) "$name *" else name
     }
 
     /**
@@ -116,6 +123,7 @@ data class CameraState(
     val currentCameraId: String = "",
     val currentLensType: LensType = LensType.BACK_MAIN,
     val availableCameras: List<CameraInfo> = emptyList(),
+    val currentPreviewSize: Size = Size(1440, 1080),
 
     // 曝光控制
     val exposureCompensation: Int = 0,
@@ -194,6 +202,10 @@ data class CameraState(
     val longitude: Double? = null,
     val isP3Supported: Boolean = false,
     val currentDynamicRangeProfile: String = "STANDARD",
+    val captureMode: CaptureMode = CaptureMode.PHOTO,
+    val videoConfig: VideoConfig = VideoConfig(),
+    val videoCapabilities: VideoCapabilities = VideoCapabilities(),
+    val videoRecordingState: VideoRecordingState = VideoRecordingState(),
 ) {
     /**
      * 是否全自动曝光
@@ -265,5 +277,14 @@ data class CameraState(
         }
         if (totalCount == 0L) return 0.18f
         return (weightedSum.toFloat() / totalCount) / 255f
+    }
+
+    fun getPreviewAspectRatio(): Float {
+        return when (captureMode) {
+            CaptureMode.PHOTO -> aspectRatio.getValue(isLandscape = false)
+            CaptureMode.VIDEO -> videoConfig.aspectRatio.getPortraitAspectRatio(
+                videoCapabilities.openGatePortraitAspectRatio
+            )
+        }
     }
 }

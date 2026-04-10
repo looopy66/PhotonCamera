@@ -1,14 +1,15 @@
 package com.hinnka.mycamera.gallery
 
 import android.content.Context
-import android.net.Uri
+import android.content.ContentUris
+import android.media.MediaMetadataRetriever
 import android.provider.MediaStore
-import android.util.Log
-import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.utils.StartupTrace
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 
 /**
@@ -24,35 +25,35 @@ class GalleryRepository(private val context: Context) {
     /**
      * 获取所有照片（按时间倒序）
      */
-    fun getPhotos(): Flow<List<PhotoData>> = flow {
+    fun getPhotos(): Flow<List<MediaData>> = flow {
         emit(queryPhotos())
     }.flowOn(Dispatchers.IO)
 
     /**
      * 同步获取所有照片
      */
-    suspend fun getPhotosSync(): List<PhotoData> = withContext(Dispatchers.IO) {
+    suspend fun getPhotosSync(): List<MediaData> = withContext(Dispatchers.IO) {
         queryPhotos()
     }
 
     /**
      * 获取最新的一张照片
      */
-    suspend fun getLatestPhoto(): PhotoData? = withContext(Dispatchers.IO) {
+    suspend fun getLatestPhoto(): MediaData? = withContext(Dispatchers.IO) {
         queryPhotos(limit = 1).firstOrNull()
     }
 
     /**
      * 删除单张照片
      */
-    suspend fun deletePhoto(photo: PhotoData): Boolean = withContext(Dispatchers.IO) {
-        PhotoManager.deletePhoto(context, photo.id)
+    suspend fun deletePhoto(photo: MediaData): Boolean = withContext(Dispatchers.IO) {
+        MediaManager.deletePhoto(context, photo.id)
     }
 
     /**
      * 批量删除照片
      */
-    suspend fun deletePhotos(photos: List<PhotoData>): Int = withContext(Dispatchers.IO) {
+    suspend fun deletePhotos(photos: List<MediaData>): Int = withContext(Dispatchers.IO) {
         var deletedCount = 0
         photos.forEach { photo ->
             if (deletePhoto(photo)) {
@@ -65,92 +66,167 @@ class GalleryRepository(private val context: Context) {
     /**
      * 查询系统相册照片
      */
-    suspend fun getSystemPhotos(offset: Int, limit: Int): List<PhotoData> = withContext(Dispatchers.IO) {
-        val photos = mutableListOf<PhotoData>()
+    suspend fun getSystemPhotos(offset: Int, limit: Int): List<MediaData> = withContext(Dispatchers.IO) {
+        val imageItems = querySystemImages(offset = 0, limit = offset + limit)
+        val videoItems = querySystemVideos(offset = 0, limit = offset + limit)
+        (imageItems + videoItems)
+            .sortedByDescending { it.dateAdded }
+            .drop(offset)
+            .take(limit)
+    }
+
+    /**
+     * 查询私有存储中的照片
+     */
+    private fun queryPhotos(limit: Int = Int.MAX_VALUE): List<MediaData> {
+        val ids = StartupTrace.measure("GalleryRepository.getPhotoIds") {
+            MediaManager.getPhotoIds(context)
+        }
+        val photos = StartupTrace.measure("GalleryRepository.buildPhotoData", "ids=${ids.size}") {
+            ids.mapNotNull { id -> runBlocking { MediaManager.buildPhotoData(context, id) } }
+        }.take(limit)
+        StartupTrace.mark("GalleryRepository.queryPhotos finished", "count=${photos.size}, limit=$limit")
+        return photos
+    }
+
+    private fun querySystemImages(offset: Int, limit: Int): List<MediaData> {
+        val items = mutableListOf<MediaData>()
         val projection = arrayOf(
             MediaStore.Images.Media._ID,
             MediaStore.Images.Media.DISPLAY_NAME,
             MediaStore.Images.Media.DATE_ADDED,
             MediaStore.Images.Media.SIZE,
             MediaStore.Images.Media.WIDTH,
-            MediaStore.Images.Media.HEIGHT
+            MediaStore.Images.Media.HEIGHT,
+            MediaStore.Images.Media.MIME_TYPE
         )
-
-        val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
-
         val queryArgs = android.os.Bundle().apply {
-                putInt(android.content.ContentResolver.QUERY_ARG_OFFSET, offset)
-                putInt(android.content.ContentResolver.QUERY_ARG_LIMIT, limit)
-                putString(android.content.ContentResolver.QUERY_ARG_SQL_SORT_ORDER, sortOrder)
-            }
-
-        val cursor = context.contentResolver.query(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                projection,
-                queryArgs,
-                null
+            putInt(android.content.ContentResolver.QUERY_ARG_OFFSET, offset)
+            putInt(android.content.ContentResolver.QUERY_ARG_LIMIT, limit)
+            putString(
+                android.content.ContentResolver.QUERY_ARG_SQL_SORT_ORDER,
+                "${MediaStore.Images.Media.DATE_ADDED} DESC"
             )
-
-        cursor?.use {
-            val idColumn = it.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-            val nameColumn = it.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
-            val dateColumn = it.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
-            val sizeColumn = it.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
-            val widthColumn = it.getColumnIndexOrThrow(MediaStore.Images.Media.WIDTH)
-            val heightColumn = it.getColumnIndexOrThrow(MediaStore.Images.Media.HEIGHT)
-
-            while (it.moveToNext()) {
-                val id = it.getLong(idColumn)
-                val contentUri = android.content.ContentUris.withAppendedId(
-                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                    id
-                )
-
-                photos.add(
-                    PhotoData(
-                        id = id.toString(),
-                        uri = contentUri,
-                        thumbnailUri = contentUri, // Coil can load thumbnails from content URIs
-                        displayName = it.getString(nameColumn),
-                        dateAdded = it.getLong(dateColumn) * 1000, // MediaStore is in seconds
-                        size = it.getLong(sizeColumn),
-                        width = it.getInt(widthColumn),
-                        height = it.getInt(heightColumn)
-                    )
-                )
-            }
         }
-        photos
+        context.contentResolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, projection, queryArgs, null)
+            ?.use { cursor ->
+                val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+                val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+                val dateColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
+                val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
+                val widthColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.WIDTH)
+                val heightColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.HEIGHT)
+                val mimeColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.MIME_TYPE)
+
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(idColumn)
+                    val contentUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                    items.add(
+                        MediaData(
+                            id = "image_$id",
+                            uri = contentUri,
+                            thumbnailUri = contentUri,
+                            displayName = cursor.getString(nameColumn),
+                            dateAdded = cursor.getLong(dateColumn) * 1000L,
+                            size = cursor.getLong(sizeColumn),
+                            width = cursor.getInt(widthColumn),
+                            height = cursor.getInt(heightColumn),
+                            mediaType = MediaType.IMAGE,
+                            mimeType = cursor.getString(mimeColumn),
+                            sourceUri = contentUri
+                        )
+                    )
+                }
+            }
+        return items
     }
 
-    /**
-     * 查询私有存储中的照片
-     */
-    private fun queryPhotos(limit: Int = Int.MAX_VALUE): List<PhotoData> {
-        val photos = mutableListOf<PhotoData>()
-        val photoIds = PhotoManager.getPhotoIds(context)
-
-        photoIds.forEach { id ->
-            val photoFile = PhotoManager.getPhotoFile(context, id)
-
-            if (photoFile.exists()) {
-                val videoFile = PhotoManager.getVideoFile(context, id)
-                val isBurstPhoto = PhotoManager.hasBurstPhotos(context, id)
-                photos.add(
-                    PhotoData(
-                        id = id,
-                        uri = Uri.fromFile(photoFile),
-                        thumbnailUri = Uri.fromFile(PhotoManager.getThumbnailFile(context, id)),
-                        displayName = photoFile.name,
-                        dateAdded = photoFile.lastModified(),
-                        size = photoFile.length(),
-                        isMotionPhoto = videoFile.exists(),
-                        isBurstPhoto = isBurstPhoto
-                    )
-                )
-            }
+    private fun querySystemVideos(offset: Int, limit: Int): List<MediaData> {
+        val items = mutableListOf<MediaData>()
+        val projection = arrayOf(
+            MediaStore.Video.Media._ID,
+            MediaStore.Video.Media.DISPLAY_NAME,
+            MediaStore.Video.Media.DATE_ADDED,
+            MediaStore.Video.Media.SIZE,
+            MediaStore.Video.Media.WIDTH,
+            MediaStore.Video.Media.HEIGHT,
+            MediaStore.Video.Media.MIME_TYPE,
+            MediaStore.Video.Media.DURATION
+        )
+        val queryArgs = android.os.Bundle().apply {
+            putInt(android.content.ContentResolver.QUERY_ARG_OFFSET, offset)
+            putInt(android.content.ContentResolver.QUERY_ARG_LIMIT, limit)
+            putString(
+                android.content.ContentResolver.QUERY_ARG_SQL_SORT_ORDER,
+                "${MediaStore.Video.Media.DATE_ADDED} DESC"
+            )
         }
+        context.contentResolver.query(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, projection, queryArgs, null)
+            ?.use { cursor ->
+                val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+                val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
+                val dateColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_ADDED)
+                val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
+                val widthColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.WIDTH)
+                val heightColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.HEIGHT)
+                val mimeColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.MIME_TYPE)
+                val durationColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
 
-        return photos.take(limit)
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(idColumn)
+                    val contentUri = ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id)
+                    val mimeType = cursor.getString(mimeColumn)
+                    val durationMs = cursor.getLong(durationColumn)
+                    var frameRate: Int? = null
+                    var bitrate: Long? = null
+                    var rotationDegrees: Int? = null
+                    var hasAudio: Boolean? = null
+                    val retriever = MediaMetadataRetriever()
+                    try {
+                        retriever.setDataSource(context, contentUri)
+                        frameRate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)
+                            ?.toFloatOrNull()?.toInt()
+                        bitrate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toLongOrNull()
+                        rotationDegrees = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull()
+                        hasAudio = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO)?.let {
+                            it == "yes" || it == "true" || it == "1"
+                        }
+                    } finally {
+                        retriever.release()
+                    }
+                    items.add(
+                        MediaData(
+                            id = "video_$id",
+                            uri = contentUri,
+                            thumbnailUri = contentUri,
+                            displayName = cursor.getString(nameColumn),
+                            dateAdded = cursor.getLong(dateColumn) * 1000L,
+                            size = cursor.getLong(sizeColumn),
+                            width = cursor.getInt(widthColumn),
+                            height = cursor.getInt(heightColumn),
+                            mediaType = MediaType.VIDEO,
+                            mimeType = mimeType,
+                            durationMs = durationMs,
+                            sourceUri = contentUri,
+                            metadata = MediaMetadata(
+                                mediaType = MediaType.VIDEO,
+                                dateTaken = cursor.getLong(dateColumn) * 1000L,
+                                width = cursor.getInt(widthColumn),
+                                height = cursor.getInt(heightColumn),
+                                sourceUri = contentUri.toString(),
+                                mimeType = mimeType,
+                                durationMs = durationMs,
+                                frameRate = frameRate,
+                                bitrate = bitrate,
+                                rotationDegrees = rotationDegrees,
+                                hasAudio = hasAudio,
+                                videoWidth = cursor.getInt(widthColumn),
+                                videoHeight = cursor.getInt(heightColumn)
+                            )
+                        )
+                    )
+                }
+            }
+        return items
     }
 }

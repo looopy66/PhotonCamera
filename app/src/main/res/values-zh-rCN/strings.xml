@@ -10,6 +10,9 @@
     <string name="histogram">直方图</string>
     <string name="grid">网格</string>
     <string name="back">返回</string>
+    <string name="take_photo">拍照</string>
+    <string name="pause">暂停</string>
+    <string name="resume">继续</string>
 
     <!-- Exposure Controls -->
     <string name="exposure_compensation">EV</string>
@@ -27,6 +30,39 @@
     <string name="ratio_4_3">4:3</string>
     <string name="ratio_16_9">16:9</string>
     <string name="ratio_1_1">1:1</string>
+    <string name="capture_mode_photo">照片</string>
+    <string name="capture_mode_video">视频</string>
+    <string name="video_torch_chip">补光</string>
+    <string name="video_stabilization_chip">防抖</string>
+    <string name="video_resolution_chip">分辨率</string>
+    <string name="video_fps_chip">帧率</string>
+    <string name="video_aspect_chip">画幅</string>
+    <string name="video_log_chip">Log</string>
+    <string name="video_option_on">开</string>
+    <string name="video_option_off">关</string>
+    <string name="video_aspect_16_9">16:9</string>
+    <string name="video_aspect_21_9">21:9</string>
+    <string name="video_aspect_open_gate">片门全开</string>
+    <string name="video_log_off">关闭</string>
+    <string name="video_log_flog2_bt2020">F-Log2</string>
+    <string name="video_log_logc4_arri4">LogC4</string>
+    <string name="video_log_acescct_ap1">ACEScct</string>
+    <string name="video_codec_chip">编码格式</string>
+    <string name="video_microphone_title">麦克风</string>
+    <string name="video_microphone_auto">自动</string>
+    <string name="video_microphone_disconnected">设备已断开</string>
+    <string name="video_microphone_builtin">内置</string>
+    <string name="video_microphone_wired">有线</string>
+    <string name="video_microphone_bluetooth">蓝牙</string>
+    <string name="video_microphone_ble">BLE</string>
+    <string name="video_microphone_usb">USB</string>
+    <string name="video_microphone_hdmi">HDMI 输入</string>
+    <string name="video_microphone_line_in">线路输入</string>
+    <string name="video_microphone_telephony">通话音频</string>
+    <string name="video_microphone_external">外接</string>
+    <string name="video_bitrate_chip">码率</string>
+    <string name="video_advanced_settings">视频高级设置</string>
+    <string name="video_rec_label">REC</string>
 
     <!-- Permissions -->
     <string name="camera_permission_required">需要相机和麦克风权限</string>
@@ -68,6 +104,7 @@
     <string name="delete_exported_photos">同时删除系统相册中的导出图</string>
     <string name="no_photos">暂无照片</string>
     <string name="photo_info">照片信息</string>
+    <string name="video_info">视频信息</string>
     <string name="filter">LUT</string>
     <string name="intensity">强度</string>
     <string name="original">原图</string>
@@ -83,6 +120,15 @@
     <string name="photo_info_aperture">光圈</string>
     <string name="photo_info_iso">ISO</string>
     <string name="photo_info_shutter_speed">快门速度</string>
+    <string name="video">视频</string>
+    <string name="yes">是</string>
+    <string name="no">否</string>
+    <string name="video_info_duration">时长</string>
+    <string name="video_info_mime">格式</string>
+    <string name="video_info_frame_rate">帧率</string>
+    <string name="video_info_bitrate">码率</string>
+    <string name="video_info_has_audio">音轨</string>
+    <string name="video_info_rotation">旋转角</string>
 
     <!-- Frame Watermark -->
     <string name="frame">边框</string>
@@ -148,7 +194,17 @@
     <string name="settings_frame_description">为拍摄的照片添加装饰性边框和水印</string>
     <string name="settings_section_operation">拍摄操作</string>
     <string name="settings_section_image_processing">影像处理</string>
+    <string name="settings_section_baseline_color_correction">基准色彩校正</string>
     <string name="settings_section_software_processing">细节微调</string>
+    <string name="settings_baseline_jpg_title">JPG 基准色彩校正</string>
+    <string name="settings_baseline_jpg_description">选择普通 JPG 创意 LUT 之前先应用的基准 LUT 与基准配方。</string>
+    <string name="settings_baseline_raw_title">RAW 基准色彩校正</string>
+    <string name="settings_baseline_raw_description">选择用于 RAW 渲染、导出和重处理链路的基准 LUT 与基准配方。</string>
+    <string name="settings_baseline_phantom_title">幻影模式基准色彩校正</string>
+    <string name="settings_baseline_phantom_description">选择幻影模式创意 LUT 之前先应用的基准 LUT 与基准配方。</string>
+    <string name="settings_baseline_dialog_description">为当前目标选择一个基准 LUT。它会在普通创意 LUT 之前应用。</string>
+    <string name="settings_baseline_edit_recipe">编辑配方</string>
+    <string name="settings_baseline_clear">清除</string>
     <string name="settings_shutter_sound">快门声音</string>
     <string name="settings_shutter_sound_description">拍照时播放快门声音</string>
     <string name="settings_vibration">拍摄震动</string>
@@ -372,6 +428,9 @@
     <string name="no_filters">暂无自定义滤镜</string>
     <string name="no_frames">暂无自定义边框</string>
     <string name="input_curve">输入曲线</string>
+    <string name="photo_lut">照片 LUT</string>
+    <string name="video_lut">视频 LUT</string>
+    <string name="video_lut_photo_conversion_hint">以下选项用于在照片中使用此视频 LUT 时进行色彩转换。</string>
 
     <!-- 边框导入帮助 -->
     <string name="help">帮助</string>
@@ -399,6 +458,8 @@
     <string name="settings_background_description">更改应用背景图</string>
     <string name="settings_custom_background">自定义...</string>
     <string name="settings_default_focal_length_description">设置启动 App 时自动切换到的焦段</string>
+    <string name="settings_custom_lens_ids">自定义镜头 ID</string>
+    <string name="settings_custom_lens_ids_description">手动添加相机 ID，多个 ID 用逗号分隔。检测可用后会加入镜头列表并显示特殊标识。</string>
     <string name="settings_custom_focal_length_add">添加自定义焦段</string>
     <string name="settings_custom_focal_length_hint">如：35、50、85</string>
     <string name="settings_custom_focal_length_max">最多 8 个焦段</string>

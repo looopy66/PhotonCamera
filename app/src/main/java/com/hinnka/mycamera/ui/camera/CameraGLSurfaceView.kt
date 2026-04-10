@@ -14,6 +14,8 @@ import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.video.VideoLogProfile
+import com.hinnka.mycamera.video.VideoRecorder
 
 /**
  * 相机预览 GLSurfaceView
@@ -138,11 +140,23 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
     }
 
+    fun setBaselineLut(lutConfig: LutConfig?) {
+        queueEvent {
+            renderer.setBaselineLut(lutConfig)
+            requestRender()
+        }
+    }
+
     /**
      * 设置 LUT 是否启用
      */
     fun setLutEnabled(enabled: Boolean) {
         renderer.lutEnabled = enabled
+        requestRender()
+    }
+
+    fun setBaselineLutEnabled(enabled: Boolean) {
+        renderer.baselineLutEnabled = enabled
         requestRender()
     }
 
@@ -164,6 +178,11 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         requestRender()
     }
 
+    fun setBaselineColorRecipeEnabled(enabled: Boolean) {
+        renderer.baselineColorRecipeEnabled = enabled
+        requestRender()
+    }
+
     /**
      * 设置参数
      */
@@ -175,6 +194,12 @@ class CameraGLSurfaceView @JvmOverloads constructor(
 
         renderer.setRecipeParams(effectiveParams)
         renderer.aperture = aperture
+        requestRender()
+    }
+
+    fun setBaselineParams(params: ColorRecipeParams) {
+        val effectiveParams = ColorPaletteMapper.mergeIntoEffectiveParams(params)
+        renderer.updateBaselineRecipeParams(effectiveParams)
         requestRender()
     }
 
@@ -223,6 +248,15 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         renderer.livePhotoRecorder = recorder
     }
 
+    fun setVideoRecorder(recorder: VideoRecorder?) {
+        renderer.videoRecorder = recorder
+    }
+
+    fun setVideoLogProfile(profile: VideoLogProfile) {
+        renderer.videoLogProfile = profile
+        requestRender()
+    }
+
     /**
      * 设置实时景深图
      */
@@ -246,6 +280,13 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     override fun onResume() {
         super.onResume()
         PLog.d(TAG, "onResume")
+    }
+
+    fun restoreRenderStateAfterResume() {
+        queueEvent {
+            renderer.restoreLutTexturesAfterResume()
+            requestRender()
+        }
     }
 
     override fun onDetachedFromWindow() {
