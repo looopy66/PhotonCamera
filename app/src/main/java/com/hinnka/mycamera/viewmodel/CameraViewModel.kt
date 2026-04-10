@@ -209,6 +209,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     val defaultFocalLength: Flow<Float> = userPreferencesRepository.userPreferences.map { it.defaultFocalLength }
     val customFocalLengths: Flow<List<Float>> = userPreferencesRepository.userPreferences.map { it.customFocalLengths }
+    val customLensIds: Flow<List<String>> = userPreferencesRepository.userPreferences.map { it.customLensIds }
     val userPreferences: StateFlow<com.hinnka.mycamera.data.UserPreferences> = userPreferencesRepository.userPreferences
         .stateIn(viewModelScope, SharingStarted.Eagerly, com.hinnka.mycamera.data.UserPreferences())
     val jpgBaselineLutId: StateFlow<String?> = userPreferencesRepository.userPreferences
@@ -2096,10 +2097,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val zoomableCameras =
             cameras.filter { if (currentLensType == LensType.FRONT) it.lensType == LensType.FRONT else (it.lensType != LensType.FRONT && it.lensType != LensType.BACK_MACRO) }
         if (zoomableCameras.isEmpty()) return null
-        return zoomableCameras
+        val candidates = zoomableCameras
             .filter { it.intrinsicZoomRatio <= targetZoom + 0.01f }
-            .sortedByDescending { it.intrinsicZoomRatio }
-            .getOrNull(0)
+        val bestZoom = candidates.maxOfOrNull { it.intrinsicZoomRatio } ?: return null
+        val tiedCandidates = candidates.filter { abs(it.intrinsicZoomRatio - bestZoom) <= 0.01f }
+        return tiedCandidates.firstOrNull { it.cameraId == currentCameraId }
+            ?: tiedCandidates.firstOrNull()
     }
 
     /**
@@ -2243,6 +2246,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             val current = userPreferencesRepository.userPreferences.firstOrNull()?.customFocalLengths ?: emptyList()
             userPreferencesRepository.saveCustomFocalLengths(current.filter { abs(it - fl) >= 0.5f })
+        }
+    }
+
+    fun setCustomLensIds(value: String) {
+        viewModelScope.launch {
+            val lensIds = value.split(",")
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+            userPreferencesRepository.saveCustomLensIds(lensIds)
+            cameraController.refreshCameraList()
         }
     }
 

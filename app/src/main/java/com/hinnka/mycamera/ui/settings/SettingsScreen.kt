@@ -143,6 +143,7 @@ fun SettingsScreen(
     val noiseReduction by viewModel.noiseReduction.collectAsState(initial = 0f)
     val chromaNoiseReduction by viewModel.chromaNoiseReduction.collectAsState(initial = 0f)
     val defaultFocalLength by viewModel.defaultFocalLength.collectAsState(initial = 0f)
+    val customLensIds by viewModel.customLensIds.collectAsState(initial = emptyList())
     val multiFrameCount by viewModel.multiFrameCount.collectAsState()
     val useMultipleExposure by viewModel.useMultipleExposure.collectAsState()
     val multipleExposureCount by viewModel.multipleExposureCount.collectAsState()
@@ -634,6 +635,18 @@ fun SettingsScreen(
                             viewModel = viewModel,
                             currentFocalLength = defaultFocalLength,
                             onFocalLengthSelected = { viewModel.setDefaultFocalLength(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        TextInputSettingItem(
+                            title = stringResource(R.string.settings_custom_lens_ids),
+                            description = stringResource(R.string.settings_custom_lens_ids_description),
+                            value = customLensIds.joinToString(","),
+                            onValueChange = { viewModel.setCustomLensIds(it) }
                         )
 
                         HorizontalDivider(

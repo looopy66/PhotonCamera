@@ -9,8 +9,11 @@ import android.hardware.camera2.CameraMetadata
 import android.os.Build
 import android.util.Log
 import android.util.Range
+import com.hinnka.mycamera.data.UserPreferencesRepository
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.PLog
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.runBlocking
 import kotlin.math.abs
 
 /**
@@ -40,6 +43,8 @@ class CameraDiscovery(private val context: Context) {
         context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     }
 
+    private val userPreferencesRepository = UserPreferencesRepository(context)
+
     // 缓存已发现的摄像头 ID 列表
     private var cachedCameraIds: List<String>? = null
 
@@ -57,6 +62,7 @@ class CameraDiscovery(private val context: Context) {
 
         // 获取完整的 Camera ID 列表（包括探测的隐藏摄像头）
         val allCameraIds = getAllCameraIds()
+        val customLensIdSet = loadCustomLensIds().toSet()
         PLog.d(TAG, "Camera2 discovered IDs: $allCameraIds")
 
         // 构建摄像头信息
@@ -74,7 +80,13 @@ class CameraDiscovery(private val context: Context) {
                 // 检测是否为微距镜头
                 val isMacro = isMacroLens(characteristics)
 
-                val info = createCameraInfo(cameraId, characteristics, lensFacing, intrinsicZoomRatio)
+                val info = createCameraInfo(
+                    cameraId = cameraId,
+                    characteristics = characteristics,
+                    lensFacing = lensFacing,
+                    intrinsicZoomRatio = intrinsicZoomRatio,
+                    isCustomLensId = customLensIdSet.contains(cameraId)
+                )
 
                 when (lensFacing) {
                     CameraCharacteristics.LENS_FACING_BACK -> {
@@ -115,7 +127,7 @@ class CameraDiscovery(private val context: Context) {
      */
     private fun getAllCameraIds(): List<String> {
         // 使用缓存
-        cachedCameraIds?.let { return it }
+        cachedCameraIds?.let { return appendCustomCameraIds(it) }
 
         val systemCameraIds = try {
             cameraManager.cameraIdList.toList()
@@ -136,7 +148,50 @@ class CameraDiscovery(private val context: Context) {
         PLog.d(TAG, "After probing: $allIds (probed: $probedIds)")
 
         cachedCameraIds = allIds
-        return allIds
+        return appendCustomCameraIds(allIds)
+    }
+
+    private fun appendCustomCameraIds(baseIds: List<String>): List<String> {
+        val existingSet = baseIds.toSet()
+        val customIds = loadCustomLensIds()
+            .filterNot { existingSet.contains(it) }
+            .filter { isCustomCameraIdAvailable(it) }
+
+        if (customIds.isNotEmpty()) {
+            PLog.d(TAG, "Custom lens IDs available: $customIds")
+        }
+
+        return (baseIds + customIds).distinct()
+    }
+
+    private fun loadCustomLensIds(): List<String> {
+        return try {
+            runBlocking {
+                userPreferencesRepository.userPreferences.firstOrNull()?.customLensIds ?: emptyList()
+            }
+        } catch (e: Exception) {
+            PLog.w(TAG, "Failed to load custom lens IDs", e)
+            emptyList()
+        }
+    }
+
+    private fun isCustomCameraIdAvailable(cameraId: String): Boolean {
+        return try {
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+
+            characteristics.get(CameraCharacteristics.LENS_FACING) ?: return false
+
+            val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            if (map?.getOutputSizes(ImageFormat.JPEG).isNullOrEmpty()) {
+                PLog.d(TAG, "Custom lens ID $cameraId skipped: no JPEG output")
+                return false
+            }
+
+            true
+        } catch (e: Exception) {
+            PLog.v(TAG, "Custom lens ID $cameraId unavailable: ${e.message}")
+            false
+        }
     }
 
     /**
@@ -382,7 +437,8 @@ class CameraDiscovery(private val context: Context) {
         cameraId: String,
         characteristics: CameraCharacteristics,
         lensFacing: Int,
-        intrinsicZoomRatio: Float
+        intrinsicZoomRatio: Float,
+        isCustomLensId: Boolean
     ): CameraInfo {
         // 焦距信息
         val focalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
@@ -438,7 +494,8 @@ class CameraDiscovery(private val context: Context) {
             supportsManualProcessing = checkManualProcessingSupport(characteristics),
             supportsRaw = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.contains(
                 CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW
-            ) == true
+            ) == true,
+            isCustomLensId = isCustomLensId
         )
     }
 

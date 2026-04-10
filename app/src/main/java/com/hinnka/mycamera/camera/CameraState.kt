@@ -73,19 +73,21 @@ data class CameraInfo(
     val intrinsicZoomRatio: Float = 1f,  // 固有变焦比例 (CameraX 1.3.0+)
     val hardwareLevel: Int = -1,  // 硬件支持级别
     val supportsManualProcessing: Boolean = false, // 是否支持手动处理（关闭系统锐化/降噪）
-    val supportsRaw: Boolean = false // 是否支持 RAW 格式
+    val supportsRaw: Boolean = false, // 是否支持 RAW 格式
+    val isCustomLensId: Boolean = false // 是否来自用户手动添加的镜头 ID
 ) {
     /**
      * 获取镜头类型显示名称
      */
     fun getLensDisplayName(): String {
-        return when (lensType) {
+        val name = when (lensType) {
             LensType.FRONT -> "前置"
             LensType.BACK_MAIN -> "主摄 (1x)"
             LensType.BACK_ULTRA_WIDE -> "广角 (0.5x)"
             LensType.BACK_TELEPHOTO -> "长焦 (${String.format("%.1f", focalLength35mmEquivalent / 24f)}x)"
             LensType.BACK_MACRO -> "微距"
         }
+        return if (isCustomLensId) "$name *" else name
     }
 
     /**

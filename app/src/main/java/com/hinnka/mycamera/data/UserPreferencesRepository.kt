@@ -118,7 +118,8 @@ data class UserPreferences(
     val useBuiltInAiService: Boolean = false,
     val phantomSaveAsNew: Boolean = false,
     val defaultVirtualAperture: Float = 0f, // 默认虚化光圈，0表示关闭
-    val customFocalLengths: List<Float> = emptyList() // 自定义焦段 (35mm等效)，最多8个
+    val customFocalLengths: List<Float> = emptyList(), // 自定义焦段 (35mm等效)，最多8个
+    val customLensIds: List<String> = emptyList() // 自定义镜头 ID，逗号分隔存储
 )
 
 /**
@@ -211,6 +212,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val PHANTOM_SAVE_AS_NEW = booleanPreferencesKey("phantom_save_as_new")
         private val DEFAULT_VIRTUAL_APERTURE = floatPreferencesKey("default_virtual_aperture")
         private val CUSTOM_FOCAL_LENGTHS = stringPreferencesKey("custom_focal_lengths")
+        private val CUSTOM_LENS_IDS = stringPreferencesKey("custom_lens_ids")
     }
 
     /**
@@ -313,7 +315,8 @@ class UserPreferencesRepository(private val context: Context) {
                 customFocalLengths = preferences[CUSTOM_FOCAL_LENGTHS]
                     ?.split(",")?.filter { it.isNotEmpty() }
                     ?.mapNotNull { it.toFloatOrNull() }
-                    ?: listOf(35f, 50f, 85f, 200f)
+                    ?: listOf(35f, 50f, 85f, 200f),
+                customLensIds = parseCustomLensIds(preferences[CUSTOM_LENS_IDS])
             )
         }
 
@@ -344,6 +347,14 @@ class UserPreferencesRepository(private val context: Context) {
         return offsets.entries
             .filter { it.value in listOf(0, 90, 180, 270) }
             .joinToString(",") { "${it.key}:${it.value}" }
+    }
+
+    private fun parseCustomLensIds(value: String?): List<String> {
+        if (value.isNullOrBlank()) return emptyList()
+        return value.split(",")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
     }
 
     private fun parseRawLuts(preferences: Preferences): Map<String, String> {
@@ -622,6 +633,16 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveCustomFocalLengths(focalLengths: List<Float>) {
         context.dataStore.edit { preferences ->
             preferences[CUSTOM_FOCAL_LENGTHS] = focalLengths.joinToString(",")
+        }
+    }
+
+    suspend fun saveCustomLensIds(lensIds: List<String>) {
+        context.dataStore.edit { preferences ->
+            preferences[CUSTOM_LENS_IDS] = lensIds
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+                .joinToString(",")
         }
     }
 

@@ -467,6 +467,8 @@
     <string name="settings_donation_description">Support the development of Photon Camera</string>
     <string name="settings_default_focal_length">Default Focal Length</string>
     <string name="settings_default_focal_length_description">Set the focal length to automatically switch to when the app starts.</string>
+    <string name="settings_custom_lens_ids">Custom Lens IDs</string>
+    <string name="settings_custom_lens_ids_description">Add camera IDs manually, separated by commas. Available IDs will appear in the lens list with a special marker.</string>
     <string name="settings_custom_focal_length_add">Add Custom Focal Length</string>
     <string name="settings_custom_focal_length_hint">e.g. 35, 50, 85</string>
     <string name="settings_custom_focal_length_max">Maximum 8 custom focal lengths</string>

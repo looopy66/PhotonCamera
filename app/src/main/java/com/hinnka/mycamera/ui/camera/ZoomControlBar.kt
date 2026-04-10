@@ -78,6 +78,18 @@ fun ZoomControlBar(
     // 根据可用相机计算变焦档位
     val customFocalLengths by viewModel.customFocalLengths.collectAsState(initial = emptyList())
     val lensZoomStops = viewModel.calculateLensZoomStops(availableCameras, currentCamera)
+    val customLensZoomStops = remember(availableCameras, currentCamera) {
+        availableCameras
+            .filter { camera ->
+                camera.isCustomLensId &&
+                    if (currentCamera?.lensType == LensType.FRONT) {
+                        camera.lensType == LensType.FRONT
+                    } else {
+                        camera.lensType != LensType.FRONT && camera.lensType != LensType.BACK_MACRO
+                    }
+            }
+            .map { it.intrinsicZoomRatio }
+    }
     val zoomStops = viewModel.allZoomStops(lensZoomStops, mainCamera, currentCamera, customFocalLengths)
 
     val cameraState by viewModel.state.collectAsState()
@@ -273,6 +285,7 @@ fun ZoomControlBar(
                 ZoomRuler(
                     zoomRatio = internalZoomRatio,
                     lensStops = lensZoomStops,
+                    customLensStops = customLensZoomStops,
                     stops = effectiveStops,
                     mainCamera = mainCamera,
                     displayMode = displayMode,
@@ -300,6 +313,7 @@ fun ZoomControlBar(
 fun ZoomRuler(
     zoomRatio: Float,
     lensStops: List<Float>,
+    customLensStops: List<Float>,
     stops: List<Float>,
     mainCamera: CameraInfo?,
     displayMode: ZoomDisplayMode,
@@ -325,8 +339,10 @@ fun ZoomRuler(
         horizontalArrangement = Arrangement.SpaceAround,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        stops.forEachIndexed { _, stop ->
-            val isSelected = abs(stop - zoomRatio) <= 0.01f
+        val selectedStopIndex = stops.indices.minByOrNull { abs(stops[it] - zoomRatio) }
+        stops.forEachIndexed { index, stop ->
+            val isSelected = index == selectedStopIndex && abs(stop - zoomRatio) <= 0.01f
+            val isCustomLensStop = customLensStops.any { abs(it - stop) <= 0.01f }
 
             // 显示文本
             val text = when (displayMode) {
@@ -337,7 +353,7 @@ fun ZoomRuler(
                 ZoomDisplayMode.FOCAL_LENGTH -> {
                     zoomRatioToFocalLength(stop, mainCamera)
                 }
-            }
+            } + if (isCustomLensStop) "*" else ""
 
             val style = TextStyle(
                 fontSize = if (isSelected) 13.sp else 10.sp,

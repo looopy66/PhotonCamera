@@ -441,7 +441,7 @@ class Camera2Controller(private val context: Context) {
     /**
      * 发现所有可用摄像头（包括隐藏摄像头）
      */
-    private fun discoverCameras() {
+    private fun discoverCameras(preferredCameraId: String? = null) {
         val cameras = cameraDiscovery.discoverAllCameras()
 
         PLog.d(TAG, "Discovered ${cameras.size} cameras:")
@@ -452,7 +452,8 @@ class Camera2Controller(private val context: Context) {
         }
 
         // 默认选择主摄
-        val defaultCamera = cameras.firstOrNull { it.lensType == LensType.BACK_MAIN }
+        val defaultCamera = cameras.firstOrNull { it.cameraId == preferredCameraId }
+            ?: cameras.firstOrNull { it.lensType == LensType.BACK_MAIN }
             ?: cameras.firstOrNull { it.lensFacing == CameraCharacteristics.LENS_FACING_BACK }
             ?: cameras.firstOrNull()
 
@@ -463,6 +464,13 @@ class Camera2Controller(private val context: Context) {
             currentCameraId = defaultCamera?.cameraId ?: "",
             currentLensType = defaultCamera?.lensType ?: LensType.BACK_MAIN
         )
+    }
+
+    fun refreshCameraList() {
+        PLog.i(TAG, "刷新摄像头列表")
+        val currentCameraId = _state.value.currentCameraId
+        cameraDiscovery.clearCache()
+        discoverCameras(preferredCameraId = currentCameraId.takeIf { it.isNotEmpty() })
     }
 
     private fun refreshVideoCapabilities(characteristics: CameraCharacteristics? = null): Size {
