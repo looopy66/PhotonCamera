@@ -2,25 +2,24 @@
     "id": "time",
     "name": {
         "en": "Time",
-        "zh": "时间"
+        "zh": "胶片时间"
     },
     "version": 1,
     "editable": true,
     "layout": {
         "position": "OVERLAY",
         "backgroundColor": "#00000000",
-        "height": 160,
-        "padding": 80
+        "height": 250,
+        "padding": 120
     },
     "elements": [
         {
             "type": "text",
             "textType": "DATE",
             "alignment": "END",
-            "fontSize": 18,
+            "fontSize": 24,
             "color": "#FFA600",
-            "fontWeight": "BOLD",
-            "fontFamily": "digital-7.ttf",
+            "fontFamily": "DS-DIGIB.TTF",
             "format": "\"yy MM dd"
         }
     ]
