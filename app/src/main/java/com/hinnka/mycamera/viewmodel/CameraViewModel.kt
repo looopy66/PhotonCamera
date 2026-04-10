@@ -1672,13 +1672,41 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         val glView = glSurfaceView
         if (glView != null) {
+            val thumbnailRotation = capturePreviewThumbnailRotation()
             glView.capturePreviewFrame { bitmap ->
-                previewThumbnail = bitmap
+                previewThumbnail = rotateCapturePreviewThumbnail(bitmap, thumbnailRotation)
                 isGeneratingPreviews = false
             }
         } else {
             isGeneratingPreviews = false
         }
+    }
+
+    private fun capturePreviewThumbnailRotation(): Float {
+        val deviceRotation = OrientationObserver.rotationDegrees.toInt()
+        val lensFacing = cameraController.getLensFacing()
+        val baseRotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+            (360 - deviceRotation) % 360
+        } else {
+            deviceRotation
+        }
+        val currentCameraId = cameraController.getCurrentCameraId()
+        val orientationOffset = userPreferences.value.cameraOrientationOffsets[currentCameraId] ?: 0
+        return ((baseRotation + orientationOffset) % 360).toFloat()
+    }
+
+    private fun rotateCapturePreviewThumbnail(bitmap: Bitmap, rotationDegrees: Float): Bitmap {
+        if (rotationDegrees == 0f) {
+            return bitmap
+        }
+        val sourceWidth = bitmap.width
+        val sourceHeight = bitmap.height
+        val rotated = BitmapUtils.rotate(bitmap, rotationDegrees)
+        PLog.d(
+            TAG,
+            "Preview thumbnail rotated for capture: ${sourceWidth}x${sourceHeight}, rotation=$rotationDegrees"
+        )
+        return rotated
     }
 
     suspend fun applyLut(bitmap: Bitmap): Bitmap = withContext(Dispatchers.IO) {
