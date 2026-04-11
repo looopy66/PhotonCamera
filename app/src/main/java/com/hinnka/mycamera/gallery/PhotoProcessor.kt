@@ -567,12 +567,7 @@ class PhotoProcessor(
     ) = colorCorrectionPipelineResolver.resolveFromMetadata(
         fallbackTarget = fallbackTarget,
         metadata = metadata
-    ).also { stack ->
-        PLog.d(
-            "PhotoProcessor",
-            "Color correction target=${stack.target} baseline=${stack.baselineLutId} creative=${stack.creativeLutId} stacked=${stack.hasStackedLayers}"
-        )
-    }
+    )
 
     private suspend fun applyFrame(
         input: Bitmap,

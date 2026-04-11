@@ -88,6 +88,7 @@ private:
   struct FrameData {
     AHardwareBuffer *buffer;
     float score = 0.0f;
+    GrayImage grayY; // cached grayscale from score calculation
   };
   std::vector<FrameData> pendingFrames;
 
@@ -110,5 +111,6 @@ private:
   void initVulkanResources();
   void releaseVulkanResources();
   void createPipelines(VkSampler immutableSampler);
-  bool processFrame(AHardwareBuffer *buffer, float frameScore);
+  bool processFrame(AHardwareBuffer *buffer, float frameScore,
+                    GrayImage &cachedGray);
 };

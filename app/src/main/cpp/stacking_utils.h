@@ -95,9 +95,11 @@ std::vector<GrayImage> buildPyramid(const uint8_t *src, int width, int height,
                                     int levels);
 
 // Compute tile-based alignment
+// tileSize: grid cell size in pixels (default 32; use 16 for super-res)
 TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
                                    const std::vector<GrayImage> &targetPyramid,
-                                   int maxShift);
+                                   int maxShift,
+                                   int tileSize = 32);
 
 class ImageStacker {
 public:
