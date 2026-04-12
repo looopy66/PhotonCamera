@@ -816,6 +816,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         return Triple(target, baselineLutId, params)
     }
 
+    private fun isRawCaptureFormat(format: Int): Boolean {
+        return when (format) {
+            ImageFormat.RAW_SENSOR,
+            ImageFormat.RAW10,
+            ImageFormat.RAW12 -> true
+            else -> false
+        }
+    }
+
     private fun defaultHdrEffectEnabled(
         hasEmbeddedGainmap: Boolean,
         userPrefs: com.hinnka.mycamera.data.UserPreferences?
@@ -970,7 +979,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         captureInfo: CaptureInfo
     ) {
         try {
-            if (state.value.useRaw || image.format == android.graphics.ImageFormat.RAW_SENSOR) {
+            if (isRawCaptureFormat(image.format)) {
                 image.close()
                 PLog.w(TAG, "Multiple exposure currently supports processed YUV captures only")
                 return
@@ -2356,7 +2365,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 hasEmbeddedGainmap = false,
                 userPrefs = userPrefs
             )
-            val baselineTarget = if (state.value.useRaw || image.format == ImageFormat.RAW_SENSOR) {
+            val baselineTarget = if (isRawCaptureFormat(image.format)) {
                 BaselineColorCorrectionTarget.RAW
             } else {
                 BaselineColorCorrectionTarget.JPG
@@ -2590,7 +2599,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 hasEmbeddedGainmap = false,
                 userPrefs = userPrefs
             )
-            val baselineTarget = if (state.value.useRaw || useSuperRes || images.firstOrNull()?.format == ImageFormat.RAW_SENSOR) {
+            val baselineTarget = if (images.firstOrNull()?.format?.let(::isRawCaptureFormat) == true) {
                 BaselineColorCorrectionTarget.RAW
             } else {
                 BaselineColorCorrectionTarget.JPG
@@ -2729,7 +2738,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             hasEmbeddedGainmap = false,
             userPrefs = userPrefs
         )
-        val baselineTarget = if (state.value.useRaw || image.format == ImageFormat.RAW_SENSOR) {
+        val baselineTarget = if (isRawCaptureFormat(image.format)) {
             BaselineColorCorrectionTarget.RAW
         } else {
             BaselineColorCorrectionTarget.JPG
