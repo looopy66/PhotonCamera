@@ -122,15 +122,11 @@ LocalReliabilityMap buildLocalReliabilityMap(const GrayImage &reference,
     float err = errorMap[idx];
     float errRms = std::sqrt(std::max(err, 0.0f));
     float detailPenalty = smoothstepf(flatThreshold, detailThreshold, detail);
-    float flatness = 1.0f - detailPenalty;
     float errorWeight = clamp01(1.0f - std::max(0.0f, errRms - 2.0f) / 4.5f);
-    float tileWeight =
-        clamp01(errorWeight * (0.18f + 0.82f * flatness * flatness));
+    float tileWeight = clamp01(errorWeight);
 
     if (detailPenalty > 0.60f) {
       ++detailCount;
-    } else if (detailPenalty > 0.30f) {
-      tileWeight *= 0.72f;
     } else {
       ++flatCount;
       if (errRms < 4.0f)
@@ -168,11 +164,11 @@ float computeFrameFusionWeight(const std::vector<float> &errorMap,
   float errorWeight =
       clamp01(1.0f - std::max(0.0f, errP90Rms - 2.5f) / 5.0f);
   float sharpnessGuard = clamp01(0.88f + 0.12f * sharpnessRatio);
-  float flatCoverage = clamp01(0.35f + 0.65f * localMap.flatAreaFraction);
-  float flatReliability = clamp01(0.40f + 0.60f * localMap.flatGoodFraction);
-  float detailPenalty = clamp01(1.0f - 0.35f * localMap.detailAreaFraction);
+  float flatCoverage = clamp01(0.75f + 0.25f * localMap.flatAreaFraction);
+  float flatReliability = clamp01(0.44f + 0.55f * localMap.flatGoodFraction);
+  float detailPenalty = clamp01(1.0f - 0.15f * localMap.detailAreaFraction);
   float baseWeight =
-      0.42f + 0.40f * errorWeight * flatCoverage * flatReliability * detailPenalty;
+      0.6f + 0.40f * errorWeight * flatCoverage * flatReliability * detailPenalty;
   return clamp01(baseWeight * sharpnessGuard);
 }
 
@@ -251,8 +247,10 @@ void VulkanImageStacker::initVulkanResources() {
   }
 
   // Initialize Alignment Grid Buffer early
-  gridW = (width + 31) / 32;
-  gridH = (height + 31) / 32;
+  // Use finer grid (16px tiles) for super-res to capture sub-pixel variation
+  uint32_t alignTileSize = enableSuperRes ? 16 : 32;
+  gridW = (width + alignTileSize - 1) / alignTileSize;
+  gridH = (height + alignTileSize - 1) / alignTileSize;
   VkDeviceSize alignBufferSize = gridW * gridH * sizeof(Point);
   VkBufferCreateInfo alignInfo{};
   alignInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -712,7 +710,8 @@ bool VulkanImageStacker::addFrame(AHardwareBuffer *buffer) {
   return true;
 }
 
-bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer, float frameScore) {
+bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer, float frameScore,
+                                      GrayImage &cachedGray) {
   VulkanImage input;
   // Use existing conversion if available (from first frame) to compatible with
   // immutable sampler
@@ -868,48 +867,24 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer, float frameScore)
   size_t copyCount = 0;
   float frameWeight = 1.0f;
 
-  AHardwareBuffer_Desc desc;
-  AHardwareBuffer_describe(buffer, &desc);
-
-  void *lockedData = nullptr;
   TIME_START(cpuAlignment);
-  if (AHardwareBuffer_lock(buffer, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, -1,
-                           nullptr, &lockedData) == 0) {
-    // Create a 8-bit grayscale image for alignment
-    GrayImage currentY;
-    currentY.width = width;
-    currentY.height = height;
-    currentY.data.resize(width * height);
-
-    uint8_t *srcY = (uint8_t *)lockedData;
-    int stride = desc.stride;
-    bool is10bit = (desc.format == 0x36); // AHARDWAREBUFFER_FORMAT_YCbCr_P010
-
-    for (int y = 0; y < height; ++y) {
-      if (is10bit) {
-        uint16_t *rowPtr = (uint16_t *)(srcY + y * stride * 2);
-        for (int x = 0; x < width; ++x) {
-          currentY.data[y * width + x] = (uint8_t)(rowPtr[x] >> 8);
-        }
-      } else {
-        memcpy(currentY.data.data() + y * width, srcY + y * stride, width);
-      }
-    }
-    AHardwareBuffer_unlock(buffer, nullptr);
-
-    auto currentPyramid = buildPyramid(currentY.data.data(), width, height, 4);
+  {
+    // Use cached grayscale from score calculation (no second HardwareBuffer lock)
+    auto currentPyramid =
+        buildPyramid(cachedGray.data.data(), width, height, 4);
     if (currentIsFirstFrame) {
       referencePyramid = std::move(currentPyramid);
       localTileMask.assign((size_t)gridW * gridH, 1.0f);
     } else {
+      int alignTileSize = enableSuperRes ? 16 : 32;
       TileAlignment alignment =
-          computeTileAlignment(referencePyramid, currentPyramid, 64);
+          computeTileAlignment(referencePyramid, currentPyramid, 64, alignTileSize);
 
       gridW = alignment.gridW;
       gridH = alignment.gridH;
 
-      uint32_t allocatedGridW = (width + 31) / 32;
-      uint32_t allocatedGridH = (height + 31) / 32;
+      uint32_t allocatedGridW = (width + alignTileSize - 1) / alignTileSize;
+      uint32_t allocatedGridH = (height + alignTileSize - 1) / alignTileSize;
       uint32_t maxAllocatedPoints = allocatedGridW * allocatedGridH;
 
       copyCount =
@@ -942,7 +917,7 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer, float frameScore)
            p90Err, std::sqrt(std::max(p90Err, 0.0f)));
     }
   }
-  TIME_END(cpuAlignment);
+  TIME_END(cpuAlignment);  // closes cpuAlignment + the cached-gray block
 
   // 3. Prepare Push Constants
   float transform[6] = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
@@ -1144,66 +1119,49 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer, float frameScore)
                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
                        &localMaskBarrier, 0, nullptr);
 
-  // Phase 2: Compute Structure Tensor (Pass 1)
+  // Phase 2: Compute Structure Tensor (only on first/reference frame)
+  // The kernel shape is driven by the reference frame's local structure.
+  // Subsequent frames reuse it — avoids (N-1) expensive GPU dispatches.
+  if (currentIsFirstFrame) {
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, tensorPipeline);
 
-  // Phase 2: Compute Structure Tensor (Pass 1)
-  // Only if first frame? Or every frame?
-  // Paper says: Structure tensor is computed on the image being merged
-  // (Target). So we must compute it for EVERY frame.
+    for (int y = 0; y < numTilesY; ++y) {
+      for (int x = 0; x < numTilesX; ++x) {
+        int i = y * numTilesX + x;
 
-  vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, tensorPipeline);
+        uint32_t stFullW = width;
+        uint32_t stFullH = height;
+        uint32_t stTileW = (stFullW + numTilesX - 1) / numTilesX;
+        uint32_t stTileH = (stFullH + numTilesY - 1) / numTilesY;
 
-  // Use pc.scale and global width/height from PC
-  // pc was prepared above, let's use it.
+        PushConstants stPC = pc;
+        stPC.tileX = x * stTileW;
+        stPC.tileY = y * stTileH;
+        stPC.tileW = std::min(stTileW, stFullW - stPC.tileX);
+        stPC.tileH = std::min(stTileH, stFullH - stPC.tileY);
+        stPC.width = stFullW;
+        stPC.height = stFullH;
 
-  // Dispatch over the image logic (tiled or global?)
-  // We allocated per-tile descriptor sets.
-
-  for (int y = 0; y < numTilesY; ++y) {
-    for (int x = 0; x < numTilesX; ++x) {
-      int i = y * numTilesX + x;
-      // Reuse PC logic for tiling, but Structure Tensor covers full target
-      // frame. Actually Structure Tensor is 1:1 with Upscaled Output if we want
-      // per-pixel kernel. Shader uses inputSampler and writes to kpBuffer. We
-      // can dispatch over tiles logic.
-
-      // Calculate tile rect (Using NATIVE resolution for ST calculation)
-      uint32_t stFullW = width;
-      uint32_t stFullH = height;
-      uint32_t stTileW = (stFullW + numTilesX - 1) / numTilesX;
-      uint32_t stTileH = (stFullH + numTilesY - 1) / numTilesY;
-
-      PushConstants stPC = pc;
-      stPC.tileX = x * stTileW;
-      stPC.tileY = y * stTileH;
-      stPC.tileW = std::min(stTileW, stFullW - stPC.tileX);
-      stPC.tileH = std::min(stTileH, stFullH - stPC.tileY);
-      // Ensure shader sees native dimensions for indexing
-      stPC.width = stFullW;
-      stPC.height = stFullH;
-
-      // Bind ST Set
-      vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                              tensorPipelineLayout, 0, 1, &tensorSets[i], 0,
-                              nullptr);
-      vkCmdPushConstants(cb, tensorPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
-                         0, sizeof(stPC), &stPC);
-
-      // Dispatch
-      vkCmdDispatch(cb, (stPC.tileW + 15) / 16, (stPC.tileH + 15) / 16, 1);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                tensorPipelineLayout, 0, 1, &tensorSets[i], 0,
+                                nullptr);
+        vkCmdPushConstants(cb, tensorPipelineLayout,
+                           VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(stPC), &stPC);
+        vkCmdDispatch(cb, (stPC.tileW + 15) / 16, (stPC.tileH + 15) / 16, 1);
+      }
     }
-  }
 
-  // Barrier between ST and Accumulate
-  VkBufferMemoryBarrier stBarrier{};
-  stBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-  stBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-  stBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-  stBarrier.buffer = kernelParamsBuffer;
-  stBarrier.size = VK_WHOLE_SIZE;
-  vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
-                       &stBarrier, 0, nullptr);
+    // Barrier: ST writes must finish before Accumulate reads kernelParams
+    VkBufferMemoryBarrier stBarrier{};
+    stBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    stBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    stBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    stBarrier.buffer = kernelParamsBuffer;
+    stBarrier.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
+                         &stBarrier, 0, nullptr);
+  }
 
   // Barrier between frames to ensure Accumulator writes are finished
   for (int i = 0; i < numTiles; ++i) {
@@ -1263,35 +1221,6 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer, float frameScore)
   return true;
 }
 
-float calculateYuvScore(AHardwareBuffer *buffer, uint32_t width,
-                        uint32_t height) {
-  AHardwareBuffer_Desc desc;
-  AHardwareBuffer_describe(buffer, &desc);
-  void *lockedData = nullptr;
-  long long score = 0;
-  if (AHardwareBuffer_lock(buffer, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, -1,
-                           nullptr, &lockedData) == 0) {
-    uint8_t *srcY = (uint8_t *)lockedData;
-    int stride = desc.stride;
-    bool is10bit = (desc.format == 0x36);
-    int step = 8;
-    for (uint32_t y = step; y < height - step; y += step) {
-      for (uint32_t x = step; x < width - step; x += step) {
-        int val = is10bit ? (((uint16_t *)srcY)[y * stride + x] >> 8)
-                          : srcY[y * stride + x];
-        int valR = is10bit ? (((uint16_t *)srcY)[y * stride + x + 1] >> 8)
-                           : srcY[y * stride + x + 1];
-        int valB = is10bit ? (((uint16_t *)srcY)[(y + 1) * stride + x] >> 8)
-                           : srcY[(y + 1) * stride + x];
-        score += std::abs(val - valR);
-        score += std::abs(val - valB);
-      }
-    }
-    AHardwareBuffer_unlock(buffer, nullptr);
-  }
-  return (float)score;
-}
-
 bool VulkanImageStacker::processStack(uint32_t *outBitmap, uint32_t outWidth,
                                       uint32_t outHeight, uint32_t stride,
                                       int rotation) {
@@ -1304,10 +1233,49 @@ bool VulkanImageStacker::processStack(uint32_t *outBitmap, uint32_t outWidth,
     return false;
   }
 
-  // 1. Calculate scores for all pending frames
+  // 1. Calculate scores and extract grayscale in a single lock per frame
   TIME_START(scoreCalculation);
   for (auto &frame : pendingFrames) {
-    frame.score = calculateYuvScore(frame.buffer, width, height);
+    AHardwareBuffer_Desc desc;
+    AHardwareBuffer_describe(frame.buffer, &desc);
+    void *lockedData = nullptr;
+    if (AHardwareBuffer_lock(frame.buffer, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN,
+                             -1, nullptr, &lockedData) == 0) {
+      uint8_t *srcY = (uint8_t *)lockedData;
+      int stride = desc.stride;
+      bool is10bit = (desc.format == 0x36);
+
+      // Extract grayscale
+      frame.grayY.width = width;
+      frame.grayY.height = height;
+      frame.grayY.data.resize((size_t)width * height);
+      for (uint32_t y = 0; y < height; ++y) {
+        if (is10bit) {
+          uint16_t *rowPtr = (uint16_t *)(srcY + y * stride * 2);
+          for (uint32_t x = 0; x < width; ++x) {
+            frame.grayY.data[y * width + x] = (uint8_t)(rowPtr[x] >> 8);
+          }
+        } else {
+          memcpy(frame.grayY.data.data() + y * width, srcY + y * stride, width);
+        }
+      }
+
+      // Calculate score from the same locked data
+      long long score = 0;
+      int step = 8;
+      for (uint32_t y = step; y < height - step; y += step) {
+        for (uint32_t x = step; x < width - step; x += step) {
+          int val = frame.grayY.data[y * width + x];
+          int valR = frame.grayY.data[y * width + x + 1];
+          int valB = frame.grayY.data[(y + 1) * width + x];
+          score += std::abs(val - valR);
+          score += std::abs(val - valB);
+        }
+      }
+      frame.score = (float)score;
+
+      AHardwareBuffer_unlock(frame.buffer, nullptr);
+    }
   }
   TIME_END(scoreCalculation);
 
@@ -1331,11 +1299,12 @@ bool VulkanImageStacker::processStack(uint32_t *outBitmap, uint32_t outWidth,
   for (auto &frame : pendingFrames) {
     //    LOGI("processStack: Processing frame %d, score %f", frameIdx,
     //    frame.score);
-    if (!processFrame(frame.buffer, frame.score)) {
+    if (!processFrame(frame.buffer, frame.score, frame.grayY)) {
       LOGE("processStack: Failed to process frame %d", frameIdx);
-    } else {
-      //      LOGI("processStack: Successfully processed frame %d", frameIdx);
     }
+    // Release grayscale cache to free memory as soon as it's consumed
+    frame.grayY.data.clear();
+    frame.grayY.data.shrink_to_fit();
     AHardwareBuffer_release(frame.buffer);
     frameIdx++;
   }

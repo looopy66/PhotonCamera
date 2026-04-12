@@ -8,7 +8,7 @@ layout(binding = 0, scalar) buffer OutputBuffer {
 } outputBuffer;
 
 layout(binding = 1, scalar) buffer Accumulator {
-    vec4 data[]; // Float32
+    vec4 data[]; // vec4(Y*w, Cb*w, Cr*w, w)
 } accumulator;
 
 layout(push_constant, scalar) uniform PushConstants {
@@ -30,8 +30,23 @@ vec4 readAccum(int x, int y) {
     return accumulator.data[uint(y) * pc.bufferStride + uint(x)];
 }
 
-float luminance(vec3 color) {
-    return dot(color, vec3(0.299, 0.587, 0.114));
+vec3 normalizeYCC(vec4 acc) {
+    float invW = 1.0 / max(acc.a, 0.001);
+    float Y  = acc.r * invW;
+    float Cb = acc.g * invW;
+    float Cr = acc.b * invW;
+    return vec3(Y, Cb, Cr);
+}
+
+// YCbCr to Linear RGB (BT.709 inverse, matches accumulate.comp)
+vec3 ycbcr2rgb(vec3 ycc) {
+    float Y  = ycc.x;
+    float Cb = ycc.y - 0.5;
+    float Cr = ycc.z - 0.5;
+    float R = Y + 1.5748 * Cr;
+    float G = Y - 0.1873 * Cb - 0.4681 * Cr;
+    float B = Y + 1.8556 * Cb;
+    return vec3(R, G, B);
 }
 
 void main() {
@@ -42,53 +57,127 @@ void main() {
 
     float fx = float(X) * pc.t0 + float(Y) * pc.t1 + pc.t2;
     float fy = float(X) * pc.t3 + float(Y) * pc.t4 + pc.t5;
-    
-    uint sx = uint(clamp(floor(fx + 0.5), 0.0, float(pc.sensorWidth - 1)));
-    uint sy = uint(clamp(floor(fy + 0.5), 0.0, float(pc.sensorHeight - 1)));
 
-    // Check if the sampled point (sx, sy) is within THIS tile
-    if (sx >= pc.tileX && sx < pc.tileX + pc.tileW && 
-        sy >= pc.tileY && sy < pc.tileY + pc.tileH) {
-        
-        uint localX = sx - pc.tileX;
-        uint localY = sy - pc.tileY;
-        uint index = localY * pc.bufferStride + localX;
-        vec4 accum = accumulator.data[index];
-        
-        vec3 color = accum.rgb / max(accum.a, 0.001);
-        if (any(isnan(color)) || any(isinf(color))) {
-            color = vec3(0.0);
+    // Bilinear sampling from accumulator to preserve sub-pixel super-res detail.
+    // Nearest-neighbor (floor+0.5) would alias 2x SR data back to 1x.
+    float localFx = fx - float(pc.tileX);
+    float localFy = fy - float(pc.tileY);
+
+    // Check if the sampled point is within THIS tile (with 1px margin for bilinear)
+    if (localFx >= -0.5 && localFx < float(pc.tileW) - 0.5 &&
+        localFy >= -0.5 && localFy < float(pc.tileH) - 0.5) {
+
+        // Bilinear interpolation of accumulator
+        float bx = localFx - 0.5;
+        float by = localFy - 0.5;
+        int x0 = int(floor(bx));
+        int y0 = int(floor(by));
+        float fracX = bx - float(x0);
+        float fracY = by - float(y0);
+
+        vec4 a00 = readAccum(x0,     y0);
+        vec4 a10 = readAccum(x0 + 1, y0);
+        vec4 a01 = readAccum(x0,     y0 + 1);
+        vec4 a11 = readAccum(x0 + 1, y0 + 1);
+
+        vec3 c00 = normalizeYCC(a00);
+        vec3 c10 = normalizeYCC(a10);
+        vec3 c01 = normalizeYCC(a01);
+        vec3 c11 = normalizeYCC(a11);
+
+        // Bilinear interpolation in YCbCr space
+        vec3 ycc = mix(mix(c00, c10, fracX), mix(c01, c11, fracX), fracY);
+        float accumWeight = mix(mix(a00.a, a10.a, fracX), mix(a01.a, a11.a, fracX), fracY);
+
+        if (any(isnan(ycc)) || any(isinf(ycc))) {
+            ycc = vec3(0.0, 0.5, 0.5);
         }
 
-        // Gentle luma-only detail recovery, gated by confidence and local contrast.
-        if (accum.a > 0.75) {
-            vec3 left = readAccum(int(localX) - 1, int(localY)).rgb /
-                        max(readAccum(int(localX) - 1, int(localY)).a, 0.001);
-            vec3 right = readAccum(int(localX) + 1, int(localY)).rgb /
-                         max(readAccum(int(localX) + 1, int(localY)).a, 0.001);
-            vec3 up = readAccum(int(localX), int(localY) - 1).rgb /
-                      max(readAccum(int(localX), int(localY) - 1).a, 0.001);
-            vec3 down = readAccum(int(localX), int(localY) + 1).rgb /
-                        max(readAccum(int(localX), int(localY) + 1).a, 0.001);
+        // ── Y-guided spatial chroma denoising ──
+        // Chroma noise is LOW-FREQUENCY (large color blobs), so we must sample
+        // widely spaced pixels to break the spatial correlation.
+        // Matches BM3D PASS0 approach: 5×5 window with large step scale.
+        {
+            int cx = int(floor(localFx));
+            int cy = int(floor(localFy));
+            float centerY = ycc.x;
+            vec2 centerCbCr = ycc.yz;
 
-            float centerY = luminance(color);
-            float neighborY = 0.25 * (luminance(left) + luminance(right) +
-                                      luminance(up) + luminance(down));
+            vec2 chromaSum = vec2(0.0);
+            float chromaWSum = 0.0;
+
+            // Step scale: sample every ~6 pixels in accumulator space.
+            // 5×5 window × step 6 = effective 30×30 pixel coverage,
+            // enough to average out low-frequency chroma blobs.
+            const int stepScale = 6;
+            // Spatial Gaussian sigma² (in grid units, not pixels)
+            const float spatialSigmaSq = 3.0;
+            // Luma range sigma²: tight to preserve edges (linear space)
+            const float lumaSigmaSq = 0.001;
+            // Chroma range sigma²: wide to aggressively merge similar chroma
+            const float chromaSigmaSq = 0.02;
+
+            for (int gy = -2; gy <= 2; ++gy) {
+                for (int gx = -2; gx <= 2; ++gx) {
+                    int nx = cx + gx * stepScale;
+                    int ny = cy + gy * stepScale;
+                    vec4 nAcc = readAccum(nx, ny);
+                    vec3 nYCC = normalizeYCC(nAcc);
+
+                    // Spatial weight
+                    float wS = exp(-float(gx*gx + gy*gy) / (2.0 * spatialSigmaSq));
+                    // Luma edge guide: tight tolerance prevents color bleeding across edges
+                    float dL = nYCC.x - centerY;
+                    float wL = exp(-(dL * dL) / (2.0 * lumaSigmaSq));
+                    // Chroma self-similarity: wide tolerance merges noisy chroma variants
+                    vec2 dC = nYCC.yz - centerCbCr;
+                    float wC = exp(-dot(dC, dC) / (2.0 * chromaSigmaSq));
+
+                    float w = wS * wL * wC;
+                    // Ensure center pixel always contributes
+                    if (gx == 0 && gy == 0) w = max(w, 0.1);
+                    chromaSum += nYCC.yz * w;
+                    chromaWSum += w;
+                }
+            }
+
+            if (chromaWSum > 0.001) {
+                ycc.yz = chromaSum / chromaWSum;
+            }
+        }
+
+        // ── Luma-only detail recovery ──
+        // Gated by confidence and local contrast.
+        if (accumWeight > 0.75) {
+            int lx = int(floor(localFx));
+            int ly = int(floor(localFy));
+
+            vec3 left  = normalizeYCC(readAccum(lx - 1, ly));
+            vec3 right = normalizeYCC(readAccum(lx + 1, ly));
+            vec3 up    = normalizeYCC(readAccum(lx, ly - 1));
+            vec3 down  = normalizeYCC(readAccum(lx, ly + 1));
+
+            float centerY = ycc.x;
+            float neighborY = 0.25 * (left.x + right.x + up.x + down.x);
             float detail = centerY - neighborY;
             float localContrast =
                 abs(detail) / max(centerY + neighborY + 1e-4, 1e-4);
+            float confidenceBoost = smoothstep(1.0, 4.0, accumWeight);
+            float baseSharpen = mix(0.15, 0.35, confidenceBoost);
             float sharpenAmount =
-                0.10 * smoothstep(0.02, 0.10, localContrast);
-            color = max(color + detail * sharpenAmount, vec3(0.0));
+                baseSharpen * smoothstep(0.015, 0.08, localContrast);
+            ycc.x = max(ycc.x + detail * sharpenAmount, 0.0);
         }
 
+        // Convert YCbCr back to RGB after chroma denoising.
+        vec3 color = ycbcr2rgb(ycc);
         color = clamp(color, 0.0, 1.0);
-        
+
         uint r = uint(clamp(color.r * 255.0, 0.0, 255.0));
         uint g = uint(clamp(color.g * 255.0, 0.0, 255.0));
         uint b = uint(clamp(color.b * 255.0, 0.0, 255.0));
         uint a = 255;
-        
+
         uint outIndex = Y * pc.outWidth + X;
         outputBuffer.pixels[outIndex] = (a << 24) | (b << 16) | (g << 8) | r;
     }

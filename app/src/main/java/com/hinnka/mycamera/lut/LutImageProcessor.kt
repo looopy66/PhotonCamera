@@ -10,7 +10,7 @@ import android.opengl.EGLSurface
 import android.opengl.GLES30
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.ColorPaletteMapper
-import com.hinnka.mycamera.raw.NLMShaders
+import com.hinnka.mycamera.raw.BM3DShaders
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.currentCoroutineContext
@@ -907,12 +907,12 @@ class LutImageProcessor {
         }
 
         val vShader = compileShader(GLES30.GL_VERTEX_SHADER, IMAGE_VERTEX_SHADER)
-        nlmChromaProgram = createProgram(vShader, NLMShaders.PASS0_CHROMA_DENOISE)
-        nlmPassHProgram = createProgram(vShader, NLMShaders.NLM_PASS_H)
-        nlmPassVProgram = createProgram(vShader, NLMShaders.NLM_PASS_V)
+        nlmChromaProgram = createProgram(vShader, BM3DShaders.PASS0_CHROMA_DENOISE)
+        nlmPassHProgram = createProgram(vShader, BM3DShaders.PASS1_BASIC_ESTIMATE)
+        nlmPassVProgram = createProgram(vShader, BM3DShaders.PASS2_WIENER)
         GLES30.glDeleteShader(vShader)
 
-        PLog.d(TAG, "NLM programs initialized: Chroma=$nlmChromaProgram H=$nlmPassHProgram V=$nlmPassVProgram")
+        PLog.d(TAG, "BM3D programs initialized: Pass0=$nlmChromaProgram Pass1=$nlmPassHProgram Pass2=$nlmPassVProgram")
     }
 
     private fun initHDFPrograms() {
@@ -1094,7 +1094,7 @@ class LutImageProcessor {
         GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmPassVProgram, "uInputTexture"), 0)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, nlmPassTexId[0])
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmPassVProgram, "uBlurTexture"), 1)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmPassVProgram, "uBasicTexture"), 1)
         GLES30.glUniform2f(GLES30.glGetUniformLocation(nlmPassVProgram, "uTexelSize"), texelW, texelH)
         GLES30.glUniformMatrix4fv(
             GLES30.glGetUniformLocation(nlmPassVProgram, "uMVPMatrix"),

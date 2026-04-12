@@ -922,11 +922,11 @@ class RawDemosaicProcessor {
             return program
         }
 
-        gfPass0Program = createGfProgram(vShader, NLMShaders.PASS0_CHROMA_DENOISE, "GF_Pass0")
-        nlmPassHProgram = createGfProgram(vShader, NLMShaders.NLM_PASS_H, "NLM_PassH")
-        nlmPassVProgram = createGfProgram(vShader, NLMShaders.NLM_PASS_V, "NLM_PassV")
+        gfPass0Program = createGfProgram(vShader, BM3DShaders.PASS0_CHROMA_DENOISE, "BM3D_Pass0")
+        nlmPassHProgram = createGfProgram(vShader, BM3DShaders.PASS1_BASIC_ESTIMATE, "BM3D_Pass1")
+        nlmPassVProgram = createGfProgram(vShader, BM3DShaders.PASS2_WIENER,         "BM3D_Pass2")
 
-        PLog.d(TAG, "Denoise programs: GF_Pass0=$gfPass0Program NLM_H=$nlmPassHProgram NLM_V=$nlmPassVProgram")
+        PLog.d(TAG, "Denoise programs: BM3D_Pass0=$gfPass0Program BM3D_Pass1=$nlmPassHProgram BM3D_Pass2=$nlmPassVProgram")
     }
 
     private fun setupNLMFramebuffers(width: Int, height: Int) {
@@ -1004,9 +1004,9 @@ class RawDemosaicProcessor {
 
 
     /**
-     * 渲染 NLM 降噪
+     * 渲染 BM3D 降噪
      *
-     * 管线: tonemapTexture → [Pass0 Chroma] → [NLM] → gfFboId[1]
+     * 管线: tonemapTexture → [Pass0 Chroma] → [BM3D Basic] → [BM3D Wiener] → gfFboId[1]
      *
      * @param sourceTextureId 输入纹理 (ToneMap 输出)
      */
@@ -1059,7 +1059,7 @@ class RawDemosaicProcessor {
 
         val h = (noise * denoiseValue).coerceIn(0.0f, 0.1f)
         val ch = (noise * (chromaDenoiseValue + 0.5f)).coerceIn(0.0f, 0.1f)
-        PLog.d(TAG, "Dynamic NLM: noise=$noise, h=$h ch=$ch")
+        PLog.d(TAG, "Dynamic BM3D: noise=$noise, h=$h ch=$ch")
 
         val identityMatrix = FloatArray(16)
         GlMatrix.setIdentityM(identityMatrix, 0)
@@ -1080,7 +1080,7 @@ class RawDemosaicProcessor {
         GLES30.glUniform1f(GLES30.glGetUniformLocation(gfPass0Program, "uH"), ch)
         drawQuad(gfPass0Program)
 
-        // ===== NLM Pass 1: Horizontal (gfChromaTexId -> gfFboId[0]) =====
+        // ===== BM3D Pass 1: Basic Estimate (gfChromaTexId -> gfFboId[0]) =====
         GLES30.glUseProgram(nlmPassHProgram)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, gfFboId[0])
         GLES30.glViewport(0, 0, width, height)
@@ -1096,18 +1096,18 @@ class RawDemosaicProcessor {
         GLES30.glUniform1f(GLES30.glGetUniformLocation(nlmPassHProgram, "uH"), h)
         drawQuad(nlmPassHProgram)
 
-        // ===== NLM Pass 2: Vertical (gfChromaTexId + gfTexId[0] -> gfFboId[1]) =====
+        // ===== BM3D Pass 2: Wiener Refinement (gfChromaTexId + gfTexId[0] -> gfFboId[1]) =====
         GLES30.glUseProgram(nlmPassVProgram)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, gfFboId[1])
         GLES30.glViewport(0, 0, width, height)
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, gfChromaTexId) // Original (Guide)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, gfChromaTexId) // Original noisy (chroma-denoised)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmPassVProgram, "uInputTexture"), 0)
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, gfTexId[0])    // Blur Input
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmPassVProgram, "uBlurTexture"), 1)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, gfTexId[0])    // Pass-1 basic estimate
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmPassVProgram, "uBasicTexture"), 1)
 
         GLES30.glUniform2f(GLES30.glGetUniformLocation(nlmPassVProgram, "uTexelSize"), texelW, texelH)
         GLES30.glUniformMatrix4fv(

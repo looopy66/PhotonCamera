@@ -270,9 +270,9 @@ long long computeBlockSAD(const GrayImage &ref, const GrayImage &target,
 
 TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
                                    const std::vector<GrayImage> &targetPyramid,
-                                   int maxShift) {
+                                   int maxShift,
+                                   int tileSize) {
   TIME_START(computeTileAlignment);
-  const int tileSize = 32; // Increased from 16 to 32 for performance
   int width = refPyramid[0].width;
   int height = refPyramid[0].height;
 
@@ -435,8 +435,12 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
 
       float det = sumIxIx * sumIyIy - sumIxIy * sumIxIy;
 
+      // More iterations for smaller tiles to reach sub-pixel convergence
+      int lkIters = (tileSize <= 16) ? 5 : 3;
+      float convergenceThresh = (tileSize <= 16) ? 0.00005f : 0.0001f;
+
       if (std::abs(det) > 1e-6f) { // Only iterate if the patch has texture
-        for (int iter = 0; iter < 3; ++iter) { // Reduced from 6 to 3
+        for (int iter = 0; iter < lkIters; ++iter) {
           float sumIxIt = 0, sumIyIt = 0;
 
           // Only compute the temporal difference It = I(x+p) - T(x) inside the
@@ -459,7 +463,7 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
           lkDx -= dvx;
           lkDy -= dvy;
 
-          if (dvx * dvx + dvy * dvy < 0.0001f)
+          if (dvx * dvx + dvy * dvy < convergenceThresh)
             break; // Early convergence
         }
       }
@@ -476,14 +480,20 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
   // 4. Edge-Preserving Flow Smoothing (Bilateral by flow consistency)
   // Only smooth with neighbors that have similar flow vectors.
   // This preserves motion boundaries while stabilizing flat regions.
+  // With smaller tiles (e.g. 16px for SR), LK already provides good sub-pixel
+  // estimates, so use a higher center weight to preserve precision.
+  float centerWeight = (tileSize <= 16) ? 8.0f : 4.0f;
+  float bilateralSigma = (tileSize <= 16) ? 0.3f : 0.5f;
+  float bilateralDenom = 2.0f * bilateralSigma * bilateralSigma;
+
 #pragma omp parallel for collapse(2) num_threads(4)
   for (int y = 0; y < gridH; ++y) {
     for (int x = 0; x < gridW; ++x) {
 
       Point center = rawOffsets[y * gridW + x];
-      float sumX = center.x * 4.0f; // Strong center weight
-      float sumY = center.y * 4.0f;
-      float wSum = 4.0f;
+      float sumX = center.x * centerWeight;
+      float sumY = center.y * centerWeight;
+      float wSum = centerWeight;
 
       // 3x3 neighborhood with flow-similarity weighting
       for (int dy = -1; dy <= 1; ++dy) {
@@ -502,10 +512,7 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
               !std::isfinite(neighbor.y))
             continue;
 
-          // Bilateral weight: exponential decay with flow difference
-          // sigma = 0.5px: neighbors with >1px flow difference get very low
-          // weight
-          float w = std::exp(-distSq / (2.0f * 0.5f * 0.5f));
+          float w = std::exp(-distSq / bilateralDenom);
           if (!std::isfinite(w))
             w = 0.01f;
 
