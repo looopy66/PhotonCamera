@@ -33,7 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
-import com.hinnka.mycamera.lut.LutCurve
+import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.ui.camera.autoRotate
@@ -837,7 +837,7 @@ fun FilterManagementScreen(
         // 导入时分类选择对话框
         if (showImportCategoryDialog && pendingImportUris.isNotEmpty()) {
             var selectedColorSpace by remember { mutableStateOf(ColorSpace.SRGB) }
-            var selectedCurve by remember { mutableStateOf(LutCurve.SRGB) }
+            var selectedCurve by remember { mutableStateOf(TransferCurve.SRGB) }
             var selectedLutType by remember { mutableIntStateOf(0) } // 0: Photo, 1: Video
             AlertDialog(
                 onDismissRequest = {
@@ -919,7 +919,7 @@ fun FilterManagementScreen(
                                     onDismissRequest = { expanded = false },
                                     modifier = Modifier.background(Color(0xFF2C2C2C))
                                 ) {
-                                    LutCurve.entries.forEach { curve ->
+                                    TransferCurve.entries.filter { it != TransferCurve.HLG }.forEach { curve ->
                                         DropdownMenuItem(
                                             text = { Text(curve.name) },
                                             onClick = {

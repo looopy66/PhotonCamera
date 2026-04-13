@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.raw
 
+import com.hinnka.mycamera.color.TransferCurve
 import java.nio.FloatBuffer
 import kotlin.math.pow
 
@@ -124,7 +125,7 @@ object MeteringSystem {
         val exposureBias = metadata?.exposureBias?.let { if (it > -10 && it < 10) it else 0f } ?: 0f
         val biasMultiplier = 2.0f.pow(exposureBias)
 
-        val targetLumaIRE = LogCurve.LINEAR.middleGray
+        val targetLumaIRE = TransferCurve.LINEAR.middleGray
         val gain = targetLumaIRE * biasMultiplier / avg
         return gain.coerceAtLeast(1f)
     }

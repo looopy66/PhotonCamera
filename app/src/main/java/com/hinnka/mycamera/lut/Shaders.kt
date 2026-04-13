@@ -203,11 +203,12 @@ object Shaders {
     uniform float uLutSize;
     uniform float uLutIntensity;
     uniform bool uLutEnabled;
-    uniform int uLutCurve; // 0=sRGB, 1=Linear, 2=V-Log, 3=S-Log3, 4=F-Log2, 5=LogC, 6=AppleLog, 7=HLG, 8=ACEScct
+    uniform int uLutCurve; // 0=sRGB, 1=Linear, 2=V-Log, 3=S-Log3, 4=F-Log2, 5=LogC4, 6=AppleLog, 7=HLG, 8=ACEScct
     uniform int uLutColorSpace; // 0=sRGB, 1=DCI-P3, 2=BT2020, 3=ARRI4, 4=AppleLog2, 5=ProPhoto, 6=ACES_AP1
     uniform bool uVideoLogEnabled;
     uniform int uVideoLogCurve;
     uniform int uVideoColorSpace;
+    uniform bool uIsHlgInput;  // true：相机以 HLG10 采集，LUT 查找前用 HLG EOTF 解码至线性
 
     // 色彩配方控制
     uniform bool uColorRecipeEnabled;
@@ -268,6 +269,25 @@ object Shaders {
         return mix(12.92 * l, 1.055 * pow(l, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, l));
     }
 
+    // BT.2100 HLG EOTF：将 HLG 编码信号解码为场景线性光（可能 > 1.0，保留 HDR 高光）
+    vec3 hlgToLinear(vec3 e) {
+        float ha = 0.17883277;
+        float hb = 1.0 - 4.0 * ha;
+        float hc = 0.5 - ha * log(4.0 * ha);
+        vec3 low = e * e / 3.0;
+        vec3 high = (exp((e - hc) / ha) + hb) / 12.0;
+        return mix(low, high, step(vec3(0.5), e));
+    }
+
+    // BT.2020 原色的线性光转换到线性 sRGB，供现有 SDR/LUT 管线继续处理。
+    vec3 bt2020ToLinearSrgb(vec3 rgb) {
+        return mat3(
+            1.660491, -0.124550, -0.018151,
+            -0.587641, 1.132900, -0.100579,
+            -0.072850, -0.008350, 1.118730
+        ) * rgb;
+    }
+
     vec3 applyExposureInLinearSpace(vec3 srgbColor, float exposureEv) {
         vec3 linearColor = srgbToLinear(max(srgbColor, vec3(0.0)));
         linearColor *= exp2(exposureEv);
@@ -303,12 +323,13 @@ object Shaders {
             : mix(1.0, 1.85, shoulderAmount);
 
         if (safeLuma <= pivotPoint) {
-            float segment = safeLuma / max(pivotPoint, 0.0001);
-            return pow(segment, toeGamma) * pivotPoint;
+            float segment = clamp(safeLuma / max(pivotPoint, 0.0001), 0.0, 1.0);
+            return clamp(pow(segment, toeGamma) * pivotPoint, 0.0, 1.0);
         }
 
-        float segment = (safeLuma - pivotPoint) / max(1.0 - pivotPoint, 0.0001);
-        return 1.0 - pow(1.0 - segment, shoulderGamma) * (1.0 - pivotPoint);
+        float segment = clamp((safeLuma - pivotPoint) / max(1.0 - pivotPoint, 0.0001), 0.0, 1.0);
+        float result = 1.0 - pow(max(0.0, 1.0 - segment), shoulderGamma) * (1.0 - pivotPoint);
+        return clamp(result, 0.0, 1.0);
     }
 
     vec3 applyToneCurve(vec3 color, float toe, float shoulder, float pivot) {
@@ -323,15 +344,6 @@ object Shaders {
         }
         vec3 scaled = safeColor * (curvedLuma / luma);
         return mix(vec3(curvedLuma), scaled, 0.92);
-    }
-
-    bool isLogLutCurve(int curveType) {
-        return curveType >= 2 && curveType <= 6;
-    }
-
-    vec3 bt709Gamma24ToSrgb(vec3 gammaColor) {
-        vec3 linearColor = pow(max(gammaColor, vec3(0.0)), vec3(2.4));
-        return linearToSrgb(linearColor);
     }
 
     vec3 linearRgbToOklab(vec3 c) {
@@ -531,8 +543,8 @@ object Shaders {
         if (curveType == 4) { // F-Log2
             return mix(8.799461 * l + 0.092864, 0.245281 * log10(5.555556 * l + 0.064829) + 0.384316, step(0.00089, l));
         }
-        if (curveType == 5) { // LogC
-            return mix(5.367655 * l + 0.092809, 0.247190 * log10(5.555556 * l + 0.052272) + 0.385537, step(0.010591, l));
+        if (curveType == 5) { // LogC4
+            return mix(8.80302 * l + 0.158957, 0.21524584 * log10(2231.8263 * l + 64.0) - 0.29590839, step(-0.018057, l));
         }
         if (curveType == 6) { // AppleLog
             return mix(mix(vec3(0.0), 47.28711236 * pow(l + 0.05641088, vec3(2.0)), step(-0.05641088, l)), 0.08550479 * (log(l + 0.00964052) / log(2.0)) + 0.69336945, step(0.01, l));
@@ -619,11 +631,11 @@ object Shaders {
         } else {
             color = texture(uCameraTexture, uvCoord);
         }
-
-        // Early exit 优化：无任何调整时直接输出
-        if (!uColorRecipeEnabled && !uLutEnabled && !uVideoLogEnabled && uChromaticAberration <= 0.001) {
-            fragColor = color;
-            return;
+        
+        if (uIsHlgInput) {
+            color.rgb = hlgToLinear(color.rgb);
+            color.rgb = bt2020ToLinearSrgb(color.rgb);
+            color.rgb = linearToSrgb(color.rgb);
         }
 
         // === 色彩配方处理（按专业后期流程顺序） ===
@@ -782,25 +794,19 @@ object Shaders {
         }
 
         // === LUT 处理（在色彩配方之后） ===
-        if (!uVideoLogEnabled && uLutEnabled && uLutIntensity > 0.0) {
-            vec3 linearRGB = srgbToLinear(max(color.rgb, vec3(0.0)));
-            vec3 colorSpaceRGB = applyLutColorSpace(linearRGB, uLutColorSpace);
-            vec3 lutInColor = applyLutCurve(colorSpaceRGB, uLutCurve);
+        if (uLutEnabled && uLutIntensity > 0.0) {
+            vec3 lutInColor;
+            if (uVideoLogEnabled) {
+                // Video Log 模式：color.rgb 已经是 Log 编码，直接作为 LUT 坐标
+                lutInColor = color.rgb;
+            } else {
+                vec3 linearRGB = srgbToLinear(max(color.rgb, vec3(0.0)));
+                vec3 colorSpaceRGB = applyLutColorSpace(linearRGB, uLutColorSpace);
+                lutInColor = applyLutCurve(colorSpaceRGB, uLutCurve);
+            }
             float scale = (uLutSize - 1.0) / uLutSize;
             float offset = 1.0 / (2.0 * uLutSize);
             vec3 lutCoord = lutInColor * scale + offset;
-            vec4 lutColor = texture(uLutTexture, lutCoord);
-            if (isLogLutCurve(uLutCurve)) {
-                lutColor.rgb = bt709Gamma24ToSrgb(lutColor.rgb);
-            }
-            color.rgb = mix(color.rgb, lutColor.rgb, uLutIntensity);
-            color.rgb = sanitizeColor(color.rgb);
-        }
-        
-        if (uVideoLogEnabled && uLutEnabled && uLutIntensity > 0.0) {
-            float scale = (uLutSize - 1.0) / uLutSize;
-            float offset = 1.0 / (2.0 * uLutSize);
-            vec3 lutCoord = color.rgb * scale + offset;
             vec4 lutColor = texture(uLutTexture, lutCoord);
             color.rgb = mix(color.rgb, lutColor.rgb, uLutIntensity);
             color.rgb = sanitizeColor(color.rgb);

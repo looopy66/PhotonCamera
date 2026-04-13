@@ -6,7 +6,7 @@ import android.graphics.SurfaceTexture
 import android.opengl.*
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.raw.ColorSpace
-import com.hinnka.mycamera.raw.LogCurve
+import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.video.VideoLogProfile
@@ -41,6 +41,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         val uVideoLogEnabledLocation: Int,
         val uVideoLogCurveLocation: Int,
         val uVideoColorSpaceLocation: Int,
+        val uIsHlgInputLocation: Int,
         val uColorRecipeEnabledLocation: Int,
         val uExposureLocation: Int,
         val uContrastLocation: Int,
@@ -162,6 +163,10 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var uVideoLogEnabledLocation: Int = 0
     private var uVideoLogCurveLocation: Int = 0
     private var uVideoColorSpaceLocation: Int = 0
+    private var uIsHlgInputLocation: Int = 0
+
+    // 是否以 HLG10 动态范围采集（Log LUT 兼容性方案）
+    var isHlgInput: Boolean = false
 
     // 色彩配方 Uniform 位置
     private var uColorRecipeEnabledLocation: Int = 0
@@ -693,6 +698,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         curveTextureId: Int,
         curveEnabled: Boolean,
         enableVideoLog: Boolean,
+        treatSourceAsHlgInput: Boolean,
         apertureOverride: Float = aperture,
         focusPointOverride: PointF? = focusPoint,
     ) {
@@ -730,6 +736,9 @@ class LutRenderer : GLSurfaceView.Renderer {
         GLES30.glUniform1i(locations.uVideoLogEnabledLocation, if (enableVideoLog && videoLogProfile.isEnabled) 1 else 0)
         GLES30.glUniform1i(locations.uVideoLogCurveLocation, mapLogCurve(videoLogProfile.logCurve))
         GLES30.glUniform1i(locations.uVideoColorSpaceLocation, mapRawColorSpace(videoLogProfile.colorSpace))
+        GLES30.glUniform1i(locations.uIsHlgInputLocation, if (treatSourceAsHlgInput) 1 else 0)
+
+//        PLog.d(TAG, "uIsHlgInputLocation=$treatSourceAsHlgInput")
 
         val recipeEnabled = !params.isDefault()
         GLES30.glUniform1i(locations.uColorRecipeEnabledLocation, if (recipeEnabled) 1 else 0)
@@ -909,6 +918,7 @@ class LutRenderer : GLSurfaceView.Renderer {
                     curveTextureId = curveTextureId,
                     curveEnabled = curveEnabled && curveTextureId != 0,
                     enableVideoLog = false,
+                    treatSourceAsHlgInput = false,
                     apertureOverride = 0f,
                     focusPointOverride = null
                 )
@@ -1165,7 +1175,8 @@ class LutRenderer : GLSurfaceView.Renderer {
             params = layerParams,
             curveTextureId = layerCurveTextureId,
             curveEnabled = layerCurveEnabled,
-            enableVideoLog = true
+            enableVideoLog = true,
+            treatSourceAsHlgInput = isHlgInput
         )
 
         // 捕获预览帧（如果需要）
@@ -1200,6 +1211,7 @@ class LutRenderer : GLSurfaceView.Renderer {
             uVideoLogEnabledLocation = GLES30.glGetUniformLocation(program, "uVideoLogEnabled"),
             uVideoLogCurveLocation = GLES30.glGetUniformLocation(program, "uVideoLogCurve"),
             uVideoColorSpaceLocation = GLES30.glGetUniformLocation(program, "uVideoColorSpace"),
+            uIsHlgInputLocation = GLES30.glGetUniformLocation(program, "uIsHlgInput"),
             uColorRecipeEnabledLocation = GLES30.glGetUniformLocation(program, "uColorRecipeEnabled"),
             uExposureLocation = GLES30.glGetUniformLocation(program, "uExposure"),
             uContrastLocation = GLES30.glGetUniformLocation(program, "uContrast"),
@@ -1271,6 +1283,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         uVideoLogEnabledLocation = GLES30.glGetUniformLocation(programId, "uVideoLogEnabled")
         uVideoLogCurveLocation = GLES30.glGetUniformLocation(programId, "uVideoLogCurve")
         uVideoColorSpaceLocation = GLES30.glGetUniformLocation(programId, "uVideoColorSpace")
+        uIsHlgInputLocation = GLES30.glGetUniformLocation(programId, "uIsHlgInput")
 
         // 获取色彩配方 Uniform 位置
         uColorRecipeEnabledLocation = GLES30.glGetUniformLocation(programId, "uColorRecipeEnabled")
@@ -2472,30 +2485,12 @@ class LutRenderer : GLSurfaceView.Renderer {
         )
     }
 
-    private fun mapLutCurve(curve: LutCurve?): Int {
-        return when (curve ?: LutCurve.SRGB) {
-            LutCurve.SRGB -> 0
-            LutCurve.LINEAR -> 1
-            LutCurve.V_LOG -> 2
-            LutCurve.S_LOG3 -> 3
-            LutCurve.F_LOG2 -> 4
-            LutCurve.LOG_C -> 5
-            LutCurve.APPLE_LOG -> 6
-            LutCurve.HLG -> 7
-        }
+    private fun mapLutCurve(curve: TransferCurve?): Int {
+        return (curve ?: TransferCurve.SRGB).shaderId
     }
 
-    private fun mapLogCurve(curve: LogCurve): Int {
-        return when (curve) {
-            LogCurve.SRGB -> 0
-            LogCurve.LINEAR -> 1
-            LogCurve.VLOG -> 2
-            LogCurve.SLOG3 -> 3
-            LogCurve.FLOG2 -> 4
-            LogCurve.LOGC4 -> 5
-            LogCurve.APPLE_LOG -> 6
-            LogCurve.ACES_CCT -> 8
-        }
+    private fun mapLogCurve(curve: TransferCurve): Int {
+        return curve.shaderId
     }
 
     private fun mapRawColorSpace(colorSpace: ColorSpace): Int {

@@ -118,6 +118,7 @@ fun CameraScreen(
     val useMFSR by viewModel.useMFSR.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
+    val hlgHardwareCompatibilityEnabled by viewModel.hlgHardwareCompatibilityEnabled.collectAsState()
     val phantomMode by viewModel.phantomMode.collectAsState()
     val videoCodec by viewModel.videoCodec.collectAsState()
     val videoAudioInputOptions by viewModel.videoAudioInputOptions.collectAsState()
@@ -637,6 +638,7 @@ fun CameraScreen(
                         livePhotoRecorder = viewModel.livePhotoRecorder,
                         videoRecorder = viewModel.videoRecorder,
                         videoLogProfile = state.videoConfig.logProfile,
+                        isHlgInput = if (hlgHardwareCompatibilityEnabled) state.isHLG else false,
                         aperture = if (state.isVirtualApertureEnabled) state.virtualAperture else 0f,
                         modifier = Modifier.fillMaxSize()
                     )

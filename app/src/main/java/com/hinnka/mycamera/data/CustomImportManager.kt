@@ -4,7 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import com.hinnka.mycamera.lut.LutConverter
-import com.hinnka.mycamera.lut.LutCurve
+import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.XmpLutParser
 import com.hinnka.mycamera.raw.ColorSpace
@@ -83,7 +83,7 @@ class CustomImportManager(private val context: Context) {
      * @param curve 输入曲线类型（可选）
      * @return 导入成功的 LUT ID，失败返回 null
      */
-    fun importLut(uri: Uri, displayName: String? = null, category: String? = null, colorSpace: ColorSpace = ColorSpace.SRGB, curve: LutCurve = LutCurve.SRGB): String? {
+    fun importLut(uri: Uri, displayName: String? = null, category: String? = null, colorSpace: ColorSpace = ColorSpace.SRGB, curve: TransferCurve = TransferCurve.SRGB): String? {
         return try {
             val fileName = getFileName(uri) ?: "lut_${System.currentTimeMillis()}.cube"
             val lutId = "custom_${UUID.randomUUID()}"

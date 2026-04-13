@@ -11,7 +11,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.raw.ColorSpace
-import com.hinnka.mycamera.raw.LogCurve
+import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import kotlinx.coroutines.flow.Flow
@@ -89,10 +89,11 @@ data class UserPreferences(
     val droMode: String = "OFF", // DRO 模式
     val applyUltraHDR: Boolean = false, // 是否应用 Ultra HDR 策略
     val colorSpace: ColorSpace = ColorSpace.SRGB,
-    val logCurve: LogCurve = LogCurve.SRGB,
-    val rawLuts: Map<String, String> = mapOf(LogCurve.SRGB.name to RawProfile.STANDARD_SRGB.rawLut),
+    val logCurve: TransferCurve = TransferCurve.SRGB,
+    val rawLuts: Map<String, String> = mapOf(TransferCurve.SRGB.name to RawProfile.STANDARD_SRGB.rawLut),
     val useP010: Boolean = false,
     val useHlg10: Boolean = false,
+    val hlgHardwareCompatibilityEnabled: Boolean = true,
     val useP3ColorSpace: Boolean = false,
     val videoResolution: VideoResolutionPreset = VideoResolutionPreset.FHD_1080P,
     val videoFps: VideoFpsPreset = VideoFpsPreset.FPS_30,
@@ -183,6 +184,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val LOG_CURVE = stringPreferencesKey("log_curve")
         private val USE_P010 = booleanPreferencesKey("use_p010")
         private val USE_HLG10 = booleanPreferencesKey("use_hlg10")
+        private val HLG_HARDWARE_COMPATIBILITY_ENABLED = booleanPreferencesKey("hlg_hardware_compatibility_enabled")
         private val USE_P3_COLOR_SPACE = booleanPreferencesKey("use_p3_color_space")
         private val VIDEO_RESOLUTION = stringPreferencesKey("video_resolution")
         private val VIDEO_FPS = stringPreferencesKey("video_fps")
@@ -266,10 +268,11 @@ class UserPreferencesRepository(private val context: Context) {
                 droMode = preferences[DRO_MODE] ?: "OFF",
                 applyUltraHDR = preferences[APPLY_ULTRA_HDR] ?: false,
                 colorSpace = ColorSpace.valueOf(preferences[COLOR_SPACE] ?: ColorSpace.SRGB.name),
-                logCurve = LogCurve.valueOf(preferences[LOG_CURVE] ?: LogCurve.SRGB.name),
+                logCurve = TransferCurve.fromPersistedName(preferences[LOG_CURVE] ?: TransferCurve.SRGB.name),
                 rawLuts = parseRawLuts(preferences),
                 useP010 = preferences[USE_P010] ?: false,
                 useHlg10 = preferences[USE_HLG10] ?: false,
+                hlgHardwareCompatibilityEnabled = preferences[HLG_HARDWARE_COMPATIBILITY_ENABLED] ?: true,
                 useP3ColorSpace = preferences[USE_P3_COLOR_SPACE] ?: false,
                 videoResolution = VideoResolutionPreset.valueOf(
                     preferences[VIDEO_RESOLUTION] ?: VideoResolutionPreset.FHD_1080P.name
@@ -359,11 +362,11 @@ class UserPreferencesRepository(private val context: Context) {
 
     private fun parseRawLuts(preferences: Preferences): Map<String, String> {
         val result = mutableMapOf<String, String>()
-        LogCurve.entries.forEach { entry ->
+        TransferCurve.entries.forEach { entry ->
             val default = when (entry) {
-                LogCurve.FLOG2 -> "PROVIA.plut"
-                LogCurve.SRGB -> "none"
-                LogCurve.LINEAR -> "none"
+                TransferCurve.FLOG2 -> "PROVIA.plut"
+                TransferCurve.SRGB -> "none"
+                TransferCurve.LINEAR -> "none"
                 else -> "sRGB.plut"
             }
             val value = preferences[stringPreferencesKey("${entry.name}_raw_lut")] ?: default
@@ -772,7 +775,7 @@ class UserPreferencesRepository(private val context: Context) {
     /**
      * 保存 Log 曲线
      */
-    suspend fun saveLogCurve(logCurve: LogCurve) {
+    suspend fun saveLogCurve(logCurve: TransferCurve) {
         context.dataStore.edit { preferences ->
             preferences[LOG_CURVE] = logCurve.name
         }
@@ -781,7 +784,7 @@ class UserPreferencesRepository(private val context: Context) {
     /**
      * 保存针对特定 Log 曲线的 RAW 还原 LUT
      */
-    suspend fun saveRawLut(logCurve: LogCurve, lut: String) {
+    suspend fun saveRawLut(logCurve: TransferCurve, lut: String) {
         context.dataStore.edit { preferences ->
             preferences[stringPreferencesKey("${logCurve.name}_raw_lut")] = lut
         }
@@ -807,6 +810,12 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveUseHlg10(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[USE_HLG10] = enabled
+        }
+    }
+
+    suspend fun saveHlgHardwareCompatibilityEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[HLG_HARDWARE_COMPATIBILITY_ENABLED] = enabled
         }
     }
 

@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.graphics.ColorSpace
 import android.os.Build
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.data.UserPreferencesRepository
 import com.hinnka.mycamera.frame.FrameManager
 import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.hdr.GainmapSourceSet
@@ -22,6 +23,7 @@ import com.hinnka.mycamera.raw.RawHdrRenderResult
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.YuvProcessor
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
@@ -38,9 +40,16 @@ class PhotoProcessor(
     private val frameManager: FrameManager,
     private val frameRenderer: FrameRenderer,
     private val depthBokehProcessor: DepthBokehProcessor,
+    private val userPreferencesRepository: UserPreferencesRepository,
 ) {
     private val hlgImageProcessor = HlgImageProcessor()
     private val colorCorrectionPipelineResolver = ColorCorrectionPipelineResolver(lutManager)
+
+    private suspend fun shouldDecodeHlgInput(metadata: MediaMetadata): Boolean {
+        val isHlg = metadata.dynamicRangeProfile == "HLG10"
+        if (!isHlg) return false
+        return userPreferencesRepository.userPreferences.firstOrNull()?.hlgHardwareCompatibilityEnabled ?: true
+    }
 
     suspend fun prepareUltraHdrSource(
         context: Context,
@@ -136,6 +145,7 @@ class PhotoProcessor(
                 val sdrPostElapsed = measureTimeMillis {
                     sdrBitmap = lutImageProcessor.applyLutStack(
                         sdrBitmap,
+                        isHlgInput = false,
                         colorCorrection.baselineLayer,
                         colorCorrection.creativeLayer,
                         finalSharpening,
@@ -251,6 +261,7 @@ class PhotoProcessor(
 
         sdrBitmap = lutImageProcessor.applyLutStack(
             sdrBitmap,
+            isHlgInput = false,
             colorCorrection.baselineLayer,
             colorCorrection.creativeLayer,
             finalSharpening,
@@ -410,6 +421,7 @@ class PhotoProcessor(
 
             lutImageProcessor.applyLutStack(
                 b,
+                isHlgInput = false,
                 colorCorrection.baselineLayer,
                 colorCorrection.creativeLayer,
                 finalSharpening,
@@ -462,6 +474,7 @@ class PhotoProcessor(
             metadata.width,
             metadata.height,
             ColorSpace.get(metadata.colorSpace),
+            isHlgInput = shouldDecodeHlgInput(metadata),
             colorCorrection.baselineLayer,
             colorCorrection.creativeLayer,
             finalSharpening,
@@ -521,6 +534,7 @@ class PhotoProcessor(
         // 1. 应用 LUT
         result = lutImageProcessor.applyLutStack(
             result,
+            isHlgInput = shouldDecodeHlgInput(metadata),
             colorCorrection.baselineLayer,
             colorCorrection.creativeLayer,
             sharpening,

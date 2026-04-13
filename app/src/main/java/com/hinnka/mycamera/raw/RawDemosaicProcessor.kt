@@ -6,6 +6,7 @@ import android.graphics.Rect
 import android.media.Image
 import android.opengl.*
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutParser
 import com.hinnka.mycamera.utils.BitmapUtils
@@ -233,7 +234,7 @@ class RawDemosaicProcessor {
 
     private var baseLut: LutConfig? = null
     private var colorSpace = ColorSpace.SRGB
-    private var logCurve = LogCurve.SRGB
+    private var logCurve = TransferCurve.SRGB
 
     /**
      * 设置 RAW 还原 LUT
@@ -273,7 +274,7 @@ class RawDemosaicProcessor {
         return colorSpace
     }
 
-    fun setRawLogCurve(logCurve: LogCurve) {
+    fun setRawLogCurve(logCurve: TransferCurve) {
         this.logCurve = logCurve
     }
 
@@ -1644,7 +1645,7 @@ class RawDemosaicProcessor {
         metadata: RawMetadata,
         calcExposureGain: Float,
         lutConfig: LutConfig?,
-        logCurve: LogCurve,
+        logCurve: TransferCurve,
         inputTextureId: Int = demosaicTextureId
     ) {
         GLES30.glUseProgram(combinedProgram)

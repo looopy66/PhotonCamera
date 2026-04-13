@@ -59,19 +59,20 @@ class ContentRepository private constructor(context: Context) {
 
     val depthBokehProcessor = startupInit("DepthBokehProcessor()") { DepthBokehProcessor(appContext) }
 
+    // 用户偏好设置仓库
+    val userPreferencesRepository = startupInit("UserPreferencesRepository()") {
+        UserPreferencesRepository(appContext)
+    }
+
     val photoProcessor = startupInit("PhotoProcessor()") {
         PhotoProcessor(
             lutManager,
             imageProcessor,
             frameManager,
             frameRenderer,
-            depthBokehProcessor
+            depthBokehProcessor,
+            userPreferencesRepository
         )
-    }
-
-    // 用户偏好设置仓库
-    val userPreferencesRepository = startupInit("UserPreferencesRepository()") {
-        UserPreferencesRepository(appContext)
     }
 
     val galleryRepository = startupInit("GalleryRepository()") { GalleryRepository(appContext) }

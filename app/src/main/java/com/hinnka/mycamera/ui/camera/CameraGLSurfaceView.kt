@@ -160,6 +160,11 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         requestRender()
     }
 
+    fun setIsHlgInput(isHlg: Boolean) {
+        renderer.isHlgInput = isHlg
+        requestRender()
+    }
+
     /**
      * 获取当前 LUT 强度
      */

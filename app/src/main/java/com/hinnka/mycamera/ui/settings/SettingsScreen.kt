@@ -154,6 +154,7 @@ fun SettingsScreen(
     val rawProfile by viewModel.rawProfile.collectAsState()
     val useP010 by viewModel.useP010.collectAsState()
     val useHlg10 by viewModel.useHlg10.collectAsState()
+    val hlgHardwareCompatibilityEnabled by viewModel.hlgHardwareCompatibilityEnabled.collectAsState()
     val useP3ColorSpace by viewModel.useP3ColorSpace.collectAsState()
     val autoEnableHdr by viewModel.autoEnableHdr.collectAsState()
     val isPurchased by viewModel.isPurchased.collectAsState()
@@ -907,6 +908,17 @@ fun SettingsScreen(
                         }
 
                         if (isHdrSettingsSupported) {
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 12.dp)
+                            )
+
+                            SwitchSettingItem(
+                                title = stringResource(R.string.settings_hlg_hardware_compatibility),
+                                description = stringResource(R.string.settings_hlg_hardware_compatibility_description),
+                                checked = hlgHardwareCompatibilityEnabled,
+                                onCheckedChange = { viewModel.setHlgHardwareCompatibilityEnabled(it) }
+                            )
 
                             /*if (state.isHlg10Supported) {
                                 HorizontalDivider(

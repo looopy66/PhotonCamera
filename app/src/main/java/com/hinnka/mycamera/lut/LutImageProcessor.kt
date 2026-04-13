@@ -80,6 +80,7 @@ class LutImageProcessor {
     private var uLutCurveLoc = 0
     private var uLutColorSpaceLoc = 0
     private var uInputColorSpaceLoc = 0
+    private var uIsHlgInputLoc = 0
     private var uMVPMatrixLoc = 0
 
     // 色彩配方 Uniform 位置
@@ -218,6 +219,7 @@ class LutImageProcessor {
         width: Int,
         height: Int,
         colorSpace: ColorSpace,
+        isHlgInput: Boolean = false,
         lutConfig: LutConfig?,
         colorRecipeParams: ColorRecipeParams?,
         sharpeningValue: Float = 0f,
@@ -275,6 +277,7 @@ class LutImageProcessor {
             width, height,
             inputTexId,
             colorSpace,
+            isHlgInput,
             lutConfig,
             effectiveRecipeParams,
             sharpening,
@@ -288,6 +291,7 @@ class LutImageProcessor {
         width: Int,
         height: Int,
         colorSpace: ColorSpace,
+        isHlgInput: Boolean = false,
         baselineLayer: LutRenderLayer?,
         creativeLayer: LutRenderLayer?,
         sharpeningValue: Float = 0f,
@@ -303,6 +307,7 @@ class LutImageProcessor {
                     width = width,
                     height = height,
                     colorSpace = colorSpace,
+                    isHlgInput = isHlgInput,
                     lutConfig = baselineLayer?.lutConfig,
                     colorRecipeParams = baselineLayer?.colorRecipeParams,
                 )
@@ -320,6 +325,7 @@ class LutImageProcessor {
                 width = width,
                 height = height,
                 colorSpace = colorSpace,
+                isHlgInput = isHlgInput,
                 lutConfig = baselineLayer?.lutConfig,
                 colorRecipeParams = baselineLayer?.colorRecipeParams,
                 sharpeningValue = sharpeningValue,
@@ -331,6 +337,7 @@ class LutImageProcessor {
                 width = width,
                 height = height,
                 colorSpace = colorSpace,
+                isHlgInput = isHlgInput,
                 lutConfig = creativeLayer?.lutConfig,
                 colorRecipeParams = creativeLayer?.colorRecipeParams,
                 sharpeningValue = sharpeningValue,
@@ -352,6 +359,7 @@ class LutImageProcessor {
      */
     suspend fun applyLut(
         bitmap: Bitmap,
+        isHlgInput: Boolean = false,
         lutConfig: LutConfig?,
         colorRecipeParams: ColorRecipeParams?,
         sharpeningValue: Float = 0f,
@@ -411,6 +419,7 @@ class LutImageProcessor {
             width, height,
             inputTexId,
             bitmap.colorSpace ?: ColorSpace.get(ColorSpace.Named.SRGB),
+            isHlgInput,
             lutConfig,
             effectiveRecipeParams,
             sharpening,
@@ -421,6 +430,7 @@ class LutImageProcessor {
 
     suspend fun applyLutStack(
         bitmap: Bitmap,
+        isHlgInput: Boolean = false,
         baselineLayer: LutRenderLayer?,
         creativeLayer: LutRenderLayer?,
         sharpeningValue: Float = 0f,
@@ -433,13 +443,14 @@ class LutImageProcessor {
             hasBaseline && hasCreative -> {
                 val baseBitmap = applyLut(
                     bitmap = bitmap,
-                    lutConfig = baselineLayer?.lutConfig,
-                    colorRecipeParams = baselineLayer?.colorRecipeParams,
+                    isHlgInput = isHlgInput,
+                    lutConfig = baselineLayer.lutConfig,
+                    colorRecipeParams = baselineLayer.colorRecipeParams,
                 )
                 applyLut(
                     bitmap = baseBitmap,
-                    lutConfig = creativeLayer?.lutConfig,
-                    colorRecipeParams = creativeLayer?.colorRecipeParams,
+                    lutConfig = creativeLayer.lutConfig,
+                    colorRecipeParams = creativeLayer.colorRecipeParams,
                     sharpeningValue = sharpeningValue,
                     noiseReductionValue = noiseReductionValue,
                     chromaNoiseReductionValue = chromaNoiseReductionValue
@@ -447,14 +458,16 @@ class LutImageProcessor {
             }
             hasBaseline -> applyLut(
                 bitmap = bitmap,
-                lutConfig = baselineLayer?.lutConfig,
-                colorRecipeParams = baselineLayer?.colorRecipeParams,
+                isHlgInput = isHlgInput,
+                lutConfig = baselineLayer.lutConfig,
+                colorRecipeParams = baselineLayer.colorRecipeParams,
                 sharpeningValue = sharpeningValue,
                 noiseReductionValue = noiseReductionValue,
                 chromaNoiseReductionValue = chromaNoiseReductionValue
             )
             else -> applyLut(
                 bitmap = bitmap,
+                isHlgInput = isHlgInput,
                 lutConfig = creativeLayer?.lutConfig,
                 colorRecipeParams = creativeLayer?.colorRecipeParams,
                 sharpeningValue = sharpeningValue,
@@ -517,6 +530,7 @@ class LutImageProcessor {
         height: Int,
         inputTextureId: Int,
         inputColorSpace: ColorSpace,
+        isHlgInput: Boolean,
         lutConfig: LutConfig?,
         effectiveRecipeParams: ColorRecipeParams?,
         sharpening: Float,
@@ -567,11 +581,12 @@ class LutImageProcessor {
             if (lutConfig != null) intensity else 0f
         )
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLutEnabled"), if (lutConfig != null) 1 else 0)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLutCurve"), lutConfig?.curve?.ordinal ?: 0)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLutCurve"), lutConfig?.curve?.shaderId ?: 0)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLutColorSpace"), lutConfig?.colorSpace?.ordinal ?: 0)
 
         val inputColorSpaceId = if (inputColorSpace == ColorSpace.get(ColorSpace.Named.DISPLAY_P3)) 1 else 0
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uInputColorSpace"), inputColorSpaceId)
+        GLES30.glUniform1i(uIsHlgInputLoc, if (isHlgInput) 1 else 0)
 
         // 设置色彩配方参数
         GLES30.glUniform1i(
@@ -860,6 +875,7 @@ class LutImageProcessor {
         uLutCurveLoc = GLES30.glGetUniformLocation(shaderProgram, "uLutCurve")
         uLutColorSpaceLoc = GLES30.glGetUniformLocation(shaderProgram, "uLutColorSpace")
         uInputColorSpaceLoc = GLES30.glGetUniformLocation(shaderProgram, "uInputColorSpace")
+        uIsHlgInputLoc = GLES30.glGetUniformLocation(shaderProgram, "uIsHlgInput")
         uMVPMatrixLoc = GLES30.glGetUniformLocation(shaderProgram, "uMVPMatrix")
 
         // 获取色彩配方 uniform 位置
@@ -1387,6 +1403,7 @@ class LutImageProcessor {
             uniform int uLutCurve;
             uniform int uLutColorSpace;
             uniform int uInputColorSpace;
+            uniform bool uIsHlgInput;
 
             // 色彩配方控制
             uniform bool uColorRecipeEnabled;
@@ -1457,16 +1474,33 @@ class LutImageProcessor {
                 return sign(c) * result;
             }
 
+            vec3 hlgToLinear(vec3 e) {
+                float ha = 0.17883277;
+                float hb = 1.0 - 4.0 * ha;
+                float hc = 0.5 - ha * log(4.0 * ha);
+                vec3 low = e * e / 3.0;
+                vec3 high = (exp((e - hc) / ha) + hb) / 12.0;
+                return mix(low, high, step(vec3(0.5), e));
+            }
+
+            vec3 bt2020ToLinearSrgb(vec3 rgb) {
+                return mat3(
+                    1.660491, -0.124550, -0.018151,
+                    -0.587641, 1.132900, -0.100579,
+                    -0.072850, -0.008350, 1.118730
+                ) * rgb;
+            }
+
             vec3 applyExposureInLinearSpace(vec3 srgbColor, float exposureEv) {
-                vec3 linearColor = srgbToLinear(clamp(srgbColor, 0.0, 1.0));
+                vec3 linearColor = srgbToLinear(max(srgbColor, vec3(0.0)));
                 linearColor *= exp2(exposureEv);
                 return linearToSrgb(linearColor);
             }
 
             float sanitizeFloat(float value) {
                 if (value != value) return 0.0;
-                if (value > 1.0) return 1.0;
-                if (value < 0.0) return 0.0;
+//                if (value > 1.0) return 1.0;
+//                if (value < 0.0) return 0.0;
                 return value;
             }
 
@@ -1491,35 +1525,31 @@ class LutImageProcessor {
                     : mix(1.0, 1.85, shoulderAmount);
 
                 if (safeLuma <= pivotPoint) {
-                    float segment = safeLuma / max(pivotPoint, 0.0001);
-                    return pow(segment, toeGamma) * pivotPoint;
+                    float segment = clamp(safeLuma / max(pivotPoint, 0.0001), 0.0, 1.0);
+                    return clamp(pow(segment, toeGamma) * pivotPoint, 0.0, 1.0);
                 }
 
-                float segment = (safeLuma - pivotPoint) / max(1.0 - pivotPoint, 0.0001);
-                return 1.0 - pow(1.0 - segment, shoulderGamma) * (1.0 - pivotPoint);
+                float segment = clamp((safeLuma - pivotPoint) / max(1.0 - pivotPoint, 0.0001), 0.0, 1.0);
+                float result = 1.0 - pow(max(0.0, 1.0 - segment), shoulderGamma) * (1.0 - pivotPoint);
+                return clamp(result, 0.0, 1.0);
             }
 
             vec3 applyToneCurve(vec3 color, float toe, float shoulder, float pivot) {
                 if (abs(toe) < 0.001 && abs(shoulder) < 0.001 && abs(pivot) < 0.001) {
                     return color;
                 }
-                vec3 safeColor = clamp(color, 0.0, 1.0);
-                float luma = getLuma(safeColor);
-                float curvedLuma = applyToneCurveToLuma(luma, toe, shoulder, pivot);
-                if (luma < 0.0001) {
-                    return safeColor;
+                vec3 nonNegativeColor = max(color, vec3(0.0));
+                vec3 curveSampleColor = clamp(nonNegativeColor, 0.0, 1.0);
+                float luma = getLuma(curveSampleColor);
+                float peak = max(curveSampleColor.r, max(curveSampleColor.g, curveSampleColor.b));
+                float toneSignal = mix(luma, peak, 0.65);
+                float curvedSignal = applyToneCurveToLuma(toneSignal, toe, shoulder, pivot);
+                if (toneSignal < 0.0001) {
+                    return curveSampleColor;
                 }
-                vec3 scaled = safeColor * (curvedLuma / luma);
-                return clamp(mix(vec3(curvedLuma), scaled, 0.92), 0.0, 1.0);
-            }
-
-            bool isLogLutCurve(int curveType) {
-                return curveType >= 2 && curveType <= 6;
-            }
-
-            vec3 bt709Gamma24ToSrgb(vec3 gammaColor) {
-                vec3 linearColor = pow(clamp(gammaColor, 0.0, 1.0), vec3(2.4));
-                return clamp(linearToSrgb(linearColor), 0.0, 1.0);
+                float safeRatio = clamp(curvedSignal / max(toneSignal, 0.0001), 0.0, 16.0);
+                vec3 scaled = nonNegativeColor * safeRatio;
+                return sanitizeColor(mix(vec3(curvedSignal), scaled, 0.96));
             }
 
             vec3 linearRgbToOklab(vec3 c) {
@@ -1580,7 +1610,7 @@ class LutImageProcessor {
                     return srgbColor;
                 }
 
-                vec3 linearColor = srgbToLinear(clamp(srgbColor, 0.0, 1.0));
+                vec3 linearColor = srgbToLinear(max(srgbColor, vec3(0.0)));
                 vec3 lab = linearRgbToOklab(linearColor);
                 float chroma = length(lab.yz);
                 float hue = atan(lab.z, lab.y);
@@ -1591,11 +1621,11 @@ class LutImageProcessor {
                 float newLightness = clamp(lab.x * exp(-DENSITY_K * density * chroma), 0.0, 1.0);
                 vec3 denseLab = vec3(newLightness, cos(hue) * newChroma, sin(hue) * newChroma);
                 vec3 denseLinear = max(oklabToLinearRgb(denseLab), vec3(0.0));
-                return clamp(linearToSrgb(denseLinear), 0.0, 1.0);
+                return linearToSrgb(denseLinear);
             }
 
             vec3 applyLchColorMixer(vec3 srgbColor) {
-                vec3 linearColor = srgbToLinear(clamp(srgbColor, 0.0, 1.0));
+                vec3 linearColor = srgbToLinear(max(srgbColor, vec3(0.0)));
                 vec3 lab = linearRgbToOklab(linearColor);
                 float chroma = length(lab.yz);
                 float hue = atan(lab.z, lab.y);
@@ -1654,7 +1684,7 @@ class LutImageProcessor {
                 float newLightness = clamp(lab.x + lightnessShift, 0.0, 1.0);
                 vec3 mixedLab = vec3(newLightness, cos(newHue) * newChroma, sin(newHue) * newChroma);
                 vec3 mixedLinear = max(oklabToLinearRgb(mixedLab), vec3(0.0));
-                return clamp(linearToSrgb(mixedLinear), 0.0, 1.0);
+                return linearToSrgb(mixedLinear);
             }
 
             vec3 applyPrimaryCalibration(vec3 color) {
@@ -1702,7 +1732,7 @@ class LutImageProcessor {
                 float bL = uPrimaryLightness.z * 0.5;
                 vec3 light_add = vec3(rgb.r * rL + rgb.g * gL + rgb.b * bL);
 
-                return clamp(vec3(minC) + mixed + light_add, 0.0, 1.0);
+                return vec3(minC) + mixed + light_add;
             }
 
             vec3 applyLutCurve(vec3 l, int curveType) {
@@ -1719,8 +1749,8 @@ class LutImageProcessor {
                 if (curveType == 4) { // F-Log2
                     return mix(8.799461 * l + 0.092864, 0.245281 * log10(5.555556 * l + 0.064829) + 0.384316, step(0.00089, l));
                 }
-                if (curveType == 5) { // LogC
-                    return mix(5.367655 * l + 0.092809, 0.247190 * log10(5.555556 * l + 0.052272) + 0.385537, step(0.010591, l));
+                if (curveType == 5) { // LogC4
+                    return mix(8.80302 * l + 0.158957, 0.21524584 * log10(2231.8263 * l + 64.0) - 0.29590839, step(-0.018057, l));
                 }
                 if (curveType == 6) { // AppleLog
                     return mix(mix(vec3(0.0), 47.28711236 * pow(l + 0.05641088, vec3(2.0)), step(-0.05641088, l)), 0.08550479 * (log(l + 0.00964052) / log(2.0)) + 0.69336945, step(0.01, l));
@@ -1730,6 +1760,9 @@ class LutImageProcessor {
                     float hb = 1.0 - 4.0 * ha;
                     float hc = 0.5 - ha * log(4.0 * ha);
                     return mix(sqrt(3.0 * l), ha * log(12.0 * l - hb) + hc, step(1.0 / 12.0, l));
+                }
+                if (curveType == 8) { // ACEScct
+                    return mix(10.540237 * l + 0.072905536, 0.18955931 * log10(max(l, vec3(1e-6))) + 0.5547945, step(0.0078125, l));
                 }
                 return l;
             }
@@ -1755,6 +1788,9 @@ class LutImageProcessor {
                 }
                 if (colorSpace == 6) { // ACES_AP1
                     return mat3(0.613083, 0.070004, 0.020491, 0.341167, 0.918063, 0.106764, 0.045750, 0.011934, 0.872745) * rgb;
+                }
+                if (colorSpace == 7) { // V-Gamut
+                    return mat3(0.585196, 0.078589, 0.022794, 0.322642, 0.819627, 0.114217, 0.092162, 0.101784, 0.862989) * rgb;
                 }
                 return rgb;
             }
@@ -1809,6 +1845,12 @@ class LutImageProcessor {
                     color = vec4(r, g, b, a);
                 } else {
                     color = sampleImage(uvCoord);
+                }
+
+                if (uIsHlgInput) {
+                    color.rgb = hlgToLinear(color.rgb);
+                    color.rgb = bt2020ToLinearSrgb(color.rgb);
+                    color.rgb = linearToSrgb(color.rgb);
                 }
 
                 // === 色彩配方处理（按专业后期流程顺序） ===
@@ -1956,15 +1998,16 @@ class LutImageProcessor {
                     }
 
                     // Clamp 到合法范围
-                    color.rgb = clamp(color.rgb, 0.0, 1.0);
+                    color.rgb = sanitizeColor(color.rgb);
                 }
 
                 // === 曲线调整（色彩配方之后、HDF/LUT 之前） ===
                 if (uCurveEnabled) {
-                    float r = texture(uCurveTexture, vec2(color.r, 0.5)).r;
-                    float g = texture(uCurveTexture, vec2(color.g, 0.5)).g;
-                    float b = texture(uCurveTexture, vec2(color.b, 0.5)).b;
-                    color.rgb = clamp(vec3(r, g, b), 0.0, 1.0);
+                    vec3 clamped = clamp(color.rgb, 0.0, 1.0);
+                    float r = texture(uCurveTexture, vec2(clamped.r, 0.5)).r;
+                    float g = texture(uCurveTexture, vec2(clamped.g, 0.5)).g;
+                    float b = texture(uCurveTexture, vec2(clamped.b, 0.5)).b;
+                    color.rgb = sanitizeColor(vec3(r, g, b));
                 }
 
                 // === HDF 光晕效果（在色彩配方之后，LUT 之前） ===
@@ -1991,27 +2034,21 @@ class LutImageProcessor {
                 }
 
                 // === LUT 处理（在色彩配方之后） ===
-                // 假定 LUT 始终为 sRGB 色彩空间进行计算，进行管线优化：
-                // 省略了 applyLutColorSpace 以及避免了多次线性和非线性空间的来回切换。
                 if (uLutEnabled && uLutIntensity > 0.0) {
                     bool isP3 = (uInputColorSpace == 1);
                     vec3 linearInput = srgbToLinear(color.rgb);
                     
                     if (isP3) {
-                         // 直接将 P3 转为 sRGB 线性空间，避免直接套用非线性转换
                          linearInput = mat3(1.22486, -0.04205, -0.01974, -0.22471, 1.04192, -0.07865, 0.00000, 0.00013, 1.09837) * linearInput;
                     }
 
-                    // 假定 LUT 为 sRGB 空间，直接用它的专属曲线适配
-                    vec3 lutInColor = applyLutCurve(linearInput, uLutCurve);
+                    vec3 colorSpaceRGB = applyLutColorSpace(linearInput, uLutColorSpace);
+                    vec3 lutInColor = applyLutCurve(colorSpaceRGB, uLutCurve);
                     
                     float scale = (uLutSize - 1.0) / uLutSize;
                     float offset = 1.0 / (2.0 * uLutSize);
                     vec3 lutCoord = lutInColor * scale + offset;
                     vec4 lutColor = texture(uLutTexture, lutCoord);
-                    if (isLogLutCurve(uLutCurve)) {
-                        lutColor.rgb = bt709Gamma24ToSrgb(lutColor.rgb);
-                    }
 
                     // 在非线性 sRGB 空间进行混合
                     vec3 srgbColor = linearToSrgb(linearInput);

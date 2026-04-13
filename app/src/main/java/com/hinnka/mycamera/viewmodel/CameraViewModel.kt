@@ -9,6 +9,7 @@ import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.net.Uri
+import android.os.Build
 import android.os.SystemClock
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -32,11 +33,10 @@ import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.phantom.PhantomWidgetProvider
 import com.hinnka.mycamera.raw.ColorSpace
-import com.hinnka.mycamera.raw.LogCurve
+import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
-import com.hinnka.mycamera.raw.rawFolder
 import com.hinnka.mycamera.ui.camera.CameraGLSurfaceView
 import com.hinnka.mycamera.utils.*
 import com.hinnka.mycamera.video.CaptureMode
@@ -260,9 +260,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val colorSpace: StateFlow<ColorSpace> = userPreferencesRepository.userPreferences
         .map { it.colorSpace }
         .stateIn(viewModelScope, SharingStarted.Eagerly, ColorSpace.SRGB)
-    val logCurve: StateFlow<LogCurve> = userPreferencesRepository.userPreferences
+    val logCurve: StateFlow<TransferCurve> = userPreferencesRepository.userPreferences
         .map { it.logCurve }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, LogCurve.SRGB)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, TransferCurve.SRGB)
 
     val rawLut: StateFlow<String> = userPreferencesRepository.userPreferences
         .map { prefs ->
@@ -285,6 +285,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useHlg10: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useHlg10 }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val hlgHardwareCompatibilityEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.hlgHardwareCompatibilityEnabled }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
     val useP3ColorSpace: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useP3ColorSpace }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -635,6 +638,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     }
                     view.setVideoRecorder(cameraController.videoRecorder)
                     view.setVideoLogProfile(currentState.videoConfig.logProfile)
+                    view.setIsHlgInput(shouldTreatPreviewAsHlgInput(currentState))
                     currentState.focusPoint?.let { fp ->
                         view.setFocusPoint(android.graphics.PointF(fp.first, fp.second))
                     }
@@ -651,7 +655,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         StartupTrace.mark("CameraViewModel.init end")
     }
 
-    fun getAvailableRawLutList(context: Context, logCurve: LogCurve): List<String> {
+    fun getAvailableRawLutList(context: Context, logCurve: TransferCurve): List<String> {
         try {
             val files = logCurve.rawFolder?.let { context.assets.list(it) }
             return files?.filter { it.endsWith(".plut") }?.toList() ?: emptyList()
@@ -703,6 +707,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             currentLutConfig = loadedLut
             cameraController.setLutEnabled(loadedLut != null)
+            cameraController.setLogLutActive(loadedLut?.curve?.isLog == true)
             glSurfaceView?.let { view ->
                 val currentState = state.value
                 view.setBaselineLut(currentBaselineLutConfig)
@@ -718,6 +723,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 view.setColorRecipeEnabled(!currentRecipeParams.value.isDefault())
                 view.setVideoRecorder(cameraController.videoRecorder)
                 view.setVideoLogProfile(currentState.videoConfig.logProfile)
+                view.setIsHlgInput(shouldTreatPreviewAsHlgInput(currentState))
                 view.restoreRenderStateAfterResume()
             }
         }
@@ -1487,11 +1493,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (lutId == null) {
             currentLutConfig = null
             // LUT 已禁用，通知相机控制器
+            cameraController.setLogLutActive(false)
             cameraController.setLutEnabled(false)
         } else {
             val hadActiveLut = currentLutConfig != null
             if (!hadActiveLut) {
-                // 首次启动时先保持“未启用”状态，避免 Live Photo 在 LUT 文件尚未加载完成前录入原始画面。
+                // 首次启动时先保持”未启用”状态，避免 Live Photo 在 LUT 文件尚未加载完成前录入原始画面。
                 cameraController.setLutEnabled(false)
             }
             viewModelScope.launch {
@@ -1504,6 +1511,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     started = SharingStarted.Lazily,
                     initialValue = ColorRecipeParams.DEFAULT,
                 )
+                cameraController.setLogLutActive(loadedLut?.curve?.isLog == true)
                 cameraController.setLutEnabled(loadedLut != null)
             }
             if (hadActiveLut) {
@@ -1515,6 +1523,26 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             userPreferencesRepository.saveLutConfig(lutId)
         }
+    }
+
+    private fun shouldUseHlgCapture(): Boolean {
+        val state = state.value
+        val baseCondition = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                state.isP010Supported &&
+                state.isHlg10Supported &&
+                !state.useRaw
+        if (!baseCondition) return false
+        // 用户主动开启 HLG10 录制
+        val userHlg = state.useP010 && state.useHlg10
+        // Log LUT 需要 HLG 采集获取线性信号（替代 tonemap gamma，提升兼容性）
+        val logLutHlg = state.lutEnabled && state.isLogLutActive
+        // Video Log 同样需要 HLG 采集获取线性信号
+        val videoLogHlg = state.captureMode == CaptureMode.VIDEO && state.videoConfig.logProfile.isEnabled
+        return userHlg || logLutHlg || videoLogHlg
+    }
+
+    private fun shouldTreatPreviewAsHlgInput(currentState: com.hinnka.mycamera.camera.CameraState): Boolean {
+        return hlgHardwareCompatibilityEnabled.value && currentState.isHLG
     }
 
     /**
@@ -1649,6 +1677,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         reopenCamera()
     }
 
+    fun setHlgHardwareCompatibilityEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveHlgHardwareCompatibilityEnabled(enabled)
+        }
+        glSurfaceView?.setIsHlgInput(shouldTreatPreviewAsHlgInput(state.value))
+    }
+
     fun setUseP3ColorSpace(enabled: Boolean) {
         cameraController.setUseP3ColorSpace(enabled)
         viewModelScope.launch {
@@ -1723,7 +1758,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     suspend fun applyLut(bitmap: Bitmap): Bitmap = withContext(Dispatchers.IO) {
         currentLutConfig?.let { lut ->
             val params = contentRepository.lutManager.loadColorRecipeParams(currentLutId.value)
-            contentRepository.imageProcessor.applyLut(bitmap, lut, params)
+            contentRepository.imageProcessor.applyLut(
+                bitmap = bitmap,
+                isHlgInput = shouldTreatPreviewAsHlgInput(state.value),
+                lutConfig = lut,
+                colorRecipeParams = params
+            )
         } ?: bitmap
     }
 
@@ -2136,7 +2176,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * 设置 RAW Log 曲线
      */
-    fun setLogCurve(logCurve: LogCurve) {
+    fun setLogCurve(logCurve: TransferCurve) {
         viewModelScope.launch {
             userPreferencesRepository.saveLogCurve(logCurve)
         }
@@ -2145,7 +2185,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * 设置 RAW 还原 LUT
      */
-    fun setRawLut(logCurve: LogCurve, lut: String) {
+    fun setRawLut(logCurve: TransferCurve, lut: String) {
         viewModelScope.launch {
             userPreferencesRepository.saveRawLut(logCurve, lut)
         }

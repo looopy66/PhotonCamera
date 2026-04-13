@@ -53,6 +53,7 @@ fun CameraPreviewGL(
     livePhotoRecorder: LivePhotoRecorder? = null,
     videoRecorder: VideoRecorder? = null,
     videoLogProfile: VideoLogProfile = VideoLogProfile.OFF,
+    isHlgInput: Boolean = false,
     onGLSurfaceViewReady: ((CameraGLSurfaceView) -> Unit)? = null,
     aperture: Float = 0f,
     modifier: Modifier = Modifier
@@ -205,6 +206,7 @@ fun CameraPreviewGL(
                         glSurfaceView.setLivePhotoRecorder(livePhotoRecorder)
                         glSurfaceView.setVideoRecorder(videoRecorder)
                         glSurfaceView.setVideoLogProfile(videoLogProfile)
+                        glSurfaceView.setIsHlgInput(isHlgInput)
                     },
                     modifier = Modifier.fillMaxSize()
                 )
