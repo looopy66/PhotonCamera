@@ -146,6 +146,40 @@ void main() {
             }
         }
 
+        // ── Residual luma denoise ──
+        // Only active when accumWeight is low (few frames merged).
+        // 3×3 bilateral filter with very tight range sigma to preserve edges.
+        if (accumWeight < 3.0) {
+            int lx = int(floor(localFx));
+            int ly = int(floor(localFy));
+            // Use readAccum at integer position as reference, matching neighbor sources
+            float centerL = normalizeYCC(readAccum(lx, ly)).x;
+            float lumaSum = 0.0;
+            float lumaW = 0.0;
+
+            // Filtering strength fades out as more frames are accumulated
+            float strength = smoothstep(3.0, 0.5, accumWeight);
+            float rangeSigmaSq = 0.0005 * strength;
+
+            for (int gy = -1; gy <= 1; ++gy) {
+                for (int gx = -1; gx <= 1; ++gx) {
+                    vec4 nAcc = readAccum(lx + gx, ly + gy);
+                    float nL = normalizeYCC(nAcc).x;
+
+                    float wS = (gx == 0 && gy == 0) ? 1.0 : 0.5;
+                    float dL = nL - centerL;
+                    float wR = exp(-(dL * dL) / max(2.0 * rangeSigmaSq, 1e-8));
+                    float w = wS * wR;
+
+                    lumaSum += nL * w;
+                    lumaW += w;
+                }
+            }
+            // Blend denoised luma with original bilinear value to keep sub-pixel detail
+            float denoisedL = lumaSum / max(lumaW, 0.001);
+            ycc.x = mix(ycc.x, denoisedL, strength);
+        }
+
         // ── Luma-only detail recovery ──
         // Gated by confidence and local contrast.
         if (accumWeight > 0.75) {
