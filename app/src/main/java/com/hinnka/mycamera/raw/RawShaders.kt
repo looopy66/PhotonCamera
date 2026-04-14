@@ -114,10 +114,11 @@ object RawShaders {
      *
      * Process chain:
      * 1. Linear RGB Input -> Exposure Gain
-     * 2. Log2 Conversion (F-Log2)
-     * 3. 3D LUT Application
-     * 4. Contrast / Gamma (2.4/2.2)
-     * 5. Sharpening (High-pass on Log Luma)
+     * 2. Highlight Contrast Restore
+     * 3. Log2 Conversion (F-Log2)
+     * 4. 3D LUT Application
+     * 5. Contrast / Gamma (2.4/2.2)
+     * 6. Sharpening (High-pass on Log Luma)
      */
     val COMBINED_FRAGMENT_SHADER = """
         #version 300 es
@@ -135,6 +136,8 @@ object RawShaders {
         uniform vec4 uLogCoeffs;  // a, b, c, d
         uniform vec4 uLogLimits;  // e, f, cut1, cut2
         uniform int uLogType;     // 0=Linear, 1=Quadratic
+        uniform bool uApplySdrToneMap;
+        uniform float uLogExposureBoost;
         
         float log10(float x) { return log(x) * 0.4342944819; }
         vec3 log10(vec3 x) { return log(x) * 0.4342944819; }
@@ -165,20 +168,44 @@ object RawShaders {
             vec3 filmic = (t * (6.2 * t + 0.5)) / (t * (6.2 * t + 1.7) + 0.06);
             return mix(filmic / 12.92, pow((filmic + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), filmic));
         }
+
+        vec3 restoreHighlightContrast(vec3 sceneLinear, vec3 toneMappedLinear) {
+            float scenePeak = max(max(sceneLinear.r, sceneLinear.g), sceneLinear.b);
+            float mappedPeak = max(max(toneMappedLinear.r, toneMappedLinear.g), toneMappedLinear.b);
+            float mappedLuma = dot(toneMappedLinear, vec3(0.2126, 0.7152, 0.0722));
+
+            // 仅在进入 shoulder 压缩区后恢复部分通道分离和局部亮部斜率，
+            // 避免高光整体重新抬爆。
+            float shoulderWeight = smoothstep(0.48, 0.9, mappedPeak) * smoothstep(1.05, 7.0, scenePeak);
+            float clipGuard = 1.0 - smoothstep(0.96, 1.0, mappedPeak);
+
+            vec3 sceneRatio = sceneLinear / max(scenePeak, 1e-4);
+            vec3 mappedRatio = toneMappedLinear / max(mappedPeak, 1e-4);
+            vec3 ratioGain = clamp(sceneRatio / max(mappedRatio, vec3(1e-3)), vec3(0.68), vec3(1.52));
+            vec3 chromaRestored = toneMappedLinear * mix(vec3(1.0), ratioGain, shoulderWeight * 0.62);
+
+            float lumaBoost = shoulderWeight * clipGuard * 0.5 * sqrt(max(scenePeak - 1.0, 0.0)) * mappedLuma * (1.0 - mappedLuma);
+            vec3 restored = chromaRestored + vec3(lumaBoost);
+            return clamp(restored, 0.0, 1.0);
+        }
         
         void main() {
             vec3 rawColor = texture(uInputTexture, vTexCoord).rgb;
             
             // 1. Exposure
             vec3 color = rawColor * uExposureGain;
+            if (uApplySdrToneMap) {
+                vec3 exposedColor = color;
+                color = filmicOperatorLinear(color);
+                color = restoreHighlightContrast(exposedColor, color);
+            } else {
+                color *= uLogExposureBoost;
+            }
             
-            // 2. Filmic tone mapping (linear in, linear out)
-            color = filmicOperatorLinear(color);
-            
-            // 4. 颜色空间转换 (Log or sRGB)
+            // 颜色空间转换 (Log or sRGB)
             color = linearToLog(color);
 
-            // 5. 3D LUT
+            // 3D LUT
             if (uLutEnabled) {
                 float scale = (uLutSize - 1.0) / uLutSize;
                 float offset = 1.0 / (2.0 * uLutSize);
