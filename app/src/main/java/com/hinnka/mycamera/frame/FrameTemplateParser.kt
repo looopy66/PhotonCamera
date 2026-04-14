@@ -138,6 +138,82 @@ object FrameTemplateParser {
             elements = parseElements(obj.getJSONArray("elements"))
         )
     }
+
+    /**
+     * 将模板序列化为 JSON，保持与解析器字段定义对称。
+     */
+    fun serializeTemplate(template: FrameTemplate): String {
+        val obj = JSONObject().apply {
+            put("id", template.id)
+            put("name", JSONObject().apply {
+                template.nameMap.forEach { (lang, value) ->
+                    put(lang, value)
+                }
+            })
+            put("version", template.version)
+            put("layout", JSONObject().apply {
+                put("position", template.layout.position.name)
+                put("height", template.layout.heightDp)
+                put("backgroundColor", colorToHex(template.layout.backgroundColor))
+                put("padding", template.layout.paddingDp)
+                if (template.layout.borderWidthDp > 0) {
+                    put("borderWidth", template.layout.borderWidthDp)
+                }
+                template.layout.imageResName?.let { put("imageResName", it) }
+                template.layout.imagePath?.let { put("imagePath", it) }
+            })
+            put("elements", JSONArray().apply {
+                template.elements.forEach { element ->
+                    put(serializeElement(element))
+                }
+            })
+        }
+        return obj.toString(2)
+    }
+
+    fun validateTemplate(template: FrameTemplate): List<String> {
+        val errors = mutableListOf<String>()
+
+        if (template.getName().isBlank()) {
+            errors += "name"
+        }
+
+        if (template.layout.heightDp < 0) errors += "layout.height"
+        if (template.layout.paddingDp < 0) errors += "layout.padding"
+        if (template.layout.borderWidthDp < 0) errors += "layout.borderWidth"
+        if (template.layout.position == FramePosition.IMAGE &&
+            template.layout.imageResName.isNullOrBlank() &&
+            template.layout.imagePath.isNullOrBlank()
+        ) {
+            errors += "layout.imageSource"
+        }
+
+        template.elements.forEachIndexed { index, element ->
+            when (element) {
+                is FrameElement.Text -> {
+                    if (element.fontSizeSp < 0) errors += "elements[$index].fontSize"
+                }
+
+                is FrameElement.Logo -> {
+                    if (element.sizeDp < 0) errors += "elements[$index].size"
+                    if (element.maxWidth < 0) errors += "elements[$index].maxWidth"
+                    if (element.marginDp < 0) errors += "elements[$index].margin"
+                }
+
+                is FrameElement.Divider -> {
+                    if (element.lengthDp < 0) errors += "elements[$index].length"
+                    if (element.thicknessDp < 0) errors += "elements[$index].thickness"
+                    if (element.marginDp < 0) errors += "elements[$index].margin"
+                }
+
+                is FrameElement.Spacer -> {
+                    if (element.widthDp < 0) errors += "elements[$index].width"
+                }
+            }
+        }
+
+        return errors
+    }
     
     /**
      * 解析布局配置
@@ -181,6 +257,64 @@ object FrameTemplateParser {
             "divider" -> parseDividerElement(obj)
             "spacer" -> parseSpacerElement(obj)
             else -> null
+        }
+    }
+
+    private fun serializeElement(element: FrameElement): JSONObject {
+        return when (element) {
+            is FrameElement.Text -> JSONObject().apply {
+                put("type", "text")
+                put("textType", element.textType.name)
+                put("alignment", element.alignment.name)
+                put("fontSize", element.fontSizeSp)
+                put("color", colorToHex(element.color))
+                put("fontWeight", element.fontWeight.name)
+                element.fontFamily?.let { put("fontFamily", it) }
+                element.format?.let { put("format", it) }
+                element.prefix?.let { put("prefix", it) }
+                element.suffix?.let { put("suffix", it) }
+                if (element.line != 0) {
+                    put("line", element.line)
+                }
+            }
+
+            is FrameElement.Logo -> JSONObject().apply {
+                put("type", "logo")
+                put("logoType", element.logoType.name)
+                put("alignment", element.alignment.name)
+                put("size", element.sizeDp)
+                if (element.maxWidth > 0) {
+                    put("maxWidth", element.maxWidth)
+                }
+                if (element.light) {
+                    put("light", true)
+                }
+                put("margin", element.marginDp)
+                if (element.line != 0) {
+                    put("line", element.line)
+                }
+            }
+
+            is FrameElement.Divider -> JSONObject().apply {
+                put("type", "divider")
+                put("orientation", element.orientation.name)
+                put("alignment", element.alignment.name)
+                put("length", element.lengthDp)
+                put("thickness", element.thicknessDp)
+                put("color", colorToHex(element.color))
+                put("margin", element.marginDp)
+                if (element.line != 0) {
+                    put("line", element.line)
+                }
+            }
+
+            is FrameElement.Spacer -> JSONObject().apply {
+                put("type", "spacer")
+                put("width", element.widthDp)
+                if (element.line != 0) {
+                    put("line", element.line)
+                }
+            }
         }
     }
     
@@ -250,6 +384,14 @@ object FrameTemplateParser {
             Color.parseColor(colorStr)
         } catch (e: Exception) {
             Color.BLACK
+        }
+    }
+
+    private fun colorToHex(color: Int): String {
+        return if ((color ushr 24) == 0xFF) {
+            String.format("#%06X", color and 0xFFFFFF)
+        } else {
+            String.format("#%08X", color)
         }
     }
 }

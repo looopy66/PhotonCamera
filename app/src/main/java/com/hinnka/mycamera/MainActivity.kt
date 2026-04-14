@@ -62,6 +62,7 @@ import com.hinnka.mycamera.ui.gallery.GalleryScreen
 import com.hinnka.mycamera.ui.gallery.MediaDetailScreen
 import com.hinnka.mycamera.ui.gallery.PhotoEditScreen
 import com.hinnka.mycamera.ui.settings.FilterManagementScreen
+import com.hinnka.mycamera.ui.settings.FrameEditorScreen
 import com.hinnka.mycamera.ui.settings.FrameManagementScreen
 import com.hinnka.mycamera.ui.settings.SettingsScreen
 import com.hinnka.mycamera.ui.theme.PhotonCameraTheme
@@ -89,6 +90,7 @@ object Routes {
     const val SETTINGS = "settings"
     const val FILTER_MANAGEMENT = "filter_management"
     const val FRAME_MANAGEMENT = "frame_management"
+    const val FRAME_EDITOR = "frame_editor?frameId={frameId}&imageFrame={imageFrame}"
     const val LUT_CREATOR = "lut_creator"
     const val PHANTOM_PIP_CROP = "phantom_pip_crop"
 
@@ -96,6 +98,15 @@ object Routes {
         "photo_detail/$tab/$index" + (if (photoId != null) "?photoId=$photoId" else "")
 
     fun burstDetail(photoId: String) = "burst_detail/$photoId"
+
+    fun frameEditor(frameId: String? = null, imageFrame: Boolean = false): String {
+        return buildString {
+            append("frame_editor?imageFrame=$imageFrame")
+            if (frameId != null) {
+                append("&frameId=$frameId")
+            }
+        }
+    }
 }
 
 class MainActivity : ComponentActivity() {
@@ -510,6 +521,38 @@ fun NavigationHost(
                 FrameManagementScreen(
                     viewModel = cameraViewModel,
                     onBack = {
+                        navController.popBackStack()
+                    },
+                    onCreateFrameClick = {
+                        navController.navigate(Routes.frameEditor())
+                    },
+                    onEditFrameStyle = { frameId ->
+                        navController.navigate(Routes.frameEditor(frameId = frameId))
+                    }
+                )
+            }
+
+            composable(
+                route = Routes.FRAME_EDITOR,
+                arguments = listOf(
+                    navArgument("frameId") {
+                        type = NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    },
+                    navArgument("imageFrame") {
+                        type = NavType.BoolType
+                        defaultValue = false
+                    }
+                )
+            ) { backStackEntry ->
+                FrameEditorScreen(
+                    viewModel = cameraViewModel,
+                    frameId = backStackEntry.arguments?.getString("frameId"),
+                    imageFrame = backStackEntry.arguments?.getBoolean("imageFrame") ?: false,
+                    onBack = { navController.popBackStack() },
+                    onSaved = { savedId ->
+                        cameraViewModel.setFrame(savedId)
                         navController.popBackStack()
                     }
                 )

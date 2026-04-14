@@ -252,6 +252,7 @@ class FrameRenderer(private val context: Context) {
         // 获取所有行号以计算行数
         val allLines = visibleElements.map { getLine(it) }.filter { it >= 0 }.distinct().sorted()
         val lineCount = allLines.size
+        val knownLines = if (allLines.isEmpty()) listOf(0) else allLines
 
         val height = bottom - top
 
@@ -303,9 +304,9 @@ class FrameRenderer(private val context: Context) {
                 if (line == -1) {
                     // 全局元素，推进所有行的 X 坐标
                     currentXPerLine[-1] = nextX
-                    currentXPerLine[0] = nextX
-                    currentXPerLine[1] = nextX
-                    currentXPerLine[2] = nextX
+                    knownLines.forEach { currentLine ->
+                        currentXPerLine[currentLine] = nextX
+                    }
                 } else {
                     currentXPerLine[line] = nextX
                 }
@@ -383,6 +384,8 @@ class FrameRenderer(private val context: Context) {
         scale: Float = 1f
     ): Float {
         val xPerLine = mutableMapOf<Int, Float>()
+        val realLines = elements.map { getLine(it) }.filter { it >= 0 }.distinct().sorted()
+        val knownLines = if (realLines.isEmpty()) listOf(0) else realLines
         for (element in elements) {
             val width = measureElementWidth(element, metadata, scale)
             val line = getLine(element)
@@ -390,9 +393,9 @@ class FrameRenderer(private val context: Context) {
             if (line == -1) {
                 val max = (xPerLine.values.maxOrNull() ?: 0f) + width
                 xPerLine[-1] = max
-                xPerLine[0] = max
-                xPerLine[1] = max
-                xPerLine[2] = max
+                knownLines.forEach { currentLine ->
+                    xPerLine[currentLine] = max
+                }
             } else {
                 val current = xPerLine.getOrDefault(line, 0f)
                 xPerLine[line] = current + width

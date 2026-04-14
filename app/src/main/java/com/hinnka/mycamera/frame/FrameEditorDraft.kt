@@ -1,0 +1,321 @@
+package com.hinnka.mycamera.frame
+
+import android.graphics.Color
+import java.util.UUID
+
+/**
+ * 边框编辑器草稿模型
+ *
+ * UI 层只编辑草稿，不直接操作持久化模板。
+ */
+data class FrameEditorDraft(
+    val sourceFrameId: String? = null,
+    val editableFrameId: String? = null,
+    val isBuiltInSource: Boolean = false,
+    val name: String = "",
+    val layout: FrameLayoutDraft = FrameLayoutDraft(),
+    val elements: List<FrameElementDraft> = emptyList(),
+    val selectedElementId: String? = elements.firstOrNull()?.draftId,
+) {
+    val effectiveSelectedElementId: String?
+        get() = selectedElementId?.takeIf { id -> elements.any { it.draftId == id } }
+            ?: elements.firstOrNull()?.draftId
+
+    fun withSelectedElement(elementId: String?): FrameEditorDraft {
+        val resolvedId = elementId?.takeIf { id -> elements.any { it.draftId == id } }
+        return copy(selectedElementId = resolvedId ?: elements.firstOrNull()?.draftId)
+    }
+
+    fun toTemplate(templateId: String): FrameTemplate {
+        val safeName = name.trim().ifEmpty { "Custom Frame" }
+        return FrameTemplate(
+            id = templateId,
+            nameMap = mapOf("en" to safeName, "zh" to safeName),
+            version = 1,
+            layout = layout.toFrameLayout(),
+            elements = if (layout.position == FramePosition.IMAGE) {
+                emptyList()
+            } else {
+                elements.map { it.toFrameElement() }
+            }
+        )
+    }
+
+    fun validate(): List<String> = FrameTemplateParser.validateTemplate(
+        toTemplate(editableFrameId ?: sourceFrameId ?: "draft_frame")
+    )
+
+    companion object {
+        fun createNew(imageFrame: Boolean = false): FrameEditorDraft {
+            val defaultElements = if (imageFrame) {
+                emptyList()
+            } else {
+                listOf(
+                    FrameElementDraft.Text(
+                        textType = TextType.DEVICE_MODEL,
+                        alignment = ElementAlignment.START,
+                        fontSizeSp = 20,
+                        color = Color.BLACK,
+                        fontWeight = FontWeight.BOLD,
+                        line = -1
+                    ),
+                    FrameElementDraft.Divider(
+                        orientation = DividerOrientation.VERTICAL,
+                        alignment = ElementAlignment.START,
+                        lengthDp = 36,
+                        thicknessDp = 1,
+                        color = 0xFFE0E0E0.toInt(),
+                        marginDp = 8,
+                        line = -1
+                    ),
+                    FrameElementDraft.Logo(
+                        logoType = LogoType.BRAND,
+                        alignment = ElementAlignment.START,
+                        sizeDp = 32,
+                        maxWidth = 128,
+                        marginDp = 8,
+                        line = -1
+                    ),
+                    FrameElementDraft.Text(
+                        textType = TextType.APERTURE,
+                        alignment = ElementAlignment.END,
+                        fontSizeSp = 16,
+                        color = 0xFF333333.toInt(),
+                        fontWeight = FontWeight.BOLD,
+                        line = 0
+                    ),
+                    FrameElementDraft.Text(
+                        textType = TextType.FOCAL_LENGTH_35MM,
+                        alignment = ElementAlignment.END,
+                        fontSizeSp = 16,
+                        color = 0xFF333333.toInt(),
+                        fontWeight = FontWeight.BOLD,
+                        line = 0
+                    ),
+                    FrameElementDraft.Text(
+                        textType = TextType.SHUTTER_SPEED,
+                        alignment = ElementAlignment.END,
+                        fontSizeSp = 16,
+                        color = 0xFF333333.toInt(),
+                        fontWeight = FontWeight.BOLD,
+                        line = 0
+                    ),
+                    FrameElementDraft.Text(
+                        textType = TextType.ISO,
+                        alignment = ElementAlignment.END,
+                        fontSizeSp = 16,
+                        color = 0xFF333333.toInt(),
+                        fontWeight = FontWeight.BOLD,
+                        line = 0
+                    ),
+                    FrameElementDraft.Text(
+                        textType = TextType.DATETIME,
+                        alignment = ElementAlignment.END,
+                        fontSizeSp = 12,
+                        color = 0xFF666666.toInt(),
+                        format = "yyyy.MM.dd HH:mm:ss",
+                        line = 1
+                    )
+                )
+            }
+
+            return FrameEditorDraft(
+                name = "",
+                layout = if (imageFrame) {
+                    FrameLayoutDraft(
+                        position = FramePosition.IMAGE,
+                        backgroundColor = Color.WHITE
+                    )
+                } else {
+                    FrameLayoutDraft(
+                        position = FramePosition.BOTTOM,
+                        heightDp = 80,
+                        backgroundColor = Color.WHITE,
+                        paddingDp = 20
+                    )
+                },
+                elements = defaultElements,
+                selectedElementId = defaultElements.firstOrNull()?.draftId
+            )
+        }
+
+        fun fromTemplate(
+            template: FrameTemplate,
+            frameInfo: FrameInfo? = null
+        ): FrameEditorDraft {
+            val elements = template.elements.map { FrameElementDraft.fromElement(it) }
+            return FrameEditorDraft(
+                sourceFrameId = template.id,
+                editableFrameId = template.id.takeIf { frameInfo?.isBuiltIn == false },
+                isBuiltInSource = frameInfo?.isBuiltIn ?: false,
+                name = template.getName(),
+                layout = FrameLayoutDraft.fromLayout(template.layout),
+                elements = elements,
+                selectedElementId = elements.firstOrNull()?.draftId
+            )
+        }
+    }
+}
+
+data class FrameLayoutDraft(
+    val position: FramePosition = FramePosition.BOTTOM,
+    val heightDp: Int = 80,
+    val backgroundColor: Int = Color.WHITE,
+    val paddingDp: Int = 16,
+    val borderWidthDp: Int = 0,
+    val imageResName: String? = null,
+    val imagePath: String? = null
+) {
+    fun toFrameLayout(): FrameLayout = FrameLayout(
+        position = position,
+        heightDp = heightDp.coerceAtLeast(0),
+        backgroundColor = backgroundColor,
+        paddingDp = paddingDp.coerceAtLeast(0),
+        borderWidthDp = borderWidthDp.coerceAtLeast(0),
+        imageResName = imageResName,
+        imagePath = imagePath
+    )
+
+    companion object {
+        fun fromLayout(layout: FrameLayout): FrameLayoutDraft = FrameLayoutDraft(
+            position = layout.position,
+            heightDp = layout.heightDp,
+            backgroundColor = layout.backgroundColor,
+            paddingDp = layout.paddingDp,
+            borderWidthDp = layout.borderWidthDp,
+            imageResName = layout.imageResName,
+            imagePath = layout.imagePath
+        )
+    }
+}
+
+sealed class FrameElementDraft(
+    open val draftId: String = UUID.randomUUID().toString(),
+    open val line: Int,
+) {
+    abstract fun toFrameElement(): FrameElement
+
+    data class Text(
+        override val draftId: String = UUID.randomUUID().toString(),
+        val textType: TextType = TextType.DEVICE_MODEL,
+        val alignment: ElementAlignment = ElementAlignment.START,
+        val fontSizeSp: Int = 14,
+        val color: Int = Color.DKGRAY,
+        val fontWeight: FontWeight = FontWeight.NORMAL,
+        val fontFamily: String? = null,
+        val format: String? = null,
+        val prefix: String? = null,
+        val suffix: String? = null,
+        override val line: Int = 0
+    ) : FrameElementDraft(draftId, line) {
+        override fun toFrameElement(): FrameElement = FrameElement.Text(
+            textType = textType,
+            alignment = alignment,
+            fontSizeSp = fontSizeSp.coerceAtLeast(0),
+            color = color,
+            fontWeight = fontWeight,
+            fontFamily = fontFamily,
+            format = format,
+            prefix = prefix,
+            suffix = suffix,
+            line = line
+        )
+    }
+
+    data class Logo(
+        override val draftId: String = UUID.randomUUID().toString(),
+        val logoType: LogoType = LogoType.BRAND,
+        val alignment: ElementAlignment = ElementAlignment.CENTER,
+        val sizeDp: Int = 24,
+        val maxWidth: Int = 0,
+        val light: Boolean = false,
+        val marginDp: Int = 8,
+        override val line: Int = 0
+    ) : FrameElementDraft(draftId, line) {
+        override fun toFrameElement(): FrameElement = FrameElement.Logo(
+            logoType = logoType,
+            alignment = alignment,
+            sizeDp = sizeDp.coerceAtLeast(0),
+            maxWidth = maxWidth.coerceAtLeast(0),
+            light = light,
+            marginDp = marginDp.coerceAtLeast(0),
+            line = line
+        )
+    }
+
+    data class Divider(
+        override val draftId: String = UUID.randomUUID().toString(),
+        val orientation: DividerOrientation = DividerOrientation.VERTICAL,
+        val alignment: ElementAlignment = ElementAlignment.CENTER,
+        val lengthDp: Int = 16,
+        val thicknessDp: Int = 1,
+        val color: Int = Color.LTGRAY,
+        val marginDp: Int = 8,
+        override val line: Int = 0
+    ) : FrameElementDraft(draftId, line) {
+        override fun toFrameElement(): FrameElement = FrameElement.Divider(
+            orientation = orientation,
+            alignment = alignment,
+            lengthDp = lengthDp.coerceAtLeast(0),
+            thicknessDp = thicknessDp.coerceAtLeast(0),
+            color = color,
+            marginDp = marginDp.coerceAtLeast(0),
+            line = line
+        )
+    }
+
+    data class Spacer(
+        override val draftId: String = UUID.randomUUID().toString(),
+        val widthDp: Int = 8,
+        override val line: Int = 0
+    ) : FrameElementDraft(draftId, line) {
+        override fun toFrameElement(): FrameElement = FrameElement.Spacer(
+            widthDp = widthDp.coerceAtLeast(0),
+            line = line
+        )
+    }
+
+    companion object {
+        fun fromElement(element: FrameElement): FrameElementDraft {
+            return when (element) {
+                is FrameElement.Text -> Text(
+                    textType = element.textType,
+                    alignment = element.alignment,
+                    fontSizeSp = element.fontSizeSp,
+                    color = element.color,
+                    fontWeight = element.fontWeight,
+                    fontFamily = element.fontFamily,
+                    format = element.format,
+                    prefix = element.prefix,
+                    suffix = element.suffix,
+                    line = element.line
+                )
+
+                is FrameElement.Logo -> Logo(
+                    logoType = element.logoType,
+                    alignment = element.alignment,
+                    sizeDp = element.sizeDp,
+                    maxWidth = element.maxWidth,
+                    light = element.light,
+                    marginDp = element.marginDp,
+                    line = element.line
+                )
+
+                is FrameElement.Divider -> Divider(
+                    orientation = element.orientation,
+                    alignment = element.alignment,
+                    lengthDp = element.lengthDp,
+                    thicknessDp = element.thicknessDp,
+                    color = element.color,
+                    marginDp = element.marginDp,
+                    line = element.line
+                )
+
+                is FrameElement.Spacer -> Spacer(
+                    widthDp = element.widthDp,
+                    line = element.line
+                )
+            }
+        }
+    }
+}

@@ -5,6 +5,8 @@ import android.net.Uri
 import android.util.Log
 import com.hinnka.mycamera.lut.LutConverter
 import com.hinnka.mycamera.color.TransferCurve
+import com.hinnka.mycamera.frame.FrameTemplate
+import com.hinnka.mycamera.frame.FrameTemplateParser
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.XmpLutParser
 import com.hinnka.mycamera.raw.ColorSpace
@@ -232,7 +234,8 @@ class CustomImportManager(private val context: Context) {
         return try {
             val fileName = getFileName(uri) ?: "frame_${System.currentTimeMillis()}.png"
             val frameId = "custom_${UUID.randomUUID()}"
-            val imageFileName = "${frameId}_image.png"
+            val extension = fileName.substringAfterLast('.', "png")
+            val imageFileName = "${frameId}_image.$extension"
             val imageFile = File(customFrameDir, imageFileName)
             val frameConfigFile = File(customFrameDir, "$frameId.json")
 
@@ -272,6 +275,58 @@ class CustomImportManager(private val context: Context) {
             frameId
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to import image frame", e)
+            null
+        }
+    }
+
+    /**
+     * 为边框编辑器导入图片资源并复制到私有目录。
+     */
+    fun importEditorFrameImage(uri: Uri, frameIdHint: String? = null): String? {
+        return try {
+            val fileName = getFileName(uri) ?: "frame_${System.currentTimeMillis()}.png"
+            val extension = fileName.substringAfterLast('.', "png")
+            val imageFileName = (frameIdHint ?: "frame_${UUID.randomUUID()}") + "_image.$extension"
+            val imageFile = File(customFrameDir, imageFileName)
+
+            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                imageFile.outputStream().use { outputStream ->
+                    inputStream.copyTo(outputStream)
+                }
+            } ?: return null
+
+            imageFile.absolutePath
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to import frame editor image", e)
+            null
+        }
+    }
+
+    /**
+     * 保存或覆盖自定义边框模板。
+     *
+     * @param template 待保存模板
+     * @param overwriteFrameId 若传入则覆盖该自定义边框，否则创建新的自定义边框
+     * @return 实际保存的边框 ID
+     */
+    fun saveFrameTemplate(template: FrameTemplate, overwriteFrameId: String? = null): String? {
+        return try {
+            val frameId = overwriteFrameId ?: template.id.takeIf { it.startsWith("custom_") } ?: "custom_${UUID.randomUUID()}"
+            val templateToSave = template.copy(id = frameId)
+            val validationErrors = FrameTemplateParser.validateTemplate(templateToSave)
+            if (validationErrors.isNotEmpty()) {
+                PLog.e(TAG, "Failed to save frame template, invalid fields: $validationErrors")
+                return null
+            }
+
+            val frameConfigFile = File(customFrameDir, "$frameId.json")
+            frameConfigFile.writeText(FrameTemplateParser.serializeTemplate(templateToSave))
+            upsertFrameConfig(frameId, templateToSave.nameMap, frameConfigFile.name)
+
+            PLog.d(TAG, "Frame template saved: $frameId overwrite=$overwriteFrameId")
+            frameId
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to save frame template", e)
             null
         }
     }
@@ -401,7 +456,8 @@ class CustomImportManager(private val context: Context) {
                         path = path,
                         nameMap = nameMap,
                         previewResId = 0,
-                        isBuiltIn = false
+                        isBuiltIn = false,
+                        isEditable = true
                     )
                 )
             }
@@ -598,7 +654,24 @@ class CustomImportManager(private val context: Context) {
 
                 // 删除文件
                 fileName?.let {
-                    File(customFrameDir, it).delete()
+                    val frameFile = File(customFrameDir, it)
+                    val imagePath = runCatching {
+                        if (frameFile.exists()) {
+                            JSONObject(frameFile.readText())
+                                .optJSONObject("layout")
+                                ?.optString("imagePath")
+                                ?.takeIf { path -> path.isNotBlank() }
+                        } else {
+                            null
+                        }
+                    }.getOrNull()
+                    frameFile.delete()
+                    imagePath?.let { path ->
+                        val imageFile = File(path)
+                        if (imageFile.exists() && imageFile.parentFile == customFrameDir) {
+                            imageFile.delete()
+                        }
+                    }
                 }
             }
 
@@ -649,6 +722,42 @@ class CustomImportManager(private val context: Context) {
             JSONArray()
         }
 
+        jsonArray.put(JSONObject().apply {
+            put("id", frameId)
+            put("name", JSONObject().apply {
+                nameMap.forEach { (lang, name) ->
+                    put(lang, name)
+                }
+            })
+            put("fileName", fileName)
+        })
+        configFile.writeText(jsonArray.toString())
+    }
+
+    private fun upsertFrameConfig(frameId: String, nameMap: Map<String, String>, fileName: String) {
+        val configFile = File(context.filesDir, CUSTOM_FRAME_CONFIG)
+        val existing = if (configFile.exists()) JSONArray(configFile.readText()) else JSONArray()
+        val newArray = JSONArray()
+        var updated = false
+
+        for (i in 0 until existing.length()) {
+            val frameObj = existing.getJSONObject(i)
+            if (frameObj.getString("id") == frameId) {
+                newArray.put(createFrameConfigObject(frameId, nameMap, fileName))
+                updated = true
+            } else {
+                newArray.put(frameObj)
+            }
+        }
+
+        if (!updated) {
+            newArray.put(createFrameConfigObject(frameId, nameMap, fileName))
+        }
+
+        configFile.writeText(newArray.toString())
+    }
+
+    private fun createFrameConfigObject(frameId: String, nameMap: Map<String, String>, fileName: String): JSONObject {
         val frameObj = JSONObject().apply {
             put("id", frameId)
             put("name", JSONObject().apply {
@@ -658,9 +767,7 @@ class CustomImportManager(private val context: Context) {
             })
             put("fileName", fileName)
         }
-
-        jsonArray.put(frameObj)
-        configFile.writeText(jsonArray.toString())
+        return frameObj
     }
 
     /**

@@ -51,6 +51,8 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
 fun FrameManagementScreen(
     viewModel: CameraViewModel,
     onBack: () -> Unit,
+    onCreateFrameClick: () -> Unit,
+    onEditFrameStyle: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val currentFrameId = viewModel.currentFrameId
@@ -83,11 +85,8 @@ fun FrameManagementScreen(
     // 导入状态
     var isImporting by remember { mutableStateOf(false) }
 
-    // 导入类型选择
-    var showImportMenu by remember { mutableStateOf(false) }
-
-    // 帮助对话框状态
-    var showHelpDialog by remember { mutableStateOf(false) }
+    // 顶部操作菜单
+    var showCreateMenu by remember { mutableStateOf(false) }
 
     // 自定义属性编辑状态
     var showFrameEditSheet by remember { mutableStateOf(false) }
@@ -102,22 +101,6 @@ fun FrameManagementScreen(
             scope.launch {
                 withContext(Dispatchers.IO) {
                     customImportManager.importFrame(it)
-                }
-                viewModel.refreshCustomContent()
-                isImporting = false
-            }
-        }
-    }
-
-    // 图片边框文件选择器
-    val frameImagePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        uri?.let {
-            isImporting = true
-            scope.launch {
-                withContext(Dispatchers.IO) {
-                    customImportManager.importImageFrame(it)
                 }
                 viewModel.refreshCustomContent()
                 isImporting = false
@@ -181,22 +164,9 @@ fun FrameManagementScreen(
                 }
             },
             actions = {
-                // 帮助按钮
-                IconButton(
-                    onClick = { showHelpDialog = true }
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.HelpOutline,
-                        contentDescription = stringResource(R.string.help),
-                        tint = Color.White
-                    )
-                }
-
                 // 导入按钮
                 IconButton(
-                    onClick = {
-                        frameImagePicker.launch(arrayOf("image/png", "image/webp", "image/*"))
-                    },
+                    onClick = { showCreateMenu = true },
                     enabled = !isImporting
                 ) {
                     if (isImporting) {
@@ -208,10 +178,29 @@ fun FrameManagementScreen(
                     } else {
                         Icon(
                             imageVector = Icons.Default.Add,
-                            contentDescription = stringResource(R.string.import_frame),
+                            contentDescription = stringResource(R.string.frame_editor_create_menu),
                             tint = Color.White
                         )
                     }
+                }
+                DropdownMenu(
+                    expanded = showCreateMenu,
+                    onDismissRequest = { showCreateMenu = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.frame_editor_new_title)) },
+                        onClick = {
+                            showCreateMenu = false
+                            onCreateFrameClick()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.import_frame_json)) },
+                        onClick = {
+                            showCreateMenu = false
+                            frameJsonPicker.launch(arrayOf("application/json", "text/plain", "*/*"))
+                        }
+                    )
                 }
             },
             colors = TopAppBarDefaults.topAppBarColors(
@@ -239,6 +228,7 @@ fun FrameManagementScreen(
                     onSetDefault = {
                         viewModel.setFrame(null)
                     },
+                    onEditStyle = null,
                     onRename = null,
                     onEditProperties = null,
                     onDelete = null
@@ -255,6 +245,9 @@ fun FrameManagementScreen(
                         canDrag = true,
                         onSetDefault = {
                             viewModel.setFrame(frameInfo.id)
+                        },
+                        onEditStyle = {
+                            onEditFrameStyle(frameInfo.id)
                         },
                         onRename = if (!frameInfo.isBuiltIn) {
                             {
@@ -363,24 +356,6 @@ fun FrameManagementScreen(
         )
     }
 
-    // 帮助对话框
-    if (showHelpDialog) {
-        AlertDialog(
-            onDismissRequest = { showHelpDialog = false },
-            title = {
-                Text(stringResource(R.string.frame_import_help_title))
-            },
-            text = {
-                Text(stringResource(R.string.frame_import_help_message))
-            },
-            confirmButton = {
-                TextButton(onClick = { showHelpDialog = false }) {
-                    Text(stringResource(R.string.got_it))
-                }
-            }
-        )
-    }
-
     // 页面退出时保存排序
     DisposableEffect(Unit) {
         onDispose {
@@ -431,12 +406,14 @@ private fun FrameManagementItem(
     isDragging: Boolean,
     canDrag: Boolean,
     onSetDefault: () -> Unit,
+    onEditStyle: (() -> Unit)?,
     onRename: (() -> Unit)?,
     onEditProperties: (() -> Unit)?,
     onDelete: (() -> Unit)?,
     dragModifier: Modifier = Modifier,
     modifier: Modifier = Modifier
 ) {
+    var showActionsMenu by remember { mutableStateOf(false) }
     val borderColor = if (isDefault) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.2f)
     val backgroundColor = when {
         isDragging -> Color.White.copy(alpha = 0.2f)
@@ -526,47 +503,58 @@ private fun FrameManagementItem(
             }
         }
 
-        // 自定义属性编辑按钮（仅可编辑边框）
-        if (onEditProperties != null) {
+        if (onEditStyle != null || onEditProperties != null || onRename != null || onDelete != null) {
             IconButton(
-                onClick = onEditProperties,
+                onClick = { showActionsMenu = true },
                 modifier = Modifier.size(36.dp)
             ) {
                 Icon(
-                    imageVector = Icons.Default.Tune,
-                    contentDescription = stringResource(R.string.watermark_adjustment),
+                    imageVector = Icons.Default.MoreVert,
+                    contentDescription = stringResource(R.string.more_options),
                     tint = Color.White.copy(alpha = 0.7f),
                     modifier = Modifier.size(20.dp)
                 )
             }
-        }
-
-        // 操作按钮（仅自定义边框）
-        if (onRename != null) {
-            IconButton(
-                onClick = onRename,
-                modifier = Modifier.size(36.dp)
+            DropdownMenu(
+                expanded = showActionsMenu,
+                onDismissRequest = { showActionsMenu = false }
             ) {
-                Icon(
-                    imageVector = Icons.Default.Edit,
-                    contentDescription = stringResource(R.string.rename),
-                    tint = Color.White.copy(alpha = 0.7f),
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-        }
-
-        if (onDelete != null) {
-            IconButton(
-                onClick = onDelete,
-                modifier = Modifier.size(36.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = stringResource(R.string.delete),
-                    tint = Color.White.copy(alpha = 0.7f),
-                    modifier = Modifier.size(20.dp)
-                )
+                onEditStyle?.let {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.frame_editor_edit_title)) },
+                        onClick = {
+                            showActionsMenu = false
+                            it()
+                        }
+                    )
+                }
+                onEditProperties?.let {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.watermark_adjustment)) },
+                        onClick = {
+                            showActionsMenu = false
+                            it()
+                        }
+                    )
+                }
+                onRename?.let {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.rename)) },
+                        onClick = {
+                            showActionsMenu = false
+                            it()
+                        }
+                    )
+                }
+                onDelete?.let {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.delete)) },
+                        onClick = {
+                            showActionsMenu = false
+                            it()
+                        }
+                    )
+                }
             }
         }
     }

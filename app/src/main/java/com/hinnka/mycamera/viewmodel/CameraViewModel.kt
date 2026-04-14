@@ -20,7 +20,9 @@ import androidx.lifecycle.viewModelScope
 import com.hinnka.mycamera.camera.*
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.data.VolumeKeyAction
+import com.hinnka.mycamera.frame.FrameEditorDraft
 import com.hinnka.mycamera.frame.FrameInfo
+import com.hinnka.mycamera.frame.FramePreviewFactory
 import com.hinnka.mycamera.gallery.MediaManager
 import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
@@ -1805,6 +1807,30 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     suspend fun saveFrameCustomProperties(frameId: String, properties: Map<String, String>) {
         contentRepository.frameManager.saveCustomProperties(frameId, properties)
     }
+
+    fun loadFrameEditorDraft(frameId: String?, imageFrame: Boolean = false): FrameEditorDraft {
+        return contentRepository.frameManager.createEditorDraft(frameId, imageFrame)
+    }
+
+    suspend fun saveFrameEditorDraft(draft: FrameEditorDraft): String? = withContext(Dispatchers.IO) {
+        val savedId = contentRepository.frameManager.saveEditorDraft(draft)
+        if (savedId != null) {
+            contentRepository.refreshCustomContent()
+        }
+        savedId
+    }
+
+    fun importFrameEditorImage(uri: Uri, frameIdHint: String? = null): String? {
+        return contentRepository.frameManager.importEditorFrameImage(uri, frameIdHint)
+    }
+
+    suspend fun renderFrameEditorPreview(draft: FrameEditorDraft, portrait: Boolean): Bitmap =
+        withContext(Dispatchers.Default) {
+            val source = FramePreviewFactory.createPreviewBitmap(portrait)
+            val template = draft.toTemplate(draft.editableFrameId ?: draft.sourceFrameId ?: "preview_frame")
+            val metadata = FramePreviewFactory.createPreviewMetadata(source.width, source.height)
+            contentRepository.frameRenderer.render(source, template, metadata)
+        }
 
     /**
      * 设置是否显示直方图
