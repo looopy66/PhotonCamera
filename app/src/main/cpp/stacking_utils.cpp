@@ -108,8 +108,6 @@ inline float sampleBicubic(const std::vector<uint16_t> &data, int width,
   float dy = y - yInt;
 
   float sum = 0.0f;
-  float weightSum = 0.0f;
-
   // 4x4 邻域采样
   for (int j = -1; j <= 2; ++j) {
     int sy = std::max(0, std::min(height - 1, yInt + j));
@@ -121,8 +119,6 @@ inline float sampleBicubic(const std::vector<uint16_t> &data, int width,
 
       float weight = wx * wy;
       sum += (float)data[sy * width + sx] * weight;
-      // Bicubic 权重之和理论为 1，但为了浮点稳定性可以除以 weightSum
-      // weightSum += weight;
     }
   }
 
@@ -329,6 +325,7 @@ long long computeSAD(const GrayImage &ref, const GrayImage &target, int dx,
   uint64_t totalSad = 0;
   int width_to_process = endX - startX;
 
+#pragma omp parallel for reduction(+ : totalSad) num_threads(4)
   for (int y = startY; y < endY; ++y) {
     const uint8_t *pRef = &ref.data[y * ref.width + startX];
     const uint8_t *pTgt = &target.data[(y + dy) * target.width + (startX + dx)];
@@ -369,6 +366,8 @@ long long computeBlockSAD(const GrayImage &ref, const GrayImage &target,
   }
 
   uint32_t totalSad = 0;
+
+#pragma omp parallel for reduction(+ : totalSad) num_threads(4)
   for (int y = 0; y < h; ++y) {
     const uint8_t *pRef = &ref.data[(refY + y) * ref.width + refX];
     const uint8_t *pTgt =
