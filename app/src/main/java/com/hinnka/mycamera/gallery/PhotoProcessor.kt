@@ -79,7 +79,12 @@ class PhotoProcessor(
         val yuvFile = MediaManager.getYuvFile(context, photoId)
         if (hlgImageProcessor.isHlgCapture(metadata)) {
             val prepareStart = System.currentTimeMillis()
-            val hdrData = MediaManager.loadHdrData(context, photoId)
+            val hdrData = MediaManager.loadHdrData(
+                context = context,
+                photoId = photoId,
+                fallbackWidth = metadata.width,
+                fallbackHeight = metadata.height
+            )
             if (hdrData != null) {
                 val photoFile = MediaManager.getPhotoFile(context, photoId)
                 val photoBitmap = BitmapFactory.decodeFile(photoFile.absolutePath) ?: return null
@@ -100,16 +105,17 @@ class PhotoProcessor(
                     useComputationalAperture = true
                 )
                 val hdrReferenceBitmap = hlgImageProcessor.createHdrReferenceFromRawSidecar(
-                    buffer = hdrData,
-                    width = metadata.width,
-                    height = metadata.height
+                    buffer = hdrData.buffer,
+                    width = hdrData.width,
+                    height = hdrData.height
                 ).let {
                     applyFrame(applyCrop(it, metadata), metadata)
                 }
                 PLog.d(
                     "PhotoProcessor",
                     "prepareUltraHdrSource(HLG sidecar) took ${System.currentTimeMillis() - prepareStart}ms " +
-                            "(sdrPost=${System.currentTimeMillis() - sdrPostElapsedStart}ms, hasHdr=true)"
+                            "(sdrPost=${System.currentTimeMillis() - sdrPostElapsedStart}ms, " +
+                            "hasHdr=true, sidecar=${hdrData.width}x${hdrData.height}, compressed=${hdrData.compressed})"
                 )
                 return GainmapSourceSet(
                     sdrBase = sdrBitmap,

@@ -92,6 +92,13 @@ object MediaManager {
         val hasAudio: Boolean?
     )
 
+    data class HdrSidecarData(
+        val buffer: ByteBuffer,
+        val width: Int,
+        val height: Int,
+        val compressed: Boolean
+    )
+
     val processingScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val gainmapProducer = UnifiedGainmapProducer()
 
@@ -2274,16 +2281,60 @@ object MediaManager {
         }
     }
 
-    fun loadHdrData(context: Context, photoId: String): ByteBuffer? {
+    fun loadHdrData(
+        context: Context,
+        photoId: String,
+        fallbackWidth: Int,
+        fallbackHeight: Int
+    ): HdrSidecarData? {
         val hdrFile = getHdrFile(context, photoId)
         if (!hdrFile.exists()) {
             return null
         }
+
+        val start = System.currentTimeMillis()
+        val dims = YuvProcessor.getCompressedArgbDimensions(hdrFile.absolutePath)
+        if (dims != null && dims.size >= 2) {
+            val buffer = YuvProcessor.loadCompressedArgb(hdrFile.absolutePath)
+            if (buffer != null) {
+                PLog.d(
+                    TAG,
+                    "loadHdrData loaded compressed sidecar in ${System.currentTimeMillis() - start}ms, " +
+                        "size=${dims[0]}x${dims[1]}, bytes=${buffer.capacity()}"
+                )
+                return HdrSidecarData(
+                    buffer = buffer,
+                    width = dims[0],
+                    height = dims[1],
+                    compressed = true
+                )
+            }
+        }
+
         return try {
             val bytes = hdrFile.readBytes()
-            ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder()).apply {
-                put(bytes)
-                rewind()
+            val expectedBytes = fallbackWidth * fallbackHeight * 4 * 2
+            if (bytes.size != expectedBytes) {
+                PLog.e(
+                    TAG,
+                    "Failed to load HDR sidecar: unexpected legacy size ${bytes.size}, expected=$expectedBytes"
+                )
+                null
+            } else {
+                PLog.d(
+                    TAG,
+                    "loadHdrData loaded legacy raw sidecar in ${System.currentTimeMillis() - start}ms, " +
+                        "size=${fallbackWidth}x${fallbackHeight}, bytes=${bytes.size}"
+                )
+                HdrSidecarData(
+                    buffer = ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder()).apply {
+                        put(bytes)
+                        rewind()
+                    },
+                    width = fallbackWidth,
+                    height = fallbackHeight,
+                    compressed = false
+                )
             }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to load HDR sidecar", e)
