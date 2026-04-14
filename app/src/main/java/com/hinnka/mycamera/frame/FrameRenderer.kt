@@ -861,50 +861,44 @@ class FrameRenderer(private val context: Context) {
 
         PLog.d(TAG, "Transparent bounds: $transparentBounds, frame size: ${frameBitmap.width}x${frameBitmap.height}")
 
-        // 计算缩放比例，使透明区域能够容纳照片（以照片尺寸为准）
-        val photoWidth = originalBitmap.width
-        val photoHeight = originalBitmap.height
-        val transparentWidth = transparentBounds.width()
-        val transparentHeight = transparentBounds.height()
-
-        // 计算边框需要缩放的比例，使透明区域与照片大小匹配
-        val scaleX = photoWidth.toFloat() / transparentWidth
-        val scaleY = photoHeight.toFloat() / transparentHeight
-        // 使用较大的缩放比例，确保照片完全填充透明区域（center crop 效果）
-        val frameScale = maxOf(scaleX, scaleY)
-
-        // 缩放后的边框尺寸
-        val scaledFrameWidth = (frameBitmap.width * frameScale).toInt()
-        val scaledFrameHeight = (frameBitmap.height * frameScale).toInt()
-
-        // 缩放后的透明区域边界
-        val scaledTransparentLeft = (transparentBounds.left * frameScale).toInt()
-        val scaledTransparentTop = (transparentBounds.top * frameScale).toInt()
-        val scaledTransparentWidth = (transparentWidth * frameScale).toInt()
-        val scaledTransparentHeight = (transparentHeight * frameScale).toInt()
-
-        // 计算照片在缩放后透明区域中的居中位置
-        val photoOffsetX = (scaledTransparentWidth - photoWidth) / 2
-        val photoOffsetY = (scaledTransparentHeight - photoHeight) / 2
-
-        // 缩放边框图片
-        val scaledFrame = Bitmap.createScaledBitmap(frameBitmap, scaledFrameWidth, scaledFrameHeight, true)
-        frameBitmap.recycle()
-
-        // 创建输出 Bitmap（与缩放后的边框大小相同）
-        val output = createBitmap(scaledFrameWidth, scaledFrameHeight)
+        // 保持模板图片原始尺寸，将原图按 centerCrop 方式填满透明区域，避免出现黑边。
+        val output = createBitmap(frameBitmap.width, frameBitmap.height)
         val canvas = Canvas(output)
 
-        // 先绘制照片到缩放后的透明区域位置（居中）
-        val photoDrawX = scaledTransparentLeft + photoOffsetX
-        val photoDrawY = scaledTransparentTop + photoOffsetY
-        canvas.drawBitmap(originalBitmap, photoDrawX.toFloat(), photoDrawY.toFloat(), null)
+        drawBitmapCenterCrop(
+            canvas = canvas,
+            bitmap = originalBitmap,
+            destination = RectF(transparentBounds)
+        )
 
-        // 再绘制缩放后的边框图片（透明区域会显示下面的照片）
-        canvas.drawBitmap(scaledFrame, 0f, 0f, null)
-        scaledFrame.recycle()
+        // 再绘制边框图片（透明区域会显示下面的照片）
+        canvas.drawBitmap(frameBitmap, 0f, 0f, null)
+        frameBitmap.recycle()
 
         return output
+    }
+
+    private fun drawBitmapCenterCrop(
+        canvas: Canvas,
+        bitmap: Bitmap,
+        destination: RectF
+    ) {
+        if (destination.width() <= 0f || destination.height() <= 0f) return
+
+        val srcWidth = bitmap.width.toFloat()
+        val srcHeight = bitmap.height.toFloat()
+        val dstWidth = destination.width()
+        val dstHeight = destination.height()
+
+        val scale = maxOf(dstWidth / srcWidth, dstHeight / srcHeight)
+        val scaledWidth = srcWidth * scale
+        val scaledHeight = srcHeight * scale
+
+        val left = destination.left - (scaledWidth - dstWidth) / 2f
+        val top = destination.top - (scaledHeight - dstHeight) / 2f
+        val targetRect = RectF(left, top, left + scaledWidth, top + scaledHeight)
+
+        canvas.drawBitmap(bitmap, null, targetRect, null)
     }
 
     /**
