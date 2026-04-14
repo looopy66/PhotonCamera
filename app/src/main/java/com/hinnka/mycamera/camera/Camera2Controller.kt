@@ -35,6 +35,7 @@ import com.hinnka.mycamera.video.VIDEO_AUDIO_INPUT_AUTO
 import com.hinnka.mycamera.video.VideoBitratePreset
 import com.hinnka.mycamera.video.VideoCapabilitiesResolver
 import com.hinnka.mycamera.video.VideoFpsPreset
+import com.hinnka.mycamera.video.VideoEncoderColorRequest
 import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.video.VideoRecorder
 import com.hinnka.mycamera.video.VideoResolutionPreset
@@ -2433,6 +2434,10 @@ class Camera2Controller(private val context: Context) {
             fps = _state.value.videoConfig.fps.fps,
             bitrateMbps = _state.value.videoConfig.bitrate.bitrateMbps,
             codecMime = _state.value.videoConfig.codec.mimeType,
+            colorConfig = VideoEncoderColorRequest(
+                logProfile = _state.value.videoConfig.logProfile,
+                hasActiveLut = _state.value.lutEnabled && _state.value.currentLutName != null
+            ),
             orientationHintDegrees = resolveVideoOrientationHintDegrees()
         ) { uri ->
             PLog.i(TAG, "Video saved: $uri")
