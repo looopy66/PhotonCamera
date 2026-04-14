@@ -200,6 +200,7 @@ VulkanImageStacker::~VulkanImageStacker() {
 void VulkanImageStacker::initVulkanResources() {
   VulkanManager &vm = VulkanManager::getInstance();
   VkDevice device = vm.getDevice();
+  VkPhysicalDevice physicalDevice = vm.getPhysicalDevice();
 
   // Create Accumulator Tiles
   uint32_t scale = enableSuperRes ? 2 : 1;
@@ -255,7 +256,8 @@ void VulkanImageStacker::initVulkanResources() {
   VkBufferCreateInfo alignInfo{};
   alignInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
   alignInfo.size = alignBufferSize;
-  alignInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  alignInfo.usage =
+      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
   alignInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
   VK_CHECK(vkCreateBuffer(device, &alignInfo, nullptr, &alignmentBuffer));
 
@@ -265,16 +267,36 @@ void VulkanImageStacker::initVulkanResources() {
   alignAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
   alignAlloc.allocationSize = alignMemReqs.size;
   alignAlloc.memoryTypeIndex = vm.findMemoryType(
-      alignMemReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+      alignMemReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
   VK_CHECK(vkAllocateMemory(device, &alignAlloc, nullptr, &alignmentMemory));
   vkBindBufferMemory(device, alignmentBuffer, alignmentMemory, 0);
 
+  VkBufferCreateInfo alignUploadInfo{};
+  alignUploadInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  alignUploadInfo.size = alignBufferSize;
+  alignUploadInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  alignUploadInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  VK_CHECK(
+      vkCreateBuffer(device, &alignUploadInfo, nullptr, &alignmentUploadBuffer));
+
+  VkMemoryRequirements alignUploadReqs;
+  vkGetBufferMemoryRequirements(device, alignmentUploadBuffer,
+                                &alignUploadReqs);
+  VkMemoryAllocateInfo alignUploadAlloc{};
+  alignUploadAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  alignUploadAlloc.allocationSize = alignUploadReqs.size;
+  alignUploadAlloc.memoryTypeIndex = vm.findMemoryType(
+      alignUploadReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  VK_CHECK(vkAllocateMemory(device, &alignUploadAlloc, nullptr,
+                            &alignmentUploadMemory));
+  vkBindBufferMemory(device, alignmentUploadBuffer, alignmentUploadMemory, 0);
+
   // Initial Clear for Alignment Buffer
   void *ptr;
-  vkMapMemory(device, alignmentMemory, 0, alignBufferSize, 0, &ptr);
+  vkMapMemory(device, alignmentUploadMemory, 0, alignBufferSize, 0, &ptr);
   memset(ptr, 0, (size_t)alignBufferSize);
-  vkUnmapMemory(device, alignmentMemory);
+  vkUnmapMemory(device, alignmentUploadMemory);
 
   // Staging Buffer
   VkDeviceSize stagingSize = (VkDeviceSize)fullW * fullH * 4;
@@ -316,6 +338,20 @@ void VulkanImageStacker::initVulkanResources() {
   poolInfo.poolSizeCount = 3;
   poolInfo.pPoolSizes = poolSizes;
   VK_CHECK(vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool));
+
+  VkPhysicalDeviceProperties deviceProperties{};
+  vkGetPhysicalDeviceProperties(physicalDevice, &deviceProperties);
+  gpuTimestampPeriodNs = deviceProperties.limits.timestampPeriod;
+  gpuTimestampSupported =
+      (deviceProperties.limits.timestampComputeAndGraphics == VK_TRUE);
+  if (gpuTimestampSupported) {
+    VkQueryPoolCreateInfo queryPoolInfo{};
+    queryPoolInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    queryPoolInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    queryPoolInfo.queryCount = 8;
+    VK_CHECK(vkCreateQueryPool(device, &queryPoolInfo, nullptr,
+                               &gpuTimingQueryPool));
+  }
 
   // Initial Clear
   VkCommandBuffer cb = vm.beginSingleTimeCommands();
@@ -373,7 +409,8 @@ void VulkanImageStacker::initVulkanResources() {
   VkBufferCreateInfo mpInfo{};
   mpInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
   mpInfo.size = mpSize;
-  mpInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  mpInfo.usage =
+      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
   mpInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
   VK_CHECK(vkCreateBuffer(device, &mpInfo, nullptr, &motionPriorBuffer));
 
@@ -384,15 +421,37 @@ void VulkanImageStacker::initVulkanResources() {
   mpAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
   mpAlloc.allocationSize = mpReqs.size;
   mpAlloc.memoryTypeIndex = vm.findMemoryType(
-      mpReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+      mpReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
   VK_CHECK(vkAllocateMemory(device, &mpAlloc, nullptr, &motionPriorMemory));
   vkBindBufferMemory(device, motionPriorBuffer, motionPriorMemory, 0);
+
+  VkBufferCreateInfo mpUploadInfo{};
+  mpUploadInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  mpUploadInfo.size = mpSize;
+  mpUploadInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  mpUploadInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  VK_CHECK(vkCreateBuffer(device, &mpUploadInfo, nullptr,
+                          &motionPriorUploadBuffer));
+
+  VkMemoryRequirements mpUploadReqs;
+  vkGetBufferMemoryRequirements(device, motionPriorUploadBuffer,
+                                &mpUploadReqs);
+  VkMemoryAllocateInfo mpUploadAlloc{};
+  mpUploadAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  mpUploadAlloc.allocationSize = mpUploadReqs.size;
+  mpUploadAlloc.memoryTypeIndex = vm.findMemoryType(
+      mpUploadReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  VK_CHECK(vkAllocateMemory(device, &mpUploadAlloc, nullptr,
+                            &motionPriorUploadMemory));
+  vkBindBufferMemory(device, motionPriorUploadBuffer, motionPriorUploadMemory,
+                     0);
 
   VkBufferCreateInfo lmInfo{};
   lmInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
   lmInfo.size = mpSize;
-  lmInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  lmInfo.usage =
+      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
   lmInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
   VK_CHECK(vkCreateBuffer(device, &lmInfo, nullptr, &localTileMaskBuffer));
 
@@ -403,10 +462,31 @@ void VulkanImageStacker::initVulkanResources() {
   lmAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
   lmAlloc.allocationSize = lmReqs.size;
   lmAlloc.memoryTypeIndex = vm.findMemoryType(
-      lmReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+      lmReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
   VK_CHECK(vkAllocateMemory(device, &lmAlloc, nullptr, &localTileMaskMemory));
   vkBindBufferMemory(device, localTileMaskBuffer, localTileMaskMemory, 0);
+
+  VkBufferCreateInfo lmUploadInfo{};
+  lmUploadInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  lmUploadInfo.size = mpSize;
+  lmUploadInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  lmUploadInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  VK_CHECK(vkCreateBuffer(device, &lmUploadInfo, nullptr,
+                          &localTileMaskUploadBuffer));
+
+  VkMemoryRequirements lmUploadReqs;
+  vkGetBufferMemoryRequirements(device, localTileMaskUploadBuffer,
+                                &lmUploadReqs);
+  VkMemoryAllocateInfo lmUploadAlloc{};
+  lmUploadAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  lmUploadAlloc.allocationSize = lmUploadReqs.size;
+  lmUploadAlloc.memoryTypeIndex = vm.findMemoryType(
+      lmUploadReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  VK_CHECK(vkAllocateMemory(device, &lmUploadAlloc, nullptr,
+                            &localTileMaskUploadMemory));
+  vkBindBufferMemory(device, localTileMaskUploadBuffer,
+                     localTileMaskUploadMemory, 0);
 
   // Initialize RGB Intermediate Image
   rgbFrame.width = width;
@@ -712,6 +792,11 @@ bool VulkanImageStacker::addFrame(AHardwareBuffer *buffer) {
 
 bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer, float frameScore,
                                       GrayImage &cachedGray) {
+  using PerfClock = std::chrono::high_resolution_clock;
+  auto elapsedMs = [](const PerfClock::time_point &start,
+                      const PerfClock::time_point &end) {
+    return std::chrono::duration<double, std::milli>(end - start).count();
+  };
   VulkanImage input;
   // Use existing conversion if available (from first frame) to compatible with
   // immutable sampler
@@ -948,6 +1033,10 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer, float frameScore,
     return true;
   }
 
+  double yuvToRgbaGpuMs = -1.0;
+  double tensorGpuMs = -1.0;
+  double accumulateGpuMs = -1.0;
+
   // --- START PIPELINING SYNC POINT ---
   // Wait for the PREVIOUS frame's GPU task to finish before we start recording
   // new commands or mapping shared buffers.
@@ -957,20 +1046,20 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer, float frameScore,
   if (!currentIsFirstFrame && copyCount > 0) {
     void *mapPtr = nullptr;
     VkResult res =
-        vkMapMemory(device, alignmentMemory, 0, VK_WHOLE_SIZE, 0, &mapPtr);
+        vkMapMemory(device, alignmentUploadMemory, 0, VK_WHOLE_SIZE, 0, &mapPtr);
     if (res == VK_SUCCESS && mapPtr != nullptr) {
       memcpy(mapPtr, alignmentOffsets.data(), copyCount * sizeof(Point));
-      vkUnmapMemory(device, alignmentMemory);
+      vkUnmapMemory(device, alignmentUploadMemory);
     }
 
     void *mpMapPtr = nullptr;
     VkResult resMP =
-        vkMapMemory(device, motionPriorMemory, 0, VK_WHOLE_SIZE, 0, &mpMapPtr);
+        vkMapMemory(device, motionPriorUploadMemory, 0, VK_WHOLE_SIZE, 0,
+                    &mpMapPtr);
     if (resMP == VK_SUCCESS && mpMapPtr != nullptr) {
       memcpy(mpMapPtr, alignmentErrorMap.data(), copyCount * sizeof(float));
-      vkUnmapMemory(device, motionPriorMemory);
+      vkUnmapMemory(device, motionPriorUploadMemory);
     }
-
   }
 
   if (localTileMask.empty()) {
@@ -978,11 +1067,12 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer, float frameScore,
   }
   void *lmMapPtr = nullptr;
   VkResult resLM =
-      vkMapMemory(device, localTileMaskMemory, 0, VK_WHOLE_SIZE, 0, &lmMapPtr);
+      vkMapMemory(device, localTileMaskUploadMemory, 0, VK_WHOLE_SIZE, 0,
+                  &lmMapPtr);
   if (resLM == VK_SUCCESS && lmMapPtr != nullptr && !localTileMask.empty()) {
     memcpy(lmMapPtr, localTileMask.data(),
            localTileMask.size() * sizeof(float));
-    vkUnmapMemory(device, localTileMaskMemory);
+    vkUnmapMemory(device, localTileMaskUploadMemory);
   }
 
   // Update yuvToRgbaSet with current input
@@ -1013,6 +1103,9 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer, float frameScore,
   TIME_START(gpuDispatch);
   // 3. Command Buffer Recording
   VkCommandBuffer cb = vm.beginSingleTimeCommands();
+  if (gpuTimestampSupported && gpuTimingQueryPool != VK_NULL_HANDLE) {
+    vkCmdResetQueryPool(cb, gpuTimingQueryPool, 0, 8);
+  }
 
   // Transition Input Image Layout
   VkImageMemoryBarrier imageBarrier{};
@@ -1055,6 +1148,10 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer, float frameScore,
                        nullptr, 1, &rgbWriteBarrier);
 
   // Dispatch YUV to RGBA Conversion
+  if (gpuTimestampSupported && gpuTimingQueryPool != VK_NULL_HANDLE) {
+    vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                        gpuTimingQueryPool, 0);
+  }
   vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, yuvToRgbaPipeline);
   vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                           yuvToRgbaPipelineLayout, 0, 1, &yuvToRgbaSet, 0,
@@ -1067,6 +1164,10 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer, float frameScore,
   vkCmdPushConstants(cb, yuvToRgbaPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                      0, sizeof(convPc), &convPc);
   vkCmdDispatch(cb, (width + 15) / 16, (height + 15) / 16, 1);
+  if (gpuTimestampSupported && gpuTimingQueryPool != VK_NULL_HANDLE) {
+    vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                        gpuTimingQueryPool, 1);
+  }
 
   // Transition RGB frame to SHADER_READ_ONLY_OPTIMAL for sampling
   VkImageMemoryBarrier rgbReadBarrier{};
@@ -1109,20 +1210,76 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer, float frameScore,
                          &memBarrier, 0, nullptr, 0, nullptr);
   }
 
-  VkBufferMemoryBarrier localMaskBarrier{};
-  localMaskBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-  localMaskBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-  localMaskBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-  localMaskBarrier.buffer = localTileMaskBuffer;
-  localMaskBarrier.size = VK_WHOLE_SIZE;
+  bool needAlignmentUpload = (!currentIsFirstFrame && copyCount > 0);
+  VkBufferMemoryBarrier uploadSrcBarriers[3] = {};
+  uint32_t uploadSrcBarrierCount = 0;
+  auto appendUploadSrcBarrier = [&](VkBuffer buffer) {
+    VkBufferMemoryBarrier &barrier = uploadSrcBarriers[uploadSrcBarrierCount++];
+    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier.buffer = buffer;
+    barrier.offset = 0;
+    barrier.size = VK_WHOLE_SIZE;
+  };
+  if (needAlignmentUpload) {
+    appendUploadSrcBarrier(alignmentUploadBuffer);
+    appendUploadSrcBarrier(motionPriorUploadBuffer);
+  }
+  appendUploadSrcBarrier(localTileMaskUploadBuffer);
   vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_HOST_BIT,
-                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
-                       &localMaskBarrier, 0, nullptr);
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr,
+                       uploadSrcBarrierCount, uploadSrcBarriers, 0, nullptr);
+
+  if (needAlignmentUpload) {
+    VkBufferCopy alignCopy{};
+    alignCopy.size = copyCount * sizeof(Point);
+    vkCmdCopyBuffer(cb, alignmentUploadBuffer, alignmentBuffer, 1, &alignCopy);
+
+    VkBufferCopy motionCopy{};
+    motionCopy.size = copyCount * sizeof(float);
+    vkCmdCopyBuffer(cb, motionPriorUploadBuffer, motionPriorBuffer, 1,
+                    &motionCopy);
+  }
+  if (!localTileMask.empty()) {
+    VkBufferCopy localMaskCopy{};
+    localMaskCopy.size = localTileMask.size() * sizeof(float);
+    vkCmdCopyBuffer(cb, localTileMaskUploadBuffer, localTileMaskBuffer, 1,
+                    &localMaskCopy);
+  }
+
+  VkBufferMemoryBarrier uploadDstBarriers[3] = {};
+  uint32_t uploadDstBarrierCount = 0;
+  auto appendUploadDstBarrier = [&](VkBuffer buffer) {
+    VkBufferMemoryBarrier &barrier = uploadDstBarriers[uploadDstBarrierCount++];
+    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barrier.buffer = buffer;
+    barrier.offset = 0;
+    barrier.size = VK_WHOLE_SIZE;
+  };
+  if (needAlignmentUpload) {
+    appendUploadDstBarrier(alignmentBuffer);
+    appendUploadDstBarrier(motionPriorBuffer);
+  }
+  if (!localTileMask.empty()) {
+    appendUploadDstBarrier(localTileMaskBuffer);
+  }
+  if (uploadDstBarrierCount > 0) {
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
+                         uploadDstBarrierCount, uploadDstBarriers, 0, nullptr);
+  }
 
   // Phase 2: Compute Structure Tensor (only on first/reference frame)
   // The kernel shape is driven by the reference frame's local structure.
   // Subsequent frames reuse it — avoids (N-1) expensive GPU dispatches.
   if (currentIsFirstFrame) {
+    if (gpuTimestampSupported && gpuTimingQueryPool != VK_NULL_HANDLE) {
+      vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                          gpuTimingQueryPool, 2);
+    }
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, tensorPipeline);
 
     for (int y = 0; y < numTilesY; ++y) {
@@ -1161,23 +1318,20 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer, float frameScore,
     vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
                          &stBarrier, 0, nullptr);
+    if (gpuTimestampSupported && gpuTimingQueryPool != VK_NULL_HANDLE) {
+      vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                          gpuTimingQueryPool, 3);
+    }
   }
 
-  // Barrier between frames to ensure Accumulator writes are finished
-  for (int i = 0; i < numTiles; ++i) {
-    VkBufferMemoryBarrier postBarrier{};
-    postBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-    postBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    postBarrier.dstAccessMask =
-        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    postBarrier.buffer = accumBuffers[i];
-    postBarrier.size = VK_WHOLE_SIZE;
-    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
-                         &postBarrier, 0, nullptr);
-  }
+  // The previous frame is already fully retired by vkQueueWaitIdle() above.
+  // Avoid issuing redundant per-tile carry-over barriers here.
 
   // Pass 2: Accumulate
+  if (gpuTimestampSupported && gpuTimingQueryPool != VK_NULL_HANDLE) {
+    vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                        gpuTimingQueryPool, 4);
+  }
   vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, accumulatePipeline);
 
   uint32_t fullW = pc.width;
@@ -1212,8 +1366,46 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer, float frameScore,
   vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &postBarrier,
                        0, nullptr, 0, nullptr);
+  if (gpuTimestampSupported && gpuTimingQueryPool != VK_NULL_HANDLE) {
+    vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                        gpuTimingQueryPool, 5);
+  }
 
   vm.endSingleTimeCommands(cb);
+  if (gpuTimestampSupported && gpuTimingQueryPool != VK_NULL_HANDLE) {
+    auto ticksToMs = [&](uint64_t begin, uint64_t end) {
+      return (double)(end - begin) * (double)gpuTimestampPeriodNs / 1.0e6;
+    };
+
+    uint64_t yuvTimestamps[2] = {};
+    VkResult yuvResult = vkGetQueryPoolResults(
+        device, gpuTimingQueryPool, 0, 2, sizeof(yuvTimestamps), yuvTimestamps,
+        sizeof(uint64_t), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+    if (yuvResult == VK_SUCCESS && gpuTimestampPeriodNs > 0.0f) {
+      yuvToRgbaGpuMs = ticksToMs(yuvTimestamps[0], yuvTimestamps[1]);
+    }
+
+    if (currentIsFirstFrame) {
+      uint64_t tensorTimestamps[2] = {};
+      VkResult tensorResult = vkGetQueryPoolResults(
+          device, gpuTimingQueryPool, 2, 2, sizeof(tensorTimestamps),
+          tensorTimestamps, sizeof(uint64_t),
+          VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+      if (tensorResult == VK_SUCCESS && gpuTimestampPeriodNs > 0.0f) {
+        tensorGpuMs = ticksToMs(tensorTimestamps[0], tensorTimestamps[1]);
+      }
+    }
+
+    uint64_t accumulateTimestamps[2] = {};
+    VkResult accumulateResult = vkGetQueryPoolResults(
+        device, gpuTimingQueryPool, 4, 2, sizeof(accumulateTimestamps),
+        accumulateTimestamps, sizeof(uint64_t),
+        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+    if (accumulateResult == VK_SUCCESS && gpuTimestampPeriodNs > 0.0f) {
+      accumulateGpuMs =
+          ticksToMs(accumulateTimestamps[0], accumulateTimestamps[1]);
+    }
+  }
   TIME_END(gpuDispatch);
 
   isFirstFrame = false;
@@ -1515,6 +1707,8 @@ void VulkanImageStacker::releaseVulkanResources() {
     vkDestroyPipelineLayout(device, normalizePipelineLayout, nullptr);
   if (normalizePipeline != VK_NULL_HANDLE)
     vkDestroyPipeline(device, normalizePipeline, nullptr);
+  if (gpuTimingQueryPool != VK_NULL_HANDLE)
+    vkDestroyQueryPool(device, gpuTimingQueryPool, nullptr);
 
   if (immutableSampler != VK_NULL_HANDLE)
     vkDestroySampler(device, immutableSampler, nullptr);
@@ -1538,6 +1732,10 @@ void VulkanImageStacker::releaseVulkanResources() {
   if (stagingMemory != VK_NULL_HANDLE)
     vkFreeMemory(device, stagingMemory, nullptr);
 
+  if (alignmentUploadBuffer != VK_NULL_HANDLE)
+    vkDestroyBuffer(device, alignmentUploadBuffer, nullptr);
+  if (alignmentUploadMemory != VK_NULL_HANDLE)
+    vkFreeMemory(device, alignmentUploadMemory, nullptr);
   if (alignmentBuffer != VK_NULL_HANDLE)
     vkDestroyBuffer(device, alignmentBuffer, nullptr);
   if (alignmentMemory != VK_NULL_HANDLE)
@@ -1552,10 +1750,18 @@ void VulkanImageStacker::releaseVulkanResources() {
     vkDestroyBuffer(device, motionPriorBuffer, nullptr);
   if (motionPriorMemory != VK_NULL_HANDLE)
     vkFreeMemory(device, motionPriorMemory, nullptr);
+  if (motionPriorUploadBuffer != VK_NULL_HANDLE)
+    vkDestroyBuffer(device, motionPriorUploadBuffer, nullptr);
+  if (motionPriorUploadMemory != VK_NULL_HANDLE)
+    vkFreeMemory(device, motionPriorUploadMemory, nullptr);
   if (localTileMaskBuffer != VK_NULL_HANDLE)
     vkDestroyBuffer(device, localTileMaskBuffer, nullptr);
   if (localTileMaskMemory != VK_NULL_HANDLE)
     vkFreeMemory(device, localTileMaskMemory, nullptr);
+  if (localTileMaskUploadBuffer != VK_NULL_HANDLE)
+    vkDestroyBuffer(device, localTileMaskUploadBuffer, nullptr);
+  if (localTileMaskUploadMemory != VK_NULL_HANDLE)
+    vkFreeMemory(device, localTileMaskUploadMemory, nullptr);
 
   if (tensorSetLayout != VK_NULL_HANDLE)
     vkDestroyDescriptorSetLayout(device, tensorSetLayout, nullptr);

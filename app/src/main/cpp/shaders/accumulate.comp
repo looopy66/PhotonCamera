@@ -85,75 +85,6 @@ vec3 rgb2ycbcr(vec3 rgb) {
     return vec3(Y, Cb, Cr);
 }
 
-float sampleLumaAt(sampler2D s, vec2 uv, vec2 size, bool highQuality) {
-    vec3 rgb = highQuality ? sampleBicubic(s, uv, size).rgb : texture(s, uv).rgb;
-    return rgb2ycbcr(rgb).x;
-}
-
-float computeGuidedProtectMask(sampler2D s, vec2 uv, vec2 size) {
-    vec2 pixel = vec2(1.0) / size;
-
-    float sum = 0.0;
-    float sumSq = 0.0;
-    float sumWeighted = 0.0;
-    float weightTotal = 0.0;
-    float luma[9];
-    int idx = 0;
-
-    for (int j = -1; j <= 1; ++j) {
-        for (int i = -1; i <= 1; ++i) {
-            vec2 sampleUV = uv + vec2(float(i) * pixel.x, float(j) * pixel.y);
-            float y = sampleLumaAt(s, sampleUV, size, i == 0 && j == 0);
-            float w = (i == 0 && j == 0) ? 4.0 : ((i == 0 || j == 0) ? 2.0 : 1.0);
-            luma[idx++] = y;
-            sum += y;
-            sumSq += y * y;
-            sumWeighted += y * w;
-            weightTotal += w;
-        }
-    }
-
-    float mean = sum / 9.0;
-    float var = max(sumSq / 9.0 - mean * mean, 0.0);
-    float center = luma[4];
-
-    float eps = 0.0015;
-    float a = var / (var + eps);
-    float b = (1.0 - a) * mean;
-    float guidedBase = a * center + b;
-
-    float weightedMean = sumWeighted / weightTotal;
-    guidedBase = mix(weightedMean, guidedBase, 0.75);
-
-    float detailResidual = abs(center - guidedBase);
-
-    float l = luma[3];
-    float r = luma[5];
-    float u = luma[1];
-    float d = luma[7];
-    float gx = abs(r - l);
-    float gy = abs(d - u);
-    float gradPeak = max(gx, gy);
-    float directional = max(gx, gy) / max(gx + gy, 1e-4);
-
-    float continuityH = 0.5 * (abs(luma[0] - luma[1]) + abs(luma[7] - luma[8]));
-    float continuityV = 0.5 * (abs(luma[0] - luma[3]) + abs(luma[2] - luma[5]));
-    float continuity = (gx >= gy) ? continuityH : continuityV;
-
-    float residualScore = smoothstep(0.008, 0.040, detailResidual);
-    float varianceScore = smoothstep(0.0008, 0.010, var);
-    float continuityScore = smoothstep(0.008, 0.035, continuity);
-    float directionalScore = smoothstep(0.54, 0.90, directional);
-    float noisePenalty = 1.0 - smoothstep(0.002, 0.018,
-                                          max(0.0, gradPeak - detailResidual * 3.0));
-
-    float protect = residualScore * mix(0.58, 1.0, continuityScore);
-    protect *= mix(0.60, 1.0, varianceScore);
-    protect *= mix(0.74, 1.0, directionalScore);
-    protect *= mix(1.0, 0.55, noisePenalty);
-    return clamp(protect, 0.0, 1.0);
-}
-
 float sampleLocalTileWeight(vec2 uv) {
     vec2 gridPos = uv * vec2(float(pc.gridW), float(pc.gridH));
     ivec2 g = ivec2(floor(gridPos));
@@ -229,15 +160,19 @@ void main() {
     // [REPLACED BY PREVIOUS DEFINITION AT TOP]
     
     // 1. Read reference accumulator state (used for both center robustness and per-sample checks)
-    float currentW = accumulator.data[outIndex].a;
+    vec4 accumValue = accumulator.data[outIndex];
+    float currentW = accumValue.a;
     float refLuma = 0.0;
     float expectedSigma = 0.025;
     float centerRobustness = 1.0;
 
+    vec3 centerColor = vec3(0.0);
+    vec3 centerYCC = vec3(0.0);
+
     if (pc.isFirstFrame == 0 && currentW > 0.001) {
         refLuma = accumulator.data[outIndex].r / currentW;
-        vec3 centerColor = sampleBicubic(rgbSampler, finalUV, nativeSize).rgb;
-        vec3 centerYCC = rgb2ycbcr(centerColor);
+        centerColor = sampleBicubic(rgbSampler, finalUV, nativeSize).rgb;
+        centerYCC = rgb2ycbcr(centerColor);
         float diff = abs(centerYCC.x - refLuma);
         float expectedVar = pc.noiseAlpha * refLuma + pc.noiseBeta;
         expectedSigma = sqrt(max(expectedVar, 1e-7));
@@ -257,7 +192,6 @@ void main() {
     }
     float localTileWeight = sampleLocalTileWeight(finalUV);
     float fusionMask = localTileWeight;
-    float fineDetailMask = computeGuidedProtectMask(rgbSampler, finalUV, nativeSize);
     int supportRadius = 0;
 
     if (pc.isFirstFrame == 0) {
@@ -285,6 +219,8 @@ void main() {
     float kernelScale = 0.25 * pc.scale * pc.scale;
     float invVarU = kp.x * kernelScale;
     float invVarV = kp.y * kernelScale;
+    float baseWeightScale = pc.frameWeight * fusionMask;
+    float robustnessFloor = 0.25 * localTileWeight;
 
     // Accumulate neighbors
     for (int j = -2; j <= 2; ++j) {
@@ -292,6 +228,25 @@ void main() {
             if (abs(i) > supportRadius || abs(j) > supportRadius) {
                 continue;
             }
+            vec2 d = (centerSource + vec2(float(i), float(j)) - posInSource);
+
+            // Compute the anisotropic kernel weight before sampling texture.
+            // This lets us skip neighbors whose theoretical contribution is already negligible.
+            float u = d.x * cosT + d.y * sinT;
+            float v = -d.x * sinT + d.y * cosT;
+            float w = exp(-0.5 * (u*u * invVarU + v*v * invVarV));
+            if (w <= 1e-4) {
+                continue;
+            }
+
+            float baseCombinedUpperBound = w * baseWeightScale;
+            if (pc.isFirstFrame == 0) {
+                baseCombinedUpperBound *= max(centerRobustness, robustnessFloor);
+            }
+            if (baseCombinedUpperBound <= 1e-6) {
+                continue;
+            }
+
             vec2 samplePos = centerSource + vec2(float(i), float(j));
             vec2 sampleUV = samplePos / nativeSize;
 
@@ -299,20 +254,18 @@ void main() {
             // neighbors use hardware bilinear (1 texture() vs 16 texelFetch())
             vec3 sampleColor;
             if (i == 0 && j == 0) {
-                sampleColor = sampleBicubic(rgbSampler, sampleUV, nativeSize).rgb;
+                if (pc.isFirstFrame == 0 && currentW > 0.001) {
+                    sampleColor = centerColor;
+                } else {
+                    sampleColor = sampleBicubic(rgbSampler, sampleUV, nativeSize).rgb;
+                }
             } else {
                 sampleColor = texture(rgbSampler, sampleUV).rgb;
             }
             vec3 sampleYCC = rgb2ycbcr(sampleColor);
-            vec2 d = (samplePos - posInSource);
 
             // Per-sample robustness
             float robustness = centerRobustness;
-
-            // Anisotropic Gaussian weight using pre-computed rotation and inv variance
-            float u = d.x * cosT + d.y * sinT;
-            float v = -d.x * sinT + d.y * cosT;
-            float w = exp(-0.5 * (u*u * invVarU + v*v * invVarV));
 
             float sampleFusionMask = fusionMask;
             if (pc.isFirstFrame == 0) {
@@ -322,7 +275,7 @@ void main() {
                 float largeLumaPenalty = smoothstep(5.5, 9.5, lumaDiffRatio);
                 sampleFusionMask *= mix(1.0, 0.70, largeLumaPenalty);
                 robustness *= sampleLumaRobustness;
-                robustness = max(robustness, 0.25 * localTileWeight);
+                robustness = max(robustness, robustnessFloor);
             }
 
             float combinedWeight = w * robustness * pc.frameWeight * sampleFusionMask;
@@ -337,8 +290,9 @@ void main() {
                 combinedWeight
             );
             if (!any(isnan(increment)) && !any(isinf(increment))) {
-                accumulator.data[outIndex] += increment;
+                accumValue += increment;
             }
         }
     }
+    accumulator.data[outIndex] = accumValue;
 }
