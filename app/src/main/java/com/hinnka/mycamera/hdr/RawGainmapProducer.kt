@@ -23,8 +23,8 @@ class RawGainmapProducer : GainmapProducer {
             hdrReference
         }
 
-        val gainmapBitmap = createGainmapBitmap(sdrBase, alignedHdr) ?: return null
         val fullHdrRatio = source.displayHdrSdrRatio.takeIf { it > 1f } ?: DEFAULT_FULL_HDR_RATIO
+        val gainmapBitmap = createGainmapBitmap(sdrBase, alignedHdr, fullHdrRatio) ?: return null
         val gainmap = Gainmap(gainmapBitmap).apply {
             setRatioMin(MIN_GAIN_RATIO, MIN_GAIN_RATIO, MIN_GAIN_RATIO)
             setRatioMax(MAX_GAIN_RATIO, MAX_GAIN_RATIO, MAX_GAIN_RATIO)
@@ -42,7 +42,8 @@ class RawGainmapProducer : GainmapProducer {
         )
     }
 
-    private fun createGainmapBitmap(sdrBase: Bitmap, hdrReference: Bitmap): Bitmap? {
+    private fun createGainmapBitmap(sdrBase: Bitmap, hdrReference: Bitmap, fullHdrRatio: Float): Bitmap? {
+        val displayMapper = HlgDisplayMapper(fullHdrRatio)
         val width = (sdrBase.width / DOWNSAMPLE).coerceAtLeast(1)
         val height = (sdrBase.height / DOWNSAMPLE).coerceAtLeast(1)
         val contents = Bitmap.createBitmap(width, height, Bitmap.Config.ALPHA_8)
@@ -57,12 +58,13 @@ class RawGainmapProducer : GainmapProducer {
                 val srcX = ((x + 0.5f) * sdrBase.width / width).toInt().coerceIn(0, sdrBase.width - 1)
 
                 val sdrLuma = sampleSdrLuma(sdrBase, srcX, srcY)
-                val hdrLuma = sampleHdrLuma(hdrReference, srcX, srcY)
+                val hdrSceneLuma = sampleHdrLuma(hdrReference, srcX, srcY)
+                val hdrDisplayLuma = displayMapper.mapSceneLinearToDisplayLuma(hdrSceneLuma)
 
-                val rawRatio = (hdrLuma / (sdrLuma + EPSILON)).coerceIn(MIN_GAIN_RATIO, MAX_GAIN_RATIO)
-                val hdrEligibility = smoothstep(HDR_ELIGIBILITY_START, HDR_ELIGIBILITY_END, hdrLuma)
-                val deltaMask = smoothstep(DELTA_START, DELTA_END, hdrLuma - sdrLuma)
-                val highlightMask = smoothstep(0.7f, 1.0f, sdrLuma)
+                val rawRatio = (hdrDisplayLuma / (sdrLuma + EPSILON)).coerceIn(MIN_GAIN_RATIO, MAX_GAIN_RATIO)
+                val hdrEligibility = smoothstep(HDR_ELIGIBILITY_START, HDR_ELIGIBILITY_END, hdrSceneLuma)
+                val deltaMask = smoothstep(DELTA_START, DELTA_END, hdrDisplayLuma - sdrLuma)
+                val highlightMask = smoothstep(HIGHLIGHT_START, HIGHLIGHT_END, sdrLuma)
                 val selectiveWeight = (hdrEligibility * deltaMask * highlightMask).pow(WEIGHT_POWER)
                 val targetRatio = (1.0f + (rawRatio - 1.0f) * selectiveWeight)
                     .coerceIn(MIN_GAIN_RATIO, MAX_GAIN_RATIO)
@@ -141,6 +143,8 @@ class RawGainmapProducer : GainmapProducer {
         private const val HDR_ELIGIBILITY_END = 2.0f
         private const val DELTA_START = 0.02f
         private const val DELTA_END = 0.22f
+        private const val HIGHLIGHT_START = 0.56f
+        private const val HIGHLIGHT_END = 0.95f
         private const val WEIGHT_POWER = 1.15f
         private const val BLUR_RADIUS = 3
         private const val DEFAULT_FULL_HDR_RATIO = 1.35f

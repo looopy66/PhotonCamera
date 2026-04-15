@@ -908,19 +908,7 @@ fun SettingsScreen(
                         }
 
                         if (isHdrSettingsSupported) {
-                            HorizontalDivider(
-                                color = Color.White.copy(alpha = 0.1f),
-                                modifier = Modifier.padding(vertical = 12.dp)
-                            )
-
-                            SwitchSettingItem(
-                                title = stringResource(R.string.settings_hlg_hardware_compatibility),
-                                description = stringResource(R.string.settings_hlg_hardware_compatibility_description),
-                                checked = hlgHardwareCompatibilityEnabled,
-                                onCheckedChange = { viewModel.setHlgHardwareCompatibilityEnabled(it) }
-                            )
-
-                            /*if (state.isHlg10Supported) {
+                            if (state.isHlg10Supported) {
                                 HorizontalDivider(
                                     color = Color.White.copy(alpha = 0.1f),
                                     modifier = Modifier.padding(vertical = 12.dp)
@@ -930,9 +918,26 @@ fun SettingsScreen(
                                     title = stringResource(R.string.settings_use_hlg10),
                                     description = stringResource(R.string.settings_use_hlg10_description),
                                     checked = useHlg10,
-                                    onCheckedChange = { viewModel.setUseHlg10(it) }
+                                    onCheckedChange = {
+                                        viewModel.setUseHlg10(it)
+                                        if (it) {
+                                            viewModel.setUseP010(true)
+                                        }
+                                    }
                                 )
-                            }*/
+
+                                HorizontalDivider(
+                                    color = Color.White.copy(alpha = 0.1f),
+                                    modifier = Modifier.padding(vertical = 12.dp)
+                                )
+
+                                SwitchSettingItem(
+                                    title = stringResource(R.string.settings_hlg_hardware_compatibility),
+                                    description = stringResource(R.string.settings_hlg_hardware_compatibility_description),
+                                    checked = hlgHardwareCompatibilityEnabled,
+                                    onCheckedChange = { viewModel.setHlgHardwareCompatibilityEnabled(it) }
+                                )
+                            }
 
                             HorizontalDivider(
                                 color = Color.White.copy(alpha = 0.1f),
