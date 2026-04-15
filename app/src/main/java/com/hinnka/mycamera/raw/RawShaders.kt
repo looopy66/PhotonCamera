@@ -163,30 +163,46 @@ object RawShaders {
             return mix(lowPart, logPart, step(uLogLimits.z, reflection));
         }
         
-        vec3 filmicOperatorLinear(vec3 x) {
-            vec3 t = max(x - 0.004, vec3(0.0));
-            vec3 filmic = (t * (6.2 * t + 0.5)) / (t * (6.2 * t + 1.7) + 0.06);
-            return mix(filmic / 12.92, pow((filmic + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), filmic));
+        float luminance(vec3 color) {
+            return max(dot(color, vec3(0.2126, 0.7152, 0.0722)), 1e-4);
         }
 
-        vec3 restoreHighlightContrast(vec3 sceneLinear, vec3 toneMappedLinear) {
-            float scenePeak = max(max(sceneLinear.r, sceneLinear.g), sceneLinear.b);
-            float mappedPeak = max(max(toneMappedLinear.r, toneMappedLinear.g), toneMappedLinear.b);
-            float mappedLuma = dot(toneMappedLinear, vec3(0.2126, 0.7152, 0.0722));
+        float sampleLuma(vec2 uv) {
+            return luminance(texture(uInputTexture, uv).rgb * uExposureGain);
+        }
 
-            // 仅在进入 shoulder 压缩区后恢复部分通道分离和局部亮部斜率，
-            // 避免高光整体重新抬爆。
-            float shoulderWeight = smoothstep(0.48, 0.9, mappedPeak) * smoothstep(1.05, 7.0, scenePeak);
-            float clipGuard = 1.0 - smoothstep(0.96, 1.0, mappedPeak);
+        float localAverageLuma(vec2 uv, vec2 texelSize, float radius) {
+            vec2 dx = vec2(texelSize.x * radius, 0.0);
+            vec2 dy = vec2(0.0, texelSize.y * radius);
 
-            vec3 sceneRatio = sceneLinear / max(scenePeak, 1e-4);
-            vec3 mappedRatio = toneMappedLinear / max(mappedPeak, 1e-4);
-            vec3 ratioGain = clamp(sceneRatio / max(mappedRatio, vec3(1e-3)), vec3(0.68), vec3(1.52));
-            vec3 chromaRestored = toneMappedLinear * mix(vec3(1.0), ratioGain, shoulderWeight * 0.62);
+            float center = sampleLuma(uv) * 0.28;
+            float axial =
+                sampleLuma(clamp(uv + dx, vec2(0.0), vec2(1.0))) +
+                sampleLuma(clamp(uv - dx, vec2(0.0), vec2(1.0))) +
+                sampleLuma(clamp(uv + dy, vec2(0.0), vec2(1.0))) +
+                sampleLuma(clamp(uv - dy, vec2(0.0), vec2(1.0)));
+            float diagonal =
+                sampleLuma(clamp(uv + dx + dy, vec2(0.0), vec2(1.0))) +
+                sampleLuma(clamp(uv + dx - dy, vec2(0.0), vec2(1.0))) +
+                sampleLuma(clamp(uv - dx + dy, vec2(0.0), vec2(1.0))) +
+                sampleLuma(clamp(uv - dx - dy, vec2(0.0), vec2(1.0)));
 
-            float lumaBoost = shoulderWeight * clipGuard * 0.5 * sqrt(max(scenePeak - 1.0, 0.0)) * mappedLuma * (1.0 - mappedLuma);
-            vec3 restored = chromaRestored + vec3(lumaBoost);
-            return clamp(restored, 0.0, 1.0);
+            return center + axial * 0.12 + diagonal * 0.06;
+        }
+
+        vec3 reinhardLocalTonemapping(vec3 sceneLinear) {
+            vec2 texelSize = 1.0 / vec2(textureSize(uInputTexture, 0));
+            float sceneLuma = luminance(sceneLinear);
+
+            float localSmall = localAverageLuma(vTexCoord, texelSize, 1.5);
+            float localLarge = localAverageLuma(vTexCoord, texelSize, 4.0);
+            float scaleContrast = abs(log2(localSmall + 1e-4) - log2(localLarge + 1e-4));
+            float localAdaptation = mix(localLarge, localSmall, smoothstep(0.08, 0.35, scaleContrast));
+
+            float adaptedLuma = sceneLuma / (1.0 + localAdaptation);
+            float mappedLuma = adaptedLuma / (1.0 + adaptedLuma);
+            float chromaScale = mappedLuma / sceneLuma;
+            return clamp(sceneLinear * chromaScale, 0.0, 1.0);
         }
         
         void main() {
@@ -195,9 +211,7 @@ object RawShaders {
             // 1. Exposure
             vec3 color = rawColor * uExposureGain;
             if (uApplySdrToneMap) {
-                vec3 exposedColor = color;
-                color = filmicOperatorLinear(color);
-                color = restoreHighlightContrast(exposedColor, color);
+                color = reinhardLocalTonemapping(color);
             } else {
                 color *= uLogExposureBoost;
             }
