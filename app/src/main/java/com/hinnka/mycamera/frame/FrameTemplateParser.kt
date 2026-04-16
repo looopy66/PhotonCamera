@@ -270,6 +270,7 @@ object FrameTemplateParser {
                 put("color", colorToHex(element.color))
                 put("fontWeight", element.fontWeight.name)
                 element.fontFamily?.let { put("fontFamily", it) }
+                element.overrideText?.let { put("overrideText", it) }
                 element.format?.let { put("format", it) }
                 element.prefix?.let { put("prefix", it) }
                 element.suffix?.let { put("suffix", it) }
@@ -281,6 +282,7 @@ object FrameTemplateParser {
             is FrameElement.Logo -> JSONObject().apply {
                 put("type", "logo")
                 put("logoType", element.logoType.name)
+                element.overrideSource?.let { put("overrideSource", it) }
                 put("alignment", element.alignment.name)
                 put("size", element.sizeDp)
                 if (element.maxWidth > 0) {
@@ -329,6 +331,7 @@ object FrameTemplateParser {
             color = parseColor(obj.optString("color", "#333333")),
             fontWeight = FontWeight.valueOf(obj.optString("fontWeight", "NORMAL")),
             fontFamily = obj.optString("fontFamily").takeIf { it.isNotEmpty() },
+            overrideText = obj.optString("overrideText").takeIf { it.isNotEmpty() },
             format = obj.optString("format").takeIf { it.isNotEmpty() },
             prefix = obj.optString("prefix").takeIf { it.isNotEmpty() },
             suffix = obj.optString("suffix").takeIf { it.isNotEmpty() },
@@ -342,6 +345,7 @@ object FrameTemplateParser {
     private fun parseLogoElement(obj: JSONObject): FrameElement.Logo {
         return FrameElement.Logo(
             logoType = LogoType.valueOf(obj.getString("logoType")),
+            overrideSource = obj.optString("overrideSource").takeIf { it.isNotEmpty() },
             alignment = ElementAlignment.valueOf(obj.optString("alignment", "CENTER")),
             sizeDp = obj.optInt("size", 24),
             maxWidth = obj.optInt("maxWidth", 0),

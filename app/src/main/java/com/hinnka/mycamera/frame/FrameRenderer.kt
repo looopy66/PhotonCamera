@@ -585,7 +585,9 @@ class FrameRenderer(private val context: Context) {
         } ?: return null
 
         // 允许用户自定义覆盖内容
-        val finalContent = metadata.customProperties[element.textType.name] ?: content
+        val finalContent = element.overrideText
+            ?: metadata.customProperties[element.textType.name]
+            ?: content
 
         val prefix = element.prefix ?: ""
         val suffix = element.suffix ?: ""
@@ -605,7 +607,7 @@ class FrameRenderer(private val context: Context) {
         }
 
         // 获取对应的 drawable
-        val logoKey = metadata?.customProperties?.get("LOGO")
+        val logoKey = element.overrideSource ?: metadata?.customProperties?.get("LOGO")
 
         try {
             val bitmap = if (logoKey != null && (logoKey.startsWith("/") || logoKey.startsWith("content://"))) {
@@ -659,7 +661,7 @@ class FrameRenderer(private val context: Context) {
         val size = (dpToPx(element.sizeDp) * scale).toInt()
 
         // 获取对应的 drawable
-        val logoKey = metadata?.customProperties?.get("LOGO")
+        val logoKey = element.overrideSource ?: metadata?.customProperties?.get("LOGO")
         if (logoKey == "none") return 0f
 
         try {
@@ -1023,6 +1025,28 @@ class FrameRenderer(private val context: Context) {
     }
 
     private fun getTextTypeface(element: FrameElement.Text, metadata: MediaMetadata): Typeface {
+        val elementFont = element.fontFamily
+        if (!elementFont.isNullOrBlank()) {
+            if (elementFont.startsWith("/")) {
+                val cacheKey = "file-$elementFont-${element.fontWeight}"
+                typefaceCache[cacheKey]?.let { return it }
+                try {
+                    val base = Typeface.createFromFile(elementFont)
+                    val style = when (element.fontWeight) {
+                        FontWeight.BOLD -> Typeface.BOLD
+                        else -> Typeface.NORMAL
+                    }
+                    val typeface = Typeface.create(base, style)
+                    typefaceCache[cacheKey] = typeface
+                    return typeface
+                } catch (e: Exception) {
+                    PLog.e(TAG, "Failed to load custom font from file: $elementFont", e)
+                }
+            } else {
+                return getTypeface(element.fontWeight, elementFont)
+            }
+        }
+
         if (element.textType == TextType.DEVICE_MODEL) {
             val customFont = metadata.customProperties["DEVICE_MODEL_FONT"]
             if (customFont == "Default") {
@@ -1030,7 +1054,6 @@ class FrameRenderer(private val context: Context) {
             } else if (customFont == "SlacksideOne") {
                 return getTypeface(element.fontWeight, "SlacksideOne.ttf")
             } else if (customFont != null && customFont.startsWith("/")) {
-                // It's a file path
                 val cacheKey = "file-$customFont-${element.fontWeight}"
                 typefaceCache[cacheKey]?.let { return it }
                 try {
@@ -1047,6 +1070,6 @@ class FrameRenderer(private val context: Context) {
                 }
             }
         }
-        return getTypeface(element.fontWeight, element.fontFamily)
+        return getTypeface(element.fontWeight, null)
     }
 }

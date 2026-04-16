@@ -156,6 +156,15 @@ fun CameraTopSheet(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    if (DeviceUtil.canShowPhantom) {
+                        QuickSettingToggle(
+                            title = stringResource(R.string.ghost_mode),
+                            checked = phantomMode,
+                            onCheckedChange = onPhantomModeToggle,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
                     QuickSettingToggle(
                         title = stringResource(R.string.settings_use_multiple_exposure),
                         checked = useMultipleExposure,
@@ -360,15 +369,6 @@ fun CameraTopSheet(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                if (DeviceUtil.canShowPhantom) {
-                    QuickSettingToggle(
-                        title = stringResource(R.string.ghost_mode),
-                        checked = phantomMode,
-                        onCheckedChange = onPhantomModeToggle,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
                 QuickSettingButton(
                     title = stringResource(R.string.settings_filter_management),
                     icon = Icons.Default.AutoAwesome,
@@ -376,14 +376,12 @@ fun CameraTopSheet(
                     modifier = Modifier.weight(1f)
                 )
 
-                if (!DeviceUtil.canShowPhantom) {
-                    QuickSettingButton(
-                        title = stringResource(R.string.settings_frame_management),
-                        icon = Icons.Default.BorderBottom,
-                        onClick = onFrameManageClick,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
+                QuickSettingButton(
+                    title = stringResource(R.string.settings_frame_management),
+                    icon = Icons.Default.BorderBottom,
+                    onClick = onFrameManageClick,
+                    modifier = Modifier.weight(1f)
+                )
             }
 
             Spacer(modifier = Modifier.height(16.dp))

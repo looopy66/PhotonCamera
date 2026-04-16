@@ -490,10 +490,12 @@
     <string name="frame_editor_text_color">Text Color</string>
     <string name="frame_editor_font_weight">Font Weight</string>
     <string name="frame_editor_font_family">Font Family</string>
+    <string name="frame_editor_text_override">Text Override</string>
     <string name="frame_editor_text_format">Format</string>
     <string name="frame_editor_text_prefix">Prefix</string>
     <string name="frame_editor_text_suffix">Suffix</string>
     <string name="frame_editor_logo_type">Logo Type</string>
+    <string name="frame_editor_logo_source">Logo Source</string>
     <string name="frame_editor_logo_size">Logo Size (dp)</string>
     <string name="frame_editor_logo_max_width">Logo Max Width (dp)</string>
     <string name="frame_editor_margin">Margin (dp)</string>

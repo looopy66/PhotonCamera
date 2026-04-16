@@ -33,8 +33,10 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -44,6 +46,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.ScrollableTabRow
@@ -120,6 +123,8 @@ fun FrameEditorScreen(
     var showDiscardDialog by remember { mutableStateOf(false) }
     var validationMessage by remember { mutableStateOf<String?>(null) }
     var showAddElementMenu by remember { mutableStateOf(false) }
+    var pendingFontElementId by remember { mutableStateOf<String?>(null) }
+    var pendingLogoElementId by remember { mutableStateOf<String?>(null) }
 
     val imagePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -140,10 +145,44 @@ fun FrameEditorScreen(
         }
     }
 
+    val fontPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        val targetId = pendingFontElementId ?: return@rememberLauncherForActivityResult
+        pendingFontElementId = null
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            val importedPath = withContext(Dispatchers.IO) {
+                viewModel.getCustomImportManager().importFont(uri)
+            }
+            if (importedPath != null) {
+                draft = updateTextElementById(draft, targetId) { it.copy(fontFamily = importedPath) }
+            }
+        }
+    }
+
+    val logoPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        val targetId = pendingLogoElementId ?: return@rememberLauncherForActivityResult
+        pendingLogoElementId = null
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            val importedPath = withContext(Dispatchers.IO) {
+                viewModel.getCustomImportManager().importLogo(uri)
+            }
+            if (importedPath != null) {
+                draft = updateLogoElementById(draft, targetId) { it.copy(overrideSource = importedPath) }
+            }
+        }
+    }
+
     LaunchedEffect(frameId, imageFrame) {
         val loaded = viewModel.loadFrameEditorDraft(frameId, imageFrame)
-        initialDraft = loaded
-        draft = loaded
+        val legacyProperties = frameId?.let { viewModel.getFrameCustomProperties(it) }.orEmpty()
+        val hydratedDraft = loaded.applyLegacyCustomProperties(legacyProperties)
+        initialDraft = hydratedDraft
+        draft = hydratedDraft
     }
 
     LaunchedEffect(draft, previewPortrait) {
@@ -251,6 +290,9 @@ fun FrameEditorScreen(
                                     }
                                     isSaving = false
                                     if (savedId != null) {
+                                        if (draft.editableFrameId == savedId) {
+                                            viewModel.saveFrameCustomProperties(savedId, emptyMap())
+                                        }
                                         onSaved(savedId)
                                     } else {
                                         validationMessage = saveFailedMessage
@@ -293,7 +335,7 @@ fun FrameEditorScreen(
                 isRendering = isRenderingPreview,
                 portrait = previewPortrait,
                 onOrientationChange = { previewPortrait = it },
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                modifier = Modifier.padding(horizontal = 16.dp)
             )
 
             ScrollableTabRow(
@@ -337,6 +379,14 @@ fun FrameEditorScreen(
                     onDraftChange = { draft = it },
                     showAddMenu = showAddElementMenu,
                     onShowAddMenuChange = { showAddElementMenu = it },
+                    onImportFont = { draftId ->
+                        pendingFontElementId = draftId
+                        fontPicker.launch(arrayOf("font/*", "application/octet-stream"))
+                    },
+                    onImportLogo = { draftId ->
+                        pendingLogoElementId = draftId
+                        logoPicker.launch("image/*")
+                    },
                     modifier = Modifier.weight(1f)
                 )
 
@@ -398,37 +448,11 @@ private fun PreviewCard(
         shape = RoundedCornerShape(24.dp),
         modifier = modifier.fillMaxWidth()
     ) {
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(16.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = stringResource(R.string.frame_editor_preview_title),
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PreviewToggleButton(
-                        text = stringResource(R.string.frame_editor_preview_portrait),
-                        selected = portrait,
-                        onClick = { onOrientationChange(true) }
-                    )
-                    PreviewToggleButton(
-                        text = stringResource(R.string.frame_editor_preview_landscape),
-                        selected = !portrait,
-                        onClick = { onOrientationChange(false) }
-                    )
-                }
-            }
-
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -451,28 +475,29 @@ private fun PreviewCard(
                     )
                 }
             }
-        }
-    }
-}
 
-@Composable
-private fun PreviewToggleButton(
-    text: String,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    Surface(
-        color = if (selected) AccentOrange.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.08f),
-        shape = RoundedCornerShape(12.dp),
-        border = if (selected) androidx.compose.foundation.BorderStroke(1.dp, AccentOrange) else null,
-        modifier = Modifier.clickable(onClick = onClick)
-    ) {
-        Text(
-            text = text,
-            color = if (selected) AccentOrange else Color.White,
-            fontSize = 12.sp,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-        )
+            Surface(
+                color = Color.Black.copy(alpha = 0.36f),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.align(Alignment.TopEnd)
+            ) {
+                IconButton(
+                    onClick = { onOrientationChange(!portrait) },
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ScreenRotation,
+                        contentDescription = if (portrait) {
+                            stringResource(R.string.frame_editor_preview_landscape)
+                        } else {
+                            stringResource(R.string.frame_editor_preview_portrait)
+                        },
+                        tint = if (portrait) AccentOrange else Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -561,10 +586,14 @@ private fun FrameBasicTab(
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = when {
-                            !draft.layout.imagePath.isNullOrBlank() ->
-                                stringResource(R.string.frame_editor_image_source_path, draft.layout.imagePath!!.substringAfterLast('/'))
-                            !draft.layout.imageResName.isNullOrBlank() ->
-                                stringResource(R.string.frame_editor_image_source_builtin, draft.layout.imageResName!!)
+                            !draft.layout.imagePath.isNullOrBlank() -> {
+                                val imagePath = draft.layout.imagePath.orEmpty()
+                                stringResource(R.string.frame_editor_image_source_path, imagePath.substringAfterLast('/'))
+                            }
+                            !draft.layout.imageResName.isNullOrBlank() -> {
+                                val imageResName = draft.layout.imageResName.orEmpty()
+                                stringResource(R.string.frame_editor_image_source_builtin, imageResName)
+                            }
                             else -> stringResource(R.string.frame_editor_image_source_missing)
                         },
                         color = Color.White.copy(alpha = 0.8f),
@@ -576,12 +605,15 @@ private fun FrameBasicTab(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FrameElementsTab(
     draft: FrameEditorDraft,
     onDraftChange: (FrameEditorDraft) -> Unit,
     showAddMenu: Boolean,
     onShowAddMenuChange: (Boolean) -> Unit,
+    onImportFont: (String) -> Unit,
+    onImportLogo: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (draft.layout.position == FramePosition.IMAGE) {
@@ -601,6 +633,9 @@ private fun FrameElementsTab(
     }
 
     val lazyListState = rememberLazyListState()
+    var editingElementId by remember(draft.sourceFrameId, draft.editableFrameId) {
+        mutableStateOf<String?>(null)
+    }
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
         val fromId = from.key as? String ?: return@rememberReorderableLazyListState
         val toId = to.key as? String ?: return@rememberReorderableLazyListState
@@ -615,6 +650,7 @@ private fun FrameElementsTab(
     }
 
     val selectedElement = draft.elements.firstOrNull { it.draftId == draft.effectiveSelectedElementId }
+    val editingElement = draft.elements.firstOrNull { it.draftId == editingElementId }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -648,6 +684,7 @@ private fun FrameElementsTab(
                                             selectedElementId = newElement.draftId
                                         )
                                     )
+                                    editingElementId = newElement.draftId
                                     onShowAddMenuChange(false)
                                 }
                             )
@@ -663,7 +700,14 @@ private fun FrameElementsTab(
                     element = element,
                     selected = element.draftId == draft.effectiveSelectedElementId,
                     dragging = isDragging,
-                    onSelect = { onDraftChange(draft.withSelectedElement(element.draftId)) },
+                    onSelect = {
+                        onDraftChange(draft.withSelectedElement(element.draftId))
+                        editingElementId = element.draftId
+                    },
+                    onEdit = {
+                        onDraftChange(draft.withSelectedElement(element.draftId))
+                        editingElementId = element.draftId
+                    },
                     onDuplicate = {
                         val duplicated = duplicateElement(element)
                         onDraftChange(
@@ -672,9 +716,13 @@ private fun FrameElementsTab(
                                 selectedElementId = duplicated.draftId
                             )
                         )
+                        editingElementId = duplicated.draftId
                     },
                     onDelete = {
                         val updated = draft.elements.filterNot { it.draftId == element.draftId }
+                        if (editingElementId == element.draftId) {
+                            editingElementId = null
+                        }
                         onDraftChange(
                             draft.copy(
                                 elements = updated,
@@ -687,21 +735,46 @@ private fun FrameElementsTab(
             }
         }
 
-        item {
-            SectionCard(title = stringResource(R.string.frame_editor_selected_element)) {
-                if (selectedElement == null) {
-                    Text(
-                        text = stringResource(R.string.frame_editor_no_element_selected),
-                        color = Color.White.copy(alpha = 0.6f)
-                    )
-                } else {
-                    ElementEditor(
-                        element = selectedElement,
-                        onElementChange = { updated ->
-                            onDraftChange(updateElement(draft, updated))
-                        }
-                    )
-                }
+    }
+
+    LaunchedEffect(editingElementId, draft.elements) {
+        if (editingElementId != null && draft.elements.none { it.draftId == editingElementId }) {
+            editingElementId = null
+        }
+    }
+
+    if (editingElement != null) {
+        ModalBottomSheet(
+            onDismissRequest = { editingElementId = null },
+            containerColor = Color(0xFF1A1A1A),
+            contentColor = Color.White
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = elementTypeLabel(editingElement),
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    text = elementSummary(editingElement),
+                    color = Color.White.copy(alpha = 0.6f),
+                    fontSize = 12.sp
+                )
+                ElementEditor(
+                    element = editingElement,
+                    onElementChange = { updated ->
+                        onDraftChange(updateElement(draft, updated))
+                    },
+                    onImportFont = onImportFont,
+                    onImportLogo = onImportLogo
+                )
             }
         }
     }
@@ -737,6 +810,7 @@ private fun ElementListItem(
     selected: Boolean,
     dragging: Boolean,
     onSelect: () -> Unit,
+    onEdit: () -> Unit,
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
     dragModifier: Modifier,
@@ -755,43 +829,74 @@ private fun ElementListItem(
             .background(background)
             .border(1.dp, borderColor, RoundedCornerShape(16.dp))
             .clickable(onClick = onSelect)
-            .padding(horizontal = 12.dp, vertical = 12.dp),
+            .padding(horizontal = 10.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        Icon(
+            imageVector = Icons.Default.DragHandle,
+            contentDescription = null,
+            tint = Color.White.copy(alpha = 0.5f),
+            modifier = dragModifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(10.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = elementTypeLabel(element),
                 color = Color.White,
-                fontWeight = FontWeight.Medium
+                fontWeight = FontWeight.Medium,
+                fontSize = 14.sp
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = elementSummary(element),
                 color = Color.White.copy(alpha = 0.65f),
-                fontSize = 12.sp,
+                fontSize = 11.sp,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
         }
-        IconButton(onClick = onDuplicate) {
-            Icon(Icons.Default.ContentCopy, contentDescription = null, tint = Color.White.copy(alpha = 0.7f))
+        IconButton(
+            onClick = onEdit,
+            modifier = Modifier.size(32.dp)
+        ) {
+            Icon(
+                Icons.Default.Edit,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.7f),
+                modifier = Modifier.size(16.dp)
+            )
         }
-        IconButton(onClick = onDelete) {
-            Icon(Icons.Default.Delete, contentDescription = null, tint = Color.White.copy(alpha = 0.7f))
+        IconButton(
+            onClick = onDuplicate,
+            modifier = Modifier.size(32.dp)
+        ) {
+            Icon(
+                Icons.Default.ContentCopy,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.7f),
+                modifier = Modifier.size(16.dp)
+            )
         }
-        Icon(
-            imageVector = Icons.Default.DragHandle,
-            contentDescription = null,
-            tint = Color.White.copy(alpha = 0.5f),
-            modifier = dragModifier.size(24.dp)
-        )
+        IconButton(
+            onClick = onDelete,
+            modifier = Modifier.size(32.dp)
+        ) {
+            Icon(
+                Icons.Default.Delete,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.7f),
+                modifier = Modifier.size(16.dp)
+            )
+        }
     }
 }
 
 @Composable
 private fun ElementEditor(
     element: FrameElementDraft,
-    onElementChange: (FrameElementDraft) -> Unit
+    onElementChange: (FrameElementDraft) -> Unit,
+    onImportFont: (String) -> Unit,
+    onImportLogo: (String) -> Unit
 ) {
     when (element) {
         is FrameElementDraft.Text -> {
@@ -839,6 +944,32 @@ private fun ElementEditor(
                 optionLabel = { it.second },
                 onSelected = { onElementChange(element.copy(fontFamily = it.first)) }
             )
+            OutlinedButton(
+                onClick = { onImportFont(element.draftId) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(imageVector = Icons.Default.Add, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(stringResource(R.string.custom_import))
+            }
+            val customFontPath = element.fontFamily?.takeIf { it.startsWith("/") }
+            if (customFontPath != null) {
+                Text(
+                    text = customFontPath.substringAfterLast('/'),
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSize = 12.sp
+                )
+                TextButton(
+                    onClick = { onElementChange(element.copy(fontFamily = null)) }
+                ) {
+                    Text(stringResource(R.string.default_text))
+                }
+            }
+            TextFieldSection(
+                label = stringResource(R.string.frame_editor_text_override),
+                value = element.overrideText.orEmpty(),
+                onValueChange = { onElementChange(element.copy(overrideText = it.ifBlank { null })) }
+            )
             TextFieldSection(
                 label = stringResource(R.string.frame_editor_text_format),
                 value = element.format.orEmpty(),
@@ -865,12 +996,42 @@ private fun ElementEditor(
                 onSelected = { onElementChange(element.copy(logoType = it)) }
             )
             DropdownSelectionField(
+                label = stringResource(R.string.frame_editor_logo_source),
+                currentLabel = logoSourceLabel(element.overrideSource),
+                options = logoSourceOptions(),
+                optionLabel = { it.second },
+                onSelected = { onElementChange(element.copy(overrideSource = it.first)) }
+            )
+            OutlinedButton(
+                onClick = { onImportLogo(element.draftId) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(imageVector = Icons.Default.Image, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(stringResource(R.string.custom_import))
+            }
+            DropdownSelectionField(
                 label = stringResource(R.string.frame_editor_alignment),
                 currentLabel = alignmentLabel(element.alignment),
                 options = ElementAlignment.entries,
                 optionLabel = { alignmentLabel(it) },
                 onSelected = { onElementChange(element.copy(alignment = it)) }
             )
+            val customLogoSource = element.overrideSource?.takeIf {
+                it.startsWith("/") || it.startsWith("content://")
+            }
+            if (customLogoSource != null) {
+                Text(
+                    text = customLogoSource.substringAfterLast('/'),
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSize = 12.sp
+                )
+                TextButton(
+                    onClick = { onElementChange(element.copy(overrideSource = null)) }
+                ) {
+                    Text(stringResource(R.string.default_text))
+                }
+            }
             IntField(
                 label = stringResource(R.string.frame_editor_line),
                 value = element.line,
@@ -1155,6 +1316,79 @@ private fun updateElement(draft: FrameEditorDraft, updated: FrameElementDraft): 
     )
 }
 
+private fun updateTextElementById(
+    draft: FrameEditorDraft,
+    elementId: String,
+    updater: (FrameElementDraft.Text) -> FrameElementDraft.Text
+): FrameEditorDraft {
+    return draft.copy(
+        elements = draft.elements.map { element ->
+            if (element is FrameElementDraft.Text && element.draftId == elementId) {
+                updater(element)
+            } else {
+                element
+            }
+        },
+        selectedElementId = elementId
+    )
+}
+
+private fun updateLogoElementById(
+    draft: FrameEditorDraft,
+    elementId: String,
+    updater: (FrameElementDraft.Logo) -> FrameElementDraft.Logo
+): FrameEditorDraft {
+    return draft.copy(
+        elements = draft.elements.map { element ->
+            if (element is FrameElementDraft.Logo && element.draftId == elementId) {
+                updater(element)
+            } else {
+                element
+            }
+        },
+        selectedElementId = elementId
+    )
+}
+
+private fun FrameEditorDraft.applyLegacyCustomProperties(properties: Map<String, String>): FrameEditorDraft {
+    if (properties.isEmpty()) return this
+
+    val updatedElements = elements.map { element ->
+        when (element) {
+            is FrameElementDraft.Text -> {
+                val overrideText = properties[element.textType.name]
+                val fontFamily = if (element.textType == TextType.DEVICE_MODEL) {
+                    properties["DEVICE_MODEL_FONT"]?.let { legacyFont ->
+                        when (legacyFont) {
+                            "Default" -> null
+                            "SlacksideOne" -> "SlacksideOne.ttf"
+                            else -> legacyFont
+                        }
+                    } ?: element.fontFamily
+                } else {
+                    element.fontFamily
+                }
+                element.copy(
+                    overrideText = overrideText ?: element.overrideText,
+                    fontFamily = fontFamily
+                )
+            }
+
+            is FrameElementDraft.Logo -> {
+                if (element.logoType == LogoType.BRAND) {
+                    element.copy(overrideSource = properties["LOGO"] ?: element.overrideSource)
+                } else {
+                    element
+                }
+            }
+
+            else -> element
+        }
+    }
+
+    return copy(elements = updatedElements)
+}
+
 private fun colorToHex(color: Int): String {
     return if ((color ushr 24) == 0xFF) {
         String.format("#%06X", color and 0xFFFFFF)
@@ -1239,6 +1473,38 @@ private fun frameFontOptions(): List<Pair<String?, String>> = listOf(
 @Composable
 private fun fontFamilyLabel(fontFamily: String?): String {
     return frameFontOptions().firstOrNull { it.first == fontFamily }?.second
+        ?: fontFamily?.substringAfterLast('/')
+        ?: stringResource(R.string.default_text)
+}
+
+@Composable
+private fun logoSourceOptions(): List<Pair<String?, String>> = listOf(
+    null to stringResource(R.string.default_text),
+    "none" to stringResource(R.string.none),
+    "apple" to "Apple",
+    "samsung" to "Samsung",
+    "xiaomi" to "Xiaomi",
+    "huawei" to "Huawei",
+    "honor" to "Honor",
+    "oppo" to "OPPO",
+    "vivo" to "Vivo",
+    "sony" to "Sony",
+    "canon" to "Canon",
+    "nikon" to "Nikon",
+    "fujifilm" to "Fujifilm",
+    "leica" to "Leica",
+    "hasselblad" to "Hasselblad",
+    "dji" to "DJI",
+    "panasonic" to "Panasonic",
+    "olympus" to "Olympus",
+    "pentax" to "Pentax",
+    "ricoh" to "Ricoh"
+)
+
+@Composable
+private fun logoSourceLabel(source: String?): String {
+    return logoSourceOptions().firstOrNull { it.first == source }?.second
+        ?: source?.substringAfterLast('/')
         ?: stringResource(R.string.default_text)
 }
 

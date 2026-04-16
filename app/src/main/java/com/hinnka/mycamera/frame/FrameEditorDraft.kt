@@ -203,6 +203,7 @@ sealed class FrameElementDraft(
         val color: Int = Color.DKGRAY,
         val fontWeight: FontWeight = FontWeight.NORMAL,
         val fontFamily: String? = null,
+        val overrideText: String? = null,
         val format: String? = null,
         val prefix: String? = null,
         val suffix: String? = null,
@@ -215,6 +216,7 @@ sealed class FrameElementDraft(
             color = color,
             fontWeight = fontWeight,
             fontFamily = fontFamily,
+            overrideText = overrideText,
             format = format,
             prefix = prefix,
             suffix = suffix,
@@ -225,6 +227,7 @@ sealed class FrameElementDraft(
     data class Logo(
         override val draftId: String = UUID.randomUUID().toString(),
         val logoType: LogoType = LogoType.BRAND,
+        val overrideSource: String? = null,
         val alignment: ElementAlignment = ElementAlignment.CENTER,
         val sizeDp: Int = 24,
         val maxWidth: Int = 0,
@@ -234,6 +237,7 @@ sealed class FrameElementDraft(
     ) : FrameElementDraft(draftId, line) {
         override fun toFrameElement(): FrameElement = FrameElement.Logo(
             logoType = logoType,
+            overrideSource = overrideSource,
             alignment = alignment,
             sizeDp = sizeDp.coerceAtLeast(0),
             maxWidth = maxWidth.coerceAtLeast(0),
@@ -281,23 +285,25 @@ sealed class FrameElementDraft(
                 is FrameElement.Text -> Text(
                     textType = element.textType,
                     alignment = element.alignment,
-                    fontSizeSp = element.fontSizeSp,
-                    color = element.color,
-                    fontWeight = element.fontWeight,
-                    fontFamily = element.fontFamily,
-                    format = element.format,
-                    prefix = element.prefix,
-                    suffix = element.suffix,
-                    line = element.line
-                )
+                fontSizeSp = element.fontSizeSp,
+                color = element.color,
+                fontWeight = element.fontWeight,
+                fontFamily = element.fontFamily,
+                overrideText = element.overrideText,
+                format = element.format,
+                prefix = element.prefix,
+                suffix = element.suffix,
+                line = element.line
+            )
 
-                is FrameElement.Logo -> Logo(
-                    logoType = element.logoType,
-                    alignment = element.alignment,
-                    sizeDp = element.sizeDp,
-                    maxWidth = element.maxWidth,
-                    light = element.light,
-                    marginDp = element.marginDp,
+            is FrameElement.Logo -> Logo(
+                logoType = element.logoType,
+                overrideSource = element.overrideSource,
+                alignment = element.alignment,
+                sizeDp = element.sizeDp,
+                maxWidth = element.maxWidth,
+                light = element.light,
+                marginDp = element.marginDp,
                     line = element.line
                 )
 

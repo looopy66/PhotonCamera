@@ -100,6 +100,7 @@ sealed class FrameElement(
         val color: Int = Color.DKGRAY,
         val fontWeight: FontWeight = FontWeight.NORMAL,
         val fontFamily: String? = null,
+        val overrideText: String? = null,
         val format: String? = null,
         val prefix: String? = null,
         val suffix: String? = null,
@@ -111,6 +112,7 @@ sealed class FrameElement(
      */
     data class Logo(
         val logoType: LogoType,
+        val overrideSource: String? = null,
         val alignment: ElementAlignment = ElementAlignment.CENTER,
         val sizeDp: Int = 24,
         val maxWidth: Int = 0,

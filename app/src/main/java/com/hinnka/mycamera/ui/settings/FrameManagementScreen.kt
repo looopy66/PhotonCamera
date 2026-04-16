@@ -3,13 +3,11 @@ package com.hinnka.mycamera.ui.settings
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -30,10 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.frame.FrameInfo
-import com.hinnka.mycamera.frame.TextType
 import com.hinnka.mycamera.ui.camera.autoRotate
-import com.hinnka.mycamera.ui.common.WatermarkEditSheet
-import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -87,10 +82,6 @@ fun FrameManagementScreen(
 
     // 顶部操作菜单
     var showCreateMenu by remember { mutableStateOf(false) }
-
-    // 自定义属性编辑状态
-    var showFrameEditSheet by remember { mutableStateOf(false) }
-    var editingFrameId by remember { mutableStateOf<String?>(null) }
 
     // JSON 边框配置文件选择器
     val frameJsonPicker = rememberLauncherForActivityResult(
@@ -230,7 +221,6 @@ fun FrameManagementScreen(
                     },
                     onEditStyle = null,
                     onRename = null,
-                    onEditProperties = null,
                     onDelete = null
                 )
             }
@@ -254,12 +244,6 @@ fun FrameManagementScreen(
                                 renamingFrame = frameInfo
                                 renameText = frameInfo.getName()
                                 showRenameDialog = true
-                            }
-                        } else null,
-                        onEditProperties = if (frameInfo.isEditable) {
-                            {
-                                editingFrameId = frameInfo.id
-                                showFrameEditSheet = true
                             }
                         } else null,
                         onDelete = if (!frameInfo.isBuiltIn) {
@@ -363,36 +347,6 @@ fun FrameManagementScreen(
         }
     }
 
-    // 自定义属性编辑底部弹窗
-    if (showFrameEditSheet && editingFrameId != null) {
-        var properties by remember(editingFrameId) { mutableStateOf<Map<String, String>>(emptyMap()) }
-        LaunchedEffect(editingFrameId) {
-            properties = withContext(Dispatchers.IO) {
-                viewModel.getFrameCustomProperties(editingFrameId!!)
-            }
-        }
-        WatermarkEditSheet(
-            customProperties = properties,
-            onPropertiesChange = {
-                properties = it
-                scope.launch {
-                    withContext(Dispatchers.IO) {
-                        viewModel.saveFrameCustomProperties(editingFrameId!!, it)
-                    }
-                }
-            },
-            onDismiss = {
-                showFrameEditSheet = false
-                editingFrameId = null
-            },
-            onImportFont = { uri ->
-                viewModel.getCustomImportManager().importFont(uri)
-            },
-            onImportLogo = { uri ->
-                viewModel.getCustomImportManager().importLogo(uri)
-            }
-        )
-    }
 }
 
 /**
@@ -408,7 +362,6 @@ private fun FrameManagementItem(
     onSetDefault: () -> Unit,
     onEditStyle: (() -> Unit)?,
     onRename: (() -> Unit)?,
-    onEditProperties: (() -> Unit)?,
     onDelete: (() -> Unit)?,
     dragModifier: Modifier = Modifier,
     modifier: Modifier = Modifier
@@ -503,57 +456,50 @@ private fun FrameManagementItem(
             }
         }
 
-        if (onEditStyle != null || onEditProperties != null || onRename != null || onDelete != null) {
-            IconButton(
-                onClick = { showActionsMenu = true },
-                modifier = Modifier.size(36.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.MoreVert,
-                    contentDescription = stringResource(R.string.more_options),
-                    tint = Color.White.copy(alpha = 0.7f),
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-            DropdownMenu(
-                expanded = showActionsMenu,
-                onDismissRequest = { showActionsMenu = false }
-            ) {
-                onEditStyle?.let {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.frame_editor_edit_title)) },
-                        onClick = {
-                            showActionsMenu = false
-                            it()
-                        }
+        if (onEditStyle != null || onRename != null || onDelete != null) {
+            Box {
+                IconButton(
+                    onClick = { showActionsMenu = true },
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = stringResource(R.string.more_options),
+                        tint = Color.White.copy(alpha = 0.7f),
+                        modifier = Modifier.size(20.dp)
                     )
                 }
-                onEditProperties?.let {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.watermark_adjustment)) },
-                        onClick = {
-                            showActionsMenu = false
-                            it()
-                        }
-                    )
-                }
-                onRename?.let {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.rename)) },
-                        onClick = {
-                            showActionsMenu = false
-                            it()
-                        }
-                    )
-                }
-                onDelete?.let {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.delete)) },
-                        onClick = {
-                            showActionsMenu = false
-                            it()
-                        }
-                    )
+                DropdownMenu(
+                    expanded = showActionsMenu,
+                    onDismissRequest = { showActionsMenu = false }
+                ) {
+                    onEditStyle?.let {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.frame_editor_edit_title)) },
+                            onClick = {
+                                showActionsMenu = false
+                                it()
+                            }
+                        )
+                    }
+                    onRename?.let {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.rename)) },
+                            onClick = {
+                                showActionsMenu = false
+                                it()
+                            }
+                        )
+                    }
+                    onDelete?.let {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.delete)) },
+                            onClick = {
+                                showActionsMenu = false
+                                it()
+                            }
+                        )
+                    }
                 }
             }
         }

@@ -480,10 +480,12 @@
     <string name="frame_editor_text_color">文字颜色</string>
     <string name="frame_editor_font_weight">字重</string>
     <string name="frame_editor_font_family">字体</string>
+    <string name="frame_editor_text_override">文字覆盖</string>
     <string name="frame_editor_text_format">格式</string>
     <string name="frame_editor_text_prefix">前缀</string>
     <string name="frame_editor_text_suffix">后缀</string>
     <string name="frame_editor_logo_type">Logo 类型</string>
+    <string name="frame_editor_logo_source">Logo 来源</string>
     <string name="frame_editor_logo_size">Logo 尺寸 (dp)</string>
     <string name="frame_editor_logo_max_width">Logo 最大宽度 (dp)</string>
     <string name="frame_editor_margin">边距 (dp)</string>
