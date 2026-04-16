@@ -673,7 +673,7 @@ class Camera2Controller(private val context: Context) {
                 }
                 val captureFormat = if (effectivelyUseRaw && CameraUtils.getRawCaptureSize(context, cameraId) != null) {
                     ImageFormat.RAW_SENSOR
-                } else if ((isP010Supported && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && state.value.useP010) || shouldUseHlgCapture()) {
+                } else if (isP010Supported && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && state.value.useP010) {
                     ImageFormat.YCBCR_P010
                 } else {
                     ImageFormat.YUV_420_888
@@ -967,7 +967,7 @@ class Camera2Controller(private val context: Context) {
             }
 
             if (captureMode == CaptureMode.VIDEO) {
-                val useHlgCapture = shouldUseHlgCapture() && !forceStandardSession
+                val useHlgCapture = _state.value.useHlg10 && !forceStandardSession
                 val sessionConfig = SessionConfiguration(
                     SessionConfiguration.SESSION_REGULAR,
                     surfaces.map { outputSurface ->
@@ -1008,7 +1008,7 @@ class Camera2Controller(private val context: Context) {
 
 
             // Android 9+ 使用 SessionConfiguration
-            val useHlgCapture = shouldUseHlgCapture() && !forceStandardSession
+            val useHlgCapture = _state.value.useHlg10 && !forceStandardSession
             val readerFormat = reader?.imageFormat ?: ImageFormat.YUV_420_888
             PLog.i(
                 TAG,
@@ -2855,22 +2855,6 @@ class Camera2Controller(private val context: Context) {
 
     private fun shouldUseP3ColorSpace(): Boolean {
         return _state.value.isP3Supported && _state.value.useP3ColorSpace
-    }
-
-    private fun shouldUseHlgCapture(): Boolean {
-        val state = _state.value
-        val baseCondition = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                isP010Supported &&
-                isHlg10Supported &&
-                !state.useRaw
-        if (!baseCondition) return false
-        // 用户主动开启 HLG10 录制
-        val userHlg = state.useP010 && state.useHlg10
-        // Log LUT 需要 HLG 采集获取线性信号（替代 tonemap gamma，提升兼容性）
-        val logLutHlg = state.lutEnabled && state.isLogLutActive
-        // Video Log 同样需要 HLG 采集获取线性信号
-        val videoLogHlg = state.captureMode == CaptureMode.VIDEO && state.videoConfig.logProfile.isEnabled
-        return userHlg || logLutHlg || videoLogHlg
     }
 
     /**
