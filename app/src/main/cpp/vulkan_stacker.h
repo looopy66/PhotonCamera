@@ -13,6 +13,7 @@ public:
   bool addFrame(AHardwareBuffer *buffer);
   bool processStack(uint32_t *outBitmap, uint32_t outWidth, uint32_t outHeight,
                     uint32_t stride, int rotation);
+  bool resetForReuse();
 
 private:
   uint32_t width, height;
@@ -122,4 +123,6 @@ private:
   void createPipelines(VkSampler immutableSampler);
   bool processFrame(AHardwareBuffer *buffer, float frameScore,
                     GrayImage &cachedGray);
+  void resetDescriptorHandles();
+  void releasePendingFrames();
 };

@@ -15,6 +15,8 @@ layout(push_constant, scalar) uniform PushConstants {
     float t0, t1, t2, t3, t4, t5;
     uint outWidth;
     uint outHeight;
+    uint outOriginX;
+    uint outOriginY;
     uint sensorWidth;  // Global sensor width
     uint sensorHeight; // Global sensor height
     uint tileX;
@@ -50,8 +52,8 @@ vec3 ycbcr2rgb(vec3 ycc) {
 }
 
 void main() {
-    uint X = gl_GlobalInvocationID.x;
-    uint Y = gl_GlobalInvocationID.y;
+    uint X = gl_GlobalInvocationID.x + pc.outOriginX;
+    uint Y = gl_GlobalInvocationID.y + pc.outOriginY;
 
     if (X >= pc.outWidth || Y >= pc.outHeight) return;
 

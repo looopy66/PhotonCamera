@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.model.SafeImage
+import com.hinnka.mycamera.processor.MultiFrameStacker
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.video.CaptureMode
@@ -743,6 +744,20 @@ class Camera2Controller(private val context: Context) {
                             PLog.e(TAG, "Error in onImageAvailable", e)
                         }
                     }, cameraHandler)
+                }
+
+                if ((state.value.useMFNR || state.value.useMFSR) &&
+                    captureFormat != ImageFormat.RAW_SENSOR
+                ) {
+                    val prewarmOk = MultiFrameStacker.prewarmVulkanStacker(
+                        width = captureSize.width,
+                        height = captureSize.height,
+                        enableSuperResolution = state.value.useMFSR,
+                    )
+                    PLog.i(
+                        TAG,
+                        "Vulkan stacker prewarm after ImageReader creation: size=${captureSize.width}x${captureSize.height}, SR=${state.value.useMFSR}, ok=$prewarmOk"
+                    )
                 }
             } else {
                 safeCloseImageReader(imageReader)

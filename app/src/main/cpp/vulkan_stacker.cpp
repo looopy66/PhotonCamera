@@ -190,10 +190,7 @@ VulkanImageStacker::VulkanImageStacker(uint32_t w, uint32_t h, bool sr)
 }
 
 VulkanImageStacker::~VulkanImageStacker() {
-  for (auto &frame : pendingFrames) {
-    AHardwareBuffer_release(frame.buffer);
-  }
-  pendingFrames.clear();
+  releasePendingFrames();
   releaseVulkanResources();
 }
 
@@ -814,7 +811,7 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer, float frameScore,
   VulkanManager &vm = VulkanManager::getInstance();
   VkDevice device = vm.getDevice();
 
-  if (currentIsFirstFrame) {
+  if (immutableSampler == VK_NULL_HANDLE) {
     // Steal the first frame's sampler and conversion for long-lived pipelines
     this->immutableSampler = input.sampler;
     this->ycbcrConversion = input.ycbcrConversion;
@@ -1503,15 +1500,7 @@ bool VulkanImageStacker::processStack(uint32_t *outBitmap, uint32_t outWidth,
   pendingFrames.clear();
   vkQueueWaitIdle(vm.getComputeQueue());
   vkResetDescriptorPool(device, descriptorPool, 0);
-
-  // Reset descriptor set handles as they are now invalid
-  yuvToRgbaSet = VK_NULL_HANDLE;
-  std::fill(accumSets.begin(), accumSets.end(),
-            (VkDescriptorSet)VK_NULL_HANDLE);
-  std::fill(tensorSets.begin(), tensorSets.end(),
-            (VkDescriptorSet)VK_NULL_HANDLE);
-  std::fill(normalizeSets.begin(), normalizeSets.end(),
-            (VkDescriptorSet)VK_NULL_HANDLE);
+  resetDescriptorHandles();
 
   TIME_END(allFramesProcessing);
 
@@ -1620,6 +1609,8 @@ bool VulkanImageStacker::processStack(uint32_t *outBitmap, uint32_t outWidth,
       float t0, t1, t2, t3, t4, t5;
       uint32_t outWidth;
       uint32_t outHeight;
+      uint32_t outOriginX;
+      uint32_t outOriginY;
       uint32_t sensorWidth;
       uint32_t sensorHeight;
       uint32_t tileX;
@@ -1631,8 +1622,6 @@ bool VulkanImageStacker::processStack(uint32_t *outBitmap, uint32_t outWidth,
     memcpy(&npc, transform, 6 * sizeof(float));
     npc.outWidth = outWidth;
     npc.outHeight = outHeight;
-    npc.sensorWidth = fullW;
-    npc.sensorHeight = fullH;
     int tx = i % numTilesX;
     int ty = i / numTilesX;
     npc.tileX = tx * tileW;
@@ -1640,6 +1629,72 @@ bool VulkanImageStacker::processStack(uint32_t *outBitmap, uint32_t outWidth,
     npc.tileW = std::min(tileW, fullW - npc.tileX);
     npc.tileH = std::min(tileH, fullH - npc.tileY);
     npc.bufferStride = tileW + 16;
+    npc.sensorWidth = fullW;
+    npc.sensorHeight = fullH;
+
+    const int tileStartX = static_cast<int>(npc.tileX);
+    const int tileStartY = static_cast<int>(npc.tileY);
+    const int tileEndX = tileStartX + static_cast<int>(npc.tileW);
+    const int tileEndY = tileStartY + static_cast<int>(npc.tileH);
+    int dispatchMinX = 0;
+    int dispatchMinY = 0;
+    int dispatchMaxX = static_cast<int>(outWidth);
+    int dispatchMaxY = static_cast<int>(outHeight);
+
+    switch (rotation) {
+    case 0:
+      dispatchMinX = std::max(0, static_cast<int>(std::floor(tileStartX - cropX)) - 1);
+      dispatchMaxX = std::min(static_cast<int>(outWidth),
+                              static_cast<int>(std::ceil(tileEndX - cropX)) + 1);
+      dispatchMinY = std::max(0, static_cast<int>(std::floor(tileStartY - cropY)) - 1);
+      dispatchMaxY = std::min(static_cast<int>(outHeight),
+                              static_cast<int>(std::ceil(tileEndY - cropY)) + 1);
+      break;
+    case 90:
+      dispatchMinX =
+          std::max(0, static_cast<int>(std::floor(sH - cropX - tileEndY)) - 1);
+      dispatchMaxX =
+          std::min(static_cast<int>(outWidth),
+                   static_cast<int>(std::ceil(sH - cropX - tileStartY)) + 1);
+      dispatchMinY = std::max(0, static_cast<int>(std::floor(tileStartX - cropY)) - 1);
+      dispatchMaxY = std::min(static_cast<int>(outHeight),
+                              static_cast<int>(std::ceil(tileEndX - cropY)) + 1);
+      break;
+    case 180:
+      dispatchMinX =
+          std::max(0, static_cast<int>(std::floor(sW - cropX - tileEndX)) - 1);
+      dispatchMaxX =
+          std::min(static_cast<int>(outWidth),
+                   static_cast<int>(std::ceil(sW - cropX - tileStartX)) + 1);
+      dispatchMinY =
+          std::max(0, static_cast<int>(std::floor(sH - cropY - tileEndY)) - 1);
+      dispatchMaxY =
+          std::min(static_cast<int>(outHeight),
+                   static_cast<int>(std::ceil(sH - cropY - tileStartY)) + 1);
+      break;
+    case 270:
+      dispatchMinX = std::max(0, static_cast<int>(std::floor(tileStartY - cropX)) - 1);
+      dispatchMaxX = std::min(static_cast<int>(outWidth),
+                              static_cast<int>(std::ceil(tileEndY - cropX)) + 1);
+      dispatchMinY =
+          std::max(0, static_cast<int>(std::floor(sW - cropY - tileEndX)) - 1);
+      dispatchMaxY =
+          std::min(static_cast<int>(outHeight),
+                   static_cast<int>(std::ceil(sW - cropY - tileStartX)) + 1);
+      break;
+    default:
+      break;
+    }
+
+    if (dispatchMinX >= dispatchMaxX || dispatchMinY >= dispatchMaxY)
+      continue;
+
+    const uint32_t dispatchW =
+        static_cast<uint32_t>(dispatchMaxX - dispatchMinX);
+    const uint32_t dispatchH =
+        static_cast<uint32_t>(dispatchMaxY - dispatchMinY);
+    npc.outOriginX = static_cast<uint32_t>(dispatchMinX);
+    npc.outOriginY = static_cast<uint32_t>(dispatchMinY);
 
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                             normalizePipelineLayout, 0, 1, &normalizeSets[i], 0,
@@ -1648,7 +1703,7 @@ bool VulkanImageStacker::processStack(uint32_t *outBitmap, uint32_t outWidth,
     vkCmdPushConstants(cb, normalizePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(npc), &npc);
 
-    vkCmdDispatch(cb, (outWidth + 15) / 16, (outHeight + 15) / 16, 1);
+    vkCmdDispatch(cb, (dispatchW + 15) / 16, (dispatchH + 15) / 16, 1);
   }
 
   // Transition staging buffer
@@ -1684,8 +1739,49 @@ bool VulkanImageStacker::processStack(uint32_t *outBitmap, uint32_t outWidth,
   TIME_END(outputCopy);
 
   vkFreeDescriptorSets(device, descriptorPool, numTiles, normalizeSets.data());
+  std::fill(normalizeSets.begin(), normalizeSets.end(),
+            (VkDescriptorSet)VK_NULL_HANDLE);
 
   return true;
+}
+
+bool VulkanImageStacker::resetForReuse() {
+  VulkanManager &vm = VulkanManager::getInstance();
+  VkDevice device = vm.getDevice();
+  if (device == VK_NULL_HANDLE) {
+    LOGE("resetForReuse: Vulkan device is NULL");
+    return false;
+  }
+
+  vkQueueWaitIdle(vm.getComputeQueue());
+  releasePendingFrames();
+  referencePyramid.clear();
+  referenceFrameScore = 0.0f;
+  isFirstFrame = true;
+
+  if (descriptorPool != VK_NULL_HANDLE) {
+    vkResetDescriptorPool(device, descriptorPool, 0);
+  }
+  resetDescriptorHandles();
+  return true;
+}
+
+void VulkanImageStacker::resetDescriptorHandles() {
+  yuvToRgbaSet = VK_NULL_HANDLE;
+  std::fill(accumSets.begin(), accumSets.end(), (VkDescriptorSet)VK_NULL_HANDLE);
+  std::fill(tensorSets.begin(), tensorSets.end(), (VkDescriptorSet)VK_NULL_HANDLE);
+  std::fill(normalizeSets.begin(), normalizeSets.end(),
+            (VkDescriptorSet)VK_NULL_HANDLE);
+}
+
+void VulkanImageStacker::releasePendingFrames() {
+  for (auto &frame : pendingFrames) {
+    frame.grayY.data.clear();
+    if (frame.buffer != nullptr) {
+      AHardwareBuffer_release(frame.buffer);
+    }
+  }
+  pendingFrames.clear();
 }
 
 void VulkanImageStacker::releaseVulkanResources() {

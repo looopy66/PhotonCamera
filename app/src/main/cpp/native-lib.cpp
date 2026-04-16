@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <android/bitmap.h>
 #include <cmath>
+#include <chrono>
 #include <cstring>
 #include <fstream>
 #include <jni.h>
@@ -850,6 +851,15 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_releaseVulkanStackerNative(
     JNIEnv *env, jobject /* this */, jlong stackerPtr) {
   auto *stacker = reinterpret_cast<VulkanImageStacker *>(stackerPtr);
   delete stacker;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_resetVulkanStackerNative(
+    JNIEnv *env, jobject /* this */, jlong stackerPtr) {
+  auto *stacker = reinterpret_cast<VulkanImageStacker *>(stackerPtr);
+  if (!stacker)
+    return JNI_FALSE;
+  return stacker->resetForReuse() ? JNI_TRUE : JNI_FALSE;
 }
 
 /**
