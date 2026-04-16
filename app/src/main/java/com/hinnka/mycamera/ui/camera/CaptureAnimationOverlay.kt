@@ -263,7 +263,7 @@ private fun calculateCenterBounds(
     aspectRatio: Float
 ): Rect {
     val maxWidth = rootWidth * 0.84f
-    val maxHeight = rootHeight * 0.42f
+    val maxHeight = rootHeight * 0.74f
     val targetWidth = min(maxWidth, maxHeight * aspectRatio)
     val targetHeight = targetWidth / aspectRatio
     val left = (rootWidth - targetWidth) / 2f

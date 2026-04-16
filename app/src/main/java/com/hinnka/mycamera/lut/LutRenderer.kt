@@ -424,7 +424,8 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var shouldCapturePreview = false
     private var captureWidth = 512
     private var captureHeight = 512
-    private val maxCaptureSize = 512 // 预览图最大尺寸
+    private var captureAspectRatio = 0f
+    private val maxCaptureSize = 1080 // 预览图最大尺寸
     private var lastCaptureWidth = 0
     private var lastCaptureHeight = 0
 
@@ -1872,6 +1873,14 @@ class LutRenderer : GLSurfaceView.Renderer {
         }
     }
 
+    fun setCaptureAspectRatio(aspectRatio: Float) {
+        val safeAspectRatio = aspectRatio.coerceAtLeast(0f)
+        if (kotlin.math.abs(captureAspectRatio - safeAspectRatio) > 0.0001f) {
+            captureAspectRatio = safeAspectRatio
+            updateCaptureSize()
+        }
+    }
+
     /**
      * 计算相对于传感器的总旋转角度 (用于确定最终图片的宽高比)
      * 参考 CameraViewModel.saveImage 的逻辑
@@ -1983,19 +1992,23 @@ class LutRenderer : GLSurfaceView.Renderer {
     }
 
     private fun updateCaptureSize() {
-        val totalRotation = calculateTotalRotation()
-        val isSwapped = totalRotation % 180 != 0
-        // 如果 sensorOrientation 是 90 (横置)，deviceRotation 为 0 (竖屏) 时总旋转通常是 90 (Swapped)
-        val actualWidth = if (isSwapped) previewHeight else previewWidth
-        val actualHeight = if (isSwapped) previewWidth else previewHeight
+        val targetAspectRatio = captureAspectRatio.takeIf { it > 0f } ?: run {
+            val totalRotation = calculateTotalRotation()
+            val isSwapped = totalRotation % 180 != 0
+            val actualWidth = if (isSwapped) previewHeight else previewWidth
+            val actualHeight = if (isSwapped) previewWidth else previewHeight
+            actualWidth.toFloat() / actualHeight.coerceAtLeast(1).toFloat()
+        }
 
-        if (actualWidth > actualHeight) {
+        if (targetAspectRatio >= 1f) {
             captureWidth = maxCaptureSize
-            captureHeight = (maxCaptureSize * actualHeight / actualWidth)
+            captureHeight = (maxCaptureSize / targetAspectRatio).toInt()
         } else {
             captureHeight = maxCaptureSize
-            captureWidth = (maxCaptureSize * actualWidth / actualHeight)
+            captureWidth = (maxCaptureSize * targetAspectRatio).toInt()
         }
+        captureWidth = captureWidth.coerceAtLeast(1)
+        captureHeight = captureHeight.coerceAtLeast(1)
 //        PLog.d(TAG, "Update capture size: ${captureWidth}x${captureHeight}, totalRotation: $totalRotation")
     }
 

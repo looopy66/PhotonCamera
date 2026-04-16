@@ -524,7 +524,8 @@ fun CameraScreen(
                                 while (true) {
                                     val event = awaitPointerEvent()
                                     if (gestureStartedInZoomBar == null) {
-                                        val firstPressedChange = event.changes.firstOrNull { it.pressed }
+                                        val firstPressedChange =
+                                            event.changes.firstOrNull { it.pressed }
                                         val currentPreviewBounds = previewBounds
                                         gestureStartedInZoomBar =
                                             if (firstPressedChange != null && currentPreviewBounds != null) {
@@ -548,10 +549,11 @@ fun CameraScreen(
                                         viewModel.isZooming = true
                                         val zoom = event.calculateZoom()
                                         if (zoom != 1f) {
-                                            val nextZoom = (viewModel.zoomRatioByMain * zoom).coerceIn(
-                                                viewModel.globalMinZoom,
-                                                viewModel.globalMaxZoom
-                                            )
+                                            val nextZoom =
+                                                (viewModel.zoomRatioByMain * zoom).coerceIn(
+                                                    viewModel.globalMinZoom,
+                                                    viewModel.globalMaxZoom
+                                                )
                                             // Check for lens switch
                                             val info = state.getCurrentCameraInfo()
                                             val camera = viewModel.findOptimalLens(
@@ -569,7 +571,8 @@ fun CameraScreen(
                                         // Single finger -> horizontal drag for LUT switch
                                         val change = event.changes[0]
                                         if (change.pressed) {
-                                            val dragAmount = change.position.x - change.previousPosition.x
+                                            val dragAmount =
+                                                change.position.x - change.previousPosition.x
                                             totalDrag += dragAmount
                                         } else {
                                             // onDragEnd logic
@@ -756,7 +759,9 @@ fun CameraScreen(
                         // Zoom bar overlaid on preview (only in Photo mode)
                         if (state.captureMode == CaptureMode.PHOTO) {
                             Box(
-                                modifier = Modifier.fillMaxSize().padding(bottom = 8.dp),
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(bottom = 8.dp),
                                 contentAlignment = Alignment.BottomCenter
                             ) {
                                 zoomBar()
@@ -934,7 +939,9 @@ fun CameraScreen(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         zoomBar()
                         Spacer(modifier = Modifier.height(8.dp))
-                        controls(Modifier.fillMaxWidth().wrapContentHeight())
+                        controls(Modifier
+                            .fillMaxWidth()
+                            .wrapContentHeight())
                     }
                 }
             }
@@ -949,7 +956,9 @@ fun CameraScreen(
                 topBar()
 
                 Box(
-                    modifier = Modifier.fillMaxWidth().height(cardHeight),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(cardHeight),
                     contentAlignment = Alignment.Center
                 ) {
                     viewfinder()
@@ -1089,7 +1098,8 @@ fun CameraScreen(
                             //val bottomPadding = (maxHeight - 160.dp).coerceIn(16.dp, 40.dp)
                             Modifier.height(maxHeight - 170.dp)
                         } else {
-                            Modifier.padding(top = 80.dp)
+                            Modifier
+                                .padding(top = 80.dp)
                                 .height(cardHeight - 48.dp)
                         }
                     ),
@@ -1102,11 +1112,15 @@ fun CameraScreen(
                     onLutSelected = { viewModel.setLut(it) },
                     onParamsPreviewChange = { previewRecipeParamsOverride = it },
                     categoryOrder = categoryOrder,
-                    modifier = Modifier.fillMaxWidth()
-                        .then(if (isXpan) {
-                            Modifier.padding(bottom = 48.dp)
-                                .background(Color.Black)
-                        } else Modifier)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (isXpan) {
+                                Modifier
+                                    .padding(bottom = 48.dp)
+                                    .background(Color.Black)
+                            } else Modifier
+                        )
                         .padding(horizontal = 8.dp)
                 )
             }

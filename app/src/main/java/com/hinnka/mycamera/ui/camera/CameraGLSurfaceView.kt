@@ -120,6 +120,12 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
     }
 
+    fun setCaptureAspectRatio(aspectRatio: Float) {
+        queueEvent {
+            renderer.setCaptureAspectRatio(aspectRatio)
+        }
+    }
+
     fun setFocusPoint(point: PointF?) {
         renderer.focusPoint = point
     }
