@@ -459,6 +459,9 @@ fun NavigationHost(
                     cameraViewModel = cameraViewModel,
                     onBack = {
                         navController.popBackStack()
+                    },
+                    onOpenFrameEditor = { frameId ->
+                        navController.navigate(Routes.frameEditor(frameId = frameId))
                     }
                 )
             }

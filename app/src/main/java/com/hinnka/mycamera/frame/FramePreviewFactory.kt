@@ -7,7 +7,9 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Shader
+import android.os.Build
 import com.hinnka.mycamera.gallery.MediaMetadata
+import com.hinnka.mycamera.utils.DeviceUtil
 import java.util.Calendar
 import java.util.TimeZone
 
@@ -102,17 +104,17 @@ object FramePreviewFactory {
         return MediaMetadata(
             width = width,
             height = height,
-            deviceModel = "Photon X-Pro",
-            brand = "Fujifilm",
+            deviceModel = DeviceUtil.model,
+            brand = Build.BRAND,
             dateTaken = sampleTime,
-            location = "Shanghai",
+            location = null,
             iso = 200,
             shutterSpeed = "1/250",
             focalLength = "35mm",
             focalLength35mm = "52mm",
             aperture = "f/2.0",
             customProperties = mapOf(
-                "LOGO" to "fujifilm",
+                "LOGO" to Build.BRAND.lowercase(),
                 "DEVICE_MODEL_FONT" to "Default"
             )
         )
