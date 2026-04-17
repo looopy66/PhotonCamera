@@ -117,6 +117,13 @@ fun ZoomControlBarVerticel(
         lastInteractionTime = System.currentTimeMillis()
     }
 
+    LaunchedEffect(zoomStops, customZoomStop, replacedStopIndex) {
+        if (customZoomStop != null && replacedStopIndex !in zoomStops.indices) {
+            customZoomStop = null
+            replacedStopIndex = -1
+        }
+    }
+
     // 自动恢复默认 UI 的定时器
     LaunchedEffect(isContinuousZooming, lastInteractionTime, isDragging, viewModel.isZooming) {
         if (isContinuousZooming && !isDragging && !viewModel.isZooming) {
@@ -258,13 +265,11 @@ fun ZoomControlBarVerticel(
                 )
             } else {
                 val effectiveStops = remember(zoomStops, customZoomStop, replacedStopIndex) {
-                    if (customZoomStop != null && replacedStopIndex != -1) {
-                        zoomStops.toMutableList().apply {
-                            this[replacedStopIndex] = customZoomStop!!
-                        }
-                    } else {
-                        zoomStops
-                    }
+                    buildEffectiveZoomStops(
+                        zoomStops = zoomStops,
+                        customZoomStop = customZoomStop,
+                        replacedStopIndex = replacedStopIndex
+                    )
                 }
                 ZoomRulerVertical(
                     zoomRatio = internalZoomRatio,
@@ -287,6 +292,20 @@ fun ZoomControlBarVerticel(
                 )
             }
         }
+    }
+}
+
+private fun buildEffectiveZoomStops(
+    zoomStops: List<Float>,
+    customZoomStop: Float?,
+    replacedStopIndex: Int
+): List<Float> {
+    if (customZoomStop == null || replacedStopIndex !in zoomStops.indices) {
+        return zoomStops
+    }
+
+    return zoomStops.toMutableList().apply {
+        this[replacedStopIndex] = customZoomStop
     }
 }
 
