@@ -1209,6 +1209,7 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
   auto *ptr8 = static_cast<uint32_t *>(bitmapPixels);
   AndroidBitmapInfo info;
   AndroidBitmap_getInfo(env, outBitmap8, &info);
+  const int bitmapStridePixels = static_cast<int>(info.stride / 4);
 
   // 获取 buffer 指针
   auto *yData = static_cast<uint8_t *>(env->GetDirectBufferAddress(yBuffer));
@@ -1255,6 +1256,12 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
   }
   finalWidth = std::min(finalWidth, (int)info.width);
   finalHeight = std::min(finalHeight, (int)info.height);
+  if (finalWidth > 1) {
+    finalWidth &= ~1;
+  }
+  if (finalHeight > 1) {
+    finalHeight &= ~1;
+  }
 
   int cropX = ((rotatedWidth - finalWidth) / 4) * 2;
   int cropY = ((rotatedHeight - finalHeight) / 4) * 2;
@@ -1358,7 +1365,8 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
       uint32_t g8 = static_cast<uint32_t>(G * 255.0f);
       uint32_t b8 = static_cast<uint32_t>(B * 255.0f);
       uint32_t a8 = 255;
-      ptr8[idx] = (a8 << 24) | (b8 << 16) | (g8 << 8) | r8;
+      ptr8[y * bitmapStridePixels + x] =
+          (a8 << 24) | (b8 << 16) | (g8 << 8) | r8;
     }
   }
 

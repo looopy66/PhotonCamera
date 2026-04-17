@@ -247,8 +247,8 @@ object BitmapUtils {
         // 4. 在安全区域内居中计算最终坐标
         val x = (safeRegion.left + (baseWidth - finalW) / 2f).toInt().coerceAtLeast(0)
         val y = (safeRegion.top + (baseHeight - finalH) / 2f).toInt().coerceAtLeast(0)
-        val finalWInt = finalW.toInt().coerceAtMost(width - x)
-        val finalHInt = finalH.toInt().coerceAtMost(height - y)
+        val finalWInt = alignDownToEven(finalW.toInt().coerceAtMost(width - x))
+        val finalHInt = alignDownToEven(finalH.toInt().coerceAtMost(height - y))
 
         // 5. 适配旋转角度
         val isSwapped = rotation == 90 || rotation == 270
@@ -257,5 +257,10 @@ object BitmapUtils {
         } else {
             Rect(x, y, x + finalWInt, y + finalHInt)
         }
+    }
+
+    private fun alignDownToEven(value: Int): Int {
+        if (value <= 1) return value
+        return value and 1.inv()
     }
 }
