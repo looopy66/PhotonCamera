@@ -29,6 +29,7 @@ fun SliderSettingItem(
     valueRange: ClosedFloatingPointRange<Float>,
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: (() -> Unit)? = null,
+    valueTextFormatter: (Float) -> String = { String.format("%.2f", it) },
     toggleValue: Boolean? = null,
     onToggleChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
@@ -70,7 +71,7 @@ fun SliderSettingItem(
             
             if (enabled) {
                 Text(
-                    text = String.format("%.2f", value),
+                    text = valueTextFormatter(value),
                     color = Color.White.copy(alpha = 0.8f),
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium

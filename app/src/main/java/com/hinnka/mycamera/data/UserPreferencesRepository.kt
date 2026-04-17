@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.color.TransferCurve
@@ -76,7 +77,7 @@ data class UserPreferences(
     val categoryOrder: List<String> = emptyList(), // 分类排序
     val defaultFocalLength: Float = 0f, // 默认焦段 (mm)，0表示不设置
     val useMFNR: Boolean = false, // 是否使用多帧降噪
-    val multiFrameCount: Int = 8, // 多帧降噪帧数
+    val multiFrameCount: Int = MultiFrameConfig.DEFAULT_FRAME_COUNT, // 多帧降噪帧数
     val useMultipleExposure: Boolean = false, // 是否启用多重曝光
     val multipleExposureCount: Int = 2, // 多重曝光张数
     val useMFSR: Boolean = false, // 是否启用 RAW 多帧超分
@@ -255,7 +256,9 @@ class UserPreferencesRepository(private val context: Context) {
                 categoryOrder = preferences[CATEGORY_ORDER]?.split(",")?.filter { it.isNotEmpty() } ?: emptyList(),
                 defaultFocalLength = preferences[DEFAULT_FOCAL_LENGTH] ?: 0f,
                 useMFNR = preferences[USE_MULTI_FRAME] ?: false,
-                multiFrameCount = preferences[MULTI_FRAME_COUNT] ?: 8,
+                multiFrameCount = preferences[MULTI_FRAME_COUNT]
+                    ?.coerceIn(MultiFrameConfig.MIN_FRAME_COUNT, MultiFrameConfig.MAX_FRAME_COUNT)
+                    ?: MultiFrameConfig.DEFAULT_FRAME_COUNT,
                 useMultipleExposure = preferences[USE_MULTIPLE_EXPOSURE] ?: false,
                 multipleExposureCount = preferences[MULTIPLE_EXPOSURE_COUNT] ?: 2,
                 useMFSR = preferences[USE_SUPER_RESOLUTION] ?: false,
@@ -663,7 +666,10 @@ class UserPreferencesRepository(private val context: Context) {
      */
     suspend fun saveMultiFrameCount(count: Int) {
         context.dataStore.edit { preferences ->
-            preferences[MULTI_FRAME_COUNT] = count
+            preferences[MULTI_FRAME_COUNT] = count.coerceIn(
+                MultiFrameConfig.MIN_FRAME_COUNT,
+                MultiFrameConfig.MAX_FRAME_COUNT
+            )
         }
     }
 

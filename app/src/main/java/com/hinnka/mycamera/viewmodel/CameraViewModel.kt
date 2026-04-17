@@ -237,7 +237,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, 2)
     val multiFrameCount: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.multiFrameCount }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 8)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, MultiFrameConfig.DEFAULT_FRAME_COUNT)
     val useMFSR: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useMFSR }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -1864,9 +1864,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 设置多帧合成帧数
      */
     fun setMultiFrameCount(count: Int) {
-        cameraController.setMultiFrameCount(count)
+        val normalizedCount = count.coerceIn(
+            MultiFrameConfig.MIN_FRAME_COUNT,
+            MultiFrameConfig.MAX_FRAME_COUNT
+        )
+        cameraController.setMultiFrameCount(normalizedCount)
         viewModelScope.launch {
-            userPreferencesRepository.saveMultiFrameCount(count)
+            userPreferencesRepository.saveMultiFrameCount(normalizedCount)
             //reopenCamera()
         }
     }

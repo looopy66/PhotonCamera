@@ -2537,7 +2537,12 @@ class Camera2Controller(private val context: Context) {
     }
 
     fun setMultiFrameCount(multiFrameCount: Int) {
-        _state.value = _state.value.copy(multiFrameCount = multiFrameCount)
+        _state.value = _state.value.copy(
+            multiFrameCount = multiFrameCount.coerceIn(
+                MultiFrameConfig.MIN_FRAME_COUNT,
+                MultiFrameConfig.MAX_FRAME_COUNT
+            )
+        )
     }
 
 
