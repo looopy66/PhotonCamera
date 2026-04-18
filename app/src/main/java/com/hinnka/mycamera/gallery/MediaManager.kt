@@ -63,6 +63,7 @@ import kotlin.use
  */
 object MediaManager {
     private const val TAG = "PhotoManager"
+    private const val THUMBNAIL_MAX_EDGE = 512
     private const val PHOTOS_DIR = "photos"
     private const val BURST_DIR = "burst"
     private const val PHOTO_FILE = "original.jpg"
@@ -308,16 +309,33 @@ object MediaManager {
                 retriever.release()
             } ?: return false
 
+            val thumbnail = createScaledThumbnail(bitmap, THUMBNAIL_MAX_EDGE)
+
             outputFile.parentFile?.mkdirs()
             FileOutputStream(outputFile).use { out ->
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                thumbnail.compress(Bitmap.CompressFormat.JPEG, 90, out)
             }
-            bitmap.recycle()
+            if (thumbnail != bitmap) {
+                bitmap.recycle()
+            }
+            thumbnail.recycle()
             true
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save video thumbnail for $uri", e)
             false
         }
+    }
+
+    private fun createScaledThumbnail(bitmap: Bitmap, maxEdge: Int): Bitmap {
+        val largestEdge = maxOf(bitmap.width, bitmap.height)
+        if (largestEdge <= maxEdge) {
+            return bitmap
+        }
+
+        val scale = maxEdge.toFloat() / largestEdge.toFloat()
+        val targetWidth = (bitmap.width * scale).roundToInt().coerceAtLeast(1)
+        val targetHeight = (bitmap.height * scale).roundToInt().coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
     }
 
     private fun hasBitmapGainmap(bitmap: Bitmap?): Boolean {
@@ -1946,12 +1964,14 @@ object MediaManager {
     private suspend fun generateThumbnail(bitmap: Bitmap, targetFile: File) {
         withContext(Dispatchers.IO) {
             try {
-                // 生成 512 缩略图
-                val thumbnail = ThumbnailUtils.extractThumbnail(bitmap, 512, 512 * bitmap.height / bitmap.width)
+                // 生成适合预览和 widget 的小尺寸缩略图
+                val thumbnail = createScaledThumbnail(bitmap, THUMBNAIL_MAX_EDGE)
                 FileOutputStream(targetFile).use { out ->
                     thumbnail.compress(Bitmap.CompressFormat.JPEG, 80, out)
                 }
-                thumbnail.recycle()
+                if (thumbnail != bitmap) {
+                    thumbnail.recycle()
+                }
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to generate thumbnail", e)
             }
@@ -1968,8 +1988,8 @@ object MediaManager {
             }
             BitmapFactory.decodeFile(sourceFile.absolutePath, options)
 
-            // 计算缩放比例，缩略图大小 512x512
-            val targetSize = 512
+            // 计算缩放比例，缩略图大小不超过 THUMBNAIL_MAX_EDGE
+            val targetSize = THUMBNAIL_MAX_EDGE
             options.inSampleSize = calculateInSampleSize(options, targetSize, targetSize)
             options.inJustDecodeBounds = false
 
