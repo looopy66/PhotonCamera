@@ -1729,6 +1729,7 @@ class LutRenderer : GLSurfaceView.Renderer {
     fun setLut(lutConfig: LutConfig?) {
         // 如果 Surface 尚未创建，保存配置稍后处理
         if (!surfaceReady) {
+            currentLutConfig = lutConfig
             pendingLutConfig = lutConfig
             return
         }
@@ -1738,6 +1739,7 @@ class LutRenderer : GLSurfaceView.Renderer {
 
     fun setBaselineLut(lutConfig: LutConfig?) {
         if (!surfaceReady) {
+            currentBaselineLutConfig = lutConfig
             pendingBaselineLutConfig = lutConfig
             return
         }
@@ -1791,8 +1793,9 @@ class LutRenderer : GLSurfaceView.Renderer {
      */
     fun restoreLutTexturesAfterResume() {
         if (!surfaceReady) {
-            pendingLutConfig = currentLutConfig
-            pendingBaselineLutConfig = currentBaselineLutConfig
+            // Surface 还没重建时，保留已经排队的配置，不要被当前缓存的 null 覆盖掉。
+            pendingLutConfig = pendingLutConfig ?: currentLutConfig
+            pendingBaselineLutConfig = pendingBaselineLutConfig ?: currentBaselineLutConfig
             PLog.d(TAG, "restore LUT deferred: surface not ready")
             return
         }
