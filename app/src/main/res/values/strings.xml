@@ -75,6 +75,8 @@
     <string name="gallery">Gallery</string>
     <string name="gallery_photon">Photon</string>
     <string name="gallery_system">System</string>
+    <string name="gallery_group_today">Today</string>
+    <string name="gallery_group_yesterday">Yesterday</string>
     <string name="permission_required_gallery">Media permission is required to access system gallery</string>
     <string name="photo_detail">Photo Detail</string>
     <string name="share">Share</string>

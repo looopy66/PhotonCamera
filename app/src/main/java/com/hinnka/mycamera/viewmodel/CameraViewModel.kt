@@ -23,7 +23,7 @@ import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameEditorDraft
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.frame.FramePreviewFactory
-import com.hinnka.mycamera.gallery.MediaManager
+import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.lut.LutConfig
@@ -417,7 +417,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.onVideoSaved = { uri ->
             if (uri != null) {
                 viewModelScope.launch {
-                    val mediaId = MediaManager.recordVideoCapture(getApplication(), uri)
+                    val mediaId = GalleryManager.recordVideoCapture(getApplication(), uri)
                     if (mediaId != null) {
                         _imageSavedEvent.emit(Unit)
                     }
@@ -867,7 +867,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun cancelMultipleExposureSession() {
         multipleExposureState.previewBitmap?.recycle()
         multipleExposureState.sessionId?.let { sessionId ->
-            MediaManager.clearMultipleExposureSession(getApplication(), sessionId)
+            GalleryManager.clearMultipleExposureSession(getApplication(), sessionId)
         }
         multipleExposureMetadata = null
         multipleExposureState = multipleExposureState.copy(
@@ -881,7 +881,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun undoLastMultipleExposureFrame() {
         val sessionId = multipleExposureState.sessionId ?: return
-        if (!MediaManager.removeLastMultipleExposureFrame(getApplication(), sessionId)) return
+        if (!GalleryManager.removeLastMultipleExposureFrame(getApplication(), sessionId)) return
         refreshMultipleExposurePreview(sessionId)
     }
 
@@ -893,7 +893,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             multipleExposureState = multipleExposureState.copy(isProcessing = true)
             try {
                 val context = getApplication<Application>()
-                val composedBitmap = MediaManager.composeMultipleExposurePhoto(context, sessionId) ?: run {
+                val composedBitmap = GalleryManager.composeMultipleExposurePhoto(context, sessionId) ?: run {
                     multipleExposureState = multipleExposureState.copy(isProcessing = false)
                     return@launch
                 }
@@ -903,7 +903,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
                 val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
 
-                val photoId = MediaManager.preparePhoto(
+                val photoId = GalleryManager.preparePhoto(
                     context,
                     baseMetadata.copy(
                         width = composedBitmap.width,
@@ -921,7 +921,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     return@launch
                 }
 
-                MediaManager.saveBitmapPhoto(
+                GalleryManager.saveBitmapPhoto(
                     context,
                     photoId,
                     composedBitmap,
@@ -959,9 +959,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private fun refreshMultipleExposurePreview(sessionId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>()
-            val frameFiles = MediaManager.getMultipleExposureFrameFiles(context, sessionId)
+            val frameFiles = GalleryManager.getMultipleExposureFrameFiles(context, sessionId)
             val preview = if (frameFiles.isNotEmpty()) {
-                MediaManager.composeMultipleExposurePreview(context, sessionId)
+                GalleryManager.composeMultipleExposurePreview(context, sessionId)
             } else {
                 null
             }
@@ -1004,7 +1004,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 multipleExposureFrameCount = multipleExposureState.targetCount
             ).also { multipleExposureMetadata = it }
 
-            val frameFile = MediaManager.saveMultipleExposureFrame(
+            val frameFile = GalleryManager.saveMultipleExposureFrame(
                 context,
                 sessionId,
                 frameIndex,
@@ -2491,7 +2491,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
             characteristics ?: return
             val photoId =
-                MediaManager.preparePhoto(
+                GalleryManager.preparePhoto(
                     context,
                     metadata,
                     captureResult,
@@ -2505,9 +2505,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 return
             }
             viewModelScope.launch(Dispatchers.IO) {
-                MediaManager.saveVideo(context, photoId, livePhotoVideoDeferred)
+                GalleryManager.saveVideo(context, photoId, livePhotoVideoDeferred)
 
-                MediaManager.savePhoto(
+                GalleryManager.savePhoto(
                     context,
                     photoId,
                     image,
@@ -2573,7 +2573,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 captureMode = "video_snapshot"
             )
 
-            val photoId = MediaManager.preparePhoto(
+            val photoId = GalleryManager.preparePhoto(
                 context,
                 metadata,
                 null,
@@ -2588,7 +2588,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             withContext(Dispatchers.IO) {
-                MediaManager.saveBitmapPhoto(
+                GalleryManager.saveBitmapPhoto(
                     context,
                     photoId,
                     bitmap,
@@ -2726,7 +2726,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             } else null
 
             characteristics ?: return
-            val photoId = MediaManager.preparePhoto(
+            val photoId = GalleryManager.preparePhoto(
                 context,
                 metadata,
                 captureResult,
@@ -2743,9 +2743,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             viewModelScope.launch(Dispatchers.IO) {
-                MediaManager.saveVideo(context, photoId, livePhotoVideoDeferred)
+                GalleryManager.saveVideo(context, photoId, livePhotoVideoDeferred)
 
-                MediaManager.saveStackedPhoto(
+                GalleryManager.saveStackedPhoto(
                     context,
                     photoId,
                     images,
@@ -2852,7 +2852,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             manualHdrEffectEnabled = defaultHdrEffectEnabled
         )
 
-        MediaManager.preparePhoto(
+        GalleryManager.preparePhoto(
             context,
             metadata,
             null,
@@ -2886,13 +2886,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             burstImageCount++
             try {
-                val metadata = MediaManager.loadMetadata(context, photoId)
+                val metadata = GalleryManager.loadMetadata(context, photoId)
                 if (metadata == null) {
                     prepareBurst(context, photoId, image, captureInfo)
                 }
                 val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
                 val photoQualityValue = photoQuality.firstOrNull() ?: 95
-                MediaManager.saveBurstPhoto(
+                GalleryManager.saveBurstPhoto(
                     context,
                     photoId,
                     image,
@@ -2992,7 +2992,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         burstImages.clear()
         burstImageCount = 0
         multipleExposureState.previewBitmap?.recycle()
-        multipleExposureState.sessionId?.let { MediaManager.clearMultipleExposureSession(getApplication(), it) }
+        multipleExposureState.sessionId?.let { GalleryManager.clearMultipleExposureSession(getApplication(), it) }
     }
 
     /**

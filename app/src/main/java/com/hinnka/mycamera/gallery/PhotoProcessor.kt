@@ -63,7 +63,7 @@ class PhotoProcessor(
             return null
         }
 
-        val dngFile = MediaManager.getDngFile(context, photoId)
+        val dngFile = GalleryManager.getDngFile(context, photoId)
         if (dngFile.exists()) {
             return processDngForUltraHdr(
                 context = context,
@@ -76,17 +76,17 @@ class PhotoProcessor(
             )
         }
 
-        val yuvFile = MediaManager.getYuvFile(context, photoId)
+        val yuvFile = GalleryManager.getYuvFile(context, photoId)
         if (hlgImageProcessor.isHlgCapture(metadata)) {
             val prepareStart = System.currentTimeMillis()
-            val hdrData = MediaManager.loadHdrData(
+            val hdrData = GalleryManager.loadHdrData(
                 context = context,
                 photoId = photoId,
                 fallbackWidth = metadata.width,
                 fallbackHeight = metadata.height
             )
             if (hdrData != null) {
-                val photoFile = MediaManager.getPhotoFile(context, photoId)
+                val photoFile = GalleryManager.getPhotoFile(context, photoId)
                 val photoBitmap = BitmapFactory.decodeFile(photoFile.absolutePath) ?: return null
                 val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
                 val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
@@ -129,7 +129,7 @@ class PhotoProcessor(
             if (!yuvFile.exists()) {
                 return null
             }
-            val data = MediaManager.loadYuvData(context, photoId) ?: return null
+            val data = GalleryManager.loadYuvData(context, photoId) ?: return null
             return try {
                 val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
                 val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
@@ -183,7 +183,7 @@ class PhotoProcessor(
             }
         }
 
-        val photoFile = MediaManager.getPhotoFile(context, photoId)
+        val photoFile = GalleryManager.getPhotoFile(context, photoId)
         if (photoFile.exists()) {
             val bitmap = BitmapFactory.decodeFile(photoFile.absolutePath) ?: return null
             val sdrBitmap = processBitmap(
@@ -212,7 +212,7 @@ class PhotoProcessor(
         return hlgImageProcessor.isHlgCapture(metadata)
     }
 
-    private fun readDisplayHdrSdrRatio(): Float = MediaManager.hdrSdrRatio
+    private fun readDisplayHdrSdrRatio(): Float = GalleryManager.hdrSdrRatio
 
     suspend fun prepareUltraHdrSourceFromRawResult(
         context: Context,
@@ -262,7 +262,7 @@ class PhotoProcessor(
                     aperture
                 )
             }
-            photoId?.let { id -> MediaManager.saveBokehPhoto(context, id, sdrBitmap) }
+            photoId?.let { id -> GalleryManager.saveBokehPhoto(context, id, sdrBitmap) }
         }
 
         sdrBitmap = lutImageProcessor.applyLutStack(
@@ -299,9 +299,9 @@ class PhotoProcessor(
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f
     ): Bitmap? {
-        val dngFile = MediaManager.getDngFile(context, photoId)
-        val yuvFile = MediaManager.getYuvFile(context, photoId)
-        val photoFile = MediaManager.getPhotoFile(context, photoId)
+        val dngFile = GalleryManager.getDngFile(context, photoId)
+        val yuvFile = GalleryManager.getYuvFile(context, photoId)
+        val photoFile = GalleryManager.getPhotoFile(context, photoId)
 
         if (dngFile.exists()) {
             return processDng(
@@ -314,7 +314,7 @@ class PhotoProcessor(
                 chromaNoiseReduction
             )
         } else if (yuvFile.exists()) {
-            val data = MediaManager.loadYuvData(context, photoId) ?: return null
+            val data = GalleryManager.loadYuvData(context, photoId) ?: return null
             return processYuv(
                 context,
                 photoId,
@@ -422,7 +422,7 @@ class PhotoProcessor(
                     context, photoId, b,
                     metadata.focusPointX, metadata.focusPointY, aperture
                 )
-                photoId?.let { photoId -> MediaManager.saveBokehPhoto(context, photoId, b) }
+                photoId?.let { photoId -> GalleryManager.saveBokehPhoto(context, photoId, b) }
             }
 
             lutImageProcessor.applyLutStack(
@@ -533,7 +533,7 @@ class PhotoProcessor(
                     context, photoId, result,
                     metadata.focusPointX, metadata.focusPointY, aperture
                 )
-                photoId?.let { photoId -> MediaManager.saveBokehPhoto(context, photoId, result) }
+                photoId?.let { photoId -> GalleryManager.saveBokehPhoto(context, photoId, result) }
             }
         }
 

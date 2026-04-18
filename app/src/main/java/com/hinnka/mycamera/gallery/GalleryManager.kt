@@ -7,7 +7,6 @@ import android.graphics.*
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.media.MediaMetadataRetriever
-import android.media.ThumbnailUtils
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -54,6 +53,7 @@ import kotlin.io.writeText
 import kotlin.math.roundToInt
 import kotlin.system.measureTimeMillis
 import kotlin.use
+import androidx.core.net.toUri
 
 /**
  * 照片管理器
@@ -61,7 +61,7 @@ import kotlin.use
  * 统一管理照片文件、元数据、缩略图等
  * 存储路径: context.filesDir/photos/<photoId>/
  */
-object MediaManager {
+object GalleryManager {
     private const val TAG = "PhotoManager"
     private const val THUMBNAIL_MAX_EDGE = 512
     private const val PHOTOS_DIR = "photos"
@@ -108,8 +108,14 @@ object MediaManager {
     private val detailHdrBuildJobs = ConcurrentHashMap<String, Job>()
     private val _detailHdrReadyEvents = MutableSharedFlow<String>(extraBufferCapacity = 16)
     val detailHdrReadyEvents: SharedFlow<String> = _detailHdrReadyEvents.asSharedFlow()
+    private val _photoLibraryChangedEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 16)
+    val photoLibraryChangedEvents: SharedFlow<Unit> = _photoLibraryChangedEvents.asSharedFlow()
     private val hdrWorkLock = Any()
     private val hdrWorkCounts = ConcurrentHashMap<String, Int>()
+
+    fun notifyPhotoLibraryChanged() {
+        _photoLibraryChangedEvents.tryEmit(Unit)
+    }
 
     private fun getPhotosBaseDir(context: Context): File {
         return File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), PHOTOS_DIR)
@@ -2228,7 +2234,7 @@ object MediaManager {
         val thumbnailFile = getThumbnailFile(context, photoId)
         val thumbnailUri = when {
             thumbnailFile.exists() -> Uri.fromFile(thumbnailFile)
-            metadata.sourceUri != null -> Uri.parse(metadata.sourceUri)
+            metadata.sourceUri != null -> metadata.sourceUri.toUri()
             else -> return@withContext null
         }
         if (metadata.mediaType == MediaType.VIDEO) {

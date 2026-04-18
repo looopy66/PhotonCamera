@@ -59,7 +59,7 @@ import com.hinnka.mycamera.ui.settings.PhantomPipCropScreen
 import com.hinnka.mycamera.ui.camera.CameraScreen
 import com.hinnka.mycamera.ui.gallery.BurstDetailScreen
 import com.hinnka.mycamera.ui.gallery.GalleryScreen
-import com.hinnka.mycamera.ui.gallery.MediaDetailScreen
+import com.hinnka.mycamera.ui.gallery.GalleryDetailScreen
 import com.hinnka.mycamera.ui.gallery.PhotoEditScreen
 import com.hinnka.mycamera.ui.settings.FilterManagementScreen
 import com.hinnka.mycamera.ui.settings.FrameEditorScreen
@@ -74,7 +74,7 @@ import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import com.hinnka.mycamera.lut.creator.LutCreatorScreen
 import com.hinnka.mycamera.lut.creator.LutCreatorViewModel
 import com.hinnka.mycamera.utils.DeviceUtil
-import com.hinnka.mycamera.gallery.MediaManager
+import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.StartupTrace
 
@@ -157,9 +157,9 @@ class MainActivity : ComponentActivity() {
         OrientationObserver.observe(this)
         StartupTrace.mark("MainActivity.OrientationObserver.observe applied")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            MediaManager.hdrSdrRatio = display?.hdrSdrRatio ?: 0f
+            GalleryManager.hdrSdrRatio = display?.hdrSdrRatio ?: 0f
         }
-        PLog.d("MainActivity", "hdrSdrRatio=${MediaManager.hdrSdrRatio}")
+        PLog.d("MainActivity", "hdrSdrRatio=${GalleryManager.hdrSdrRatio}")
 
         // 检查权限
         hasPermissions = permissions.all {
@@ -265,9 +265,6 @@ class MainActivity : ComponentActivity() {
         intent.getStringExtra("route")?.let {
             pendingRoute = it
         }
-        intent.getStringExtra("photoId")?.let {
-            galleryViewModel.quickLoadPhoto(it)
-        }
         intent.getBooleanExtra("show_ghost_permissions", false).let {
             cameraViewModel.showGhostPermissions = it
         }
@@ -339,10 +336,10 @@ fun NavigationHost(
                             onGalleryClick = {
                                 navController.navigate(Routes.GALLERY)
                                 val latestPhoto = galleryViewModel.latestPhoto.value
-                                if (latestPhoto != null && System.currentTimeMillis() - latestPhoto.dateAdded < 3 * 60 * 1000) {
+                                /*if (latestPhoto != null && System.currentTimeMillis() - latestPhoto.dateAdded < 3 * 60 * 1000) {
                                     galleryViewModel.setCurrentPhotoById(latestPhoto.id)
                                     navController.navigate(Routes.photoDetail(photoId = latestPhoto.id))
-                                }
+                                }*/
                             },
                             onSettingsClick = {
                                 navController.navigate(Routes.SETTINGS)
@@ -355,7 +352,7 @@ fun NavigationHost(
                             },
                             modifier = Modifier.weight(1f)
                         )
-                        MediaDetailScreen(
+                        GalleryDetailScreen(
                             viewModel = galleryViewModel,
                             isExpanded = true,
                             onEdit = {
@@ -419,10 +416,10 @@ fun NavigationHost(
                 val index = backStackEntry.arguments?.getInt("index") ?: 0
                 val tab = backStackEntry.arguments?.getString("tab") ?: GalleryTab.PHOTON.name
                 val photoId = backStackEntry.arguments?.getString("photoId")
-                galleryViewModel.selectTab(GalleryTab.valueOf(tab))
-                MediaDetailScreen(
+                GalleryDetailScreen(
                     viewModel = galleryViewModel,
                     initialIndex = index,
+                    selectedTab = GalleryTab.valueOf(tab),
                     photoId = photoId,
                     onBack = {
                         navController.popBackStack()

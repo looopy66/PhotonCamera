@@ -37,6 +37,13 @@ class GalleryRepository(private val context: Context) {
     }
 
     /**
+     * 分页获取 Photon 相册照片
+     */
+    suspend fun getPhotosPage(offset: Int, limit: Int): List<MediaData> = withContext(Dispatchers.IO) {
+        queryPhotos(offset = offset, limit = limit)
+    }
+
+    /**
      * 获取最新的一张照片
      */
     suspend fun getLatestPhoto(): MediaData? = withContext(Dispatchers.IO) {
@@ -47,7 +54,7 @@ class GalleryRepository(private val context: Context) {
      * 删除单张照片
      */
     suspend fun deletePhoto(photo: MediaData): Boolean = withContext(Dispatchers.IO) {
-        MediaManager.deletePhoto(context, photo.id)
+        GalleryManager.deletePhoto(context, photo.id)
     }
 
     /**
@@ -78,14 +85,12 @@ class GalleryRepository(private val context: Context) {
     /**
      * 查询私有存储中的照片
      */
-    private fun queryPhotos(limit: Int = Int.MAX_VALUE): List<MediaData> {
-        val ids = StartupTrace.measure("GalleryRepository.getPhotoIds") {
-            MediaManager.getPhotoIds(context)
-        }
-        val photos = StartupTrace.measure("GalleryRepository.buildPhotoData", "ids=${ids.size}") {
-            ids.mapNotNull { id -> runBlocking { MediaManager.buildPhotoData(context, id) } }
-        }.take(limit)
-        StartupTrace.mark("GalleryRepository.queryPhotos finished", "count=${photos.size}, limit=$limit")
+    private suspend fun queryPhotos(offset: Int = 0, limit: Int = Int.MAX_VALUE): List<MediaData> {
+        val ids = GalleryManager.getPhotoIds(context)
+        val photos = ids
+            .drop(offset)
+            .take(limit)
+            .mapNotNull { id -> GalleryManager.buildPhotoData(context, id) }
         return photos
     }
 

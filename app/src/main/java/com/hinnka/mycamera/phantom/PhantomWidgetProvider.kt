@@ -19,7 +19,7 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.screencapture.PhantomPipPreviewCoordinator
 import com.hinnka.mycamera.gallery.MediaData
-import com.hinnka.mycamera.gallery.MediaManager
+import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.CoroutineScope
@@ -56,7 +56,7 @@ class PhantomWidgetProvider : AppWidgetProvider() {
             val widgetTheme = prefs.widgetTheme
             val latestPhoto = withContext(Dispatchers.IO) {
                 galleryRepository.getLatestPhoto()?.apply {
-                    metadata = MediaManager.loadMetadata(context, id)
+                    metadata = GalleryManager.loadMetadata(context, id)
                 }
             }
             for (appWidgetId in appWidgetIds) {

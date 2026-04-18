@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -38,7 +39,9 @@ import androidx.compose.material.icons.filled.BurstMode
 import androidx.compose.material.icons.filled.Output
 import androidx.compose.material3.*
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -62,6 +65,8 @@ import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.GalleryTab
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * 相册浏览界面
@@ -75,13 +80,23 @@ fun GalleryScreen(
     modifier: Modifier = Modifier
 ) {
     val photos by viewModel.currentPhotos.collectAsState()
+    val context = LocalContext.current
     val isLoading by viewModel.isLoading.collectAsState()
     val isSystemLoadingMore by viewModel.isSystemLoadingMore.collectAsState()
+    val isPhotonLoadingMore by viewModel.isPhotonLoadingMore.collectAsState()
     val isSharing by viewModel.isSharing.collectAsState()
     val isSelectionMode = viewModel.isSelectionMode
     val selectedPhotos = viewModel.selectedPhotos
     val selectedTab = viewModel.selectedTab
     val hasPermission = viewModel.hasGalleryPermission
+    val scope = rememberCoroutineScope()
+    val photonGridState = rememberLazyStaggeredGridState()
+    val systemGridState = rememberLazyStaggeredGridState()
+    val currentGridState = when (selectedTab) {
+        GalleryTab.PHOTON -> photonGridState
+        GalleryTab.SYSTEM -> systemGridState
+    }
+    var shouldRenderGrid by rememberSaveable { mutableStateOf(false) }
 
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetMultipleContents()
@@ -128,12 +143,25 @@ fun GalleryScreen(
 
     var showDeleteDialog by remember { mutableStateOf(false) }
 
+    // 首次进入时先让导航过渡完成，再挂载重型网格，避免首屏动画和列表构建抢主线程。
+    LaunchedEffect(Unit) {
+        viewModel.loadCurrentTabData()
+        delay(300L)
+        shouldRenderGrid = true
+    }
+
+    fun loadCurrentTabData() {
+        scope.launch {
+            viewModel.loadCurrentTabData()
+        }
+    }
+
     // 监听生命周期，onResume 时刷新列表
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                viewModel.loadCurrentTabData()
+                loadCurrentTabData()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -142,11 +170,7 @@ fun GalleryScreen(
         }
     }
 
-    // 延迟加载照片列表，避免与跳转动画冲突导致卡顿
-    LaunchedEffect(Unit) {
-        kotlinx.coroutines.delay(500) // 等待跳转动画完成
-        viewModel.loadCurrentTabData()
-    }
+
 
     Scaffold(
         topBar = {
@@ -173,7 +197,11 @@ fun GalleryScreen(
                         ) {
                             Tab(
                                 selected = selectedTab == GalleryTab.PHOTON,
-                                onClick = { viewModel.selectTab(GalleryTab.PHOTON) },
+                                onClick = {
+                                    scope.launch {
+                                        viewModel.selectTab(GalleryTab.PHOTON)
+                                    }
+                                },
                                 text = {
                                     Text(
                                         text = stringResource(R.string.gallery_photon),
@@ -184,7 +212,11 @@ fun GalleryScreen(
                             )
                             Tab(
                                 selected = selectedTab == GalleryTab.SYSTEM,
-                                onClick = { viewModel.selectTab(GalleryTab.SYSTEM) },
+                                onClick = {
+                                    scope.launch {
+                                        viewModel.selectTab(GalleryTab.SYSTEM)
+                                    }
+                                },
                                 text = {
                                     Text(
                                         text = stringResource(R.string.gallery_system),
@@ -349,17 +381,16 @@ fun GalleryScreen(
         containerColor = Color(0xFF151515),
         modifier = modifier
     ) { paddingValues ->
-        Box(
+        PullToRefreshBox(
+            isRefreshing = isLoading,
+            onRefresh = {
+                loadCurrentTabData()
+            },
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            if (isLoading && photos.isEmpty()) {
-                CircularProgressIndicator(
-                    color = AccentOrange,
-                    modifier = Modifier.align(Alignment.Center)
-                )
-            } else if (selectedTab == GalleryTab.SYSTEM && !hasPermission) {
+            if (selectedTab == GalleryTab.SYSTEM && !hasPermission) {
                 // 权限缺失提示
                 Column(
                     modifier = Modifier.align(Alignment.Center).padding(32.dp),
@@ -402,52 +433,97 @@ fun GalleryScreen(
                         textAlign = TextAlign.Center
                     )
                 }
+            } else if (!shouldRenderGrid) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(
+                        color = AccentOrange,
+                        modifier = Modifier.size(28.dp),
+                        strokeWidth = 2.dp
+                    )
+                }
             } else {
                 val currentPhotos = photos
+                val gridEntries = remember(currentPhotos, context) {
+                    buildGalleryGridEntries(
+                        context = context,
+                        photos = currentPhotos
+                    )
+                }
                 // 照片网格
                 LazyVerticalStaggeredGrid(
                     columns = StaggeredGridCells.Fixed(3),
+                    state = currentGridState,
                     contentPadding = PaddingValues(4.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalItemSpacing = 4.dp,
                     modifier = Modifier.fillMaxSize()
                 ) {
                     items(
-                        items = currentPhotos,
-                        key = { "${selectedTab.name}_${it.id}" },
-                        contentType = { "photo" }
-                    ) { photo ->
-                        val index = currentPhotos.indexOf(photo)
-                        PhotoGridItem(
-                            photo = photo,
-                            viewModel = viewModel,
-                            isSelected = selectedPhotos.contains(photo),
-                            isSelectionMode = isSelectionMode,
-                            onClick = {
-                                if (isSelectionMode) {
-                                    viewModel.togglePhotoSelection(photo)
-                                } else {
-                                    viewModel.setCurrentPhoto(index)
-                                    onPhotoClick(selectedTab, index)
-                                }
-                            },
-                            onLongClick = {
-                                if (!isSelectionMode) {
-                                    viewModel.enterSelectionMode()
-                                }
-                                viewModel.togglePhotoSelection(photo)
+                        items = gridEntries,
+                        key = { entry ->
+                            when (entry) {
+                                is GalleryGridEntry.Header -> "${selectedTab.name}_${entry.key}"
+                                is GalleryGridEntry.Photo -> "${selectedTab.name}_${entry.photo.id}"
                             }
-                        )
+                        },
+                        contentType = { entry ->
+                            when (entry) {
+                                is GalleryGridEntry.Header -> "header"
+                                is GalleryGridEntry.Photo -> "photo"
+                            }
+                        },
+                        span = { entry ->
+                            if (entry is GalleryGridEntry.Header) {
+                                StaggeredGridItemSpan.FullLine
+                            } else {
+                                StaggeredGridItemSpan.SingleLane
+                            }
+                        }
+                    ) { entry ->
+                        when (entry) {
+                            is GalleryGridEntry.Header -> {
+                                GalleryDateHeader(title = entry.title)
+                            }
 
-                        // 触底加载更多 (仅限系统相册)
-                        if (selectedTab == GalleryTab.SYSTEM && photo == currentPhotos.lastOrNull()) {
-                            LaunchedEffect(Unit) {
-                                viewModel.loadSystemPhotos(reset = false)
+                            is GalleryGridEntry.Photo -> {
+                                val photo = entry.photo
+                                PhotoGridItem(
+                                    photo = photo,
+                                    viewModel = viewModel,
+                                    isSelected = selectedPhotos.contains(photo),
+                                    isSelectionMode = isSelectionMode,
+                                    onClick = {
+                                        if (isSelectionMode) {
+                                            viewModel.togglePhotoSelection(photo)
+                                        } else {
+                                            viewModel.setCurrentPhoto(entry.index)
+                                            onPhotoClick(selectedTab, entry.index)
+                                        }
+                                    },
+                                    onLongClick = {
+                                        if (!isSelectionMode) {
+                                            viewModel.enterSelectionMode()
+                                        }
+                                        viewModel.togglePhotoSelection(photo)
+                                    }
+                                )
+
+                                // 触底加载更多 (仅限系统相册)
+                                if (photo == currentPhotos.lastOrNull()) {
+                                    LaunchedEffect(photo.id) {
+                                        viewModel.loadCurrentTabMore()
+                                    }
+                                }
                             }
                         }
                     }
 
-                    if (selectedTab == GalleryTab.SYSTEM && isSystemLoadingMore) {
+                    if ((selectedTab == GalleryTab.SYSTEM && isSystemLoadingMore) ||
+                        (selectedTab == GalleryTab.PHOTON && isPhotonLoadingMore)
+                    ) {
                         item(span = StaggeredGridItemSpan.FullLine) {
                             Box(
                                 modifier = Modifier
@@ -524,6 +600,24 @@ fun GalleryScreen(
             textContentColor = Color.White
         )
     }
+}
+
+/**
+ * 日期分组标题
+ */
+@Composable
+private fun GalleryDateHeader(
+    title: String
+) {
+    Text(
+        text = title,
+        color = Color.White.copy(alpha = 0.9f),
+        fontSize = 14.sp,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 6.dp, vertical = 10.dp)
+    )
 }
 
 /**

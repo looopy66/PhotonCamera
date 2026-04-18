@@ -907,7 +907,6 @@ fun CameraScreen(
                     viewModel.capture()
                 },
                 onGalleryClick = {
-                    galleryViewModel.loadPhotos()
                     onGalleryClick()
                 },
                 modifier = modifier
