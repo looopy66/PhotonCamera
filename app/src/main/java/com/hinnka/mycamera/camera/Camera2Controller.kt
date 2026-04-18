@@ -2327,6 +2327,7 @@ class Camera2Controller(private val context: Context) {
      * 设置 LUT 启用状态
      */
     fun setLutEnabled(enabled: Boolean) {
+        if (_state.value.lutEnabled == enabled) return
         _state.value = _state.value.copy(lutEnabled = enabled)
         createPreviewSession()
     }
