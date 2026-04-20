@@ -46,6 +46,24 @@ import kotlinx.coroutines.withContext
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 
+private data class CategoryManagementItem(
+    val name: String,
+    val isFixed: Boolean
+)
+
+private fun sanitizeCustomLutCategoryInput(
+    category: String,
+    builtInText: String,
+    uncategorizedText: String
+): String {
+    val trimmedCategory = category.trim()
+    return if (trimmedCategory == builtInText || trimmedCategory == uncategorizedText) {
+        ""
+    } else {
+        trimmedCategory
+    }
+}
+
 /**
  * 滤镜管理页面
  * 
@@ -141,34 +159,43 @@ fun FilterManagementScreen(
     val categoryOrder by viewModel.categoryOrder.collectAsState(emptyList())
     var showCategoryManagement by remember { mutableStateOf(false) }
 
-    val allText = stringResource(R.string.category_all)
-    val customText = stringResource(R.string.custom)
+    val builtInText = stringResource(R.string.built_in)
+    val uncategorizedText = stringResource(R.string.uncategorized)
+    val reservedCategoryNames = remember(builtInText, uncategorizedText) {
+        setOf(builtInText, uncategorizedText)
+    }
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
-    val categories = remember(localLutList, categoryOrder, allText, customText) {
-        // 动态分类提取
+    val categories = remember(localLutList, categoryOrder, builtInText, uncategorizedText, reservedCategoryNames) {
         val dynamicCategories = localLutList.map { it.category }
             .distinct()
-            .filter { it.isNotEmpty() && it != allText && it != customText }
+            .filter { it.isNotEmpty() && it !in reservedCategoryNames }
+        val hasUncategorizedLuts = localLutList.any { !it.isBuiltIn && it.category.isEmpty() }
+        val orderedKnownCategories = categoryOrder.filter { it == builtInText || dynamicCategories.contains(it) }
+        val remainingDynamic = dynamicCategories.filterNot { it in orderedKnownCategories }.sorted()
 
-        // 合并排序中的分类（即使是空的）和数据中实际存在的分类
-        val allUniqueCategories = (categoryOrder + dynamicCategories).distinct()
+        buildList {
+            if (orderedKnownCategories.isEmpty()) {
+                add(builtInText)
+                addAll(remainingDynamic)
+            } else {
+                addAll(orderedKnownCategories)
+                if (builtInText !in orderedKnownCategories) add(builtInText)
+                addAll(remainingDynamic)
+            }
 
-        // 按保存的排序排列；新分类（不在排序中的）排在后面
-        val sortedDynamic = allUniqueCategories.sortedWith(compareBy<String> { cat ->
-            val index = categoryOrder.indexOf(cat)
-            if (index == -1) Int.MAX_VALUE else index
-        }.thenBy { it })
-
-        listOf(allText, customText) + sortedDynamic
+            if (hasUncategorizedLuts) {
+                add(uncategorizedText)
+            }
+        }
     }
     val filteredLutList = remember(selectedTabIndex, localLutList, categories) {
         if (selectedTabIndex >= categories.size) return@remember localLutList
 
-        when (selectedTabIndex) {
-            0 -> localLutList // All
-            1 -> localLutList.filter { !it.isBuiltIn } // Custom
-            else -> localLutList.filter { it.category == categories[selectedTabIndex] }
+        when (val selectedCategory = categories[selectedTabIndex]) {
+            builtInText -> localLutList.filter { it.isBuiltIn }
+            uncategorizedText -> localLutList.filter { !it.isBuiltIn && it.category.isEmpty() }
+            else -> localLutList.filter { it.category == selectedCategory }
         }
     }
 
@@ -596,7 +623,7 @@ fun FilterManagementScreen(
                                     showCategoryDialog = true
                                 }
                             } else null,
-                            showCategory = (selectedTabIndex <= 1) && lutInfo.category.isNotEmpty(),
+                            showCategory = categories.getOrNull(currentTabIndex) == builtInText && lutInfo.category.isNotEmpty(),
                             dragModifier = if (isSelectionMode) Modifier else Modifier.draggableHandle()
                         )
                     }
@@ -758,9 +785,13 @@ fun FilterManagementScreen(
                         Spacer(modifier = Modifier.height(8.dp))
 
                         // 常用分类快速选择
-                        val commonCategories = remember(localLutList, categoryOrder) {
-                            val dynamic = localLutList.map { it.category }.distinct().filter { it.isNotEmpty() }
-                            (categoryOrder + dynamic).distinct()
+                        val commonCategories = remember(localLutList, categoryOrder, reservedCategoryNames) {
+                            val dynamic = localLutList.map { it.category }
+                                .distinct()
+                                .filter { it.isNotEmpty() && it !in reservedCategoryNames }
+                            val orderedDynamic = categoryOrder.filter { it in dynamic }
+                            val remainingDynamic = dynamic.filterNot { it in orderedDynamic }.sorted()
+                            orderedDynamic + remainingDynamic
                         }
                         if (commonCategories.isNotEmpty()) {
                             Text(
@@ -807,10 +838,15 @@ fun FilterManagementScreen(
                 confirmButton = {
                     TextButton(
                         onClick = {
+                            val sanitizedCategory = sanitizeCustomLutCategoryInput(
+                                category = categoryText,
+                                builtInText = builtInText,
+                                uncategorizedText = uncategorizedText
+                            )
                             scope.launch {
                                 withContext(Dispatchers.IO) {
                                     categorizingIds.forEach { id ->
-                                        customImportManager.updateLutCategory(id, categoryText)
+                                        customImportManager.updateLutCategory(id, sanitizedCategory)
                                     }
                                 }
                                 viewModel.refreshCustomContent()
@@ -1007,9 +1043,13 @@ fun FilterManagementScreen(
                         Spacer(modifier = Modifier.height(8.dp))
 
                         // 常用分类快速选择
-                        val commonCategories = remember(localLutList, categoryOrder) {
-                            val dynamic = localLutList.map { it.category }.distinct().filter { it.isNotEmpty() }
-                            (categoryOrder + dynamic).distinct()
+                        val commonCategories = remember(localLutList, categoryOrder, reservedCategoryNames) {
+                            val dynamic = localLutList.map { it.category }
+                                .distinct()
+                                .filter { it.isNotEmpty() && it !in reservedCategoryNames }
+                            val orderedDynamic = categoryOrder.filter { it in dynamic }
+                            val remainingDynamic = dynamic.filterNot { it in orderedDynamic }.sorted()
+                            orderedDynamic + remainingDynamic
                         }
                         if (commonCategories.isNotEmpty()) {
                             Text(
@@ -1039,7 +1079,11 @@ fun FilterManagementScreen(
                 confirmButton = {
                     TextButton(
                         onClick = {
-                            val targetCategory = categoryText
+                            val targetCategory = sanitizeCustomLutCategoryInput(
+                                category = categoryText,
+                                builtInText = builtInText,
+                                uncategorizedText = uncategorizedText
+                            )
                             val urisToImport = pendingImportUris
                             val curveToUse = selectedCurve
                             val colorSpace = selectedColorSpace
@@ -1121,14 +1165,27 @@ fun FilterManagementScreen(
 
         // 分类管理页面 (弹出式)
         if (showCategoryManagement) {
-            val dynamicCategories = remember(localLutList, allText, customText) {
+            val dynamicCategories = remember(localLutList, reservedCategoryNames) {
                 localLutList.map { it.category }
                     .distinct()
-                    .filter { it.isNotEmpty() && it != allText && it != customText }
+                    .filter { it.isNotEmpty() && it !in reservedCategoryNames }
             }
-            // 合并当前有的分类和保存的排序
-            val allCategories = remember(dynamicCategories, categoryOrder) {
-                (categoryOrder + dynamicCategories).distinct()
+            val allCategories = remember(dynamicCategories, categoryOrder, builtInText) {
+                val orderedKnownCategories = categoryOrder.filter {
+                    it == builtInText || dynamicCategories.contains(it)
+                }
+                val remainingDynamic = dynamicCategories.filterNot { it in orderedKnownCategories }.sorted()
+
+                buildList {
+                    if (orderedKnownCategories.isEmpty()) {
+                        add(builtInText)
+                        addAll(remainingDynamic)
+                    } else {
+                        addAll(orderedKnownCategories)
+                        if (builtInText !in orderedKnownCategories) add(builtInText)
+                        addAll(remainingDynamic)
+                    }
+                }
             }
 
             ModalBottomSheet(
@@ -1198,13 +1255,34 @@ private fun CategoryManagementSheet(
     onRenameCategory: (String, String) -> Unit,
     onDeleteCategory: (String) -> Unit
 ) {
-    var localCategories by remember { mutableStateOf(categories) }
+    var localCategories by remember(categories) {
+        mutableStateOf(
+            categories.map {
+                CategoryManagementItem(
+                    name = it,
+                    isFixed = false
+                )
+            }
+        )
+    }
+    val builtInText = stringResource(R.string.built_in)
+    val uncategorizedText = stringResource(R.string.uncategorized)
+    val fixedNames = remember(builtInText, uncategorizedText) { setOf(builtInText, uncategorizedText) }
+
+    LaunchedEffect(categories, fixedNames) {
+        localCategories = categories.map { name ->
+            CategoryManagementItem(
+                name = name,
+                isFixed = name in fixedNames
+            )
+        }
+    }
     val lazyListState = rememberLazyListState()
     val reorderableLazyListState = rememberReorderableLazyListState(lazyListState) { from, to ->
         localCategories = localCategories.toMutableList().apply {
             add(to.index, removeAt(from.index))
         }
-        onSaveOrder(localCategories)
+        onSaveOrder(localCategories.map { it.name })
     }
 
     var showAddDialog by remember { mutableStateOf(false) }
@@ -1262,8 +1340,8 @@ private fun CategoryManagementSheet(
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             contentPadding = PaddingValues(bottom = 16.dp)
         ) {
-            itemsIndexed(localCategories, key = { _, it -> it }) { index, category ->
-                ReorderableItem(reorderableLazyListState, key = category) { isDragging ->
+            itemsIndexed(localCategories, key = { _, it -> it.name }) { _, category ->
+                ReorderableItem(reorderableLazyListState, key = category.name) { isDragging ->
                     val draggingBgColor =
                         if (isDragging) Color.White.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.05f)
                     Row(
@@ -1282,28 +1360,30 @@ private fun CategoryManagementSheet(
                         )
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
-                            text = category,
+                            text = category.name,
                             color = Color.White,
                             modifier = Modifier.weight(1f),
                             fontSize = 16.sp
                         )
-                        IconButton(onClick = {
-                            renamingCategory = category
-                            renameCategoryText = category
-                            showRenameDialog = true
-                        }) {
-                            Icon(
-                                imageVector = Icons.Default.Edit,
-                                contentDescription = stringResource(R.string.rename),
-                                tint = Color.White.copy(alpha = 0.7f)
-                            )
-                        }
-                        IconButton(onClick = { categoryToDelete = category }) {
-                            Icon(
-                                imageVector = Icons.Default.Delete,
-                                contentDescription = stringResource(R.string.delete),
-                                tint = Color.Red.copy(alpha = 0.7f)
-                            )
+                        if (!category.isFixed) {
+                            IconButton(onClick = {
+                                renamingCategory = category.name
+                                renameCategoryText = category.name
+                                showRenameDialog = true
+                            }) {
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = stringResource(R.string.rename),
+                                    tint = Color.White.copy(alpha = 0.7f)
+                                )
+                            }
+                            IconButton(onClick = { categoryToDelete = category.name }) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = stringResource(R.string.delete),
+                                    tint = Color.Red.copy(alpha = 0.7f)
+                                )
+                            }
                         }
                     }
                 }
@@ -1327,9 +1407,17 @@ private fun CategoryManagementSheet(
                 confirmButton = {
                     TextButton(
                         onClick = {
-                            if (newCategoryName.isNotBlank() && !localCategories.contains(newCategoryName)) {
-                                localCategories += newCategoryName
-                                onSaveOrder(localCategories)
+                            val trimmedName = newCategoryName.trim()
+                            if (
+                                trimmedName.isNotBlank() &&
+                                trimmedName !in fixedNames &&
+                                localCategories.none { it.name == trimmedName }
+                            ) {
+                                localCategories += CategoryManagementItem(
+                                    name = trimmedName,
+                                    isFixed = false
+                                )
+                                onSaveOrder(localCategories.map { it.name })
                                 showAddDialog = false
                             }
                         }
@@ -1364,10 +1452,17 @@ private fun CategoryManagementSheet(
                         onClick = {
                             val oldName = renamingCategory!!
                             val newName = renameCategoryText.trim()
-                            if (newName.isNotEmpty() && newName != oldName) {
+                            if (
+                                newName.isNotEmpty() &&
+                                newName != oldName &&
+                                newName !in fixedNames &&
+                                localCategories.none { it.name == newName }
+                            ) {
                                 onRenameCategory(oldName, newName)
-                                localCategories = localCategories.map { if (it == oldName) newName else it }
-                                onSaveOrder(localCategories)
+                                localCategories = localCategories.map {
+                                    if (it.name == oldName) it.copy(name = newName) else it
+                                }
+                                onSaveOrder(localCategories.map { it.name })
                             }
                             showRenameDialog = false
                         }
@@ -1394,8 +1489,8 @@ private fun CategoryManagementSheet(
                         onClick = {
                             val target = categoryToDelete!!
                             onDeleteCategory(target)
-                            localCategories = localCategories.filter { it != target }
-                            onSaveOrder(localCategories)
+                            localCategories = localCategories.filter { it.name != target }
+                            onSaveOrder(localCategories.map { it.name })
                             categoryToDelete = null
                         },
                         colors = ButtonDefaults.textButtonColors(contentColor = Color.Red)
@@ -1509,24 +1604,19 @@ private fun FilterManagementItem(
                     modifier = Modifier.weight(1f, fill = false)
                 )
 
-                Spacer(modifier = Modifier.width(6.dp))
+                if (lutInfo.isBuiltIn) {
+                    Spacer(modifier = Modifier.width(6.dp))
 
-                // 类型标签
-                val typeText =
-                    if (lutInfo.isBuiltIn) stringResource(R.string.built_in) else stringResource(R.string.custom)
-                Text(
-                    text = typeText,
-                    color = if (lutInfo.isBuiltIn) Color.White.copy(alpha = 0.5f) else Color(0xFFFF6B35),
-                    fontSize = 10.sp,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(
-                            if (lutInfo.isBuiltIn) Color.White.copy(alpha = 0.1f) else Color(0xFFFF6B35).copy(
-                                alpha = 0.2f
-                            )
-                        )
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                )
+                    Text(
+                        text = stringResource(R.string.built_in),
+                        color = Color.White.copy(alpha = 0.5f),
+                        fontSize = 10.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color.White.copy(alpha = 0.1f))
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    )
+                }
 
                 // VIP 标签
                 if (lutInfo.isVip) {

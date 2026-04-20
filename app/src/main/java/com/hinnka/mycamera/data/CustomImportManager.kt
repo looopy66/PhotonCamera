@@ -3,6 +3,7 @@ package com.hinnka.mycamera.data
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import com.hinnka.mycamera.R
 import com.hinnka.mycamera.lut.LutConverter
 import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.frame.FrameTemplate
@@ -44,6 +45,19 @@ class CustomImportManager(private val context: Context) {
         // 自定义 Logo 目录
         private const val CUSTOM_LOGO_DIR = "custom_logos"
     }
+
+    private fun sanitizeCustomLutCategory(category: String?): String {
+        val trimmedCategory = category?.trim().orEmpty()
+        if (trimmedCategory.isEmpty()) return ""
+
+        val reservedCategoryNames = setOf(
+            context.getString(R.string.built_in),
+            context.getString(R.string.uncategorized)
+        )
+        return if (trimmedCategory in reservedCategoryNames) "" else trimmedCategory
+    }
+
+    private fun isCustomLutId(lutId: String): Boolean = lutId.startsWith("custom_")
 
     /**
      * 获取分类重定向/重写映射
@@ -115,13 +129,14 @@ class CustomImportManager(private val context: Context) {
 
             // 生成显示名称
             val name = displayName ?: fileName.substringBeforeLast('.')
+            val sanitizedCategory = sanitizeCustomLutCategory(category)
 
             // 保存到配置文件
-            saveLutToConfig(lutId, name, plutFileName, category)
+            saveLutToConfig(lutId, name, plutFileName, sanitizedCategory)
 
             // 如果有分类，也同步到 overrides (保持一致性)
-            if (!category.isNullOrEmpty()) {
-                updateLutCategory(lutId, category)
+            if (sanitizedCategory.isNotEmpty()) {
+                updateLutCategory(lutId, sanitizedCategory)
             }
 
             PLog.d(TAG, "LUT imported successfully: $lutId ($name)")
@@ -514,6 +529,12 @@ class CustomImportManager(private val context: Context) {
      */
     fun updateLutCategory(lutId: String, newCategory: String): Boolean {
         return try {
+            val sanitizedCategory = if (isCustomLutId(lutId)) {
+                sanitizeCustomLutCategory(newCategory)
+            } else {
+                newCategory.trim()
+            }
+
             // 1. 同步到分类重写文件 (核心：支持内置)
             val overridesFile = File(context.filesDir, CATEGORY_OVERRIDES_CONFIG)
             val overridesJson = if (overridesFile.exists()) {
@@ -521,7 +542,7 @@ class CustomImportManager(private val context: Context) {
             } else {
                 JSONObject()
             }
-            overridesJson.put(lutId, newCategory)
+            overridesJson.put(lutId, sanitizedCategory)
             overridesFile.writeText(overridesJson.toString())
 
             // 2. 如果是自定义滤镜，也同步更新 custom_luts.json (保持一致性)
@@ -534,7 +555,7 @@ class CustomImportManager(private val context: Context) {
                 for (i in 0 until jsonArray.length()) {
                     val lutObj = jsonArray.getJSONObject(i)
                     if (lutObj.getString("id") == lutId) {
-                        lutObj.put("category", newCategory)
+                        lutObj.put("category", sanitizedCategory)
                         updated = true
                     }
                     newArray.put(lutObj)
@@ -544,7 +565,7 @@ class CustomImportManager(private val context: Context) {
                 }
             }
 
-            PLog.d(TAG, "LUT category updated: $lutId -> $newCategory")
+            PLog.d(TAG, "LUT category updated: $lutId -> $sanitizedCategory")
             true
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to update LUT category", e)

@@ -43,6 +43,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private sealed class LutCategoryTab {
+    data object BuiltIn : LutCategoryTab()
+    data object Uncategorized : LutCategoryTab()
+    data class Category(val name: String) : LutCategoryTab()
+}
+
 /**
  * LUT 选择器组件
  *
@@ -61,27 +67,60 @@ fun LutSelector(
     val scrollState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     var showLutEditDialogState by remember { mutableStateOf(false) }
+    val builtInText = stringResource(R.string.built_in)
+    val uncategorizedText = stringResource(R.string.uncategorized)
 
     // 分类逻辑
-    val categories = remember(availableLuts, categoryOrder) {
+    val categoryTabs = remember(availableLuts, categoryOrder, builtInText, uncategorizedText) {
         val dynamicCategories = availableLuts.map { it.category }
             .distinct()
             .filter { it.isNotEmpty() }
+        val hasUncategorizedLuts = availableLuts.any { !it.isBuiltIn && it.category.isEmpty() }
+        val orderedEntries = categoryOrder.filter { it == builtInText || dynamicCategories.contains(it) }
+        val remainingDynamic = dynamicCategories.filterNot { it in orderedEntries }.sorted()
 
-        val sortedDynamic = dynamicCategories.sortedWith(compareBy<String> { cat ->
-            val index = categoryOrder.indexOf(cat)
-            if (index == -1) Int.MAX_VALUE else index
-        }.thenBy { it })
+        buildList {
+            if (orderedEntries.isEmpty()) {
+                add(LutCategoryTab.BuiltIn)
+                addAll(remainingDynamic.map(LutCategoryTab::Category))
+            } else {
+                orderedEntries.forEach { entry ->
+                    when (entry) {
+                        builtInText -> add(LutCategoryTab.BuiltIn)
+                        else -> add(LutCategoryTab.Category(entry))
+                    }
+                }
+                if (builtInText !in orderedEntries) add(LutCategoryTab.BuiltIn)
+                addAll(remainingDynamic.map(LutCategoryTab::Category))
+            }
 
-        listOf(null) + sortedDynamic + listOf("Custom")
+            if (hasUncategorizedLuts) {
+                add(LutCategoryTab.Uncategorized)
+            }
+        }
     }
-    var selectedCategory by remember { mutableStateOf(availableLuts.find { it.id == currentLutId }?.category) }
+    var selectedCategory by remember(currentLutId, availableLuts) {
+        mutableStateOf(
+            availableLuts.find { it.id == currentLutId }?.let { lut ->
+                if (lut.isBuiltIn) {
+                    LutCategoryTab.BuiltIn
+                } else if (lut.category.isNotEmpty()) {
+                    LutCategoryTab.Category(lut.category)
+                } else {
+                    LutCategoryTab.Uncategorized
+                }
+            } ?: LutCategoryTab.BuiltIn
+        )
+    }
 
     val filteredLuts = remember(selectedCategory, availableLuts) {
         when (selectedCategory) {
-            null -> availableLuts
-            "Custom" -> availableLuts.filter { !it.isBuiltIn }
-            else -> availableLuts.filter { it.category == selectedCategory }
+            LutCategoryTab.BuiltIn -> availableLuts.filter { it.isBuiltIn }
+            LutCategoryTab.Uncategorized -> availableLuts.filter { !it.isBuiltIn && it.category.isEmpty() }
+            is LutCategoryTab.Category -> {
+                val categoryName = (selectedCategory as LutCategoryTab.Category).name
+                availableLuts.filter { it.category == categoryName }
+            }
         }
     }
 
@@ -120,12 +159,12 @@ fun LutSelector(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(horizontal = 8.dp)
         ) {
-            items(categories) { category ->
+            items(categoryTabs) { category ->
                 val isSelected = selectedCategory == category
                 val categoryName = when (category) {
-                    null -> stringResource(R.string.category_all)
-                    "Custom" -> stringResource(R.string.category_custom)
-                    else -> category
+                    LutCategoryTab.BuiltIn -> builtInText
+                    LutCategoryTab.Uncategorized -> uncategorizedText
+                    is LutCategoryTab.Category -> category.name
                 }
 
                 Text(
