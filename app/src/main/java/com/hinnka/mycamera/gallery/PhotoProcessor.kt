@@ -356,6 +356,9 @@ class PhotoProcessor(
             cropRegion = metadata.cropRegion,
             rotation = metadata.rotation,
             exposureBias = metadata.exposureBias ?: 0f,
+            rawExposureCompensation = metadata.rawExposureCompensation ?: 0f,
+            rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
+            rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
             sharpeningValue = 0.4f,
             denoiseValue = metadata.rawDenoiseValue
         ) ?: return@withContext null
@@ -411,6 +414,9 @@ class PhotoProcessor(
             cropRegion,
             metadata.rotation,
             metadata.exposureBias ?: 0f,
+            rawExposureCompensation = metadata.rawExposureCompensation ?: 0f,
+            rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
+            rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
             denoiseValue = metadata.rawDenoiseValue
         )
 

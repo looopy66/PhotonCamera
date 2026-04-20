@@ -98,7 +98,6 @@ import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.lut.LutInfo
-import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.camera.LutEditorTarget
 import com.hinnka.mycamera.ui.camera.autoRotate
@@ -152,7 +151,6 @@ fun SettingsScreen(
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
     val photoQuality by viewModel.photoQuality.collectAsState(initial = 95)
     val useGpuAcceleration by viewModel.useGpuAcceleration.collectAsState()
-    val rawProfile by viewModel.rawProfile.collectAsState()
     val useP010 by viewModel.useP010.collectAsState()
     val useHlg10 by viewModel.useHlg10.collectAsState()
     val hlgHardwareCompatibilityEnabled by viewModel.hlgHardwareCompatibilityEnabled.collectAsState()
@@ -784,6 +782,7 @@ fun SettingsScreen(
                             value = multiFrameCountSliderValue,
                             valueRange = MultiFrameConfig.MIN_FRAME_COUNT.toFloat()..MultiFrameConfig.MAX_FRAME_COUNT.toFloat(),
                             onValueChange = { multiFrameCountSliderValue = it.roundToInt().toFloat() },
+                            resetValue = MultiFrameConfig.DEFAULT_FRAME_COUNT.toFloat(),
                             onValueChangeFinished = {
                                 viewModel.setMultiFrameCount(multiFrameCountSliderValue.roundToInt())
                             },
@@ -855,19 +854,6 @@ fun SettingsScreen(
                             description = stringResource(R.string.settings_develop_animation_description),
                             checked = enableDevelopAnimation,
                             onCheckedChange = { viewModel.setEnableDevelopAnimation(it) }
-                        )
-
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
-
-                        QualityLevelSetting(
-                            title = stringResource(R.string.settings_raw_profile),
-                            description = stringResource(R.string.settings_raw_profile_description),
-                            levels = RawProfile.entries.map { it to rawProfileLabel(it) },
-                            currentLevel = rawProfile,
-                            onLevelSelected = { viewModel.setRawProfile(it) }
                         )
 
                         /*HorizontalDivider(
@@ -971,6 +957,7 @@ fun SettingsScreen(
                             description = stringResource(R.string.settings_sharpening_description),
                             value = sharpening,
                             valueRange = 0f..1f,
+                            resetValue = 0f,
                             onValueChange = { viewModel.setSharpening(it) }
                         )
 
@@ -981,6 +968,7 @@ fun SettingsScreen(
                             description = stringResource(R.string.settings_noise_reduction_description),
                             value = noiseReduction,
                             valueRange = 0f..1f,
+                            resetValue = 0f,
                             onValueChange = { viewModel.setNoiseReduction(it) }
                         )
 
@@ -991,6 +979,7 @@ fun SettingsScreen(
                             description = stringResource(R.string.settings_chroma_noise_reduction_description),
                             value = chromaNoiseReduction,
                             valueRange = 0f..1f,
+                            resetValue = 0f,
                             onValueChange = { viewModel.setChromaNoiseReduction(it) }
                         )
                     }
@@ -2036,15 +2025,6 @@ fun <T> QualityLevelSetting(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun rawProfileLabel(rawProfile: RawProfile): String {
-    return when (rawProfile) {
-        RawProfile.ACES_CINE -> stringResource(R.string.raw_profile_aces_cine)
-        RawProfile.FUJI_PROVIA -> stringResource(R.string.raw_profile_fuji_provia)
-        RawProfile.STANDARD_SRGB -> stringResource(R.string.raw_profile_standard_srgb)
     }
 }
 

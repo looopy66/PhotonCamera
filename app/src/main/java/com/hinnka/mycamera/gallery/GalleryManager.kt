@@ -1109,6 +1109,9 @@ object GalleryManager {
                 cropRegion = metadata.cropRegion,
                 rotation = rotation,
                 exposureBias = exposureBias ?: 0f,
+                rawExposureCompensation = metadata.rawExposureCompensation ?: 0f,
+                rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
+                rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
                 sharpeningValue = 0.4f
             ) ?: return@withContext
             var bitmap = rawResult.sdrBitmap
@@ -1638,10 +1641,9 @@ object GalleryManager {
                     height = finalHeight,
                     cfaPattern = RawMetadata.CFA_LINEAR_RGB,
                     blackLevel = floatArrayOf(0f, 0f, 0f, 0f),
-                    whiteLevel = 65535f,
                     whiteBalanceGains = floatArrayOf(1f, 1f, 1f, 1f),
                     noiseProfile = floatArrayOf(0f, 0f),
-                    // Keep original CCM and other params
+                    // Keep original sensor whiteLevel; stackedRgbBuffer uses a separate 16-bit encoding scale.
                 )
                 var bitmap = RawDemosaicProcessor.getInstance().process(
                     context,
@@ -1653,6 +1655,9 @@ object GalleryManager {
                     aspectRatio,
                     metadata.cropRegion,
                     rotation,
+                    rawExposureCompensation = metadata.rawExposureCompensation ?: 0f,
+                    rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
+                    rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
                     sharpeningValue = 0.4f,
                     denoiseValue = 0.2f,
                     chromaDenoiseValue = 0.2f
@@ -2546,6 +2551,9 @@ object GalleryManager {
                     val processedBitmap = RawDemosaicProcessor.getInstance().process(
                         context,
                         dngFile.absolutePath, null, null, 0,
+                        rawExposureCompensation = updatedMetadata.rawExposureCompensation ?: 0f,
+                        rawBlackPointCorrection = updatedMetadata.rawBlackPointCorrection ?: 0f,
+                        rawWhitePointCorrection = updatedMetadata.rawWhitePointCorrection ?: 0f,
                         sharpeningValue = 0.4f,
                         denoiseValue = updatedMetadata.rawDenoiseValue,
                         onMetadata = { raw ->
@@ -2656,6 +2664,9 @@ object GalleryManager {
                 val processedBitmap = RawDemosaicProcessor.getInstance().process(
                     context,
                     dngFile.absolutePath, metadata?.ratio, metadata?.cropRegion, 0,
+                    rawExposureCompensation = updatedMetadata?.rawExposureCompensation ?: 0f,
+                    rawBlackPointCorrection = updatedMetadata?.rawBlackPointCorrection ?: 0f,
+                    rawWhitePointCorrection = updatedMetadata?.rawWhitePointCorrection ?: 0f,
                     sharpeningValue = 0.4f,
                     denoiseValue = (updatedMetadata ?: MediaMetadata()).rawDenoiseValue,
                     onMetadata = { raw ->

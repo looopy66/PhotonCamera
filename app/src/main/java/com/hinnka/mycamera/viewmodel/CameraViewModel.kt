@@ -479,13 +479,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setUseLivePhoto(it.useLivePhoto && it.captureMode == CaptureMode.PHOTO)
                 // 同步 Ultra HDR 设置到相机控制器
                 cameraController.setApplyUltraHDR(it.applyUltraHDR)
-                // 同步 RAW 色彩空间和 Log 曲线到解马赛克处理器
-                RawDemosaicProcessor.getInstance().setRawColorSpace(it.colorSpace)
-                RawDemosaicProcessor.getInstance().setRawLogCurve(it.logCurve)
-                // 同步当前 Log 曲线对应的 RAW LUT
-                val currentRawLut = it.rawLuts[it.logCurve.name]
-                    ?: RawProfile.defaultLutFor(it.colorSpace, it.logCurve)
-                RawDemosaicProcessor.getInstance().setRawLut(application, currentRawLut)
                 // 同步 P010 设置到相机控制器
                 cameraController.setUseP010(it.useP010)
                 // 同步 HLG10 设置到相机控制器
@@ -2211,15 +2204,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setLogCurve(logCurve: TransferCurve) {
         viewModelScope.launch {
             userPreferencesRepository.saveLogCurve(logCurve)
-        }
-    }
-
-    /**
-     * 设置 RAW 还原 LUT
-     */
-    fun setRawLut(logCurve: TransferCurve, lut: String) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveRawLut(logCurve, lut)
         }
     }
 

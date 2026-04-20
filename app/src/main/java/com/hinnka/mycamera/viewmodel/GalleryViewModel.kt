@@ -261,6 +261,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         private set
     var editRawDenoise = MutableStateFlow(0f)
         private set
+    var editRawExposureCompensation = MutableStateFlow(0f)
+        private set
+    var editRawBlackPointCorrection = MutableStateFlow(0f)
+        private set
+    var editRawWhitePointCorrection = MutableStateFlow(0f)
+        private set
 
     // Computational Bokeh editing state
     var editComputationalAperture = MutableStateFlow<Float?>(null)
@@ -718,6 +724,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editNoiseReduction.value = m.noiseReduction ?: 0f
             editChromaNoiseReduction.value = m.chromaNoiseReduction ?: 0f
             editRawDenoise.value = m.rawDenoiseValue ?: 0f
+            editRawExposureCompensation.value = m.rawExposureCompensation ?: 0f
+            editRawBlackPointCorrection.value = m.rawBlackPointCorrection ?: 0f
+            editRawWhitePointCorrection.value = m.rawWhitePointCorrection ?: 0f
             restoreCropEditState(photo, m)
 
             // 加载 LUT 配置
@@ -1243,6 +1252,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 metadata.chromaNoiseReduction
                     ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
             editRawDenoise.value = metadata.rawDenoiseValue ?: 0f
+            editRawExposureCompensation.value = metadata.rawExposureCompensation ?: 0f
+            editRawBlackPointCorrection.value = metadata.rawBlackPointCorrection ?: 0f
+            editRawWhitePointCorrection.value = metadata.rawWhitePointCorrection ?: 0f
             
             editComputationalAperture.value = metadata.computationalAperture
             editFocusPointX.value = metadata.focusPointX
@@ -1256,6 +1268,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editNoiseReduction.value = noiseReduction.value
             editChromaNoiseReduction.value = chromaNoiseReduction.value
             editRawDenoise.value = 0.2f
+            editRawExposureCompensation.value = 0f
+            editRawBlackPointCorrection.value = 0f
+            editRawWhitePointCorrection.value = 0f
             editComputationalAperture.value = null
             editFocusPointX.value = null
             editFocusPointY.value = null
@@ -1284,6 +1299,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editCropRect.value = null
         editCropAspectOption.value = CropAspectOption.Free
         editRawDenoise.value = 0.2f
+        editRawExposureCompensation.value = 0f
+        editRawBlackPointCorrection.value = 0f
+        editRawWhitePointCorrection.value = 0f
     }
 
     /**
@@ -1376,17 +1394,39 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editChromaNoiseReduction.value = value
     }
 
-    fun saveRawDenoiseValue(mediaData: MediaData, value: Float) {
-        editRawDenoise.value = value
+    private fun persistRawEditMetadata(mediaData: MediaData) {
         viewModelScope.launch {
-            val metadata = mediaData.metadata?.copy(
+            val metadata = (mediaData.metadata ?: currentMediaMetadata)?.copy(
                 rawDenoiseValue = editRawDenoise.value,
+                rawExposureCompensation = editRawExposureCompensation.value,
+                rawBlackPointCorrection = editRawBlackPointCorrection.value,
+                rawWhitePointCorrection = editRawWhitePointCorrection.value,
             )
             val context = getApplication<Application>()
             metadata?.let {
                 GalleryManager.saveMetadata(context, mediaData.id, it)
             }
         }
+    }
+
+    fun saveRawDenoiseValue(mediaData: MediaData, value: Float) {
+        editRawDenoise.value = value
+        persistRawEditMetadata(mediaData)
+    }
+
+    fun saveRawExposureCompensationValue(mediaData: MediaData, value: Float) {
+        editRawExposureCompensation.value = value
+        persistRawEditMetadata(mediaData)
+    }
+
+    fun saveRawBlackPointCorrectionValue(mediaData: MediaData, value: Float) {
+        editRawBlackPointCorrection.value = value
+        persistRawEditMetadata(mediaData)
+    }
+
+    fun saveRawWhitePointCorrectionValue(mediaData: MediaData, value: Float) {
+        editRawWhitePointCorrection.value = value
+        persistRawEditMetadata(mediaData)
     }
 
     /**
@@ -1526,6 +1566,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         noiseReduction = editNoiseReduction.value,
                         chromaNoiseReduction = editChromaNoiseReduction.value,
                         rawDenoiseValue = editRawDenoise.value,
+                        rawExposureCompensation = editRawExposureCompensation.value,
+                        rawBlackPointCorrection = editRawBlackPointCorrection.value,
+                        rawWhitePointCorrection = editRawWhitePointCorrection.value,
                         computationalAperture = editComputationalAperture.value,
                         focusPointX = editFocusPointX.value,
                         focusPointY = editFocusPointY.value,
@@ -1751,6 +1794,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     noiseReduction = editNoiseReduction.value,
                     chromaNoiseReduction = editChromaNoiseReduction.value,
                     rawDenoiseValue = editRawDenoise.value,
+                    rawExposureCompensation = editRawExposureCompensation.value,
+                    rawBlackPointCorrection = editRawBlackPointCorrection.value,
+                    rawWhitePointCorrection = editRawWhitePointCorrection.value,
                     computationalAperture = editComputationalAperture.value,
                     focusPointX = editFocusPointX.value,
                     focusPointY = editFocusPointY.value,

@@ -616,6 +616,9 @@
     <string name="settings_raw_nlm_base_h">RAW NLM 基础强度</string>
     <string name="settings_raw_nlm_gain_factor">RAW NLM 增益响应</string>
     <string name="settings_raw_nlm_noise_factor">RAW 降噪</string>
+    <string name="settings_raw_exposure_compensation">RAW 曝光补偿</string>
+    <string name="settings_raw_black_point_correction">RAW 黑点校正</string>
+    <string name="settings_raw_white_point_correction">RAW 白点校正</string>
     <string name="ghost_mode">幻影模式</string>
     <string name="close_ghost_mode">关闭幻影模式</string>
     <string name="ghost_mode_dialog_title">开启幻影模式</string>

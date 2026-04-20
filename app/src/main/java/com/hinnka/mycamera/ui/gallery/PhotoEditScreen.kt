@@ -12,6 +12,7 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -46,7 +47,6 @@ import me.saket.telephoto.zoomable.rememberZoomableImageState
 import me.saket.telephoto.zoomable.rememberZoomableState
 import com.hinnka.mycamera.frame.TextType
 import com.hinnka.mycamera.model.ColorRecipeParams
-import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.camera.RecipeScope
 import com.hinnka.mycamera.ui.components.*
@@ -75,6 +75,10 @@ private data class PreviewRenderSignature(
     val editSharpening: Float,
     val editNoiseReduction: Float,
     val editChromaNoiseReduction: Float,
+    val editRawDenoise: Float,
+    val editRawExposureCompensation: Float,
+    val editRawBlackPointCorrection: Float,
+    val editRawWhitePointCorrection: Float,
     val editComputationalAperture: Float?,
     val editFocusX: Float?,
     val editFocusY: Float?,
@@ -131,6 +135,9 @@ fun PhotoEditScreen(
     val editNoiseReduction by viewModel.editNoiseReduction.collectAsState()
     val editChromaNoiseReduction by viewModel.editChromaNoiseReduction.collectAsState()
     val editRawNlmNoiseFactor by viewModel.editRawDenoise.collectAsState()
+    val editRawExposureCompensation by viewModel.editRawExposureCompensation.collectAsState()
+    val editRawBlackPointCorrection by viewModel.editRawBlackPointCorrection.collectAsState()
+    val editRawWhitePointCorrection by viewModel.editRawWhitePointCorrection.collectAsState()
     
     val editComputationalAperture by viewModel.editComputationalAperture.collectAsState()
     val editFocusX by viewModel.editFocusPointX.collectAsState()
@@ -138,8 +145,6 @@ fun PhotoEditScreen(
 
     val editCropRect by viewModel.editCropRect.collectAsState()
     val editCropAspectOption by viewModel.editCropAspectOption.collectAsState()
-
-    val rawProfile by cameraViewModel.rawProfile.collectAsState()
 
     val isRaw = currentPhoto?.let { viewModel.isRaw(it.id) } ?: false
 
@@ -166,6 +171,10 @@ fun PhotoEditScreen(
             editSharpening = editSharpening,
             editNoiseReduction = editNoiseReduction,
             editChromaNoiseReduction = editChromaNoiseReduction,
+            editRawDenoise = editRawNlmNoiseFactor,
+            editRawExposureCompensation = editRawExposureCompensation,
+            editRawBlackPointCorrection = editRawBlackPointCorrection,
+            editRawWhitePointCorrection = editRawWhitePointCorrection,
             editComputationalAperture = editComputationalAperture,
             editFocusX = editFocusX,
             editFocusY = editFocusY,
@@ -745,6 +754,7 @@ fun PhotoEditScreen(
                                 title = stringResource(R.string.settings_sharpening),
                                 value = editSharpening,
                                 valueRange = 0f..1f,
+                                resetValue = 0f,
                                 onValueChange = { isAdjusting = true; viewModel.setSharpening(it) },
                                 onValueChangeFinished = { isAdjusting = false }
                             )
@@ -752,6 +762,7 @@ fun PhotoEditScreen(
                                 title = stringResource(R.string.settings_noise_reduction),
                                 value = editNoiseReduction,
                                 valueRange = 0f..1f,
+                                resetValue = 0f,
                                 onValueChange = { isAdjusting = true; viewModel.setNoiseReduction(it) },
                                 onValueChangeFinished = { isAdjusting = false }
                             )
@@ -759,16 +770,31 @@ fun PhotoEditScreen(
                                 title = stringResource(R.string.settings_chroma_noise_reduction),
                                 value = editChromaNoiseReduction,
                                 valueRange = 0f..1f,
+                                resetValue = 0f,
                                 onValueChange = { isAdjusting = true; viewModel.setChromaNoiseReduction(it) },
                                 onValueChangeFinished = { isAdjusting = false }
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                         } else if (editTab == 2) {
                             RawEditPanel(
-                                viewModel = cameraViewModel,
-                                rawProfile = rawProfile,
                                 rawNlmNoiseFactor = editRawNlmNoiseFactor,
-                                onRawNlmNoiseFactorChange = { viewModel.saveRawDenoiseValue(currentPhoto, it) },
+                                rawExposureCompensation = editRawExposureCompensation,
+                                rawBlackPointCorrection = editRawBlackPointCorrection,
+                                rawWhitePointCorrection = editRawWhitePointCorrection,
+                                onRawNlmNoiseFactorChange = {
+                                    viewModel.saveRawDenoiseValue(currentPhoto, it)
+                                },
+                                onRawExposureCompensationChange = {
+                                    viewModel.saveRawExposureCompensationValue(currentPhoto, it)
+                                },
+                                onRawBlackPointCorrectionChange = {
+                                    viewModel.saveRawBlackPointCorrectionValue(currentPhoto, it)
+                                },
+                                onRawWhitePointCorrectionChange = {
+                                    viewModel.saveRawWhitePointCorrectionValue(currentPhoto, it)
+                                },
+                                onAdjustmentStart = { isAdjusting = true },
+                                onAdjustmentEnd = { isAdjusting = false },
                                 modifier = Modifier.fillMaxWidth()
                             )
                         } else if (editTab == 3) {
@@ -1026,41 +1052,68 @@ private fun ZoomableEditImage(
 
 @Composable
 private fun RawEditPanel(
-    viewModel: CameraViewModel,
-    rawProfile: RawProfile,
     rawNlmNoiseFactor: Float,
+    rawExposureCompensation: Float,
+    rawBlackPointCorrection: Float,
+    rawWhitePointCorrection: Float,
     onRawNlmNoiseFactorChange: (Float) -> Unit,
+    onRawExposureCompensationChange: (Float) -> Unit,
+    onRawBlackPointCorrectionChange: (Float) -> Unit,
+    onRawWhitePointCorrectionChange: (Float) -> Unit,
+    onAdjustmentStart: () -> Unit,
+    onAdjustmentEnd: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
         modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.SpaceBetween
     ) {
-        SegmentedControl(
-            title = stringResource(R.string.settings_raw_profile),
-            items = RawProfile.entries.toList(),
-            selectedItem = rawProfile,
-            onItemSelected = { viewModel.setRawProfile(it) },
-            itemLabel = { rawProfileLabel(it) }
-        )
-
         SliderSettingItem(
             title = stringResource(R.string.settings_raw_nlm_noise_factor),
             value = rawNlmNoiseFactor,
             valueRange = 0f..1f,
-            onValueChange = onRawNlmNoiseFactorChange
+            resetValue = 0f,
+            onValueChange = {
+                onAdjustmentStart()
+                onRawNlmNoiseFactorChange(it)
+            },
+            onValueChangeFinished = onAdjustmentEnd
         )
-    }
-}
-
-@Composable
-private fun rawProfileLabel(rawProfile: RawProfile): String {
-    return when (rawProfile) {
-        RawProfile.ACES_CINE -> stringResource(R.string.raw_profile_aces_cine)
-        RawProfile.FUJI_PROVIA -> stringResource(R.string.raw_profile_fuji_provia)
-        RawProfile.STANDARD_SRGB -> stringResource(R.string.raw_profile_standard_srgb)
+        SliderSettingItem(
+            title = stringResource(R.string.settings_raw_exposure_compensation),
+            value = rawExposureCompensation,
+            valueRange = -2f..2f,
+            resetValue = 0f,
+            onValueChange = {
+                onAdjustmentStart()
+                onRawExposureCompensationChange(it)
+            },
+            onValueChangeFinished = onAdjustmentEnd
+        )
+        SliderSettingItem(
+            title = stringResource(R.string.settings_raw_black_point_correction),
+            value = rawBlackPointCorrection,
+            valueRange = -0.25f..0.25f,
+            resetValue = 0f,
+            onValueChange = {
+                onAdjustmentStart()
+                onRawBlackPointCorrectionChange(it)
+            },
+            onValueChangeFinished = onAdjustmentEnd
+        )
+        SliderSettingItem(
+            title = stringResource(R.string.settings_raw_white_point_correction),
+            value = rawWhitePointCorrection,
+            valueRange = -0.5f..0.5f,
+            resetValue = 0f,
+            onValueChange = {
+                onAdjustmentStart()
+                onRawWhitePointCorrectionChange(it)
+            },
+            onValueChangeFinished = onAdjustmentEnd
+        )
     }
 }
 

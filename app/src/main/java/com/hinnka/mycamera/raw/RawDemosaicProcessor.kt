@@ -6,9 +6,6 @@ import android.graphics.Rect
 import android.media.Image
 import android.opengl.*
 import com.hinnka.mycamera.camera.AspectRatio
-import com.hinnka.mycamera.color.TransferCurve
-import com.hinnka.mycamera.lut.LutConfig
-import com.hinnka.mycamera.lut.LutParser
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.RawProcessor
@@ -23,6 +20,7 @@ import java.nio.ShortBuffer
 import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.ln
+import kotlin.math.pow
 import kotlin.math.sqrt
 import android.opengl.Matrix as GlMatrix
 import androidx.core.graphics.createBitmap
@@ -176,8 +174,6 @@ class RawDemosaicProcessor {
     private var sharpenTextureId = 0
     private var sharpenWidth = 0
     private var sharpenHeight = 0
-    private var lut3DTextureId = 0
-
     private var outputFramebufferId = 0
     private var outputTextureId = 0
 
@@ -220,62 +216,15 @@ class RawDemosaicProcessor {
         )
     }
 
-    private fun resolveWorkingColorSpace(): android.graphics.ColorSpace {
-        return baseLut?.outputColorSpace ?: when (colorSpace) {
-            ColorSpace.SRGB -> android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB)
-            ColorSpace.DCI_P3 -> android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.DISPLAY_P3)
-            else -> android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.BT2020)
-        }
-    }
+    private fun resolveWorkingColorSpace(): android.graphics.ColorSpace =
+        android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB)
 
 
     private var isInitialized = false
     private var maxTextureSize = 8192 // default, queried at init
 
-    private var baseLut: LutConfig? = null
-    private var colorSpace = ColorSpace.SRGB
-    private var logCurve = TransferCurve.SRGB
-
-    /**
-     * 设置 RAW 还原 LUT
-     * @param context Context
-     * @param lutFileName LUT 文件名，"none" 表示不使用 LUT
-     */
-    fun setRawLut(context: Context, lutFileName: String) {
-        if (lutFileName == "none") {
-            baseLut = null
-        } else {
-            val rawFolder = logCurve.rawFolder
-            if (rawFolder == null) {
-                baseLut = null
-                return
-            }
-            try {
-                baseLut = LutParser.parseFromAssets(context, "$rawFolder/$lutFileName")
-                //暂时简单处理输出色彩空间P3
-                if (lutFileName.contains("P3")) {
-                    baseLut = baseLut?.copy(
-                        outputColorSpace = android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.DISPLAY_P3),
-                    )
-                }
-                PLog.d(TAG, "RAW LUT updated to: $lutFileName")
-            } catch (e: Exception) {
-                PLog.e(TAG, "Failed to load RAW LUT: $lutFileName", e)
-                baseLut = null
-            }
-        }
-    }
-
-    fun setRawColorSpace(colorSpace: ColorSpace) {
-        this.colorSpace = colorSpace
-    }
-
     fun getRawColorSpace(): ColorSpace {
-        return colorSpace
-    }
-
-    fun setRawLogCurve(logCurve: TransferCurve) {
-        this.logCurve = logCurve
+        return ColorSpace.ProPhoto
     }
 
     /**
@@ -294,6 +243,9 @@ class RawDemosaicProcessor {
         cropRegion: Rect?,
         rotation: Int,
         exposureBias: Float = 0f,
+        rawExposureCompensation: Float = 0f,
+        rawBlackPointCorrection: Float = 0f,
+        rawWhitePointCorrection: Float = 0f,
         sharpeningValue: Float = 0f,
         denoiseValue: Float? = null,
         onMetadata: ((RawMetadata) -> Unit)? = null
@@ -311,6 +263,9 @@ class RawDemosaicProcessor {
                 cropRegion = cropRegion,
                 rotation = rotation,
                 exposureBias = exposureBias,
+                rawExposureCompensation = rawExposureCompensation,
+                rawBlackPointCorrection = rawBlackPointCorrection,
+                rawWhitePointCorrection = rawWhitePointCorrection,
                 sharpeningValue = sharpeningValue,
                 denoiseValue = denoiseValue,
                 dngFile = dngFile,
@@ -335,6 +290,9 @@ class RawDemosaicProcessor {
         aspectRatio: AspectRatio,
         cropRegion: Rect?,
         rotation: Int,
+        rawExposureCompensation: Float = 0f,
+        rawBlackPointCorrection: Float = 0f,
+        rawWhitePointCorrection: Float = 0f,
         sharpeningValue: Float = 0f,
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
@@ -357,6 +315,9 @@ class RawDemosaicProcessor {
                 aspectRatio = aspectRatio,
                 cropRegion = cropRegion,
                 rotation = rotation,
+                rawExposureCompensation = rawExposureCompensation,
+                rawBlackPointCorrection = rawBlackPointCorrection,
+                rawWhitePointCorrection = rawWhitePointCorrection,
                 sharpeningValue = sharpeningValue,
                 denoiseValue = denoiseValue,
                 chromaDenoiseValue = chromaDenoiseValue
@@ -374,6 +335,9 @@ class RawDemosaicProcessor {
         cropRegion: Rect?,
         rotation: Int,
         exposureBias: Float = 0f,
+        rawExposureCompensation: Float = 0f,
+        rawBlackPointCorrection: Float = 0f,
+        rawWhitePointCorrection: Float = 0f,
         sharpeningValue: Float = 0f,
         denoiseValue: Float? = null,
         onMetadata: ((RawMetadata) -> Unit)? = null
@@ -391,6 +355,9 @@ class RawDemosaicProcessor {
                 cropRegion = cropRegion,
                 rotation = rotation,
                 exposureBias = exposureBias,
+                rawExposureCompensation = rawExposureCompensation,
+                rawBlackPointCorrection = rawBlackPointCorrection,
+                rawWhitePointCorrection = rawWhitePointCorrection,
                 sharpeningValue = sharpeningValue,
                 denoiseValue = denoiseValue,
                 dngFile = dngFile,
@@ -417,6 +384,9 @@ class RawDemosaicProcessor {
         cropRegion: Rect?,
         rotation: Int,
         exposureBias: Float = 0f,
+        rawExposureCompensation: Float = 0f,
+        rawBlackPointCorrection: Float = 0f,
+        rawWhitePointCorrection: Float = 0f,
         sharpeningValue: Float = 0f,
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
@@ -435,10 +405,10 @@ class RawDemosaicProcessor {
         if (dngFile != null) {
             val dngRawData = processDngNative(
                 dngFile.absolutePath,
-                colorSpace.xr, colorSpace.yr,
-                colorSpace.xg, colorSpace.yg,
-                colorSpace.xb, colorSpace.yb,
-                colorSpace.xw, colorSpace.yw
+                ColorSpace.ProPhoto.xr, ColorSpace.ProPhoto.yr,
+                ColorSpace.ProPhoto.xg, ColorSpace.ProPhoto.yg,
+                ColorSpace.ProPhoto.xb, ColorSpace.ProPhoto.yb,
+                ColorSpace.ProPhoto.xw, ColorSpace.ProPhoto.yw
             )
             if (dngRawData == null) {
                 return@withContext RawProcessor.processAndToBitmap(dngFile, aspectRatio, cropRegion, rotation)?.let {
@@ -547,21 +517,17 @@ class RawDemosaicProcessor {
             )
             // GPU 已消费 rawData，立即释放 CPU 侧引用，帮助 GC 回收（超分时约 288 MB）
             actualRawData = null
-            renderLinearPass(actualMetadata)
+            renderLinearPass(
+                metadata = actualMetadata,
+                rawExposureCompensation = rawExposureCompensation,
+                rawBlackPointCorrection = rawBlackPointCorrection,
+                rawWhitePointCorrection = rawWhitePointCorrection
+            )
             // rawTextureId 已被 linearPass 消费，提前释放 GPU 显存
             if (rawTextureId != 0) {
                 GLES30.glDeleteTextures(1, intArrayOf(rawTextureId), 0)
                 rawTextureId = 0
             }
-
-            val calcExposureGain =
-                analyzeFromGpuTexture(
-                    demosaicTextureId,
-                    actualWidth,
-                    actualHeight,
-                    metadata
-                )
-            PLog.d(TAG, "calc Exposure Gain: $calcExposureGain")
             val workingColorSpace = resolveWorkingColorSpace()
 
             // NLM 降噪
@@ -635,7 +601,7 @@ class RawDemosaicProcessor {
             // 5. 第二步：Combined Pass (HDR Linear -> LDR sRGB + LUT)
             setupCombinedFramebuffer(actualWidth, actualHeight)
             val combinedStart = System.currentTimeMillis()
-            renderCombinedPass(actualMetadata, calcExposureGain, baseLut, logCurve, inputTextureId = outputTexture)
+            renderCombinedPass(actualMetadata, inputTextureId = outputTexture)
             PLog.d(TAG, "Combined Pass took: ${System.currentTimeMillis() - combinedStart}ms")
             // outputTexture (gfTexId[1]) 已被 combinedPass 消费，提前释放
             if (gfTexId[1] != 0) {
@@ -1485,86 +1451,6 @@ class RawDemosaicProcessor {
         checkGlError("setupOutputFramebuffer")
     }
 
-
-    /**
-     * 场景分析 (GPU Post-Demosaic)
-     *
-     * 从 demosaic 后的 RGBA16F 纹理中间 mip level 读回降采样数据，
-     * 执行评价测光 (Evaluative Metering)：以对焦点（或中心点）为中心应用高斯权重分布。
-     *
-     * 优势:
-     * - 数据已经过完整的 BLC → WB → LSC → Demosaic → CCM 变换链
-     * - 与 ToneMap shader 输入完全一致，不存在 CPU/GPU 不匹配
-     * - 评价测光权衡了主体和环境，曝光更自然
-     */
-    private fun analyzeFromGpuTexture(
-        textureId: Int,
-        width: Int,
-        height: Int,
-        metadata: RawMetadata?,
-    ): Float {
-        // 1. 生成 mipmap
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR_MIPMAP_NEAREST)
-        GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
-        checkGlError("analyzeFromGpuTexture: glGenerateMipmap")
-
-        // 2. 选择合适的 mip level 进行读回
-        val maxDim = maxOf(width, height)
-        val totalMipLevels = (ln(maxDim.toFloat()) / ln(2.0f)).toInt()
-        val targetSize = 256
-        val desiredMipLevel = (ln(maxDim.toFloat() / targetSize) / ln(2.0f))
-            .toInt().coerceIn(0, totalMipLevels)
-
-        val mipWidth = maxOf(1, width shr desiredMipLevel)
-        val mipHeight = maxOf(1, height shr desiredMipLevel)
-
-        PLog.d(TAG, "analyzeFromGpuTexture: mipLevel=$desiredMipLevel, mipSize=${mipWidth}x${mipHeight}")
-
-        // 3. 创建临时 FBO 绑定到该 mip level
-        val tempFbo = IntArray(1)
-        GLES30.glGenFramebuffers(1, tempFbo, 0)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, tempFbo[0])
-        GLES30.glFramebufferTexture2D(
-            GLES30.GL_FRAMEBUFFER,
-            GLES30.GL_COLOR_ATTACHMENT0,
-            GLES30.GL_TEXTURE_2D,
-            textureId,
-            desiredMipLevel
-        )
-
-        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
-        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
-            PLog.w(TAG, "analyzeFromGpuTexture: FBO incomplete, status=$status, fallback")
-            GLES30.glDeleteFramebuffers(1, tempFbo, 0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            return 1f
-        }
-
-        // 4. 读取整个 mip 的像素数据 (RGBA float)
-        val pixelCount = mipWidth * mipHeight
-        val floatBuffer = ByteBuffer.allocateDirect(pixelCount * 4 * 4)
-            .order(ByteOrder.nativeOrder())
-            .asFloatBuffer()
-        GLES30.glReadPixels(0, 0, mipWidth, mipHeight, GLES30.GL_RGBA, GLES30.GL_FLOAT, floatBuffer)
-        checkGlError("analyzeFromGpuTexture: glReadPixels")
-
-        // 5. 清理 GPU 资源
-        GLES30.glDeleteFramebuffers(1, tempFbo, 0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-
-        return MeteringSystem.analyze(
-            floatBuffer = floatBuffer,
-            width = mipWidth,
-            height = mipHeight,
-            metadata = metadata
-        )
-    }
-
     // 辅助函数: 3x3 矩阵转置 (行主序 -> 列主序)
     private fun transposeMatrix3x3(matrix: FloatArray): FloatArray {
         require(matrix.size >= 9) { "Matrix must have at least 9 elements" }
@@ -1573,43 +1459,6 @@ class RawDemosaicProcessor {
             matrix[1], matrix[4], matrix[7],
             matrix[2], matrix[5], matrix[8]
         )
-    }
-
-    /**
-     * 上传 3D LUT 纹理
-     */
-    private fun uploadLut3DTexture(lutConfig: LutConfig) {
-        if (lut3DTextureId == 0) {
-            val textures = IntArray(1)
-            GLES30.glGenTextures(1, textures, 0)
-            lut3DTextureId = textures[0]
-        }
-
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, lut3DTextureId)
-        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
-
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_R, GLES30.GL_CLAMP_TO_EDGE)
-
-        if (lutConfig.configDataType == LutConfig.CONFIG_DATA_TYPE_UINT16) {
-            val floatBuffer = lutConfig.toFloatBuffer()
-            GLES30.glTexImage3D(
-                GLES30.GL_TEXTURE_3D, 0, GLES30.GL_RGB16F,
-                lutConfig.size, lutConfig.size, lutConfig.size,
-                0, GLES30.GL_RGB, GLES30.GL_FLOAT, floatBuffer
-            )
-        } else {
-            val buffer = lutConfig.toByteBuffer()
-            GLES30.glTexImage3D(
-                GLES30.GL_TEXTURE_3D, 0, GLES30.GL_RGB8,
-                lutConfig.size, lutConfig.size, lutConfig.size,
-                0, GLES30.GL_RGB, GLES30.GL_UNSIGNED_BYTE, buffer
-            )
-        }
-        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 4)
     }
 
     private fun uploadCurveTexture(curveLut: FloatArray) {
@@ -1643,11 +1492,11 @@ class RawDemosaicProcessor {
      */
     private fun renderCombinedPass(
         metadata: RawMetadata,
-        calcExposureGain: Float,
-        lutConfig: LutConfig?,
-        logCurve: TransferCurve,
         inputTextureId: Int = demosaicTextureId
     ) {
+        val curveLut = ACR3Curve.samples()
+        val outputTransform = computeWorkingToOutputTransform(ColorSpace.ProPhoto, ColorSpace.SRGB)
+
         GLES30.glUseProgram(combinedProgram)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, combinedFramebufferId)
 
@@ -1658,40 +1507,22 @@ class RawDemosaicProcessor {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(combinedProgram, "uInputTexture"), 0)
 
-        lutConfig?.let { uploadLut3DTexture(it) }
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, lut3DTextureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(combinedProgram, "uLutTexture"), 1)
+        uploadCurveTexture(curveLut)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, curveTextureId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(combinedProgram, "uCurveTexture"), 1)
         GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(combinedProgram, "uLutSize"),
-            lutConfig?.size?.toFloat() ?: 0f
+            GLES30.glGetUniformLocation(combinedProgram, "uCurveSize"),
+            curveLut.size.toFloat()
         )
         GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(combinedProgram, "uLutEnabled"),
-            if (lutConfig != null) 1 else 0
+            GLES30.glGetUniformLocation(combinedProgram, "uCurveEnabled"),
+            1
         )
 
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(combinedProgram, "uExposureGain"), calcExposureGain)
-
-        // Log 曲线参数
-        GLES30.glUniform4f(
-            GLES30.glGetUniformLocation(combinedProgram, "uLogCoeffs"),
-            logCurve.a, logCurve.b, logCurve.c, logCurve.d
-        )
-        GLES30.glUniform4f(
-            GLES30.glGetUniformLocation(combinedProgram, "uLogLimits"),
-            logCurve.e, logCurve.f, logCurve.cut1, logCurve.cut2
-        )
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(combinedProgram, "uLogType"), logCurve.type)
-        val applySdrToneMap = logCurve == TransferCurve.SRGB
-        val logExposureBoost = if (logCurve.isLog) 1.8f else 1.0f
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(combinedProgram, "uApplySdrToneMap"),
-            if (applySdrToneMap) 1 else 0
-        )
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(combinedProgram, "uLogExposureBoost"),
-            logExposureBoost
+        GLES30.glUniformMatrix3fv(
+            GLES30.glGetUniformLocation(combinedProgram, "uOutputTransform"),
+            1, false, transposeMatrix3x3(outputTransform), 0
         )
 
         val identityMatrix = FloatArray(16)
@@ -1703,6 +1534,109 @@ class RawDemosaicProcessor {
         drawQuad(combinedProgram)
         checkGlError("renderCombinedPass")
     }
+
+    private fun computeWorkingToOutputTransform(
+        workingSpace: ColorSpace,
+        outputSpace: ColorSpace
+    ): FloatArray {
+        val workingFromXyz = computeXyzD50ToGamut(workingSpace) ?: return identityMatrix3x3()
+        val xyzFromWorking = invertMatrix3x3(workingFromXyz) ?: return identityMatrix3x3()
+        val outputFromXyz = computeXyzD50ToGamut(outputSpace) ?: return identityMatrix3x3()
+        return multiplyMatrix3x3(outputFromXyz, xyzFromWorking)
+    }
+
+    private fun computeXyzD50ToGamut(colorSpace: ColorSpace): FloatArray? {
+        val primaries = colorSpace.primaries
+        val whitePoint = colorSpace.whitePoint
+        if (primaries.size != 6 || whitePoint.size != 2) return null
+
+        val xr = primaries[0]
+        val yr = primaries[1]
+        val xg = primaries[2]
+        val yg = primaries[3]
+        val xb = primaries[4]
+        val yb = primaries[5]
+        val xw = whitePoint[0]
+        val yw = whitePoint[1]
+
+        val mS = floatArrayOf(
+            xr / yr, xg / yg, xb / yb,
+            1f, 1f, 1f,
+            (1 - xr - yr) / yr, (1 - xg - yg) / yg, (1 - xb - yb) / yb
+        )
+        val invS = invertMatrix3x3(mS) ?: return null
+
+        val xWhite = xw / yw
+        val yWhite = 1f
+        val zWhite = (1 - xw - yw) / yw
+
+        val sR = invS[0] * xWhite + invS[1] * yWhite + invS[2] * zWhite
+        val sG = invS[3] * xWhite + invS[4] * yWhite + invS[5] * zWhite
+        val sB = invS[6] * xWhite + invS[7] * yWhite + invS[8] * zWhite
+
+        val gamutToXyzNative = floatArrayOf(
+            mS[0] * sR, mS[1] * sG, mS[2] * sB,
+            mS[3] * sR, mS[4] * sG, mS[5] * sB,
+            mS[6] * sR, mS[7] * sG, mS[8] * sB
+        )
+
+        val bradfordD65ToD50 = floatArrayOf(
+            1.0478112f, 0.0228866f, -0.0501270f,
+            0.0295424f, 0.9904844f, -0.0170491f,
+            -0.0092345f, 0.0150436f, 0.7521316f
+        )
+
+        val gamutToXyzD50 = if (isD50WhitePoint(xw, yw)) {
+            gamutToXyzNative
+        } else {
+            multiplyMatrix3x3(bradfordD65ToD50, gamutToXyzNative)
+        }
+        return invertMatrix3x3(gamutToXyzD50)
+    }
+
+    private fun isD50WhitePoint(x: Float, y: Float): Boolean {
+        return abs(x - 0.3457f) < 0.002f && abs(y - 0.3585f) < 0.002f
+    }
+
+    private fun multiplyMatrix3x3(lhs: FloatArray, rhs: FloatArray): FloatArray {
+        return FloatArray(9) { index ->
+            val row = index / 3
+            val col = index % 3
+            lhs[row * 3] * rhs[col] +
+                lhs[row * 3 + 1] * rhs[3 + col] +
+                lhs[row * 3 + 2] * rhs[6 + col]
+        }
+    }
+
+    private fun invertMatrix3x3(matrix: FloatArray): FloatArray? {
+        val det = matrix[0] * (matrix[4] * matrix[8] - matrix[5] * matrix[7]) -
+            matrix[1] * (matrix[3] * matrix[8] - matrix[5] * matrix[6]) +
+            matrix[2] * (matrix[3] * matrix[7] - matrix[4] * matrix[6])
+
+        if (abs(det) < 1e-12f) {
+            PLog.e(TAG, "Matrix is singular, cannot invert")
+            return null
+        }
+
+        val invDet = 1.0f / det
+        return floatArrayOf(
+            (matrix[4] * matrix[8] - matrix[5] * matrix[7]) * invDet,
+            (matrix[2] * matrix[7] - matrix[1] * matrix[8]) * invDet,
+            (matrix[1] * matrix[5] - matrix[2] * matrix[4]) * invDet,
+            (matrix[5] * matrix[6] - matrix[3] * matrix[8]) * invDet,
+            (matrix[0] * matrix[8] - matrix[2] * matrix[6]) * invDet,
+            (matrix[2] * matrix[3] - matrix[0] * matrix[5]) * invDet,
+            (matrix[3] * matrix[7] - matrix[4] * matrix[6]) * invDet,
+            (matrix[1] * matrix[6] - matrix[0] * matrix[7]) * invDet,
+            (matrix[0] * matrix[4] - matrix[1] * matrix[3]) * invDet
+        )
+    }
+
+    private fun identityMatrix3x3(): FloatArray = floatArrayOf(
+        1f, 0f, 0f,
+        0f, 1f, 0f,
+        0f, 0f, 1f
+    )
 
     private fun renderHdrReferencePass(
         metadata: RawMetadata,
@@ -1765,7 +1699,12 @@ class RawDemosaicProcessor {
         checkGlError("renderSharpenPass")
     }
 
-    private fun renderLinearPass(metadata: RawMetadata) {
+    private fun renderLinearPass(
+        metadata: RawMetadata,
+        rawExposureCompensation: Float,
+        rawBlackPointCorrection: Float,
+        rawWhitePointCorrection: Float
+    ) {
         GLES30.glUseProgram(linearProgram)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, demosaicFramebufferId)
         GLES30.glViewport(0, 0, metadata.width, metadata.height)
@@ -1794,8 +1733,58 @@ class RawDemosaicProcessor {
             TAG,
             "compute: normalizationGain=$normalizationGain baseline=${metadata.baselineExposure}"
         )
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(linearProgram, "uExposureGain"), normalizationGain)
+        val exposureGain = normalizationGain * 2.0f.pow(rawExposureCompensation)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(linearProgram, "uExposureGain"), exposureGain)
+        val (blackLevel, whiteLevel) = resolveLinearInputLevels(
+            metadata = metadata,
+            rawBlackPointCorrection = rawBlackPointCorrection,
+            rawWhitePointCorrection = rawWhitePointCorrection
+        )
+        GLES30.glUniform3f(
+            GLES30.glGetUniformLocation(linearProgram, "uBlackLevel"),
+            blackLevel[0], blackLevel[1], blackLevel[2]
+        )
+        GLES30.glUniform3f(
+            GLES30.glGetUniformLocation(linearProgram, "uWhiteLevel"),
+            whiteLevel[0], whiteLevel[1], whiteLevel[2]
+        )
         drawQuad(linearProgram)
+    }
+
+    private fun resolveLinearInputLevels(
+        metadata: RawMetadata,
+        rawBlackPointCorrection: Float,
+        rawWhitePointCorrection: Float
+    ): Pair<FloatArray, FloatArray> {
+        if (metadata.cfaPattern == RawMetadata.CFA_LINEAR_RGB) {
+            val encodedMax = 65535f
+            val blackLevel = FloatArray(3) { (encodedMax * rawBlackPointCorrection).coerceAtLeast(0f) }
+            val whiteBase = encodedMax * (1f + rawWhitePointCorrection)
+            val whiteLevel = FloatArray(3) { channel -> maxOf(whiteBase, blackLevel[channel] + 1f) }
+            return blackLevel to whiteLevel
+        }
+
+        val sensorRange = metadata.whiteLevel - metadata.blackLevel.average().toFloat()
+        val blackPointOffset = sensorRange * rawBlackPointCorrection
+        val whitePointOffset = sensorRange * rawWhitePointCorrection
+        val blackLevel = FloatArray(3) { channel ->
+            val sourceIndex = channelToCfaChannelIndex(channel)
+            (metadata.blackLevel.getOrElse(sourceIndex) { metadata.blackLevel.firstOrNull() ?: 0f } + blackPointOffset)
+                .coerceAtLeast(0f)
+        }
+        val whiteLevel = FloatArray(3) { channel ->
+            val level = metadata.whiteLevel + whitePointOffset
+            maxOf(level, blackLevel[channel] + 1f)
+        }
+        return blackLevel to whiteLevel
+    }
+
+    private fun channelToCfaChannelIndex(channel: Int): Int {
+        return when (channel) {
+            0 -> 0
+            1 -> 1
+            else -> 3
+        }
     }
 
     private fun renderOutputPass(rotation: Int, width: Int, height: Int, bounds: Rect, sourceTextureId: Int) {
@@ -2011,7 +2000,6 @@ class RawDemosaicProcessor {
         if (hdrReferenceFramebufferId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(hdrReferenceFramebufferId), 0)
         if (sharpenTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(sharpenTextureId), 0)
         if (sharpenFramebufferId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(sharpenFramebufferId), 0)
-        if (lut3DTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(lut3DTextureId), 0)
         if (curveTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(curveTextureId), 0)
         if (outputTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(outputTextureId), 0)
 

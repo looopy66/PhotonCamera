@@ -51,6 +51,8 @@ object RawShaders {
         uniform sampler2D uLensShadingMap;
         
         uniform float uExposureGain;       // 曝光增益
+        uniform vec3 uBlackLevel; // Sensor black level or encoded-domain black point
+        uniform vec3 uWhiteLevel; // Sensor white level or encoded-domain full scale
 
 
         void main() {
@@ -59,7 +61,9 @@ object RawShaders {
             // 直接读取 Linear RGB (16-bit Normalized to 0..1)
             // Stack output is 0..65535
             uvec3 raw = texelFetch(uRawTexture, coord, 0).rgb;
-            vec3 rgb = vec3(raw) / 65535.0;
+            vec3 sensor = vec3(raw);
+            vec3 safeWhiteLevel = max(uWhiteLevel, uBlackLevel + vec3(1.0));
+            vec3 rgb = clamp((sensor - uBlackLevel) / (safeWhiteLevel - uBlackLevel), 0.0, 1.0);
 
             // 1. CCM
             rgb = uColorCorrectionMatrix * rgb;
@@ -110,15 +114,14 @@ object RawShaders {
     """.trimIndent()
 
     /**
-     * Combined Processing Shader: Tone Mapping + LUT + Sharpening
+     * Combined Processing Shader
      *
      * Process chain:
-     * 1. Linear RGB Input -> Exposure Gain
-     * 2. Highlight Contrast Restore
-     * 3. Log2 Conversion (F-Log2)
-     * 4. 3D LUT Application
-     * 5. Contrast / Gamma (2.4/2.2)
-     * 6. Sharpening (High-pass on Log Luma)
+     * 1. Linear RGB input in working space
+     * 2. Local SDR tone mapping
+     * 3. ACR3 curve
+     * 4. Working space -> Linear sRGB
+     * 5. Linear sRGB -> sRGB
      */
     val COMBINED_FRAGMENT_SHADER = """
         #version 300 es
@@ -128,39 +131,38 @@ object RawShaders {
         out vec4 fragColor;
         
         uniform sampler2D uInputTexture;
-        uniform mediump sampler3D uLutTexture;
-        uniform float uLutSize;
-        uniform bool uLutEnabled;
-        uniform float uExposureGain;
-        
-        uniform vec4 uLogCoeffs;  // a, b, c, d
-        uniform vec4 uLogLimits;  // e, f, cut1, cut2
-        uniform int uLogType;     // 0=Linear, 1=Quadratic
-        uniform bool uApplySdrToneMap;
-        uniform float uLogExposureBoost;
-        
-        float log10(float x) { return log(x) * 0.4342944819; }
-        vec3 log10(vec3 x) { return log(x) * 0.4342944819; }
-        
-        vec3 linearToLog(vec3 reflection) {
-            vec3 logPart = vec3(0.0);
-            if (uLogType == 2) {
-                // Power upper (sRGB style)
-                logPart = uLogCoeffs.x * pow(max(vec3(0.0), reflection), vec3(uLogCoeffs.z)) + uLogCoeffs.y;
-            } else {
-                // Log upper
-                logPart = uLogCoeffs.z * log10(uLogCoeffs.x * reflection + uLogCoeffs.y) + uLogCoeffs.w;
+        uniform sampler2D uCurveTexture;
+        uniform mat3 uOutputTransform;
+        uniform float uCurveSize;
+        uniform bool uCurveEnabled;
+
+        float sampleCurve(float value) {
+            if (!uCurveEnabled || uCurveSize <= 1.0) {
+                return value;
             }
-            
-            vec3 lowPart = vec3(0.0);
-            if (uLogType == 1) {
-                // Quadratic toe (Apple Log)
-                lowPart = uLogLimits.x * pow(max(vec3(0.0), reflection - uLogLimits.y), vec3(2.0));
-            } else {
-                // Linear toe
-                lowPart = uLogLimits.x * reflection + uLogLimits.y;
-            }
-            return mix(lowPart, logPart, step(uLogLimits.z, reflection));
+            float clampedValue = clamp(value, 0.0, 1.0);
+            float coordX = clampedValue * ((uCurveSize - 1.0) / uCurveSize) + (0.5 / uCurveSize);
+            return texture(uCurveTexture, vec2(coordX, 0.5)).r;
+        }
+
+        vec3 applyCurve(vec3 color) {
+            return vec3(
+                sampleCurve(color.r),
+                sampleCurve(color.g),
+                sampleCurve(color.b)
+            );
+        }
+
+        vec3 linearToSrgb(vec3 color) {
+            vec3 clampedColor = max(color, vec3(0.0));
+            vec3 low = clampedColor * 12.92;
+            vec3 high = 1.055 * pow(clampedColor, vec3(1.0 / 2.4)) - 0.055;
+            bvec3 useHigh = greaterThan(clampedColor, vec3(0.0031308));
+            return vec3(
+                useHigh.r ? high.r : low.r,
+                useHigh.g ? high.g : low.g,
+                useHigh.b ? high.b : low.b
+            );
         }
         
         float luminance(vec3 color) {
@@ -168,7 +170,7 @@ object RawShaders {
         }
 
         float sampleLuma(vec2 uv) {
-            return luminance(texture(uInputTexture, uv).rgb * uExposureGain);
+            return luminance(texture(uInputTexture, uv).rgb);
         }
 
         float localAverageLuma(vec2 uv, vec2 texelSize, float radius) {
@@ -206,27 +208,13 @@ object RawShaders {
         }
         
         void main() {
-            vec3 rawColor = texture(uInputTexture, vTexCoord).rgb;
-            
-            // 1. Exposure
-            vec3 color = rawColor * uExposureGain;
-            if (uApplySdrToneMap) {
-                color = reinhardLocalTonemapping(color);
-            } else {
-                color *= uLogExposureBoost;
-            }
-            
-            // 颜色空间转换 (Log or sRGB)
-            color = linearToLog(color);
+            vec3 color = texture(uInputTexture, vTexCoord).rgb;
 
-            // 3D LUT
-            if (uLutEnabled) {
-                float scale = (uLutSize - 1.0) / uLutSize;
-                float offset = 1.0 / (2.0 * uLutSize);
-                vec3 lutCoord = color * scale + offset;
-                color = texture(uLutTexture, lutCoord).rgb;
-            }
-            
+            color = reinhardLocalTonemapping(color);
+            color = applyCurve(color);
+            color = uOutputTransform * color;
+            color = linearToSrgb(color);
+
             fragColor = vec4(color, 1.0);
         }
     """.trimIndent()

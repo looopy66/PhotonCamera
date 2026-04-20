@@ -1,5 +1,7 @@
 package com.hinnka.mycamera.ui.components
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,6 +23,7 @@ import androidx.compose.ui.unit.sp
 /**
  * 滑块设置项
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SliderSettingItem(
     title: String,
@@ -30,6 +33,7 @@ fun SliderSettingItem(
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: (() -> Unit)? = null,
     valueTextFormatter: (Float) -> String = { String.format("%.2f", it) },
+    resetValue: Float? = null,
     toggleValue: Boolean? = null,
     onToggleChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
@@ -99,7 +103,13 @@ fun SliderSettingItem(
                 valueRange = valueRange,
                 thumbColor = Color.White,
                 activeTrackColor = Color(0xFFFF6B35),
-                inactiveTrackColor = Color.White.copy(alpha = 0.2f)
+                inactiveTrackColor = Color.White.copy(alpha = 0.2f),
+                onDoubleTap = {
+                    if (resetValue != null) {
+                        onValueChange(resetValue)
+                        onValueChangeFinished?.invoke()
+                    }
+                },
             )
         }
     }

@@ -584,16 +584,16 @@ static Matrix3x3 computeXYZD50ToGamut(float xr, float yr, float xg, float yg,
   float sG = invS.m[3] * Xw + invS.m[4] * Yw + invS.m[5] * Zw;
   float sB = invS.m[6] * Xw + invS.m[7] * Yw + invS.m[8] * Zw;
 
-  Matrix3x3 gamutToXYZD65;
-  gamutToXYZD65.m[0] = mS.m[0] * sR;
-  gamutToXYZD65.m[1] = mS.m[1] * sG;
-  gamutToXYZD65.m[2] = mS.m[2] * sB;
-  gamutToXYZD65.m[3] = mS.m[3] * sR;
-  gamutToXYZD65.m[4] = mS.m[4] * sG;
-  gamutToXYZD65.m[5] = mS.m[5] * sB;
-  gamutToXYZD65.m[6] = mS.m[6] * sR;
-  gamutToXYZD65.m[7] = mS.m[7] * sG;
-  gamutToXYZD65.m[8] = mS.m[8] * sB;
+  Matrix3x3 gamutToXYZNative;
+  gamutToXYZNative.m[0] = mS.m[0] * sR;
+  gamutToXYZNative.m[1] = mS.m[1] * sG;
+  gamutToXYZNative.m[2] = mS.m[2] * sB;
+  gamutToXYZNative.m[3] = mS.m[3] * sR;
+  gamutToXYZNative.m[4] = mS.m[4] * sG;
+  gamutToXYZNative.m[5] = mS.m[5] * sB;
+  gamutToXYZNative.m[6] = mS.m[6] * sR;
+  gamutToXYZNative.m[7] = mS.m[7] * sG;
+  gamutToXYZNative.m[8] = mS.m[8] * sB;
 
   float BRADFORD_D65_TO_D50[9] = {1.0478112f,  0.0228866f, -0.0501270f,
                                   0.0295424f,  0.9904844f, -0.0170491f,
@@ -602,7 +602,10 @@ static Matrix3x3 computeXYZD50ToGamut(float xr, float yr, float xg, float yg,
   for (int i = 0; i < 9; i++)
     bMat.m[i] = BRADFORD_D65_TO_D50[i];
 
-  Matrix3x3 gamutToXYZD50 = bMat.multiply(gamutToXYZD65);
+  const bool isD50WhitePoint = std::abs(xw - 0.3457f) < 0.002f &&
+                               std::abs(yw - 0.3585f) < 0.002f;
+  Matrix3x3 gamutToXYZD50 =
+      isD50WhitePoint ? gamutToXYZNative : bMat.multiply(gamutToXYZNative);
   return gamutToXYZD50.invert();
 }
 
