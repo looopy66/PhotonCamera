@@ -558,6 +558,7 @@ class FrameRenderer(private val context: Context) {
         element: FrameElement.Text,
         metadata: MediaMetadata,
     ): String? {
+        val metadataOverride = metadata.customProperties[element.textType.name]
         val content = when (element.textType) {
             TextType.DEVICE_MODEL -> metadata.deviceModel
             TextType.BRAND -> metadata.brand
@@ -580,14 +581,16 @@ class FrameRenderer(private val context: Context) {
             TextType.FOCAL_LENGTH_35MM -> metadata.focalLength35mm
             TextType.APERTURE -> metadata.aperture
             TextType.RESOLUTION -> metadata.resolution
-            TextType.CUSTOM -> element.format
+            TextType.CUSTOM -> null
             TextType.APP_NAME -> context.getString(R.string.app_name)
-        } ?: return null
+        }
 
-        // 允许用户自定义覆盖内容
-        val finalContent = element.overrideText
-            ?: metadata.customProperties[element.textType.name]
-            ?: content
+        val finalContent = when {
+            element.overrideText != null -> element.overrideText
+            metadataOverride != null -> metadataOverride
+            element.textType == TextType.CUSTOM -> element.format
+            else -> content
+        } ?: return null
 
         val prefix = element.prefix ?: ""
         val suffix = element.suffix ?: ""

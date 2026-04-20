@@ -492,6 +492,7 @@
     <string name="frame_editor_text_color">Text Color</string>
     <string name="frame_editor_font_weight">Font Weight</string>
     <string name="frame_editor_font_family">Font Family</string>
+    <string name="frame_editor_text_custom_value">Custom Text</string>
     <string name="frame_editor_text_override">Text Override</string>
     <string name="frame_editor_text_format">Format</string>
     <string name="frame_editor_text_prefix">Prefix</string>

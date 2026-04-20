@@ -910,6 +910,11 @@ private fun ElementEditor(
 ) {
     when (element) {
         is FrameElementDraft.Text -> {
+            val isCustomText = element.textType == TextType.CUSTOM
+            val supportsFormat = when (element.textType) {
+                TextType.DATE, TextType.TIME, TextType.DATETIME -> true
+                else -> false
+            }
             DropdownSelectionField(
                 label = stringResource(R.string.frame_editor_text_type),
                 currentLabel = textTypeLabel(element.textType),
@@ -975,16 +980,26 @@ private fun ElementEditor(
                     Text(stringResource(R.string.default_text))
                 }
             }
-            TextFieldSection(
-                label = stringResource(R.string.frame_editor_text_override),
-                value = element.overrideText.orEmpty(),
-                onValueChange = { onElementChange(element.copy(overrideText = it.ifBlank { null })) }
-            )
-            TextFieldSection(
-                label = stringResource(R.string.frame_editor_text_format),
-                value = element.format.orEmpty(),
-                onValueChange = { onElementChange(element.copy(format = it.ifBlank { null })) }
-            )
+            if (isCustomText) {
+                TextFieldSection(
+                    label = stringResource(R.string.frame_editor_text_custom_value),
+                    value = element.overrideText.orEmpty(),
+                    onValueChange = { onElementChange(element.copy(overrideText = it.ifBlank { null })) }
+                )
+            } else {
+                TextFieldSection(
+                    label = stringResource(R.string.frame_editor_text_override),
+                    value = element.overrideText.orEmpty(),
+                    onValueChange = { onElementChange(element.copy(overrideText = it.ifBlank { null })) }
+                )
+            }
+            if (supportsFormat) {
+                TextFieldSection(
+                    label = stringResource(R.string.frame_editor_text_format),
+                    value = element.format.orEmpty(),
+                    onValueChange = { onElementChange(element.copy(format = it.ifBlank { null })) }
+                )
+            }
             TextFieldSection(
                 label = stringResource(R.string.frame_editor_text_prefix),
                 value = element.prefix.orEmpty(),

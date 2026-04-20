@@ -482,6 +482,7 @@
     <string name="frame_editor_text_color">文字颜色</string>
     <string name="frame_editor_font_weight">字重</string>
     <string name="frame_editor_font_family">字体</string>
+    <string name="frame_editor_text_custom_value">自定义文字</string>
     <string name="frame_editor_text_override">文字覆盖</string>
     <string name="frame_editor_text_format">格式</string>
     <string name="frame_editor_text_prefix">前缀</string>
