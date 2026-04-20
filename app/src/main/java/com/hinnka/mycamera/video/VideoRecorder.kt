@@ -89,6 +89,7 @@ class VideoRecorder(
     private var requestedCodecMime: String = MediaFormat.MIMETYPE_VIDEO_AVC
     private var requestedOrientationHintDegrees: Int = 0
     private var preferredAudioInputId: String = VIDEO_AUDIO_INPUT_AUTO
+    private var requestedColorConfig: VideoEncoderColorRequest = VideoEncoderColorRequest()
 
     private var requestedSize = android.util.Size(1080, 1920)
     private var requestedFps = 30
@@ -135,6 +136,7 @@ class VideoRecorder(
         fps: Int,
         bitrateMbps: Int,
         codecMime: String,
+        colorConfig: VideoEncoderColorRequest = VideoEncoderColorRequest(),
         orientationHintDegrees: Int = 0,
         onFinished: ((Uri?) -> Unit)? = null
     ): Boolean {
@@ -144,6 +146,7 @@ class VideoRecorder(
         requestedFps = fps
         requestedBitrateMbps = bitrateMbps
         requestedCodecMime = codecMime
+        requestedColorConfig = colorConfig
         requestedOrientationHintDegrees = normalizeOrientationHint(orientationHintDegrees)
         tempOutputFile = File(context.cacheDir, "video_${System.currentTimeMillis()}.mp4")
         finishCallback = onFinished
@@ -267,6 +270,7 @@ class VideoRecorder(
         val videoBitrate = (requestedBitrateMbps * 1_000_000).coerceIn(2_000_000, 300_000_000)
 
         videoEncoder = MediaCodec.createEncoderByType(requestedCodecMime).apply {
+            val resolvedColorConfig = resolveVideoEncoderColorConfig(codecInfo, requestedCodecMime, requestedColorConfig)
             val format = MediaFormat.createVideoFormat(requestedCodecMime, width, height).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
                 setInteger(MediaFormat.KEY_BIT_RATE, videoBitrate)
@@ -278,17 +282,42 @@ class VideoRecorder(
                 setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
                 // 禁用 B 帧，降低编码延迟
                 setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+                resolvedColorConfig.applyTo(this)
             }
             configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             inputSurface = createInputSurface()
             start()
+
+            PLog.i(
+                TAG,
+                "Configured video encoder: mime=$requestedCodecMime, colorPipeline=${resolvedColorConfig.pipeline}, " +
+                    "colorStandard=${resolvedColorConfig.colorStandard}, colorTransfer=${resolvedColorConfig.colorTransfer}, " +
+                    "colorRange=${resolvedColorConfig.colorRange}, codecProfile=${resolvedColorConfig.codecProfile}, " +
+                    "prefer10BitSurface=${resolvedColorConfig.prefer10BitInputSurface}, request=${requestedColorConfig.logProfile.name}, " +
+                    "hasLut=${requestedColorConfig.hasActiveLut}"
+            )
+
+            if (requestedColorConfig.logProfile.isEnabled && resolvedColorConfig.codecProfile == null) {
+                PLog.w(
+                    TAG,
+                    "Selected codec does not expose a 10-bit profile for ${requestedColorConfig.logProfile.name}. " +
+                        "Recording will continue, but encoded Log compatibility may be reduced."
+                )
+            }
+
+            renderer = HardwareLutVideoRenderer(
+                width = width,
+                height = height,
+                lutConfig = null,
+                colorRecipeParams = null,
+                encoderColorConfig = resolvedColorConfig
+            ).apply {
+                initialize(inputSurface!!, sharedContext, sharedDisplay)
+            }
         }
 
         lastSharedContext = sharedContext
         lastSharedDisplay = sharedDisplay
-        renderer = HardwareLutVideoRenderer(width, height, null, null).apply {
-            initialize(inputSurface!!, sharedContext, sharedDisplay)
-        }
 
         audioEnabled = initAudioEncoder()
         createMuxer()

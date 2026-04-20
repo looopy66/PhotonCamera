@@ -120,6 +120,12 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
     }
 
+    fun setCaptureAspectRatio(aspectRatio: Float) {
+        queueEvent {
+            renderer.setCaptureAspectRatio(aspectRatio)
+        }
+    }
+
     fun setFocusPoint(point: PointF?) {
         renderer.focusPoint = point
     }
@@ -157,6 +163,11 @@ class CameraGLSurfaceView @JvmOverloads constructor(
 
     fun setBaselineLutEnabled(enabled: Boolean) {
         renderer.baselineLutEnabled = enabled
+        requestRender()
+    }
+
+    fun setIsHlgInput(isHlg: Boolean) {
+        renderer.isHlgInput = isHlg
         requestRender()
     }
 

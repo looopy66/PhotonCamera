@@ -189,6 +189,11 @@ object YuvProcessor {
     external fun loadCompressedArgb(inputPath: String): ByteBuffer?
 
     /**
+     * 读取压缩 ARGB 数据的尺寸信息，返回 [width, height]
+     */
+    external fun getCompressedArgbDimensions(inputPath: String): IntArray?
+
+    /**
      * 将 ARGB 数据 (16-bit) 压缩并保存到文件
      */
     external fun saveCompressedArgb(buffer: ByteBuffer, width: Int, height: Int, outputPath: String): Boolean

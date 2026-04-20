@@ -93,6 +93,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.media3.common.DeviceInfo
 import com.hinnka.mycamera.R
+import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
@@ -154,6 +155,7 @@ fun SettingsScreen(
     val rawProfile by viewModel.rawProfile.collectAsState()
     val useP010 by viewModel.useP010.collectAsState()
     val useHlg10 by viewModel.useHlg10.collectAsState()
+    val hlgHardwareCompatibilityEnabled by viewModel.hlgHardwareCompatibilityEnabled.collectAsState()
     val useP3ColorSpace by viewModel.useP3ColorSpace.collectAsState()
     val autoEnableHdr by viewModel.autoEnableHdr.collectAsState()
     val isPurchased by viewModel.isPurchased.collectAsState()
@@ -229,6 +231,9 @@ fun SettingsScreen(
     var isGhostPermissionFlowActive by remember { mutableStateOf(false) }
     var baselinePickerTarget by remember { mutableStateOf<BaselineColorCorrectionTarget?>(null) }
     var baselineRecipeEditorTarget by remember { mutableStateOf<BaselineColorCorrectionTarget?>(null) }
+    var multiFrameCountSliderValue by remember(multiFrameCount) {
+        mutableStateOf(multiFrameCount.toFloat())
+    }
 
     val ghostLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult(),
@@ -773,17 +778,16 @@ fun SettingsScreen(
                             modifier = Modifier.padding(vertical = 12.dp)
                         )
 
-                        QualityLevelSetting(
+                        SliderSettingItem(
                             title = stringResource(R.string.settings_multi_frame_count),
                             description = stringResource(R.string.settings_multi_frame_count_description),
-                            levels = listOf(
-                                4 to "4",
-                                8 to "8",
-                                12 to "12",
-                                16 to "16",
-                            ),
-                            currentLevel = multiFrameCount,
-                            onLevelSelected = { viewModel.setMultiFrameCount(it) }
+                            value = multiFrameCountSliderValue,
+                            valueRange = MultiFrameConfig.MIN_FRAME_COUNT.toFloat()..MultiFrameConfig.MAX_FRAME_COUNT.toFloat(),
+                            onValueChange = { multiFrameCountSliderValue = it.roundToInt().toFloat() },
+                            onValueChangeFinished = {
+                                viewModel.setMultiFrameCount(multiFrameCountSliderValue.roundToInt())
+                            },
+                            valueTextFormatter = { it.roundToInt().toString() }
                         )
 
                         HorizontalDivider(
@@ -907,7 +911,6 @@ fun SettingsScreen(
                         }
 
                         if (isHdrSettingsSupported) {
-
                             /*if (state.isHlg10Supported) {
                                 HorizontalDivider(
                                     color = Color.White.copy(alpha = 0.1f),
@@ -918,7 +921,24 @@ fun SettingsScreen(
                                     title = stringResource(R.string.settings_use_hlg10),
                                     description = stringResource(R.string.settings_use_hlg10_description),
                                     checked = useHlg10,
-                                    onCheckedChange = { viewModel.setUseHlg10(it) }
+                                    onCheckedChange = {
+                                        viewModel.setUseHlg10(it)
+                                        if (it) {
+                                            viewModel.setUseP010(true)
+                                        }
+                                    }
+                                )
+
+                                HorizontalDivider(
+                                    color = Color.White.copy(alpha = 0.1f),
+                                    modifier = Modifier.padding(vertical = 12.dp)
+                                )
+
+                                SwitchSettingItem(
+                                    title = stringResource(R.string.settings_hlg_hardware_compatibility),
+                                    description = stringResource(R.string.settings_hlg_hardware_compatibility_description),
+                                    checked = hlgHardwareCompatibilityEnabled,
+                                    onCheckedChange = { viewModel.setHlgHardwareCompatibilityEnabled(it) }
                                 )
                             }*/
 

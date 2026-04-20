@@ -29,7 +29,7 @@ import androidx.compose.ui.draw.clip
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.hinnka.mycamera.R
-import com.hinnka.mycamera.gallery.MediaManager
+import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.ui.theme.AccentOrange
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -75,7 +75,7 @@ fun BurstDetailScreen(
     // Load burst files
     LaunchedEffect(photoId) {
         withContext(Dispatchers.IO) {
-            burstFiles = MediaManager.getBurstPhotos(context, photoId)
+            burstFiles = GalleryManager.getBurstPhotos(context, photoId)
         }
         isLoading = false
     }
@@ -100,7 +100,7 @@ fun BurstDetailScreen(
     val pagerState = rememberPagerState(pageCount = { burstFiles.size })
     val currentFile = burstFiles.getOrNull(pagerState.currentPage)
 
-    val mainPhotoFile = remember(photoId) { MediaManager.getPhotoFile(context, photoId) }
+    val mainPhotoFile = remember(photoId) { GalleryManager.getPhotoFile(context, photoId) }
     val refreshKey = viewModel.photoRefreshKeys[photoId] ?: 0L
     val isMainPhoto = remember(currentFile, refreshKey) {
         currentFile?.exists() == true && mainPhotoFile.exists() && currentFile.length() == mainPhotoFile.length()
@@ -425,7 +425,7 @@ fun BurstDetailScreen(
                     onClick = {
                         coroutineScope.launch(Dispatchers.IO) {
                             currentFile?.delete()
-                            val updatedFiles = MediaManager.getBurstPhotos(context, photoId)
+                            val updatedFiles = GalleryManager.getBurstPhotos(context, photoId)
                             withContext(Dispatchers.Main) {
                                 burstFiles = updatedFiles
                                 showDeleteDialog = false

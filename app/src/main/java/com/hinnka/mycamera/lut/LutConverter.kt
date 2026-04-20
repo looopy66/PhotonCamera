@@ -8,6 +8,7 @@ import kotlin.math.max
 import kotlin.math.min
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.utils.PLog
 // LutConfig is in the same package (com.hinnka.mycamera.lut), no import needed
@@ -46,7 +47,7 @@ object LutConverter {
         cubeInputStream: InputStream,
         plutOutputStream: OutputStream,
         colorSpace: ColorSpace = ColorSpace.SRGB,
-        curve: LutCurve = LutCurve.SRGB
+        curve: TransferCurve = TransferCurve.SRGB
     ): Boolean {
         return try {
             // 解析 .cube 文件
@@ -79,7 +80,7 @@ object LutConverter {
         pngInputStream: InputStream,
         plutOutputStream: OutputStream,
         colorSpace: ColorSpace = ColorSpace.SRGB,
-        curve: LutCurve = LutCurve.SRGB
+        curve: TransferCurve = TransferCurve.SRGB
     ): Boolean {
         return try {
             val options = BitmapFactory.Options()
@@ -210,11 +211,11 @@ object LutConverter {
         }
     }
 
-    private fun resampleLut(cubeData: CubeData, curve: LutCurve): CubeData {
+    private fun resampleLut(cubeData: CubeData, curve: TransferCurve): CubeData {
         val size = cubeData.size
         // 尝试使用 Native 优化
         val nativeData = try {
-            LutProcessor.resampleLutNative(cubeData.data, size, curve.ordinal)
+            LutProcessor.resampleLutNative(cubeData.data, size, curve.storageId)
         } catch (e: Throwable) {
             null
         }
@@ -234,14 +235,14 @@ object LutConverter {
                     val b = bIdx * step
 
                     // 1. 将 sRGB 输入转换为线性空间 (因为相机预览是 sRGB 的，但 LUT 可能期望 Log)
-                    val rLin = LutCurve.SRGB.toLinear(r)
-                    val gLin = LutCurve.SRGB.toLinear(g)
-                    val bLin = LutCurve.SRGB.toLinear(b)
+                    val rLin = TransferCurve.SRGB.logToLinear(r)
+                    val gLin = TransferCurve.SRGB.logToLinear(g)
+                    val bLin = TransferCurve.SRGB.logToLinear(b)
 
                     // 2. 将线性空间转换为目标 Log 曲线空间
-                    val rLog = curve.fromLinear(rLin)
-                    val gLog = curve.fromLinear(gLin)
-                    val bLog = curve.fromLinear(bLin)
+                    val rLog = curve.linearToLog(rLin)
+                    val gLog = curve.linearToLog(gLin)
+                    val bLog = curve.linearToLog(bLin)
 
                     // 3. 在原始 LUT 中进行三线性插值采样
                     val interpolated = trilinearSample(cubeData, rLog, gLog, bLog)
@@ -453,7 +454,7 @@ object LutConverter {
     /**
      * 写入 .plut 文件
      */
-    private fun writePLutFile(cubeData: CubeData, outputStream: OutputStream, colorSpace: ColorSpace, curve: LutCurve) {
+    private fun writePLutFile(cubeData: CubeData, outputStream: OutputStream, colorSpace: ColorSpace, curve: TransferCurve) {
         val buffer = ByteBuffer.allocate(24 + cubeData.data.size * 2)
             .order(ByteOrder.LITTLE_ENDIAN)
 
@@ -470,7 +471,7 @@ object LutConverter {
         buffer.putInt(DATA_TYPE_UINT16)
 
         // Curve Type
-        buffer.putInt(curve.ordinal)
+        buffer.putInt(curve.storageId)
         
         // Color Space
         buffer.putInt(colorSpace.ordinal)
@@ -505,7 +506,7 @@ object LutConverter {
         outBuffer.putInt(version)
         outBuffer.putInt(lutConfig.size)
         outBuffer.putInt(lutConfig.configDataType)
-        outBuffer.putInt(lutConfig.curve.ordinal)
+        outBuffer.putInt(lutConfig.curve.storageId)
         outBuffer.putInt(lutConfig.colorSpace.ordinal)
         outBuffer.put(pixelBytes)
         if (recipeBytes != null) {
@@ -533,7 +534,7 @@ object LutConverter {
             val version = inBuffer.int
             val size = inBuffer.int
             val dataType = inBuffer.int
-            val curveOrdinal = if (version >= 2) inBuffer.int else LutCurve.SRGB.ordinal
+            val curveStorageId = if (version >= 2) inBuffer.int else TransferCurve.SRGB.storageId
             val colorSpaceOrdinal = if (version >= 3) inBuffer.int else ColorSpace.SRGB.ordinal
 
             val bytesPerComponent = if (dataType == DATA_TYPE_UINT16) 2 else 1
@@ -547,7 +548,7 @@ object LutConverter {
             outBuffer.putInt(VERSION)
             outBuffer.putInt(size)
             outBuffer.putInt(dataType)
-            outBuffer.putInt(curveOrdinal)
+            outBuffer.putInt(curveStorageId)
             outBuffer.putInt(colorSpaceOrdinal)
             outBuffer.put(dataBytes)
 

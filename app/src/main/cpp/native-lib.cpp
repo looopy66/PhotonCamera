@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <android/bitmap.h>
 #include <cmath>
+#include <chrono>
 #include <cstring>
 #include <fstream>
 #include <jni.h>
@@ -14,6 +15,10 @@
 #include <string>
 #include <turbojpeg.h>
 #include <vector>
+#include <jxl/decode.h>
+#include <jxl/decode_cxx.h>
+#include <jxl/thread_parallel_runner.h>
+#include <jxl/thread_parallel_runner_cxx.h>
 
 #include "common.h"
 #include "jxl_utils.h"
@@ -848,6 +853,15 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_releaseVulkanStackerNative(
   delete stacker;
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_resetVulkanStackerNative(
+    JNIEnv *env, jobject /* this */, jlong stackerPtr) {
+  auto *stacker = reinterpret_cast<VulkanImageStacker *>(stackerPtr);
+  if (!stacker)
+    return JNI_FALSE;
+  return stacker->resetForReuse() ? JNI_TRUE : JNI_FALSE;
+}
+
 /**
  * Raw Stacking JNI Interface
  */
@@ -1179,6 +1193,7 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
     jobject vBuffer, jint width, jint height, jint yRowStride, jint uvRowStride,
     jint uvPixelStride, jint rotation, jint targetWR, jint targetHR,
     jint format, jstring outputPath, jstring hdrSidecarPath, jobject outBitmap8) {
+  constexpr int kHdrSidecarDownsample = 2;
   const char *path = env->GetStringUTFChars(outputPath, nullptr);
   const char *hdrPath =
       hdrSidecarPath ? env->GetStringUTFChars(hdrSidecarPath, nullptr) : nullptr;
@@ -1194,6 +1209,7 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
   auto *ptr8 = static_cast<uint32_t *>(bitmapPixels);
   AndroidBitmapInfo info;
   AndroidBitmap_getInfo(env, outBitmap8, &info);
+  const int bitmapStridePixels = static_cast<int>(info.stride / 4);
 
   // 获取 buffer 指针
   auto *yData = static_cast<uint8_t *>(env->GetDirectBufferAddress(yBuffer));
@@ -1240,6 +1256,12 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
   }
   finalWidth = std::min(finalWidth, (int)info.width);
   finalHeight = std::min(finalHeight, (int)info.height);
+  if (finalWidth > 1) {
+    finalWidth &= ~1;
+  }
+  if (finalHeight > 1) {
+    finalHeight &= ~1;
+  }
 
   int cropX = ((rotatedWidth - finalWidth) / 4) * 2;
   int cropY = ((rotatedHeight - finalHeight) / 4) * 2;
@@ -1343,7 +1365,8 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
       uint32_t g8 = static_cast<uint32_t>(G * 255.0f);
       uint32_t b8 = static_cast<uint32_t>(B * 255.0f);
       uint32_t a8 = 255;
-      ptr8[idx] = (a8 << 24) | (b8 << 16) | (g8 << 8) | r8;
+      ptr8[y * bitmapStridePixels + x] =
+          (a8 << 24) | (b8 << 16) | (g8 << 8) | r8;
     }
   }
 
@@ -1355,19 +1378,34 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
       isP010 ? JxlEncodingProfile::BT2100_HLG : JxlEncodingProfile::ORIGINAL);
 
   if (success && isP010 && hdrPath) {
-    std::ofstream hdrOut(hdrPath, std::ios::binary);
-    if (!hdrOut) {
-      LOGE("Failed to open HDR sidecar path: %s", hdrPath);
-      success = false;
-    } else {
-      hdrOut.write(reinterpret_cast<const char *>(hdrReferencePixels.data()),
-                   static_cast<std::streamsize>(hdrReferencePixels.size() *
-                                                sizeof(uint16_t)));
-      hdrOut.close();
-      if (!hdrOut.good()) {
-        LOGE("Failed to write HDR sidecar: %s", hdrPath);
-        success = false;
+    const int sidecarWidth =
+        std::max(1, (finalWidth + kHdrSidecarDownsample - 1) /
+                        kHdrSidecarDownsample);
+    const int sidecarHeight =
+        std::max(1, (finalHeight + kHdrSidecarDownsample - 1) /
+                        kHdrSidecarDownsample);
+    std::vector<uint16_t> hdrSidecarPixels(sidecarWidth * sidecarHeight * 4);
+    for (int y = 0; y < sidecarHeight; ++y) {
+      const int srcY = std::min(
+          finalHeight - 1,
+          (y * finalHeight + sidecarHeight / 2) / sidecarHeight);
+      for (int x = 0; x < sidecarWidth; ++x) {
+        const int srcX = std::min(
+            finalWidth - 1,
+            (x * finalWidth + sidecarWidth / 2) / sidecarWidth);
+        const int srcIdx = (srcY * finalWidth + srcX) * 4;
+        const int dstIdx = (y * sidecarWidth + x) * 4;
+        hdrSidecarPixels[dstIdx + 0] = hdrReferencePixels[srcIdx + 0];
+        hdrSidecarPixels[dstIdx + 1] = hdrReferencePixels[srcIdx + 1];
+        hdrSidecarPixels[dstIdx + 2] = hdrReferencePixels[srcIdx + 2];
+        hdrSidecarPixels[dstIdx + 3] = hdrReferencePixels[srcIdx + 3];
       }
+    }
+
+    success = saveJxl(hdrSidecarPixels.data(), sidecarWidth, sidecarHeight,
+                      JXL_TYPE_FLOAT16, hdrPath);
+    if (!success) {
+      LOGE("Failed to write compressed HDR sidecar: %s", hdrPath);
     }
   }
 
@@ -1675,6 +1713,67 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_loadCompressedArgb(
 
   // 直接返回像素数据，不再添加 4 字节宽高头，以保持与旧版本兼容
   return env->NewDirectByteBuffer(pixels, dataSize);
+}
+
+JNIEXPORT jintArray JNICALL
+Java_com_hinnka_mycamera_utils_YuvProcessor_getCompressedArgbDimensions(
+    JNIEnv *env, jobject /* this */, jstring inputPath) {
+  const char *path = env->GetStringUTFChars(inputPath, nullptr);
+
+  std::ifstream is(path, std::ios::binary | std::ios::ate);
+  if (!is) {
+    env->ReleaseStringUTFChars(inputPath, path);
+    return nullptr;
+  }
+  std::streamsize size = is.tellg();
+  is.seekg(0, std::ios::beg);
+  std::vector<uint8_t> buffer(size);
+  if (!is.read(reinterpret_cast<char *>(buffer.data()), size)) {
+    env->ReleaseStringUTFChars(inputPath, path);
+    return nullptr;
+  }
+  env->ReleaseStringUTFChars(inputPath, path);
+
+  auto decoder = JxlDecoderMake(nullptr);
+  size_t num_threads = JxlThreadParallelRunnerDefaultNumWorkerThreads();
+  if (num_threads > 4)
+    num_threads = 4;
+  auto runner = JxlThreadParallelRunnerMake(nullptr, num_threads);
+  if (JXL_DEC_SUCCESS != JxlDecoderSetParallelRunner(decoder.get(),
+                                                     JxlThreadParallelRunner,
+                                                     runner.get())) {
+    return nullptr;
+  }
+
+  if (JXL_DEC_SUCCESS !=
+      JxlDecoderSubscribeEvents(decoder.get(), JXL_DEC_BASIC_INFO)) {
+    return nullptr;
+  }
+
+  JxlDecoderSetInput(decoder.get(), buffer.data(), buffer.size());
+  JxlDecoderCloseInput(decoder.get());
+
+  for (;;) {
+    JxlDecoderStatus status = JxlDecoderProcessInput(decoder.get());
+    if (status == JXL_DEC_BASIC_INFO) {
+      JxlBasicInfo info;
+      if (JXL_DEC_SUCCESS != JxlDecoderGetBasicInfo(decoder.get(), &info)) {
+        return nullptr;
+      }
+      jintArray result = env->NewIntArray(2);
+      if (result == nullptr) {
+        return nullptr;
+      }
+      const jint dims[2] = {static_cast<jint>(info.xsize),
+                            static_cast<jint>(info.ysize)};
+      env->SetIntArrayRegion(result, 0, 2, dims);
+      return result;
+    }
+    if (status == JXL_DEC_SUCCESS || status == JXL_DEC_ERROR ||
+        status == JXL_DEC_NEED_MORE_INPUT) {
+      return nullptr;
+    }
+  }
 }
 
 /**

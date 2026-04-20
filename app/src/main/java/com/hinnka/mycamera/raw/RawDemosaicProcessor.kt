@@ -6,6 +6,7 @@ import android.graphics.Rect
 import android.media.Image
 import android.opengl.*
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutParser
 import com.hinnka.mycamera.utils.BitmapUtils
@@ -233,7 +234,7 @@ class RawDemosaicProcessor {
 
     private var baseLut: LutConfig? = null
     private var colorSpace = ColorSpace.SRGB
-    private var logCurve = LogCurve.SRGB
+    private var logCurve = TransferCurve.SRGB
 
     /**
      * 设置 RAW 还原 LUT
@@ -273,7 +274,7 @@ class RawDemosaicProcessor {
         return colorSpace
     }
 
-    fun setRawLogCurve(logCurve: LogCurve) {
+    fun setRawLogCurve(logCurve: TransferCurve) {
         this.logCurve = logCurve
     }
 
@@ -1644,7 +1645,7 @@ class RawDemosaicProcessor {
         metadata: RawMetadata,
         calcExposureGain: Float,
         lutConfig: LutConfig?,
-        logCurve: LogCurve,
+        logCurve: TransferCurve,
         inputTextureId: Int = demosaicTextureId
     ) {
         GLES30.glUseProgram(combinedProgram)
@@ -1682,6 +1683,16 @@ class RawDemosaicProcessor {
             logCurve.e, logCurve.f, logCurve.cut1, logCurve.cut2
         )
         GLES30.glUniform1i(GLES30.glGetUniformLocation(combinedProgram, "uLogType"), logCurve.type)
+        val applySdrToneMap = logCurve == TransferCurve.SRGB
+        val logExposureBoost = if (logCurve.isLog) 1.8f else 1.0f
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(combinedProgram, "uApplySdrToneMap"),
+            if (applySdrToneMap) 1 else 0
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(combinedProgram, "uLogExposureBoost"),
+            logExposureBoost
+        )
 
         val identityMatrix = FloatArray(16)
         GlMatrix.setIdentityM(identityMatrix, 0)

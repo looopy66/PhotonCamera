@@ -6,7 +6,7 @@ import android.graphics.SurfaceTexture
 import android.opengl.*
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.raw.ColorSpace
-import com.hinnka.mycamera.raw.LogCurve
+import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.video.VideoLogProfile
@@ -41,6 +41,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         val uVideoLogEnabledLocation: Int,
         val uVideoLogCurveLocation: Int,
         val uVideoColorSpaceLocation: Int,
+        val uIsHlgInputLocation: Int,
         val uColorRecipeEnabledLocation: Int,
         val uExposureLocation: Int,
         val uContrastLocation: Int,
@@ -162,6 +163,10 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var uVideoLogEnabledLocation: Int = 0
     private var uVideoLogCurveLocation: Int = 0
     private var uVideoColorSpaceLocation: Int = 0
+    private var uIsHlgInputLocation: Int = 0
+
+    // 是否以 HLG10 动态范围采集（Log LUT 兼容性方案）
+    var isHlgInput: Boolean = false
 
     // 色彩配方 Uniform 位置
     private var uColorRecipeEnabledLocation: Int = 0
@@ -419,7 +424,8 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var shouldCapturePreview = false
     private var captureWidth = 512
     private var captureHeight = 512
-    private val maxCaptureSize = 512 // 预览图最大尺寸
+    private var captureAspectRatio = 0f
+    private val maxCaptureSize = 1080 // 预览图最大尺寸
     private var lastCaptureWidth = 0
     private var lastCaptureHeight = 0
 
@@ -693,6 +699,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         curveTextureId: Int,
         curveEnabled: Boolean,
         enableVideoLog: Boolean,
+        treatSourceAsHlgInput: Boolean,
         apertureOverride: Float = aperture,
         focusPointOverride: PointF? = focusPoint,
     ) {
@@ -730,6 +737,9 @@ class LutRenderer : GLSurfaceView.Renderer {
         GLES30.glUniform1i(locations.uVideoLogEnabledLocation, if (enableVideoLog && videoLogProfile.isEnabled) 1 else 0)
         GLES30.glUniform1i(locations.uVideoLogCurveLocation, mapLogCurve(videoLogProfile.logCurve))
         GLES30.glUniform1i(locations.uVideoColorSpaceLocation, mapRawColorSpace(videoLogProfile.colorSpace))
+        GLES30.glUniform1i(locations.uIsHlgInputLocation, if (treatSourceAsHlgInput) 1 else 0)
+
+//        PLog.d(TAG, "uIsHlgInputLocation=$treatSourceAsHlgInput")
 
         val recipeEnabled = !params.isDefault()
         GLES30.glUniform1i(locations.uColorRecipeEnabledLocation, if (recipeEnabled) 1 else 0)
@@ -909,6 +919,7 @@ class LutRenderer : GLSurfaceView.Renderer {
                     curveTextureId = curveTextureId,
                     curveEnabled = curveEnabled && curveTextureId != 0,
                     enableVideoLog = false,
+                    treatSourceAsHlgInput = false,
                     apertureOverride = 0f,
                     focusPointOverride = null
                 )
@@ -1165,7 +1176,8 @@ class LutRenderer : GLSurfaceView.Renderer {
             params = layerParams,
             curveTextureId = layerCurveTextureId,
             curveEnabled = layerCurveEnabled,
-            enableVideoLog = true
+            enableVideoLog = true,
+            treatSourceAsHlgInput = isHlgInput
         )
 
         // 捕获预览帧（如果需要）
@@ -1200,6 +1212,7 @@ class LutRenderer : GLSurfaceView.Renderer {
             uVideoLogEnabledLocation = GLES30.glGetUniformLocation(program, "uVideoLogEnabled"),
             uVideoLogCurveLocation = GLES30.glGetUniformLocation(program, "uVideoLogCurve"),
             uVideoColorSpaceLocation = GLES30.glGetUniformLocation(program, "uVideoColorSpace"),
+            uIsHlgInputLocation = GLES30.glGetUniformLocation(program, "uIsHlgInput"),
             uColorRecipeEnabledLocation = GLES30.glGetUniformLocation(program, "uColorRecipeEnabled"),
             uExposureLocation = GLES30.glGetUniformLocation(program, "uExposure"),
             uContrastLocation = GLES30.glGetUniformLocation(program, "uContrast"),
@@ -1271,6 +1284,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         uVideoLogEnabledLocation = GLES30.glGetUniformLocation(programId, "uVideoLogEnabled")
         uVideoLogCurveLocation = GLES30.glGetUniformLocation(programId, "uVideoLogCurve")
         uVideoColorSpaceLocation = GLES30.glGetUniformLocation(programId, "uVideoColorSpace")
+        uIsHlgInputLocation = GLES30.glGetUniformLocation(programId, "uIsHlgInput")
 
         // 获取色彩配方 Uniform 位置
         uColorRecipeEnabledLocation = GLES30.glGetUniformLocation(programId, "uColorRecipeEnabled")
@@ -1715,6 +1729,7 @@ class LutRenderer : GLSurfaceView.Renderer {
     fun setLut(lutConfig: LutConfig?) {
         // 如果 Surface 尚未创建，保存配置稍后处理
         if (!surfaceReady) {
+            currentLutConfig = lutConfig
             pendingLutConfig = lutConfig
             return
         }
@@ -1724,6 +1739,7 @@ class LutRenderer : GLSurfaceView.Renderer {
 
     fun setBaselineLut(lutConfig: LutConfig?) {
         if (!surfaceReady) {
+            currentBaselineLutConfig = lutConfig
             pendingBaselineLutConfig = lutConfig
             return
         }
@@ -1777,8 +1793,9 @@ class LutRenderer : GLSurfaceView.Renderer {
      */
     fun restoreLutTexturesAfterResume() {
         if (!surfaceReady) {
-            pendingLutConfig = currentLutConfig
-            pendingBaselineLutConfig = currentBaselineLutConfig
+            // Surface 还没重建时，保留已经排队的配置，不要被当前缓存的 null 覆盖掉。
+            pendingLutConfig = pendingLutConfig ?: currentLutConfig
+            pendingBaselineLutConfig = pendingBaselineLutConfig ?: currentBaselineLutConfig
             PLog.d(TAG, "restore LUT deferred: surface not ready")
             return
         }
@@ -1855,6 +1872,14 @@ class LutRenderer : GLSurfaceView.Renderer {
         if (lensFacing != facing) {
             lensFacing = facing
             updateMVPMatrix()
+            updateCaptureSize()
+        }
+    }
+
+    fun setCaptureAspectRatio(aspectRatio: Float) {
+        val safeAspectRatio = aspectRatio.coerceAtLeast(0f)
+        if (kotlin.math.abs(captureAspectRatio - safeAspectRatio) > 0.0001f) {
+            captureAspectRatio = safeAspectRatio
             updateCaptureSize()
         }
     }
@@ -1970,19 +1995,23 @@ class LutRenderer : GLSurfaceView.Renderer {
     }
 
     private fun updateCaptureSize() {
-        val totalRotation = calculateTotalRotation()
-        val isSwapped = totalRotation % 180 != 0
-        // 如果 sensorOrientation 是 90 (横置)，deviceRotation 为 0 (竖屏) 时总旋转通常是 90 (Swapped)
-        val actualWidth = if (isSwapped) previewHeight else previewWidth
-        val actualHeight = if (isSwapped) previewWidth else previewHeight
+        val targetAspectRatio = captureAspectRatio.takeIf { it > 0f } ?: run {
+            val totalRotation = calculateTotalRotation()
+            val isSwapped = totalRotation % 180 != 0
+            val actualWidth = if (isSwapped) previewHeight else previewWidth
+            val actualHeight = if (isSwapped) previewWidth else previewHeight
+            actualWidth.toFloat() / actualHeight.coerceAtLeast(1).toFloat()
+        }
 
-        if (actualWidth > actualHeight) {
+        if (targetAspectRatio >= 1f) {
             captureWidth = maxCaptureSize
-            captureHeight = (maxCaptureSize * actualHeight / actualWidth)
+            captureHeight = (maxCaptureSize / targetAspectRatio).toInt()
         } else {
             captureHeight = maxCaptureSize
-            captureWidth = (maxCaptureSize * actualWidth / actualHeight)
+            captureWidth = (maxCaptureSize * targetAspectRatio).toInt()
         }
+        captureWidth = captureWidth.coerceAtLeast(1)
+        captureHeight = captureHeight.coerceAtLeast(1)
 //        PLog.d(TAG, "Update capture size: ${captureWidth}x${captureHeight}, totalRotation: $totalRotation")
     }
 
@@ -2472,30 +2501,12 @@ class LutRenderer : GLSurfaceView.Renderer {
         )
     }
 
-    private fun mapLutCurve(curve: LutCurve?): Int {
-        return when (curve ?: LutCurve.SRGB) {
-            LutCurve.SRGB -> 0
-            LutCurve.LINEAR -> 1
-            LutCurve.V_LOG -> 2
-            LutCurve.S_LOG3 -> 3
-            LutCurve.F_LOG2 -> 4
-            LutCurve.LOG_C -> 5
-            LutCurve.APPLE_LOG -> 6
-            LutCurve.HLG -> 7
-        }
+    private fun mapLutCurve(curve: TransferCurve?): Int {
+        return (curve ?: TransferCurve.SRGB).shaderId
     }
 
-    private fun mapLogCurve(curve: LogCurve): Int {
-        return when (curve) {
-            LogCurve.SRGB -> 0
-            LogCurve.LINEAR -> 1
-            LogCurve.VLOG -> 2
-            LogCurve.SLOG3 -> 3
-            LogCurve.FLOG2 -> 4
-            LogCurve.LOGC4 -> 5
-            LogCurve.APPLE_LOG -> 6
-            LogCurve.ACES_CCT -> 8
-        }
+    private fun mapLogCurve(curve: TransferCurve): Int {
+        return curve.shaderId
     }
 
     private fun mapRawColorSpace(colorSpace: ColorSpace): Int {

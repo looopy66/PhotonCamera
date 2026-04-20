@@ -3,7 +3,7 @@ package com.hinnka.mycamera.video
 import android.graphics.Rect
 import android.util.Size
 import com.hinnka.mycamera.raw.ColorSpace
-import com.hinnka.mycamera.raw.LogCurve
+import com.hinnka.mycamera.color.TransferCurve
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -77,15 +77,15 @@ enum class VideoCodec(val displayName: String, val mimeType: String) {
 
 enum class VideoLogProfile(
     val displayName: String,
-    val logCurve: LogCurve,
+    val logCurve: TransferCurve,
     val colorSpace: ColorSpace
 ) {
-    OFF("Off", LogCurve.SRGB, ColorSpace.SRGB),
-    APPLE_LOG2("Apple-Log2", LogCurve.APPLE_LOG, ColorSpace.AppleLog2),
-    FLOG2_BT2020("F-Log2", LogCurve.FLOG2, ColorSpace.BT2020),
-    V_LOG("V-Log", LogCurve.VLOG, ColorSpace.VGamut),
-    LOGC4_ARRI4("LogC4", LogCurve.LOGC4, ColorSpace.ARRI4),
-    ACESCCT_AP1("ACEScct", LogCurve.ACES_CCT, ColorSpace.ACES_AP1);
+    OFF("Off", TransferCurve.SRGB, ColorSpace.SRGB),
+    APPLE_LOG2("Apple-Log2", TransferCurve.APPLE_LOG, ColorSpace.AppleLog2),
+    FLOG2_BT2020("F-Log2", TransferCurve.FLOG2, ColorSpace.BT2020),
+    V_LOG("V-Log", TransferCurve.VLOG, ColorSpace.VGamut),
+    LOGC4_ARRI4("LogC4", TransferCurve.LOGC4, ColorSpace.ARRI4),
+    ACESCCT_AP1("ACEScct", TransferCurve.ACES_CCT, ColorSpace.ACES_AP1);
 
     val isEnabled: Boolean
         get() = this != OFF

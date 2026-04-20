@@ -3,7 +3,7 @@ package com.hinnka.mycamera.processor
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import com.hinnka.mycamera.gallery.MediaManager
+import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.ml.DepthEstimator
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -44,7 +44,7 @@ class DepthBokehProcessor(context: Context) {
         var depthMap: Bitmap? = null
         var depthFile: java.io.File? = null
         if (photoId != null) {
-            depthFile = MediaManager.getDepthFile(context, photoId)
+            depthFile = GalleryManager.getDepthFile(context, photoId)
             if (depthFile.exists()) {
                 depthMap = BitmapFactory.decodeFile(depthFile.absolutePath)
             }

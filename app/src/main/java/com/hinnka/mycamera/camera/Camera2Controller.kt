@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.model.SafeImage
+import com.hinnka.mycamera.processor.MultiFrameStacker
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.video.CaptureMode
@@ -35,10 +36,14 @@ import com.hinnka.mycamera.video.VIDEO_AUDIO_INPUT_AUTO
 import com.hinnka.mycamera.video.VideoBitratePreset
 import com.hinnka.mycamera.video.VideoCapabilitiesResolver
 import com.hinnka.mycamera.video.VideoFpsPreset
+import com.hinnka.mycamera.video.VideoEncoderColorRequest
 import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.video.VideoRecorder
 import com.hinnka.mycamera.video.VideoResolutionPreset
 import com.hinnka.mycamera.video.VideoRecordingState
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -123,6 +128,7 @@ class Camera2Controller(private val context: Context) {
     private var availableEdgeModes: IntArray = intArrayOf()
     private var availableNoiseReductionModes: IntArray = intArrayOf()
     private var availableTonemapModes: IntArray = intArrayOf()
+    private var tonemapMaxCurvePoints: Int = 0
     private var availableColorCorrectionAberrationModes: IntArray = intArrayOf()
     private var availableHotPixelModes: IntArray = intArrayOf()
     private var availableShadingModes: IntArray = intArrayOf()
@@ -577,6 +583,8 @@ class Camera2Controller(private val context: Context) {
                         ?: intArrayOf()
                 availableTonemapModes =
                     cachedCharacteristics?.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES) ?: intArrayOf()
+                tonemapMaxCurvePoints =
+                    cachedCharacteristics?.get(CameraCharacteristics.TONEMAP_MAX_CURVE_POINTS) ?: 0
                 availableColorCorrectionAberrationModes =
                     cachedCharacteristics?.get(CameraCharacteristics.COLOR_CORRECTION_AVAILABLE_ABERRATION_MODES)
                         ?: intArrayOf()
@@ -641,7 +649,6 @@ class Camera2Controller(private val context: Context) {
                     isRawSupported = isRawSupported,
                     isP010Supported = isP010Supported,
                     isHlg10Supported = isHlg10Supported,
-                    currentDynamicRangeProfile = if (shouldUseHlgCapture()) "HLG10" else "STANDARD",
                     availableNrModes = selectableNrModes,
                     currentPreviewSize = previewSize
                 )
@@ -740,6 +747,22 @@ class Camera2Controller(private val context: Context) {
                             PLog.e(TAG, "Error in onImageAvailable", e)
                         }
                     }, cameraHandler)
+                }
+
+                if ((state.value.useMFNR || state.value.useMFSR) &&
+                    captureFormat != ImageFormat.RAW_SENSOR
+                ) {
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val prewarmOk = MultiFrameStacker.prewarmVulkanStacker(
+                            width = captureSize.width,
+                            height = captureSize.height,
+                            enableSuperResolution = state.value.useMFSR,
+                        )
+                        PLog.i(
+                            TAG,
+                            "Vulkan stacker prewarm after ImageReader creation: size=${captureSize.width}x${captureSize.height}, SR=${state.value.useMFSR}, ok=$prewarmOk"
+                        )
+                    }
                 }
             } else {
                 safeCloseImageReader(imageReader)
@@ -964,20 +987,38 @@ class Camera2Controller(private val context: Context) {
             }
 
             if (captureMode == CaptureMode.VIDEO) {
+                val useHlgCapture = _state.value.useHlg10 && !forceStandardSession
                 val sessionConfig = SessionConfiguration(
                     SessionConfiguration.SESSION_REGULAR,
-                    surfaces.map { OutputConfiguration(it) },
+                    surfaces.map { outputSurface ->
+                        OutputConfiguration(outputSurface).apply {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !DeviceUtil.isHarmonyOS) {
+                                dynamicRangeProfile = if (useHlgCapture) {
+                                    DynamicRangeProfiles.HLG10
+                                } else {
+                                    DynamicRangeProfiles.STANDARD
+                                }
+                            }
+                        }
+                    },
                     Executors.newSingleThreadExecutor(),
                     object : CameraCaptureSession.StateCallback() {
                         override fun onConfigured(session: CameraCaptureSession) {
-                            if (_state.value.currentDynamicRangeProfile != "STANDARD") {
+                            if (useHlgCapture) {
+                                _state.value = _state.value.copy(currentDynamicRangeProfile = "HLG10")
+                            } else if (_state.value.currentDynamicRangeProfile != "STANDARD") {
                                 _state.value = _state.value.copy(currentDynamicRangeProfile = "STANDARD")
                             }
                             onSessionConfigured(session)
                         }
 
                         override fun onConfigureFailed(session: CameraCaptureSession) {
-                            PLog.e(TAG, "Video session configuration failed")
+                            PLog.e(TAG, "Video session configuration failed: useHlgCapture=$useHlgCapture")
+                            if (useHlgCapture) {
+                                PLog.w(TAG, "Retrying video preview session with STANDARD dynamic range fallback")
+                                _state.value = _state.value.copy(currentDynamicRangeProfile = "STANDARD")
+                                createPreviewSession(forceStandardSession = true)
+                            }
                         }
                     }
                 )
@@ -987,7 +1028,7 @@ class Camera2Controller(private val context: Context) {
 
 
             // Android 9+ 使用 SessionConfiguration
-            val useHlgCapture = shouldUseHlgCapture() && !forceStandardSession
+            val useHlgCapture = _state.value.useHlg10 && !forceStandardSession
             val readerFormat = reader?.imageFormat ?: ImageFormat.YUV_420_888
             PLog.i(
                 TAG,
@@ -998,7 +1039,7 @@ class Camera2Controller(private val context: Context) {
             val outputConfigs = surfaces.mapIndexed { index, outputSurface ->
                 OutputConfiguration(outputSurface).apply {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !DeviceUtil.isHarmonyOS) {
-                        val profile = if (useHlgCapture && index == 1) {
+                        val profile = if (useHlgCapture) {
                             DynamicRangeProfiles.HLG10
                         } else {
                             DynamicRangeProfiles.STANDARD
@@ -2284,18 +2325,17 @@ class Camera2Controller(private val context: Context) {
 
     /**
      * 设置 LUT 启用状态
-     *
-     * 当 LUT 启用状态改变时，需要更新相机参数（特别是色调映射设置）
      */
     fun setLutEnabled(enabled: Boolean) {
+        if (_state.value.lutEnabled == enabled) return
         _state.value = _state.value.copy(lutEnabled = enabled)
+        createPreviewSession()
+    }
 
-        // LUT 启用状态改变时，需要重新应用相机设置
-        // 因为色调映射设置依赖于 LUT 是否启用
-        previewRequestBuilder?.apply {
-            applyBaseCameraSettings(this, isCapture = false)
-            updatePreview()
-        }
+    fun setLogLutActive(isLogLut: Boolean) {
+        if (_state.value.isLogLutActive == isLogLut) return
+        _state.value = _state.value.copy(isLogLutActive = isLogLut)
+        createPreviewSession()
     }
 
     fun setCaptureMode(mode: CaptureMode) {
@@ -2415,6 +2455,10 @@ class Camera2Controller(private val context: Context) {
             fps = _state.value.videoConfig.fps.fps,
             bitrateMbps = _state.value.videoConfig.bitrate.bitrateMbps,
             codecMime = _state.value.videoConfig.codec.mimeType,
+            colorConfig = VideoEncoderColorRequest(
+                logProfile = _state.value.videoConfig.logProfile,
+                hasActiveLut = _state.value.lutEnabled && _state.value.currentLutName != null
+            ),
             orientationHintDegrees = resolveVideoOrientationHintDegrees()
         ) { uri ->
             PLog.i(TAG, "Video saved: $uri")
@@ -2499,7 +2543,12 @@ class Camera2Controller(private val context: Context) {
     }
 
     fun setMultiFrameCount(multiFrameCount: Int) {
-        _state.value = _state.value.copy(multiFrameCount = multiFrameCount)
+        _state.value = _state.value.copy(
+            multiFrameCount = multiFrameCount.coerceIn(
+                MultiFrameConfig.MIN_FRAME_COUNT,
+                MultiFrameConfig.MAX_FRAME_COUNT
+            )
+        )
     }
 
 
@@ -2834,15 +2883,6 @@ class Camera2Controller(private val context: Context) {
         return _state.value.isP3Supported && _state.value.useP3ColorSpace
     }
 
-    private fun shouldUseHlgCapture(): Boolean {
-        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                _state.value.useP010 &&
-                _state.value.useHlg10 &&
-                !_state.value.useRaw &&
-                isP010Supported &&
-                isHlg10Supported
-    }
-
     /**
      * 计算等效35mm焦距
      *
@@ -3011,7 +3051,6 @@ class Camera2Controller(private val context: Context) {
     fun setUseHlg10(enabled: Boolean) {
         _state.value = _state.value.copy(
             useHlg10 = enabled,
-            currentDynamicRangeProfile = if (!enabled) "STANDARD" else _state.value.currentDynamicRangeProfile
         )
     }
 

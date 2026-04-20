@@ -252,6 +252,7 @@ class FrameRenderer(private val context: Context) {
         // 获取所有行号以计算行数
         val allLines = visibleElements.map { getLine(it) }.filter { it >= 0 }.distinct().sorted()
         val lineCount = allLines.size
+        val knownLines = if (allLines.isEmpty()) listOf(0) else allLines
 
         val height = bottom - top
 
@@ -303,9 +304,9 @@ class FrameRenderer(private val context: Context) {
                 if (line == -1) {
                     // 全局元素，推进所有行的 X 坐标
                     currentXPerLine[-1] = nextX
-                    currentXPerLine[0] = nextX
-                    currentXPerLine[1] = nextX
-                    currentXPerLine[2] = nextX
+                    knownLines.forEach { currentLine ->
+                        currentXPerLine[currentLine] = nextX
+                    }
                 } else {
                     currentXPerLine[line] = nextX
                 }
@@ -383,6 +384,8 @@ class FrameRenderer(private val context: Context) {
         scale: Float = 1f
     ): Float {
         val xPerLine = mutableMapOf<Int, Float>()
+        val realLines = elements.map { getLine(it) }.filter { it >= 0 }.distinct().sorted()
+        val knownLines = if (realLines.isEmpty()) listOf(0) else realLines
         for (element in elements) {
             val width = measureElementWidth(element, metadata, scale)
             val line = getLine(element)
@@ -390,9 +393,9 @@ class FrameRenderer(private val context: Context) {
             if (line == -1) {
                 val max = (xPerLine.values.maxOrNull() ?: 0f) + width
                 xPerLine[-1] = max
-                xPerLine[0] = max
-                xPerLine[1] = max
-                xPerLine[2] = max
+                knownLines.forEach { currentLine ->
+                    xPerLine[currentLine] = max
+                }
             } else {
                 val current = xPerLine.getOrDefault(line, 0f)
                 xPerLine[line] = current + width
@@ -555,6 +558,7 @@ class FrameRenderer(private val context: Context) {
         element: FrameElement.Text,
         metadata: MediaMetadata,
     ): String? {
+        val metadataOverride = metadata.customProperties[element.textType.name]
         val content = when (element.textType) {
             TextType.DEVICE_MODEL -> metadata.deviceModel
             TextType.BRAND -> metadata.brand
@@ -577,12 +581,16 @@ class FrameRenderer(private val context: Context) {
             TextType.FOCAL_LENGTH_35MM -> metadata.focalLength35mm
             TextType.APERTURE -> metadata.aperture
             TextType.RESOLUTION -> metadata.resolution
-            TextType.CUSTOM -> element.format
+            TextType.CUSTOM -> null
             TextType.APP_NAME -> context.getString(R.string.app_name)
-        } ?: return null
+        }
 
-        // 允许用户自定义覆盖内容
-        val finalContent = metadata.customProperties[element.textType.name] ?: content
+        val finalContent = when {
+            element.overrideText != null -> element.overrideText
+            metadataOverride != null -> metadataOverride
+            element.textType == TextType.CUSTOM -> element.format
+            else -> content
+        } ?: return null
 
         val prefix = element.prefix ?: ""
         val suffix = element.suffix ?: ""
@@ -602,7 +610,7 @@ class FrameRenderer(private val context: Context) {
         }
 
         // 获取对应的 drawable
-        val logoKey = metadata?.customProperties?.get("LOGO")
+        val logoKey = element.overrideSource ?: metadata?.customProperties?.get("LOGO")
 
         try {
             val bitmap = if (logoKey != null && (logoKey.startsWith("/") || logoKey.startsWith("content://"))) {
@@ -656,7 +664,7 @@ class FrameRenderer(private val context: Context) {
         val size = (dpToPx(element.sizeDp) * scale).toInt()
 
         // 获取对应的 drawable
-        val logoKey = metadata?.customProperties?.get("LOGO")
+        val logoKey = element.overrideSource ?: metadata?.customProperties?.get("LOGO")
         if (logoKey == "none") return 0f
 
         try {
@@ -861,50 +869,44 @@ class FrameRenderer(private val context: Context) {
 
         PLog.d(TAG, "Transparent bounds: $transparentBounds, frame size: ${frameBitmap.width}x${frameBitmap.height}")
 
-        // 计算缩放比例，使透明区域能够容纳照片（以照片尺寸为准）
-        val photoWidth = originalBitmap.width
-        val photoHeight = originalBitmap.height
-        val transparentWidth = transparentBounds.width()
-        val transparentHeight = transparentBounds.height()
-
-        // 计算边框需要缩放的比例，使透明区域与照片大小匹配
-        val scaleX = photoWidth.toFloat() / transparentWidth
-        val scaleY = photoHeight.toFloat() / transparentHeight
-        // 使用较大的缩放比例，确保照片完全填充透明区域（center crop 效果）
-        val frameScale = maxOf(scaleX, scaleY)
-
-        // 缩放后的边框尺寸
-        val scaledFrameWidth = (frameBitmap.width * frameScale).toInt()
-        val scaledFrameHeight = (frameBitmap.height * frameScale).toInt()
-
-        // 缩放后的透明区域边界
-        val scaledTransparentLeft = (transparentBounds.left * frameScale).toInt()
-        val scaledTransparentTop = (transparentBounds.top * frameScale).toInt()
-        val scaledTransparentWidth = (transparentWidth * frameScale).toInt()
-        val scaledTransparentHeight = (transparentHeight * frameScale).toInt()
-
-        // 计算照片在缩放后透明区域中的居中位置
-        val photoOffsetX = (scaledTransparentWidth - photoWidth) / 2
-        val photoOffsetY = (scaledTransparentHeight - photoHeight) / 2
-
-        // 缩放边框图片
-        val scaledFrame = Bitmap.createScaledBitmap(frameBitmap, scaledFrameWidth, scaledFrameHeight, true)
-        frameBitmap.recycle()
-
-        // 创建输出 Bitmap（与缩放后的边框大小相同）
-        val output = createBitmap(scaledFrameWidth, scaledFrameHeight)
+        // 保持模板图片原始尺寸，将原图按 centerCrop 方式填满透明区域，避免出现黑边。
+        val output = createBitmap(frameBitmap.width, frameBitmap.height)
         val canvas = Canvas(output)
 
-        // 先绘制照片到缩放后的透明区域位置（居中）
-        val photoDrawX = scaledTransparentLeft + photoOffsetX
-        val photoDrawY = scaledTransparentTop + photoOffsetY
-        canvas.drawBitmap(originalBitmap, photoDrawX.toFloat(), photoDrawY.toFloat(), null)
+        drawBitmapCenterCrop(
+            canvas = canvas,
+            bitmap = originalBitmap,
+            destination = RectF(transparentBounds)
+        )
 
-        // 再绘制缩放后的边框图片（透明区域会显示下面的照片）
-        canvas.drawBitmap(scaledFrame, 0f, 0f, null)
-        scaledFrame.recycle()
+        // 再绘制边框图片（透明区域会显示下面的照片）
+        canvas.drawBitmap(frameBitmap, 0f, 0f, null)
+        frameBitmap.recycle()
 
         return output
+    }
+
+    private fun drawBitmapCenterCrop(
+        canvas: Canvas,
+        bitmap: Bitmap,
+        destination: RectF
+    ) {
+        if (destination.width() <= 0f || destination.height() <= 0f) return
+
+        val srcWidth = bitmap.width.toFloat()
+        val srcHeight = bitmap.height.toFloat()
+        val dstWidth = destination.width()
+        val dstHeight = destination.height()
+
+        val scale = maxOf(dstWidth / srcWidth, dstHeight / srcHeight)
+        val scaledWidth = srcWidth * scale
+        val scaledHeight = srcHeight * scale
+
+        val left = destination.left - (scaledWidth - dstWidth) / 2f
+        val top = destination.top - (scaledHeight - dstHeight) / 2f
+        val targetRect = RectF(left, top, left + scaledWidth, top + scaledHeight)
+
+        canvas.drawBitmap(bitmap, null, targetRect, null)
     }
 
     /**
@@ -1026,6 +1028,28 @@ class FrameRenderer(private val context: Context) {
     }
 
     private fun getTextTypeface(element: FrameElement.Text, metadata: MediaMetadata): Typeface {
+        val elementFont = element.fontFamily
+        if (!elementFont.isNullOrBlank()) {
+            if (elementFont.startsWith("/")) {
+                val cacheKey = "file-$elementFont-${element.fontWeight}"
+                typefaceCache[cacheKey]?.let { return it }
+                try {
+                    val base = Typeface.createFromFile(elementFont)
+                    val style = when (element.fontWeight) {
+                        FontWeight.BOLD -> Typeface.BOLD
+                        else -> Typeface.NORMAL
+                    }
+                    val typeface = Typeface.create(base, style)
+                    typefaceCache[cacheKey] = typeface
+                    return typeface
+                } catch (e: Exception) {
+                    PLog.e(TAG, "Failed to load custom font from file: $elementFont", e)
+                }
+            } else {
+                return getTypeface(element.fontWeight, elementFont)
+            }
+        }
+
         if (element.textType == TextType.DEVICE_MODEL) {
             val customFont = metadata.customProperties["DEVICE_MODEL_FONT"]
             if (customFont == "Default") {
@@ -1033,7 +1057,6 @@ class FrameRenderer(private val context: Context) {
             } else if (customFont == "SlacksideOne") {
                 return getTypeface(element.fontWeight, "SlacksideOne.ttf")
             } else if (customFont != null && customFont.startsWith("/")) {
-                // It's a file path
                 val cacheKey = "file-$customFont-${element.fontWeight}"
                 typefaceCache[cacheKey]?.let { return it }
                 try {
@@ -1050,6 +1073,6 @@ class FrameRenderer(private val context: Context) {
                 }
             }
         }
-        return getTypeface(element.fontWeight, element.fontFamily)
+        return getTypeface(element.fontWeight, null)
     }
 }

@@ -96,9 +96,9 @@ import com.hinnka.mycamera.screencapture.ScreenCapturePipState
 import com.hinnka.mycamera.screencapture.ScreenCaptureRenderConfigStore
 import com.hinnka.mycamera.data.UserPreferencesRepository
 import com.hinnka.mycamera.gallery.ExifWriter
-import com.hinnka.mycamera.gallery.MediaManager
-import com.hinnka.mycamera.gallery.MediaManager.loadMetadata
-import com.hinnka.mycamera.gallery.MediaManager.saveMetadata
+import com.hinnka.mycamera.gallery.GalleryManager
+import com.hinnka.mycamera.gallery.GalleryManager.loadMetadata
+import com.hinnka.mycamera.gallery.GalleryManager.saveMetadata
 import com.hinnka.mycamera.livephoto.GoogleLivePhotoCreator
 import com.hinnka.mycamera.livephoto.MotionPhotoWriter
 import com.hinnka.mycamera.livephoto.VivoLivePhotoCreator
@@ -367,6 +367,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         size: Long,
         relativePath: String
     ) = withContext(Dispatchers.IO) {
+        var shouldNotifyGallery = false
         val userPreferencesRepository =
             ContentRepository.getInstance(context).userPreferencesRepository
         val availableLutList = ContentRepository.getInstance(context).getAvailableLuts()
@@ -379,10 +380,10 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         val computationalAperture = preferences?.defaultVirtualAperture?.let { if (it > 0f) it else null }
         val existingPhotoId = if (processingInfo?.uri == uri) processingInfo?.photoId else null
         val photoId =
-            MediaManager.importPhoto(context, uri, lutId, computationalAperture, existingPhotoId) ?: run {
+            GalleryManager.importPhoto(context, uri, lutId, computationalAperture, existingPhotoId) ?: run {
                 return@withContext
         }
-        val metadata = MediaManager.loadMetadata(context, photoId) ?: run {
+        val metadata = GalleryManager.loadMetadata(context, photoId) ?: run {
             return@withContext
         }
         val phantomBaselineLutId = preferences?.phantomBaselineLutId
@@ -426,8 +427,8 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                 0f, 0f, 0f
             ) ?: return@withContext
 
-            val videoFile = MediaManager.getVideoFile(context, photoId)
-            val photoFile = MediaManager.getPhotoFile(context, photoId)
+            val videoFile = GalleryManager.getVideoFile(context, photoId)
+            val photoFile = GalleryManager.getPhotoFile(context, photoId)
 
             FileOutputStream(tempExportFile).use { outputStream ->
                 processedBitmap.compress(Bitmap.CompressFormat.JPEG, 97, outputStream)
@@ -555,6 +556,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                 exportedUris = currentMetadata.exportedUris + writeUri.toString()
             )
             saveMetadata(context, photoId, updatedMetadata)
+            shouldNotifyGallery = true
             PLog.d(TAG, "Exported URI saved: ${writeUri.lastPathSegment} $newName $newSize for photo $photoId")
 
             val thumbnail = ThumbnailUtils.extractThumbnail(processedBitmap, 512, 512)
@@ -570,6 +572,9 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             tempExportFile.delete()
         }
         MyCameraApplication.updateWidgets(context)
+        if (shouldNotifyGallery) {
+            GalleryManager.notifyPhotoLibraryChanged()
+        }
         delay(200L)
     }
 

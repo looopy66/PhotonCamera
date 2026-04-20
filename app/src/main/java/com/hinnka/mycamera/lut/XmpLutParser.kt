@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.lut
 
+import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.utils.PLog
 import java.io.ByteArrayOutputStream
@@ -35,7 +36,7 @@ object XmpLutParser {
         inputStream: InputStream,
         outputStream: OutputStream,
         colorSpace: ColorSpace = ColorSpace.SRGB,
-        curve: LutCurve = LutCurve.SRGB
+        curve: TransferCurve = TransferCurve.SRGB
     ): Boolean {
         val factory = DocumentBuilderFactory.newInstance()
         factory.isNamespaceAware = true
@@ -97,11 +98,11 @@ object XmpLutParser {
         return writePlutFile(outputStream, lutData, colorSpace, curve)
     }
 
-    private fun resampleLut(lutData: LutData, curve: LutCurve): LutData {
+    private fun resampleLut(lutData: LutData, curve: TransferCurve): LutData {
         val size = lutData.divisions
         // 尝试使用 Native 优化
         val nativeData = try {
-            LutProcessor.resampleLutNative(lutData.samples, size, curve.ordinal)
+            LutProcessor.resampleLutNative(lutData.samples, size, curve.storageId)
         } catch (e: Throwable) {
             null
         }
@@ -120,13 +121,13 @@ object XmpLutParser {
                     val g = gIdx * step
                     val b = bIdx * step
 
-                    val rLin = LutCurve.SRGB.toLinear(r)
-                    val gLin = LutCurve.SRGB.toLinear(g)
-                    val bLin = LutCurve.SRGB.toLinear(b)
+                    val rLin = TransferCurve.SRGB.logToLinear(r)
+                    val gLin = TransferCurve.SRGB.logToLinear(g)
+                    val bLin = TransferCurve.SRGB.logToLinear(b)
 
-                    val rLog = curve.fromLinear(rLin)
-                    val gLog = curve.fromLinear(gLin)
-                    val bLog = curve.fromLinear(bLin)
+                    val rLog = curve.linearToLog(rLin)
+                    val gLog = curve.linearToLog(gLin)
+                    val bLog = curve.linearToLog(bLin)
 
                     val interpolated = trilinearSample(lutData, rLog, gLog, bLog)
 
@@ -334,7 +335,7 @@ object XmpLutParser {
         outputStream: OutputStream,
         lut: LutData,
         colorSpace: ColorSpace,
-        curve: LutCurve
+        curve: TransferCurve
     ): Boolean {
         val size = lut.divisions
         val count = size * size * size * 3
@@ -345,7 +346,7 @@ object XmpLutParser {
         buffer.putInt(3) // version
         buffer.putInt(size)
         buffer.putInt(1) // dataType: 1 = UINT16
-        buffer.putInt(curve.ordinal)
+        buffer.putInt(curve.storageId)
         buffer.putInt(colorSpace.ordinal)
 
         for (s in lut.samples) {

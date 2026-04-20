@@ -27,7 +27,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
-import com.hinnka.mycamera.ui.common.WatermarkEditSheet
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -92,6 +91,7 @@ fun PhotoEditScreen(
     viewModel: GalleryViewModel,
     cameraViewModel: CameraViewModel,
     onBack: () -> Unit,
+    onOpenFrameEditor: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -665,7 +665,7 @@ fun PhotoEditScreen(
                                             modifier = Modifier
                                                 .clip(RoundedCornerShape(16.dp))
                                                 .background(Color.White.copy(alpha = 0.1f))
-                                                .clickable { viewModel.showWatermarkSheet = true }
+                                                .clickable { onOpenFrameEditor(currentFrame.id) }
                                                 .padding(horizontal = 10.dp, vertical = 4.dp),
                                             verticalAlignment = Alignment.CenterVertically,
                                             horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -712,7 +712,9 @@ fun PhotoEditScreen(
                                         isEditable = frame.isEditable,
                                         onClick = {
                                             if (editFrameId == frame.id) {
-                                                viewModel.showWatermarkSheet = true
+                                                if (frame.isEditable) {
+                                                    onOpenFrameEditor(frame.id)
+                                                }
                                             } else {
                                                 viewModel.setEditFrame(frame.id)
                                             }
@@ -797,41 +799,6 @@ fun PhotoEditScreen(
             photoRecipeParams = editPhotoRecipeParams,
             onPhotoParamsChange = { viewModel.setPhotoRecipeParams(it) },
             defaultScope = RecipeScope.PHOTO_LOCAL
-        )
-    }
-
-    if (viewModel.showWatermarkSheet) {
-        val currentPhoto = viewModel.getCurrentPhoto()
-        val originalValues = remember(currentPhoto) {
-            mutableMapOf<TextType, String>().apply {
-                currentPhoto?.metadata?.let { metadata ->
-                    put(TextType.DEVICE_MODEL, metadata.deviceModel ?: "")
-                    put(TextType.BRAND, metadata.brand ?: "")
-                    metadata.dateTaken?.let { date ->
-                        put(TextType.DATE, SimpleDateFormat("yyyy.MM.dd", Locale.getDefault()).format(Date(date)))
-                        put(TextType.TIME, SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(date)))
-                        put(
-                            TextType.DATETIME,
-                            SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.getDefault()).format(Date(date))
-                        )
-                    }
-                }
-            }
-        }
-        WatermarkEditSheet(
-            customProperties = editFrameCustomProperties,
-            onPropertiesChange = {
-                viewModel.saveEditCustomProperties(it)
-                editFrameCustomProperties = it
-            },
-            onDismiss = { viewModel.showWatermarkSheet = false },
-            originalValues = originalValues,
-            onImportFont = { uri ->
-                viewModel.getCustomImportManager().importFont(uri)
-            },
-            onImportLogo = { uri ->
-                viewModel.getCustomImportManager().importLogo(uri)
-            }
         )
     }
 

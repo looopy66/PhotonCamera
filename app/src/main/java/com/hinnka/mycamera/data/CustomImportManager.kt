@@ -3,8 +3,11 @@ package com.hinnka.mycamera.data
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import com.hinnka.mycamera.R
 import com.hinnka.mycamera.lut.LutConverter
-import com.hinnka.mycamera.lut.LutCurve
+import com.hinnka.mycamera.color.TransferCurve
+import com.hinnka.mycamera.frame.FrameTemplate
+import com.hinnka.mycamera.frame.FrameTemplateParser
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.XmpLutParser
 import com.hinnka.mycamera.raw.ColorSpace
@@ -42,6 +45,19 @@ class CustomImportManager(private val context: Context) {
         // 自定义 Logo 目录
         private const val CUSTOM_LOGO_DIR = "custom_logos"
     }
+
+    private fun sanitizeCustomLutCategory(category: String?): String {
+        val trimmedCategory = category?.trim().orEmpty()
+        if (trimmedCategory.isEmpty()) return ""
+
+        val reservedCategoryNames = setOf(
+            context.getString(R.string.built_in),
+            context.getString(R.string.uncategorized)
+        )
+        return if (trimmedCategory in reservedCategoryNames) "" else trimmedCategory
+    }
+
+    private fun isCustomLutId(lutId: String): Boolean = lutId.startsWith("custom_")
 
     /**
      * 获取分类重定向/重写映射
@@ -83,7 +99,7 @@ class CustomImportManager(private val context: Context) {
      * @param curve 输入曲线类型（可选）
      * @return 导入成功的 LUT ID，失败返回 null
      */
-    fun importLut(uri: Uri, displayName: String? = null, category: String? = null, colorSpace: ColorSpace = ColorSpace.SRGB, curve: LutCurve = LutCurve.SRGB): String? {
+    fun importLut(uri: Uri, displayName: String? = null, category: String? = null, colorSpace: ColorSpace = ColorSpace.SRGB, curve: TransferCurve = TransferCurve.SRGB): String? {
         return try {
             val fileName = getFileName(uri) ?: "lut_${System.currentTimeMillis()}.cube"
             val lutId = "custom_${UUID.randomUUID()}"
@@ -113,13 +129,14 @@ class CustomImportManager(private val context: Context) {
 
             // 生成显示名称
             val name = displayName ?: fileName.substringBeforeLast('.')
+            val sanitizedCategory = sanitizeCustomLutCategory(category)
 
             // 保存到配置文件
-            saveLutToConfig(lutId, name, plutFileName, category)
+            saveLutToConfig(lutId, name, plutFileName, sanitizedCategory)
 
             // 如果有分类，也同步到 overrides (保持一致性)
-            if (!category.isNullOrEmpty()) {
-                updateLutCategory(lutId, category)
+            if (sanitizedCategory.isNotEmpty()) {
+                updateLutCategory(lutId, sanitizedCategory)
             }
 
             PLog.d(TAG, "LUT imported successfully: $lutId ($name)")
@@ -232,7 +249,8 @@ class CustomImportManager(private val context: Context) {
         return try {
             val fileName = getFileName(uri) ?: "frame_${System.currentTimeMillis()}.png"
             val frameId = "custom_${UUID.randomUUID()}"
-            val imageFileName = "${frameId}_image.png"
+            val extension = fileName.substringAfterLast('.', "png")
+            val imageFileName = "${frameId}_image.$extension"
             val imageFile = File(customFrameDir, imageFileName)
             val frameConfigFile = File(customFrameDir, "$frameId.json")
 
@@ -272,6 +290,58 @@ class CustomImportManager(private val context: Context) {
             frameId
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to import image frame", e)
+            null
+        }
+    }
+
+    /**
+     * 为边框编辑器导入图片资源并复制到私有目录。
+     */
+    fun importEditorFrameImage(uri: Uri, frameIdHint: String? = null): String? {
+        return try {
+            val fileName = getFileName(uri) ?: "frame_${System.currentTimeMillis()}.png"
+            val extension = fileName.substringAfterLast('.', "png")
+            val imageFileName = (frameIdHint ?: "frame_${UUID.randomUUID()}") + "_image.$extension"
+            val imageFile = File(customFrameDir, imageFileName)
+
+            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                imageFile.outputStream().use { outputStream ->
+                    inputStream.copyTo(outputStream)
+                }
+            } ?: return null
+
+            imageFile.absolutePath
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to import frame editor image", e)
+            null
+        }
+    }
+
+    /**
+     * 保存或覆盖自定义边框模板。
+     *
+     * @param template 待保存模板
+     * @param overwriteFrameId 若传入则覆盖该自定义边框，否则创建新的自定义边框
+     * @return 实际保存的边框 ID
+     */
+    fun saveFrameTemplate(template: FrameTemplate, overwriteFrameId: String? = null): String? {
+        return try {
+            val frameId = overwriteFrameId ?: template.id.takeIf { it.startsWith("custom_") } ?: "custom_${UUID.randomUUID()}"
+            val templateToSave = template.copy(id = frameId)
+            val validationErrors = FrameTemplateParser.validateTemplate(templateToSave)
+            if (validationErrors.isNotEmpty()) {
+                PLog.e(TAG, "Failed to save frame template, invalid fields: $validationErrors")
+                return null
+            }
+
+            val frameConfigFile = File(customFrameDir, "$frameId.json")
+            frameConfigFile.writeText(FrameTemplateParser.serializeTemplate(templateToSave))
+            upsertFrameConfig(frameId, templateToSave.nameMap, frameConfigFile.name)
+
+            PLog.d(TAG, "Frame template saved: $frameId overwrite=$overwriteFrameId")
+            frameId
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to save frame template", e)
             null
         }
     }
@@ -401,7 +471,8 @@ class CustomImportManager(private val context: Context) {
                         path = path,
                         nameMap = nameMap,
                         previewResId = 0,
-                        isBuiltIn = false
+                        isBuiltIn = false,
+                        isEditable = true
                     )
                 )
             }
@@ -458,6 +529,12 @@ class CustomImportManager(private val context: Context) {
      */
     fun updateLutCategory(lutId: String, newCategory: String): Boolean {
         return try {
+            val sanitizedCategory = if (isCustomLutId(lutId)) {
+                sanitizeCustomLutCategory(newCategory)
+            } else {
+                newCategory.trim()
+            }
+
             // 1. 同步到分类重写文件 (核心：支持内置)
             val overridesFile = File(context.filesDir, CATEGORY_OVERRIDES_CONFIG)
             val overridesJson = if (overridesFile.exists()) {
@@ -465,7 +542,7 @@ class CustomImportManager(private val context: Context) {
             } else {
                 JSONObject()
             }
-            overridesJson.put(lutId, newCategory)
+            overridesJson.put(lutId, sanitizedCategory)
             overridesFile.writeText(overridesJson.toString())
 
             // 2. 如果是自定义滤镜，也同步更新 custom_luts.json (保持一致性)
@@ -478,7 +555,7 @@ class CustomImportManager(private val context: Context) {
                 for (i in 0 until jsonArray.length()) {
                     val lutObj = jsonArray.getJSONObject(i)
                     if (lutObj.getString("id") == lutId) {
-                        lutObj.put("category", newCategory)
+                        lutObj.put("category", sanitizedCategory)
                         updated = true
                     }
                     newArray.put(lutObj)
@@ -488,7 +565,7 @@ class CustomImportManager(private val context: Context) {
                 }
             }
 
-            PLog.d(TAG, "LUT category updated: $lutId -> $newCategory")
+            PLog.d(TAG, "LUT category updated: $lutId -> $sanitizedCategory")
             true
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to update LUT category", e)
@@ -598,7 +675,24 @@ class CustomImportManager(private val context: Context) {
 
                 // 删除文件
                 fileName?.let {
-                    File(customFrameDir, it).delete()
+                    val frameFile = File(customFrameDir, it)
+                    val imagePath = runCatching {
+                        if (frameFile.exists()) {
+                            JSONObject(frameFile.readText())
+                                .optJSONObject("layout")
+                                ?.optString("imagePath")
+                                ?.takeIf { path -> path.isNotBlank() }
+                        } else {
+                            null
+                        }
+                    }.getOrNull()
+                    frameFile.delete()
+                    imagePath?.let { path ->
+                        val imageFile = File(path)
+                        if (imageFile.exists() && imageFile.parentFile == customFrameDir) {
+                            imageFile.delete()
+                        }
+                    }
                 }
             }
 
@@ -649,6 +743,42 @@ class CustomImportManager(private val context: Context) {
             JSONArray()
         }
 
+        jsonArray.put(JSONObject().apply {
+            put("id", frameId)
+            put("name", JSONObject().apply {
+                nameMap.forEach { (lang, name) ->
+                    put(lang, name)
+                }
+            })
+            put("fileName", fileName)
+        })
+        configFile.writeText(jsonArray.toString())
+    }
+
+    private fun upsertFrameConfig(frameId: String, nameMap: Map<String, String>, fileName: String) {
+        val configFile = File(context.filesDir, CUSTOM_FRAME_CONFIG)
+        val existing = if (configFile.exists()) JSONArray(configFile.readText()) else JSONArray()
+        val newArray = JSONArray()
+        var updated = false
+
+        for (i in 0 until existing.length()) {
+            val frameObj = existing.getJSONObject(i)
+            if (frameObj.getString("id") == frameId) {
+                newArray.put(createFrameConfigObject(frameId, nameMap, fileName))
+                updated = true
+            } else {
+                newArray.put(frameObj)
+            }
+        }
+
+        if (!updated) {
+            newArray.put(createFrameConfigObject(frameId, nameMap, fileName))
+        }
+
+        configFile.writeText(newArray.toString())
+    }
+
+    private fun createFrameConfigObject(frameId: String, nameMap: Map<String, String>, fileName: String): JSONObject {
         val frameObj = JSONObject().apply {
             put("id", frameId)
             put("name", JSONObject().apply {
@@ -658,9 +788,7 @@ class CustomImportManager(private val context: Context) {
             })
             put("fileName", fileName)
         }
-
-        jsonArray.put(frameObj)
-        configFile.writeText(jsonArray.toString())
+        return frameObj
     }
 
     /**

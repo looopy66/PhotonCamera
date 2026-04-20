@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.lut
 
+import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.raw.ColorSpace
 import java.nio.ByteBuffer
@@ -20,7 +21,7 @@ data class LutConfig(
     val byteBuffer: ByteBuffer? = null,
     val title: String = "",
     val configDataType: Int = CONFIG_DATA_TYPE_UINT8,
-    val curve: LutCurve = LutCurve.SRGB,
+    val curve: TransferCurve = TransferCurve.SRGB,
     val colorSpace: ColorSpace = ColorSpace.SRGB,
     val outputColorSpace: android.graphics.ColorSpace = android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB),
 ) {

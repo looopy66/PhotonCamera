@@ -167,6 +167,7 @@ data class CameraState(
     // LUT 设置
     val currentLutName: String? = null,
     val lutEnabled: Boolean = false,
+    val isLogLutActive: Boolean = false,
     val availableLuts: List<String> = emptyList(),
 
     // 直方图数据 (256个灰度值)
@@ -212,6 +213,9 @@ data class CameraState(
      */
     val isAutoExposure: Boolean
         get() = isIsoAuto && isShutterSpeedAuto
+
+    val isHLG: Boolean
+        get() = currentDynamicRangeProfile == "HLG10"
 
     /**
      * 获取当前相机信息

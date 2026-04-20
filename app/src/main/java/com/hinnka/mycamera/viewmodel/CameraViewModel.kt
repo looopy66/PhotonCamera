@@ -9,6 +9,7 @@ import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.net.Uri
+import android.os.Build
 import android.os.SystemClock
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -19,8 +20,10 @@ import androidx.lifecycle.viewModelScope
 import com.hinnka.mycamera.camera.*
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.data.VolumeKeyAction
+import com.hinnka.mycamera.frame.FrameEditorDraft
 import com.hinnka.mycamera.frame.FrameInfo
-import com.hinnka.mycamera.gallery.MediaManager
+import com.hinnka.mycamera.frame.FramePreviewFactory
+import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.lut.LutConfig
@@ -32,11 +35,10 @@ import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.phantom.PhantomWidgetProvider
 import com.hinnka.mycamera.raw.ColorSpace
-import com.hinnka.mycamera.raw.LogCurve
+import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
-import com.hinnka.mycamera.raw.rawFolder
 import com.hinnka.mycamera.ui.camera.CameraGLSurfaceView
 import com.hinnka.mycamera.utils.*
 import com.hinnka.mycamera.video.CaptureMode
@@ -235,7 +237,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, 2)
     val multiFrameCount: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.multiFrameCount }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 8)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, MultiFrameConfig.DEFAULT_FRAME_COUNT)
     val useMFSR: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useMFSR }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -260,9 +262,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val colorSpace: StateFlow<ColorSpace> = userPreferencesRepository.userPreferences
         .map { it.colorSpace }
         .stateIn(viewModelScope, SharingStarted.Eagerly, ColorSpace.SRGB)
-    val logCurve: StateFlow<LogCurve> = userPreferencesRepository.userPreferences
+    val logCurve: StateFlow<TransferCurve> = userPreferencesRepository.userPreferences
         .map { it.logCurve }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, LogCurve.SRGB)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, TransferCurve.SRGB)
 
     val rawLut: StateFlow<String> = userPreferencesRepository.userPreferences
         .map { prefs ->
@@ -285,6 +287,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useHlg10: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useHlg10 }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val hlgHardwareCompatibilityEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.hlgHardwareCompatibilityEnabled }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
     val useP3ColorSpace: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useP3ColorSpace }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -412,7 +417,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.onVideoSaved = { uri ->
             if (uri != null) {
                 viewModelScope.launch {
-                    val mediaId = MediaManager.recordVideoCapture(getApplication(), uri)
+                    val mediaId = GalleryManager.recordVideoCapture(getApplication(), uri)
                     if (mediaId != null) {
                         _imageSavedEvent.emit(Unit)
                     }
@@ -635,6 +640,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     }
                     view.setVideoRecorder(cameraController.videoRecorder)
                     view.setVideoLogProfile(currentState.videoConfig.logProfile)
+                    view.setIsHlgInput(shouldTreatPreviewAsHlgInput(currentState))
                     currentState.focusPoint?.let { fp ->
                         view.setFocusPoint(android.graphics.PointF(fp.first, fp.second))
                     }
@@ -651,7 +657,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         StartupTrace.mark("CameraViewModel.init end")
     }
 
-    fun getAvailableRawLutList(context: Context, logCurve: LogCurve): List<String> {
+    fun getAvailableRawLutList(context: Context, logCurve: TransferCurve): List<String> {
         try {
             val files = logCurve.rawFolder?.let { context.assets.list(it) }
             return files?.filter { it.endsWith(".plut") }?.toList() ?: emptyList()
@@ -703,6 +709,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             currentLutConfig = loadedLut
             cameraController.setLutEnabled(loadedLut != null)
+            cameraController.setLogLutActive(loadedLut?.curve?.isLog == true)
             glSurfaceView?.let { view ->
                 val currentState = state.value
                 view.setBaselineLut(currentBaselineLutConfig)
@@ -718,6 +725,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 view.setColorRecipeEnabled(!currentRecipeParams.value.isDefault())
                 view.setVideoRecorder(cameraController.videoRecorder)
                 view.setVideoLogProfile(currentState.videoConfig.logProfile)
+                view.setIsHlgInput(shouldTreatPreviewAsHlgInput(currentState))
                 view.restoreRenderStateAfterResume()
             }
         }
@@ -859,7 +867,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun cancelMultipleExposureSession() {
         multipleExposureState.previewBitmap?.recycle()
         multipleExposureState.sessionId?.let { sessionId ->
-            MediaManager.clearMultipleExposureSession(getApplication(), sessionId)
+            GalleryManager.clearMultipleExposureSession(getApplication(), sessionId)
         }
         multipleExposureMetadata = null
         multipleExposureState = multipleExposureState.copy(
@@ -873,7 +881,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun undoLastMultipleExposureFrame() {
         val sessionId = multipleExposureState.sessionId ?: return
-        if (!MediaManager.removeLastMultipleExposureFrame(getApplication(), sessionId)) return
+        if (!GalleryManager.removeLastMultipleExposureFrame(getApplication(), sessionId)) return
         refreshMultipleExposurePreview(sessionId)
     }
 
@@ -885,7 +893,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             multipleExposureState = multipleExposureState.copy(isProcessing = true)
             try {
                 val context = getApplication<Application>()
-                val composedBitmap = MediaManager.composeMultipleExposurePhoto(context, sessionId) ?: run {
+                val composedBitmap = GalleryManager.composeMultipleExposurePhoto(context, sessionId) ?: run {
                     multipleExposureState = multipleExposureState.copy(isProcessing = false)
                     return@launch
                 }
@@ -895,7 +903,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
                 val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
 
-                val photoId = MediaManager.preparePhoto(
+                val photoId = GalleryManager.preparePhoto(
                     context,
                     baseMetadata.copy(
                         width = composedBitmap.width,
@@ -913,7 +921,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     return@launch
                 }
 
-                MediaManager.saveBitmapPhoto(
+                GalleryManager.saveBitmapPhoto(
                     context,
                     photoId,
                     composedBitmap,
@@ -951,9 +959,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private fun refreshMultipleExposurePreview(sessionId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>()
-            val frameFiles = MediaManager.getMultipleExposureFrameFiles(context, sessionId)
+            val frameFiles = GalleryManager.getMultipleExposureFrameFiles(context, sessionId)
             val preview = if (frameFiles.isNotEmpty()) {
-                MediaManager.composeMultipleExposurePreview(context, sessionId)
+                GalleryManager.composeMultipleExposurePreview(context, sessionId)
             } else {
                 null
             }
@@ -996,7 +1004,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 multipleExposureFrameCount = multipleExposureState.targetCount
             ).also { multipleExposureMetadata = it }
 
-            val frameFile = MediaManager.saveMultipleExposureFrame(
+            val frameFile = GalleryManager.saveMultipleExposureFrame(
                 context,
                 sessionId,
                 frameIndex,
@@ -1487,11 +1495,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (lutId == null) {
             currentLutConfig = null
             // LUT 已禁用，通知相机控制器
+            cameraController.setLogLutActive(false)
             cameraController.setLutEnabled(false)
         } else {
             val hadActiveLut = currentLutConfig != null
             if (!hadActiveLut) {
-                // 首次启动时先保持“未启用”状态，避免 Live Photo 在 LUT 文件尚未加载完成前录入原始画面。
+                // 首次启动时先保持”未启用”状态，避免 Live Photo 在 LUT 文件尚未加载完成前录入原始画面。
                 cameraController.setLutEnabled(false)
             }
             viewModelScope.launch {
@@ -1504,6 +1513,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     started = SharingStarted.Lazily,
                     initialValue = ColorRecipeParams.DEFAULT,
                 )
+                cameraController.setLogLutActive(loadedLut?.curve?.isLog == true)
                 cameraController.setLutEnabled(loadedLut != null)
             }
             if (hadActiveLut) {
@@ -1515,6 +1525,26 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             userPreferencesRepository.saveLutConfig(lutId)
         }
+    }
+
+    private fun shouldUseHlgCapture(): Boolean {
+        val state = state.value
+        val baseCondition = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                state.isP010Supported &&
+                state.isHlg10Supported &&
+                !state.useRaw
+        if (!baseCondition) return false
+        // 用户主动开启 HLG10 录制
+        val userHlg = state.useP010 && state.useHlg10
+        // Log LUT 需要 HLG 采集获取线性信号（替代 tonemap gamma，提升兼容性）
+        val logLutHlg = state.lutEnabled && state.isLogLutActive
+        // Video Log 同样需要 HLG 采集获取线性信号
+        val videoLogHlg = state.captureMode == CaptureMode.VIDEO && state.videoConfig.logProfile.isEnabled
+        return userHlg || logLutHlg || videoLogHlg
+    }
+
+    private fun shouldTreatPreviewAsHlgInput(currentState: com.hinnka.mycamera.camera.CameraState): Boolean {
+        return hlgHardwareCompatibilityEnabled.value && currentState.isHLG
     }
 
     /**
@@ -1649,6 +1679,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         reopenCamera()
     }
 
+    fun setHlgHardwareCompatibilityEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveHlgHardwareCompatibilityEnabled(enabled)
+        }
+        glSurfaceView?.setIsHlgInput(shouldTreatPreviewAsHlgInput(state.value))
+    }
+
     fun setUseP3ColorSpace(enabled: Boolean) {
         cameraController.setUseP3ColorSpace(enabled)
         viewModelScope.launch {
@@ -1723,7 +1760,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     suspend fun applyLut(bitmap: Bitmap): Bitmap = withContext(Dispatchers.IO) {
         currentLutConfig?.let { lut ->
             val params = contentRepository.lutManager.loadColorRecipeParams(currentLutId.value)
-            contentRepository.imageProcessor.applyLut(bitmap, lut, params)
+            contentRepository.imageProcessor.applyLut(
+                bitmap = bitmap,
+                isHlgInput = shouldTreatPreviewAsHlgInput(state.value),
+                lutConfig = lut,
+                colorRecipeParams = params
+            )
         } ?: bitmap
     }
 
@@ -1766,6 +1808,30 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         contentRepository.frameManager.saveCustomProperties(frameId, properties)
     }
 
+    fun loadFrameEditorDraft(frameId: String?, imageFrame: Boolean = false): FrameEditorDraft {
+        return contentRepository.frameManager.createEditorDraft(frameId, imageFrame)
+    }
+
+    suspend fun saveFrameEditorDraft(draft: FrameEditorDraft): String? = withContext(Dispatchers.IO) {
+        val savedId = contentRepository.frameManager.saveEditorDraft(draft)
+        if (savedId != null) {
+            contentRepository.refreshCustomContent()
+        }
+        savedId
+    }
+
+    fun importFrameEditorImage(uri: Uri, frameIdHint: String? = null): String? {
+        return contentRepository.frameManager.importEditorFrameImage(uri, frameIdHint)
+    }
+
+    suspend fun renderFrameEditorPreview(draft: FrameEditorDraft, portrait: Boolean): Bitmap =
+        withContext(Dispatchers.Default) {
+            val source = FramePreviewFactory.createPreviewBitmap(portrait)
+            val template = draft.toTemplate(draft.editableFrameId ?: draft.sourceFrameId ?: "preview_frame")
+            val metadata = FramePreviewFactory.createPreviewMetadata(source.width, source.height)
+            contentRepository.frameRenderer.render(source, template, metadata)
+        }
+
     /**
      * 设置是否显示直方图
      */
@@ -1798,9 +1864,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 设置多帧合成帧数
      */
     fun setMultiFrameCount(count: Int) {
-        cameraController.setMultiFrameCount(count)
+        val normalizedCount = count.coerceIn(
+            MultiFrameConfig.MIN_FRAME_COUNT,
+            MultiFrameConfig.MAX_FRAME_COUNT
+        )
+        cameraController.setMultiFrameCount(normalizedCount)
         viewModelScope.launch {
-            userPreferencesRepository.saveMultiFrameCount(count)
+            userPreferencesRepository.saveMultiFrameCount(normalizedCount)
             //reopenCamera()
         }
     }
@@ -1820,6 +1890,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (enabled) {
             setUseMultipleExposure(false)
             setUseMFNR(false)
+            setUseRaw(false)
         }
         cameraController.setUseMFSR(enabled)
         viewModelScope.launch {
@@ -1896,6 +1967,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setUseRaw(useRaw: Boolean) {
         if (useRaw) {
             setUseMultipleExposure(false)
+            setUseMFSR(false)
         }
         cameraController.setUseRaw(useRaw)
         viewModelScope.launch {
@@ -2136,7 +2208,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * 设置 RAW Log 曲线
      */
-    fun setLogCurve(logCurve: LogCurve) {
+    fun setLogCurve(logCurve: TransferCurve) {
         viewModelScope.launch {
             userPreferencesRepository.saveLogCurve(logCurve)
         }
@@ -2145,7 +2217,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * 设置 RAW 还原 LUT
      */
-    fun setRawLut(logCurve: LogCurve, lut: String) {
+    fun setRawLut(logCurve: TransferCurve, lut: String) {
         viewModelScope.launch {
             userPreferencesRepository.saveRawLut(logCurve, lut)
         }
@@ -2419,7 +2491,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
             characteristics ?: return
             val photoId =
-                MediaManager.preparePhoto(
+                GalleryManager.preparePhoto(
                     context,
                     metadata,
                     captureResult,
@@ -2433,9 +2505,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 return
             }
             viewModelScope.launch(Dispatchers.IO) {
-                MediaManager.saveVideo(context, photoId, livePhotoVideoDeferred)
+                GalleryManager.saveVideo(context, photoId, livePhotoVideoDeferred)
 
-                MediaManager.savePhoto(
+                GalleryManager.savePhoto(
                     context,
                     photoId,
                     image,
@@ -2501,7 +2573,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 captureMode = "video_snapshot"
             )
 
-            val photoId = MediaManager.preparePhoto(
+            val photoId = GalleryManager.preparePhoto(
                 context,
                 metadata,
                 null,
@@ -2516,7 +2588,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             withContext(Dispatchers.IO) {
-                MediaManager.saveBitmapPhoto(
+                GalleryManager.saveBitmapPhoto(
                     context,
                     photoId,
                     bitmap,
@@ -2654,7 +2726,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             } else null
 
             characteristics ?: return
-            val photoId = MediaManager.preparePhoto(
+            val photoId = GalleryManager.preparePhoto(
                 context,
                 metadata,
                 captureResult,
@@ -2671,9 +2743,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             viewModelScope.launch(Dispatchers.IO) {
-                MediaManager.saveVideo(context, photoId, livePhotoVideoDeferred)
+                GalleryManager.saveVideo(context, photoId, livePhotoVideoDeferred)
 
-                MediaManager.saveStackedPhoto(
+                GalleryManager.saveStackedPhoto(
                     context,
                     photoId,
                     images,
@@ -2780,7 +2852,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             manualHdrEffectEnabled = defaultHdrEffectEnabled
         )
 
-        MediaManager.preparePhoto(
+        GalleryManager.preparePhoto(
             context,
             metadata,
             null,
@@ -2814,13 +2886,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             burstImageCount++
             try {
-                val metadata = MediaManager.loadMetadata(context, photoId)
+                val metadata = GalleryManager.loadMetadata(context, photoId)
                 if (metadata == null) {
                     prepareBurst(context, photoId, image, captureInfo)
                 }
                 val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
                 val photoQualityValue = photoQuality.firstOrNull() ?: 95
-                MediaManager.saveBurstPhoto(
+                GalleryManager.saveBurstPhoto(
                     context,
                     photoId,
                     image,
@@ -2920,7 +2992,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         burstImages.clear()
         burstImageCount = 0
         multipleExposureState.previewBitmap?.recycle()
-        multipleExposureState.sessionId?.let { MediaManager.clearMultipleExposureSession(getApplication(), it) }
+        multipleExposureState.sessionId?.let { GalleryManager.clearMultipleExposureSession(getApplication(), it) }
     }
 
     /**

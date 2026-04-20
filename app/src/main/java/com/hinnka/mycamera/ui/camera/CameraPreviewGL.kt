@@ -53,6 +53,7 @@ fun CameraPreviewGL(
     livePhotoRecorder: LivePhotoRecorder? = null,
     videoRecorder: VideoRecorder? = null,
     videoLogProfile: VideoLogProfile = VideoLogProfile.OFF,
+    isHlgInput: Boolean = false,
     onGLSurfaceViewReady: ((CameraGLSurfaceView) -> Unit)? = null,
     aperture: Float = 0f,
     modifier: Modifier = Modifier
@@ -167,6 +168,7 @@ fun CameraPreviewGL(
                         glSurfaceView.setLensFacing(lensFacing)
                         glSurfaceView.setDeviceRotation(rotationDegrees.toInt())
                         glSurfaceView.setCalibrationOffset(calibrationOffset)
+                        glSurfaceView.setCaptureAspectRatio(aspectRatio)
 
                         // 当 SurfaceTexture 准备好且尺寸已就绪时，通知外部打开相机。
                         // 对 previewSize 变化使用 key 重建 GLSurfaceView，避免旧 SurfaceTexture
@@ -205,6 +207,7 @@ fun CameraPreviewGL(
                         glSurfaceView.setLivePhotoRecorder(livePhotoRecorder)
                         glSurfaceView.setVideoRecorder(videoRecorder)
                         glSurfaceView.setVideoLogProfile(videoLogProfile)
+                        glSurfaceView.setIsHlgInput(isHlgInput)
                     },
                     modifier = Modifier.fillMaxSize()
                 )

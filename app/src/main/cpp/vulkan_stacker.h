@@ -13,6 +13,7 @@ public:
   bool addFrame(AHardwareBuffer *buffer);
   bool processStack(uint32_t *outBitmap, uint32_t outWidth, uint32_t outHeight,
                     uint32_t stride, int rotation);
+  bool resetForReuse();
 
 private:
   uint32_t width, height;
@@ -30,6 +31,8 @@ private:
   uint32_t gridH = 0;
   VkBuffer alignmentBuffer = VK_NULL_HANDLE;
   VkDeviceMemory alignmentMemory = VK_NULL_HANDLE;
+  VkBuffer alignmentUploadBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory alignmentUploadMemory = VK_NULL_HANDLE;
 
   std::vector<VkBuffer> accumBuffers;
   std::vector<VkDeviceMemory> accumMemories;
@@ -53,6 +56,9 @@ private:
   std::vector<VkDescriptorSet> normalizeSets;
   VkPipelineLayout normalizePipelineLayout = VK_NULL_HANDLE;
   VkPipeline normalizePipeline = VK_NULL_HANDLE;
+  VkQueryPool gpuTimingQueryPool = VK_NULL_HANDLE;
+  float gpuTimestampPeriodNs = 0.0f;
+  bool gpuTimestampSupported = false;
 
   // Staging buffer for result copy
   VkBuffer stagingBuffer = VK_NULL_HANDLE;
@@ -104,8 +110,12 @@ private:
   // Phase 3: Motion Prior Buffer (Grid Resolution)
   VkBuffer motionPriorBuffer = VK_NULL_HANDLE;
   VkDeviceMemory motionPriorMemory = VK_NULL_HANDLE;
+  VkBuffer motionPriorUploadBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory motionPriorUploadMemory = VK_NULL_HANDLE;
   VkBuffer localTileMaskBuffer = VK_NULL_HANDLE;
   VkDeviceMemory localTileMaskMemory = VK_NULL_HANDLE;
+  VkBuffer localTileMaskUploadBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory localTileMaskUploadMemory = VK_NULL_HANDLE;
   float referenceFrameScore = 0.0f;
 
   void initVulkanResources();
@@ -113,4 +123,6 @@ private:
   void createPipelines(VkSampler immutableSampler);
   bool processFrame(AHardwareBuffer *buffer, float frameScore,
                     GrayImage &cachedGray);
+  void resetDescriptorHandles();
+  void releasePendingFrames();
 };

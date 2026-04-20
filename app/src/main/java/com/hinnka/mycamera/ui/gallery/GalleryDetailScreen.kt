@@ -69,9 +69,10 @@ import kotlin.math.min
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MediaDetailScreen(
+fun GalleryDetailScreen(
     viewModel: GalleryViewModel,
     initialIndex: Int = 0,
+    selectedTab: GalleryTab? = null,
     photoId: String? = null,
     isExpanded: Boolean = false,
     onBack: () -> Unit = {},
@@ -122,6 +123,12 @@ fun MediaDetailScreen(
         }
     }
 
+    LaunchedEffect(selectedTab) {
+        if (selectedTab != null) {
+            viewModel.selectTab(selectedTab)
+        }
+    }
+
     // Monitor deletePendingIntent and launch system delete dialog
     LaunchedEffect(viewModel.deletePendingIntent) {
         viewModel.deletePendingIntent?.let { pendingIntent ->
@@ -166,8 +173,8 @@ fun MediaDetailScreen(
         viewModel.setCurrentPhoto(pagerState.currentPage)
         currentColorSpace.value = null
 
-        if (viewModel.selectedTab == GalleryTab.SYSTEM && pagerState.currentPage >= photos.size - 5) {
-            viewModel.loadSystemPhotos(reset = false)
+        if (pagerState.currentPage >= photos.size - 5) {
+            viewModel.loadCurrentTabMore()
         }
     }
 

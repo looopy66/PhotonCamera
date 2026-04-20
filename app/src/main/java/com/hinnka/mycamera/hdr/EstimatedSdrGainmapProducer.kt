@@ -15,8 +15,8 @@ class EstimatedSdrGainmapProducer : GainmapProducer {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return null
         if (source.sourceKind != SourceKind.SDR_BITMAP) return null
 
-        val gainmapBitmap = createGainmapBitmap(source.sdrBase) ?: return null
         val fullHdrRatio = source.displayHdrSdrRatio.takeIf { it > 1f } ?: DEFAULT_FULL_HDR_RATIO
+        val gainmapBitmap = createGainmapBitmap(source.sdrBase, fullHdrRatio) ?: return null
         val gainmap = Gainmap(gainmapBitmap).apply {
             setRatioMin(MIN_GAIN_RATIO, MIN_GAIN_RATIO, MIN_GAIN_RATIO)
             setRatioMax(MAX_GAIN_RATIO, MAX_GAIN_RATIO, MAX_GAIN_RATIO)
@@ -34,9 +34,10 @@ class EstimatedSdrGainmapProducer : GainmapProducer {
         )
     }
 
-    private fun createGainmapBitmap(sdrBase: Bitmap): Bitmap? {
+    private fun createGainmapBitmap(sdrBase: Bitmap, fullHdrRatio: Float): Bitmap? {
         if (sdrBase.width <= 0 || sdrBase.height <= 0) return null
 
+        val displayMapper = HlgDisplayMapper(fullHdrRatio)
         val width = (sdrBase.width / DOWNSAMPLE).coerceAtLeast(1)
         val height = (sdrBase.height / DOWNSAMPLE).coerceAtLeast(1)
         val contents = Bitmap.createBitmap(width, height, Bitmap.Config.ALPHA_8)
@@ -61,10 +62,15 @@ class EstimatedSdrGainmapProducer : GainmapProducer {
                 val peakMask = smoothstep(PEAK_START, PEAK_END, maxChannel)
                 val clipSuppression = 1.0f - smoothstep(CLIP_START, CLIP_END, maxChannel) * CLIP_PENALTY
                 val chromaPenalty = 1.0f - saturation * SATURATION_PENALTY
+                val displayRatio = displayMapper.estimateDisplayRatioFromSdr(
+                    sdrLuma = luma,
+                    highlightWeight = highlightMask * chromaPenalty,
+                    peakWeight = peakMask.pow(PEAK_POWER),
+                    clipSuppression = clipSuppression
+                )
                 val weight = (highlightMask * clipSuppression * chromaPenalty).coerceIn(0f, 1f)
-                val ratio = (1.0f +
-                    weight * BASE_BOOST +
-                    peakMask.pow(PEAK_POWER) * PEAK_BOOST).coerceIn(MIN_GAIN_RATIO, MAX_GAIN_RATIO)
+                val ratio = (1.0f + (displayRatio - 1.0f) * weight)
+                    .coerceIn(MIN_GAIN_RATIO, MAX_GAIN_RATIO)
 
                 val encoded = ((ln(ratio / MIN_GAIN_RATIO) / logRatioSpan) * 255.0f)
                     .toInt()
@@ -130,9 +136,7 @@ class EstimatedSdrGainmapProducer : GainmapProducer {
         private const val CLIP_END = 1.0f
         private const val CLIP_PENALTY = 0.35f
         private const val SATURATION_PENALTY = 0.12f
-        private const val BASE_BOOST = 0.55f
         private const val PEAK_POWER = 0.7f
-        private const val PEAK_BOOST = 1.5f
         private const val BLUR_RADIUS = 3
         private const val DEFAULT_FULL_HDR_RATIO = 1.8f
     }

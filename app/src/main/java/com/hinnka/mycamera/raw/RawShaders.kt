@@ -114,10 +114,11 @@ object RawShaders {
      *
      * Process chain:
      * 1. Linear RGB Input -> Exposure Gain
-     * 2. Log2 Conversion (F-Log2)
-     * 3. 3D LUT Application
-     * 4. Contrast / Gamma (2.4/2.2)
-     * 5. Sharpening (High-pass on Log Luma)
+     * 2. Highlight Contrast Restore
+     * 3. Log2 Conversion (F-Log2)
+     * 4. 3D LUT Application
+     * 5. Contrast / Gamma (2.4/2.2)
+     * 6. Sharpening (High-pass on Log Luma)
      */
     val COMBINED_FRAGMENT_SHADER = """
         #version 300 es
@@ -135,6 +136,8 @@ object RawShaders {
         uniform vec4 uLogCoeffs;  // a, b, c, d
         uniform vec4 uLogLimits;  // e, f, cut1, cut2
         uniform int uLogType;     // 0=Linear, 1=Quadratic
+        uniform bool uApplySdrToneMap;
+        uniform float uLogExposureBoost;
         
         float log10(float x) { return log(x) * 0.4342944819; }
         vec3 log10(vec3 x) { return log(x) * 0.4342944819; }
@@ -160,10 +163,46 @@ object RawShaders {
             return mix(lowPart, logPart, step(uLogLimits.z, reflection));
         }
         
-        vec3 filmicOperatorLinear(vec3 x) {
-            vec3 t = max(x - 0.004, vec3(0.0));
-            vec3 filmic = (t * (6.2 * t + 0.5)) / (t * (6.2 * t + 1.7) + 0.06);
-            return mix(filmic / 12.92, pow((filmic + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), filmic));
+        float luminance(vec3 color) {
+            return max(dot(color, vec3(0.2126, 0.7152, 0.0722)), 1e-4);
+        }
+
+        float sampleLuma(vec2 uv) {
+            return luminance(texture(uInputTexture, uv).rgb * uExposureGain);
+        }
+
+        float localAverageLuma(vec2 uv, vec2 texelSize, float radius) {
+            vec2 dx = vec2(texelSize.x * radius, 0.0);
+            vec2 dy = vec2(0.0, texelSize.y * radius);
+
+            float center = sampleLuma(uv) * 0.28;
+            float axial =
+                sampleLuma(clamp(uv + dx, vec2(0.0), vec2(1.0))) +
+                sampleLuma(clamp(uv - dx, vec2(0.0), vec2(1.0))) +
+                sampleLuma(clamp(uv + dy, vec2(0.0), vec2(1.0))) +
+                sampleLuma(clamp(uv - dy, vec2(0.0), vec2(1.0)));
+            float diagonal =
+                sampleLuma(clamp(uv + dx + dy, vec2(0.0), vec2(1.0))) +
+                sampleLuma(clamp(uv + dx - dy, vec2(0.0), vec2(1.0))) +
+                sampleLuma(clamp(uv - dx + dy, vec2(0.0), vec2(1.0))) +
+                sampleLuma(clamp(uv - dx - dy, vec2(0.0), vec2(1.0)));
+
+            return center + axial * 0.12 + diagonal * 0.06;
+        }
+
+        vec3 reinhardLocalTonemapping(vec3 sceneLinear) {
+            vec2 texelSize = 1.0 / vec2(textureSize(uInputTexture, 0));
+            float sceneLuma = luminance(sceneLinear);
+
+            float localSmall = localAverageLuma(vTexCoord, texelSize, 1.5);
+            float localLarge = localAverageLuma(vTexCoord, texelSize, 4.0);
+            float scaleContrast = abs(log2(localSmall + 1e-4) - log2(localLarge + 1e-4));
+            float localAdaptation = mix(localLarge, localSmall, smoothstep(0.08, 0.35, scaleContrast));
+
+            float adaptedLuma = sceneLuma / (1.0 + localAdaptation);
+            float mappedLuma = adaptedLuma / (1.0 + adaptedLuma);
+            float chromaScale = mappedLuma / sceneLuma;
+            return clamp(sceneLinear * chromaScale, 0.0, 1.0);
         }
         
         void main() {
@@ -171,14 +210,16 @@ object RawShaders {
             
             // 1. Exposure
             vec3 color = rawColor * uExposureGain;
+            if (uApplySdrToneMap) {
+                color = reinhardLocalTonemapping(color);
+            } else {
+                color *= uLogExposureBoost;
+            }
             
-            // 2. Filmic tone mapping (linear in, linear out)
-            color = filmicOperatorLinear(color);
-            
-            // 4. 颜色空间转换 (Log or sRGB)
+            // 颜色空间转换 (Log or sRGB)
             color = linearToLog(color);
 
-            // 5. 3D LUT
+            // 3D LUT
             if (uLutEnabled) {
                 float scale = (uLutSize - 1.0) / uLutSize;
                 float offset = 1.0 / (2.0 * uLutSize);
