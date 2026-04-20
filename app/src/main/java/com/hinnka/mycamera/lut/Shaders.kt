@@ -261,12 +261,17 @@ object Shaders {
     float log10(float x) { return log(x) * 0.4342944819; }
     vec3 log10(vec3 x) { return log(x) * 0.4342944819; }
 
+    // Preserve the sign so wide-gamut highlight channels below 0 do not produce NaN in pow().
     vec3 srgbToLinear(vec3 c) {
-        return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
+        vec3 absC = abs(c);
+        vec3 result = mix(absC / 12.92, pow((absC + 0.055) / 1.055, vec3(2.4)), step(0.04045, absC));
+        return sign(c) * result;
     }
 
     vec3 linearToSrgb(vec3 l) {
-        return mix(12.92 * l, 1.055 * pow(l, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, l));
+        vec3 absL = abs(l);
+        vec3 result = mix(absL * 12.92, 1.055 * pow(absL, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, absL));
+        return sign(l) * result;
     }
 
     // BT.2100 HLG EOTF：将 HLG 编码信号解码为场景线性光（可能 > 1.0，保留 HDR 高光）
