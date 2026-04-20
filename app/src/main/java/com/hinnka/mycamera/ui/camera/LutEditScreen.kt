@@ -219,6 +219,13 @@ fun LutEditBottomSheet(
                 }
             }
 
+            LutIntensitySlider(
+                intensity = editingParams.lutIntensity,
+                onIntensityChange = {
+                    onParamsUpdated(editingParams.copy(lutIntensity = it))
+                }
+            )
+
             ColorRecipePanel(
                 currentParams = editingParams,
                 paletteState = paletteState,
@@ -267,7 +274,7 @@ fun LutIntensitySlider(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .padding(horizontal = 16.dp).padding(bottom = 8.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -277,13 +284,15 @@ fun LutIntensitySlider(
             Text(
                 text = stringResource(R.string.filter_intensity),
                 color = if (enabled) Color.White else Color.Gray,
-                fontSize = 12.sp
+                fontSize = 12.sp,
+                lineHeight = 14.sp
             )
 
             Text(
                 text = "${(intensity * 100).toInt()}%",
                 color = if (enabled) Color.White else Color.Gray,
                 fontSize = 10.sp,
+                lineHeight = 14.sp,
                 fontWeight = FontWeight.Bold
             )
         }

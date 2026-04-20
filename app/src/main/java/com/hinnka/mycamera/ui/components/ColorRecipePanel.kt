@@ -54,37 +54,33 @@ fun ColorRecipePanel(
 
     val tabs = listOf(
         R.string.recipe_tab_palette,  // 0
-        R.string.filter,              // 1
-        R.string.recipe_tab_light,    // 2
-        R.string.recipe_tab_curve,    // 3 (曲线)
-        R.string.recipe_tab_color,    // 4
-        R.string.recipe_tab_calibration, // 5
-        R.string.recipe_tab_lch,      // 6
-        R.string.recipe_tab_texture,  // 7
-        R.string.recipe_tab_lens,     // 8
-        R.string.recipe_tab_remarks,  // 9
+        R.string.recipe_tab_light,    // 1
+        R.string.recipe_tab_curve,    // 2 (曲线)
+        R.string.recipe_tab_color,    // 3
+        R.string.recipe_tab_calibration, // 4
+        R.string.recipe_tab_lch,      // 5
+        R.string.recipe_tab_texture,  // 6
+        R.string.recipe_tab_lens,     // 7
+        R.string.recipe_tab_remarks,  // 8
     )
     val parameterGroups = listOf(
         emptyList(),       // 0 palette
-        listOf(            // 1 filter
-            RecipeParam.LUT_INTENSITY,
-        ),
-        listOf(            // 2 light
+        listOf(            // 1 light
             RecipeParam.EXPOSURE,
             RecipeParam.CONTRAST,
             RecipeParam.HIGHLIGHTS,
             RecipeParam.SHADOWS,
         ),
-        emptyList(),       // 3 curve (handled specially)
-        listOf(            // 4 color
+        emptyList(),       // 2 curve (handled specially)
+        listOf(            // 3 color
             RecipeParam.SATURATION,
             RecipeParam.TEMPERATURE,
             RecipeParam.TINT,
             RecipeParam.COLOR
         ),
-        emptyList(),       // 5 calibration (handled specially)
-        emptyList(),       // 6 lch (handled specially)
-        listOf(            // 7 texture
+        emptyList(),       // 4 calibration (handled specially)
+        emptyList(),       // 5 lch (handled specially)
+        listOf(            // 6 texture
             RecipeParam.VIGNETTE,
             RecipeParam.FILM_GRAIN,
             RecipeParam.FADE,
@@ -193,7 +189,7 @@ fun ColorRecipePanel(
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
-                            3 -> {
+                            2 -> {
                                 // 曲线编辑器
                                 CurveEditorPanel(
                                     currentParams = currentParams,
@@ -201,7 +197,7 @@ fun ColorRecipePanel(
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
-                            5 -> {
+                            4 -> {
                                 // Calibration 颜色校准
                                 ColorRingTabs(
                                     count = calibrationGroups.size,
@@ -234,7 +230,7 @@ fun ColorRecipePanel(
                                     }
                                 }
                             }
-                            6 -> {
+                            5 -> {
                                 // LCH 颜色混合
                                 ColorRingTabs(
                                     count = lchGroups.size,

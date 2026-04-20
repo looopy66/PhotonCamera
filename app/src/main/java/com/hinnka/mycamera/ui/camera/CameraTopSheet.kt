@@ -7,7 +7,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -83,9 +85,12 @@ fun CameraTopSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .aspectRatio(1f)
+                .verticalScroll(rememberScrollState())
                 .clip(RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp))
                 .background(Color.Black.copy(alpha = 0.8f))
-                .padding(top = 48.dp, bottom = 24.dp, start = 24.dp, end = 24.dp)
+                .padding(top = 32.dp, bottom = 0.dp, start = 24.dp, end = 24.dp)
+                .autoRotate()
         ) {
             if (captureMode == CaptureMode.PHOTO) {
                 SectionLabel(title = stringResource(R.string.aspect_ratio))
@@ -98,8 +103,8 @@ fun CameraTopSheet(
                         Box(
                             modifier = Modifier
                                 .weight(1f)
-                                .height(44.dp)
-                                .clip(RoundedCornerShape(12.dp))
+                                .height(40.dp)
+                                .clip(RoundedCornerShape(8.dp))
                                 .background(
                                     if (isSelected) Color(0xFFFF6B35) else Color.White.copy(
                                         alpha = 0.12f
@@ -118,7 +123,7 @@ fun CameraTopSheet(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -206,8 +211,8 @@ fun CameraTopSheet(
                         Box(
                             modifier = Modifier
                                 .weight(1f)
-                                .height(44.dp)
-                                .clip(RoundedCornerShape(12.dp))
+                                .height(40.dp)
+                                .clip(RoundedCornerShape(8.dp))
                                 .background(
                                     if (isSelected) Color(0xFFFFD700) else Color.White.copy(
                                         alpha = 0.12f
@@ -226,9 +231,8 @@ fun CameraTopSheet(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                SectionLabel(title = stringResource(R.string.video_advanced_settings))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -362,9 +366,8 @@ fun CameraTopSheet(
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-            SectionLabel(title = stringResource(R.string.advanced_options))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -384,17 +387,18 @@ fun CameraTopSheet(
                 )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(Modifier.weight(1f))
 
             // More Settings Button
-            Surface(
-                onClick = onMoreSettingsClick,
-                color = Color.White.copy(alpha = 0.05f),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
+            Box(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                contentAlignment = Alignment.Center
             ) {
                 Row(
                     modifier = Modifier
+                        .clickable(onClick = onMoreSettingsClick)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(color = Color.White.copy(alpha = 0.15f))
                         .padding(16.dp, 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -428,6 +432,8 @@ fun CameraTopSheet(
                     )
                 }
             }
+
+            Spacer(Modifier.weight(1f))
         }
     }
 }
@@ -442,7 +448,7 @@ private fun RowScope.VideoSettingTile(
     Column(
         modifier = Modifier
             .weight(1f)
-            .height(48.dp)
+            .height(40.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(
                 if (expanded) Color(0xFFFFD700) else Color.White.copy(alpha = 0.14f)
@@ -592,8 +598,8 @@ fun QuickSettingValue(
 ) {
     Box(
         modifier = modifier
-            .height(48.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .height(40.dp)
+            .clip(RoundedCornerShape(8.dp))
             .background(Color.White.copy(alpha = 0.15f))
             .clickable { onClick() }
             .padding(horizontal = 16.dp),
@@ -627,8 +633,8 @@ fun QuickSettingButton(
 ) {
     Box(
         modifier = modifier
-            .height(48.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .height(40.dp)
+            .clip(RoundedCornerShape(8.dp))
             .background(Color.White.copy(alpha = 0.15f))
             .clickable { onClick() }
             .padding(horizontal = 16.dp),
@@ -664,8 +670,8 @@ fun QuickSettingToggle(
 ) {
     Box(
         modifier = modifier
-            .height(48.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .height(40.dp)
+            .clip(RoundedCornerShape(8.dp))
             .background(
                 if (checked) Color(0xFFFF6B35).copy(alpha = 0.15f) else Color.White.copy(
                     alpha = 0.15f

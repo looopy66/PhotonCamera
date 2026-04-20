@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -35,7 +36,7 @@ import com.hinnka.mycamera.model.ColorRecipeParams
  * 曲线通道枚举
  */
 enum class CurveChannel(val label: String, val color: Color) {
-    MASTER("RGB", Color.White),
+    MASTER("W", Color.White),
     RED("R", Color(0xFFFF5555)),
     GREEN("G", Color(0xFF55DD55)),
     BLUE("B", Color(0xFF5599FF))
@@ -45,7 +46,7 @@ enum class CurveChannel(val label: String, val color: Color) {
  * 仿 Camera Raw 的曲线编辑面板
  *
  * 支持：
- * - 4 通道切换：Master (RGB)、R、G、B
+ * - 4 通道切换：Master (W)、R、G、B
  * - 拖动控制点
  * - 点击空白区域添加控制点
  * - 双击控制点删除
@@ -59,49 +60,53 @@ fun CurveEditorPanel(
     var selectedChannel by remember { mutableStateOf(CurveChannel.MASTER) }
 
     Column(modifier = modifier.fillMaxWidth()) {
-        // 通道选择器
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            CurveChannel.entries.forEach { channel ->
-                val isSelected = selectedChannel == channel
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(28.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(
-                            if (isSelected) channel.color.copy(alpha = 0.25f)
-                            else Color.Transparent
+            // 通道选择器
+            Column(
+                modifier = Modifier.width(40.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                CurveChannel.entries.forEach { channel ->
+                    val isSelected = selectedChannel == channel
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(
+                                if (isSelected) channel.color.copy(alpha = 0.25f)
+                                else Color.Transparent
+                            )
+                            .clickable { selectedChannel = channel },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = channel.label,
+                            color = if (isSelected) channel.color else channel.color.copy(alpha = 0.45f),
+                            fontSize = 11.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                         )
-                        .clickable { selectedChannel = channel },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = channel.label,
-                        color = if (isSelected) channel.color else channel.color.copy(alpha = 0.45f),
-                        fontSize = 11.sp,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                    )
+                    }
                 }
             }
+
+            // 曲线编辑画布
+            val currentPoints = currentParams.getCurvePoints(selectedChannel)
+
+            CurveCanvas(
+                points = currentPoints ?: identityPoints(),
+                curveColor = selectedChannel.color,
+                onPointsChange = { newPoints ->
+                    val arr = if (newPoints.size <= 4 && CurveUtils.isIdentityCurve(newPoints)) null else newPoints
+                    onCurveChange(selectedChannel, arr)
+                },
+                modifier = Modifier.weight(1f)
+            )
         }
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        // 曲线编辑画布
-        val currentPoints = currentParams.getCurvePoints(selectedChannel)
-
-        CurveCanvas(
-            points = currentPoints ?: identityPoints(),
-            curveColor = selectedChannel.color,
-            onPointsChange = { newPoints ->
-                val arr = if (newPoints.size <= 4 && CurveUtils.isIdentityCurve(newPoints)) null else newPoints
-                onCurveChange(selectedChannel, arr)
-            },
-            modifier = Modifier.fillMaxWidth()
-        )
     }
 }
 
@@ -134,8 +139,7 @@ private fun CurveCanvas(
     var lastTapTime by remember { mutableLongStateOf(0L) }
     var lastTapIndex by remember { mutableIntStateOf(-1) }
 
-    // Issue 4: padding 让两端控制点有更多可触摸空间
-    Box(modifier = modifier.padding(horizontal = 32.dp).padding(top = 16.dp)) {
+    Box(modifier = modifier.padding(horizontal = 40.dp, vertical = 16.dp)) {
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
