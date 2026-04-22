@@ -461,10 +461,22 @@ class ApplyLutActivity : ComponentActivity() {
                     size = if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) cursor.getLong(sizeIndex) else null,
                     dateModifiedSec = if (dateModifiedIndex >= 0 && !cursor.isNull(dateModifiedIndex)) cursor.getLong(dateModifiedIndex) else null
                 )
-            } ?: SharedTargetInfo(null, null, null, null, null)
+            } ?: SharedTargetInfo(
+                sourceDisplayName.takeIf { it.isNotBlank() },
+                null,
+                null,
+                null,
+                null
+            )
         }.getOrElse {
             PLog.e(TAG, "Failed to query shared target info: $uri", it)
-            SharedTargetInfo(null, null, null, null, null)
+            SharedTargetInfo(
+                sourceDisplayName.takeIf { it.isNotBlank() },
+                null,
+                null,
+                null,
+                null
+            )
         }
     }
 
