@@ -458,7 +458,7 @@ fun CameraScreen(
                 videoCapabilities = state.videoCapabilities,
                 onVideoTorchToggle = { viewModel.setVideoTorchEnabled(!state.videoConfig.torchEnabled) },
                 onVideoStabilizationToggle = {
-                    viewModel.setVideoStabilizationEnabled(!state.videoConfig.stabilizationEnabled)
+                    viewModel.cycleVideoStabilizationMode()
                 },
                 onVideoResolutionClick = {
                     cycleVideoResolution(state)?.let(viewModel::setVideoResolution)

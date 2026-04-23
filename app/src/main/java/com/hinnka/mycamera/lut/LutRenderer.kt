@@ -861,18 +861,7 @@ class LutRenderer : GLSurfaceView.Renderer {
 
         val liveRecorder = livePhotoRecorder
         val activeVideoRecorder = videoRecorder?.takeIf { it.isRecording() }
-        if (activeVideoRecorder != null) {
-            val nowMs = android.os.SystemClock.elapsedRealtime()
-            if (videoRenderStatsWindowStartMs == 0L) {
-                videoRenderStatsWindowStartMs = nowMs
-            }
-            videoRenderStatsFrames += 1
-            val elapsedMs = nowMs - videoRenderStatsWindowStartMs
-            if (elapsedMs >= 1000L) {
-                videoRenderStatsWindowStartMs = nowMs
-                videoRenderStatsFrames = 0
-            }
-        } else {
+        if (activeVideoRecorder == null) {
             videoRenderStatsWindowStartMs = 0L
             videoRenderStatsFrames = 0
         }
@@ -971,37 +960,30 @@ class LutRenderer : GLSurfaceView.Renderer {
                 )
             }
 
-            var sharedVideoTextureId = 0
-            var sharedVideoWidth = 0
-            var sharedVideoHeight = 0
-
             // 5. 视频录制输出
-            activeVideoRecorder?.targetSize?.let { targetSize ->
-                ensureRecordFbo(targetSize.width, targetSize.height)
-                if (recordFboId != 0 && recordTextureId != 0) {
-                    if (hdfEnabled) {
-                        drawHdfComposite(recordFboId, targetSize.width, targetSize.height, currentTexId)
-                    } else if (bokehNeeded) {
-                        drawFboToScreen(recordFboId, targetSize.width, targetSize.height, currentTexId)
-                    } else {
-                        drawFboToScreen(
-                            fboId = recordFboId,
-                            width = targetSize.width,
-                            height = targetSize.height,
-                            sourceTextureId = currentTexId,
-                            targetMvpMatrix = buildTextureMvpMatrix(
-                                sourceWidth = viewportWidth,
-                                sourceHeight = viewportHeight,
-                                targetWidth = targetSize.width,
-                                targetHeight = targetSize.height
+            if (hasFreshCameraFrame) {
+                activeVideoRecorder?.targetSize?.let { targetSize ->
+                    ensureRecordFbo(targetSize.width, targetSize.height)
+                    if (recordFboId != 0 && recordTextureId != 0) {
+                        if (hdfEnabled) {
+                            drawHdfComposite(recordFboId, targetSize.width, targetSize.height, currentTexId)
+                        } else if (bokehNeeded) {
+                            drawFboToScreen(recordFboId, targetSize.width, targetSize.height, currentTexId)
+                        } else {
+                            drawFboToScreen(
+                                fboId = recordFboId,
+                                width = targetSize.width,
+                                height = targetSize.height,
+                                sourceTextureId = currentTexId,
+                                targetMvpMatrix = buildTextureMvpMatrix(
+                                    sourceWidth = viewportWidth,
+                                    sourceHeight = viewportHeight,
+                                    targetWidth = targetSize.width,
+                                    targetHeight = targetSize.height
+                                )
                             )
-                        )
-                    }
-                    GLES30.glFlush()
-                    sharedVideoTextureId = recordTextureId
-                    sharedVideoWidth = targetSize.width
-                    sharedVideoHeight = targetSize.height
-                    if (hasFreshCameraFrame) {
+                        }
+                        GLES30.glFlush()
                         activeVideoRecorder.onPreviewFrame(
                             textureId = recordTextureId,
                             transformMatrix = identityMatrix,
@@ -1014,28 +996,15 @@ class LutRenderer : GLSurfaceView.Renderer {
             }
 
             // 6. 显示到屏幕
-            if (sharedVideoTextureId != 0 && sharedVideoWidth > 0 && sharedVideoHeight > 0) {
-                drawFboToScreen(
-                    fboId = 0,
-                    width = viewportWidth,
-                    height = viewportHeight,
-                    sourceTextureId = sharedVideoTextureId,
-                    targetMvpMatrix = buildTextureMvpMatrix(
-                        sourceWidth = sharedVideoWidth,
-                        sourceHeight = sharedVideoHeight,
-                        targetWidth = viewportWidth,
-                        targetHeight = viewportHeight
-                    )
-                )
-            } else if (hdfEnabled) {
+            if (hdfEnabled) {
                 drawHdfComposite(0, viewportWidth, viewportHeight, currentTexId)
             } else {
                 drawFboToScreen(0, viewportWidth, viewportHeight, currentTexId)
             }
-            val finalDisplayTextureId = if (sharedVideoTextureId != 0) sharedVideoTextureId else currentTexId
-            val finalDisplayWidth = if (sharedVideoTextureId != 0) sharedVideoWidth else viewportWidth
-            val finalDisplayHeight = if (sharedVideoTextureId != 0) sharedVideoHeight else viewportHeight
-            val needsHdfCompositeForSampling = hdfEnabled && sharedVideoTextureId == 0
+            val finalDisplayTextureId = currentTexId
+            val finalDisplayWidth = viewportWidth
+            val finalDisplayHeight = viewportHeight
+            val needsHdfCompositeForSampling = hdfEnabled
             if (shouldCapturePreview) {
                 shouldCapturePreview = false
                 capturePreviewFrameInternal(
@@ -1045,7 +1014,7 @@ class LutRenderer : GLSurfaceView.Renderer {
                     compositeWithHdf = needsHdfCompositeForSampling
                 )
             }
-            if (meteringEnabled) {
+            if (meteringEnabled && activeVideoRecorder == null) {
                 runMeteringInternal(
                     sourceTextureId = finalDisplayTextureId,
                     sourceWidth = finalDisplayWidth,
@@ -1187,7 +1156,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         }
 
         // 测光和直方图（按需）
-        if (meteringEnabled) {
+        if (meteringEnabled && videoRecorder?.isRecording() != true) {
             runMeteringInternal()
         }
 

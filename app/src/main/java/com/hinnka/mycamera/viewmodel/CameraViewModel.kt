@@ -485,7 +485,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoLogProfile(it.videoLogProfile)
                 cameraController.setVideoBitrate(it.videoBitrate)
                 cameraController.setVideoAudioInputId(it.videoAudioInputId)
-                cameraController.setVideoStabilizationEnabled(it.videoStabilizationEnabled)
+                cameraController.setVideoStabilizationMode(it.videoStabilizationMode)
                 cameraController.setVideoTorchEnabled(it.videoTorchEnabled)
                 cameraController.setVideoCodec(it.videoCodec)
                 multipleExposureState = multipleExposureState.copy(
@@ -593,7 +593,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoLogProfile(prefs.videoLogProfile)
                 cameraController.setVideoBitrate(prefs.videoBitrate)
                 cameraController.setVideoAudioInputId(prefs.videoAudioInputId)
-                cameraController.setVideoStabilizationEnabled(prefs.videoStabilizationEnabled)
+                cameraController.setVideoStabilizationMode(prefs.videoStabilizationMode)
                 cameraController.setVideoTorchEnabled(prefs.videoTorchEnabled)
                 cameraController.setVideoCodec(prefs.videoCodec)
 
@@ -1322,6 +1322,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun setVideoStabilizationMode(mode: com.hinnka.mycamera.video.VideoStabilizationMode) {
+        cameraController.setVideoStabilizationMode(mode)
+        viewModelScope.launch {
+            userPreferencesRepository.saveVideoStabilizationMode(mode)
+        }
+    }
+
     fun setVideoLogProfile(logProfile: VideoLogProfile) {
         cameraController.setVideoLogProfile(logProfile)
         reopenCamera()
@@ -1345,10 +1352,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun setVideoStabilizationEnabled(enabled: Boolean) {
-        cameraController.setVideoStabilizationEnabled(enabled)
+    fun cycleVideoStabilizationMode() {
+        val currentMode = state.value.videoConfig.stabilizationMode
+        val availableModes = state.value.videoCapabilities.availableStabilizationModes
+        if (availableModes.isEmpty()) return
+        val nextMode = availableModes[(availableModes.indexOf(currentMode) + 1) % availableModes.size]
+        cameraController.setVideoStabilizationMode(nextMode)
         viewModelScope.launch {
-            userPreferencesRepository.saveVideoStabilizationEnabled(enabled)
+            userPreferencesRepository.saveVideoStabilizationMode(nextMode)
         }
     }
 

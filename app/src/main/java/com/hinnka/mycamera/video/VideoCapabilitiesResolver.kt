@@ -82,9 +82,21 @@ object VideoCapabilitiesResolver {
         val resolvedLogProfile = requestedConfig.logProfile.takeIf { availableLogProfiles.contains(it) }
             ?: availableLogProfiles.first()
 
-        val supportsStabilization =
-            availableVideoStabilizationModes.contains(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON) ||
-                availableOpticalStabilizationModes.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)
+        val availableStabilizationModes = mutableListOf(VideoStabilizationMode.OFF)
+        if (availableVideoStabilizationModes.contains(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON)) {
+            availableStabilizationModes.add(VideoStabilizationMode.EIS)
+        }
+        if (availableOpticalStabilizationModes.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)) {
+            availableStabilizationModes.add(VideoStabilizationMode.OIS)
+        }
+        
+        val resolvedStabilizationMode = if (availableStabilizationModes.contains(requestedConfig.stabilizationMode)) {
+            requestedConfig.stabilizationMode
+        } else {
+            if (availableStabilizationModes.contains(VideoStabilizationMode.OIS)) VideoStabilizationMode.OIS
+            else if (availableStabilizationModes.contains(VideoStabilizationMode.EIS)) VideoStabilizationMode.EIS
+            else VideoStabilizationMode.OFF
+        }
 
         return VideoCapabilitySnapshot(
             config = requestedConfig.copy(
@@ -92,7 +104,7 @@ object VideoCapabilitiesResolver {
                 fps = resolvedFps,
                 logProfile = resolvedLogProfile,
                 bitrate = requestedConfig.bitrate,
-                stabilizationEnabled = requestedConfig.stabilizationEnabled && supportsStabilization,
+                stabilizationMode = resolvedStabilizationMode,
                 torchEnabled = requestedConfig.torchEnabled && isFlashSupported
             ),
             capabilities = VideoCapabilities(
@@ -103,7 +115,7 @@ object VideoCapabilitiesResolver {
                 availableBitrates = VideoBitratePreset.entries.toList(),
                 previewSizesByResolution = previewSizesByResolution,
                 openGatePortraitAspectRatio = openGateAspect,
-                supportsStabilization = supportsStabilization,
+                availableStabilizationModes = availableStabilizationModes,
                 supportsTorch = isFlashSupported,
                 linearTonemapSupported = linearTonemapSupported
             ),

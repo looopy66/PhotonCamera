@@ -41,6 +41,7 @@ import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.video.VideoRecorder
 import com.hinnka.mycamera.video.VideoResolutionPreset
 import com.hinnka.mycamera.video.VideoRecordingState
+import com.hinnka.mycamera.video.VideoStabilizationMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -1389,11 +1390,11 @@ class Camera2Controller(private val context: Context) {
     private fun applyStabilizationSettings(builder: CaptureRequest.Builder, state: CameraState) {
         try {
             if (state.captureMode == CaptureMode.VIDEO) {
-                val enable = state.videoConfig.stabilizationEnabled
+                val mode = state.videoConfig.stabilizationMode
                 if (availableVideoStabilizationModes.contains(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON)) {
                     builder.set(
                         CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-                        if (enable) {
+                        if (mode == VideoStabilizationMode.EIS) {
                             CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
                         } else {
                             CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
@@ -1403,7 +1404,7 @@ class Camera2Controller(private val context: Context) {
                 if (availableOpticalStabilizationModes.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)) {
                     builder.set(
                         CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                        if (enable && !availableVideoStabilizationModes.contains(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON)) {
+                        if (mode == VideoStabilizationMode.OIS) {
                             CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
                         } else {
                             CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
@@ -2397,12 +2398,13 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    fun setVideoStabilizationEnabled(enabled: Boolean) {
+    fun setVideoStabilizationMode(mode: VideoStabilizationMode) {
         _state.value = _state.value.copy(
             videoConfig = _state.value.videoConfig.copy(
-                stabilizationEnabled = enabled && _state.value.videoCapabilities.supportsStabilization
+                stabilizationMode = mode
             )
         )
+        refreshVideoCapabilities()
         previewRequestBuilder?.apply {
             applyBaseCameraSettings(this, isCapture = false)
             updatePreview()

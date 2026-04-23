@@ -108,7 +108,7 @@ data class UserPreferences(
     val videoLogProfile: VideoLogProfile = VideoLogProfile.OFF,
     val videoBitrate: VideoBitratePreset = VideoBitratePreset.P1,
     val videoAudioInputId: String = VIDEO_AUDIO_INPUT_AUTO,
-    val videoStabilizationEnabled: Boolean = true,
+    val videoStabilizationMode: com.hinnka.mycamera.video.VideoStabilizationMode = com.hinnka.mycamera.video.VideoStabilizationMode.OIS,
     val videoTorchEnabled: Boolean = false,
     val videoCodec: com.hinnka.mycamera.video.VideoCodec = com.hinnka.mycamera.video.VideoCodec.H264,
     val autoEnableHdr: Boolean = false,
@@ -205,7 +205,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val VIDEO_LOG_PROFILE = stringPreferencesKey("video_log_profile")
         private val VIDEO_BITRATE = stringPreferencesKey("video_bitrate")
         private val VIDEO_AUDIO_INPUT_ID = stringPreferencesKey("video_audio_input_id")
-        private val VIDEO_STABILIZATION_ENABLED = booleanPreferencesKey("video_stabilization_enabled")
+        private val VIDEO_STABILIZATION_MODE = stringPreferencesKey("video_stabilization_mode")
         private val VIDEO_TORCH_ENABLED = booleanPreferencesKey("video_torch_enabled")
         private val VIDEO_CODEC = stringPreferencesKey("video_codec")
         private val AUTO_ENABLE_HDR_FOR_HDR_CAPTURE = booleanPreferencesKey("auto_enable_hdr_for_hdr_capture")
@@ -311,7 +311,9 @@ class UserPreferencesRepository(private val context: Context) {
                     preferences[VIDEO_BITRATE] ?: VideoBitratePreset.P1.name
                 ),
                 videoAudioInputId = preferences[VIDEO_AUDIO_INPUT_ID] ?: VIDEO_AUDIO_INPUT_AUTO,
-                videoStabilizationEnabled = preferences[VIDEO_STABILIZATION_ENABLED] ?: true,
+                videoStabilizationMode = com.hinnka.mycamera.video.VideoStabilizationMode.valueOf(
+                    preferences[VIDEO_STABILIZATION_MODE] ?: com.hinnka.mycamera.video.VideoStabilizationMode.OIS.name
+                ),
                 videoTorchEnabled = preferences[VIDEO_TORCH_ENABLED] ?: false,
                 videoCodec = com.hinnka.mycamera.video.VideoCodec.valueOf(
                     preferences[VIDEO_CODEC] ?: com.hinnka.mycamera.video.VideoCodec.H264.name
@@ -544,6 +546,15 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveVibrationEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[VIBRATION_ENABLED] = enabled
+        }
+    }
+
+    /**
+     * 保存视频防抖模式
+     */
+    suspend fun saveVideoStabilizationMode(mode: com.hinnka.mycamera.video.VideoStabilizationMode) {
+        context.dataStore.edit { preferences ->
+            preferences[VIDEO_STABILIZATION_MODE] = mode.name
         }
     }
 
@@ -928,11 +939,7 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
-    suspend fun saveVideoStabilizationEnabled(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[VIDEO_STABILIZATION_ENABLED] = enabled
-        }
-    }
+
 
     suspend fun saveVideoTorchEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->
