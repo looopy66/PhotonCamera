@@ -940,6 +940,10 @@ object GalleryManager {
 
     suspend fun generateBokehPhoto(context: Context, photoId: String, metadata: MediaMetadata, bitmap: Bitmap) {
         val aperture = metadata.computationalAperture ?: 0f
+        if (aperture <= 0f) {
+            getBokehFile(context, photoId).takeIf { it.exists() }?.delete()
+            return
+        }
         val focusPointX = metadata.focusPointX
         val focusPointY = metadata.focusPointY
         val bokeh = ContentRepository.getInstance(context).depthBokehProcessor.applyHighQualityBokeh(

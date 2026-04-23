@@ -1,11 +1,10 @@
 package com.hinnka.mycamera.viewmodel
 
 import android.app.Application
-import android.content.Context
 import android.content.Intent
-import android.graphics.RectF
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.RectF
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
@@ -19,8 +18,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.frame.FrameInfo
-import com.hinnka.mycamera.gallery.MediaData
 import com.hinnka.mycamera.gallery.GalleryManager
+import com.hinnka.mycamera.gallery.MediaData
 import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.hdr.UnifiedGainmapProducer
 import com.hinnka.mycamera.lut.LutConfig
@@ -29,10 +28,10 @@ import com.hinnka.mycamera.lut.PhotoTransformation
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.raw.RawProcessingPreferences
-import com.hinnka.mycamera.utils.PLog
-import com.hinnka.mycamera.utils.StartupTrace
 import com.hinnka.mycamera.ui.gallery.CropAspectOption
 import com.hinnka.mycamera.ui.gallery.calculateInitialCropRect
+import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.utils.StartupTrace
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.io.File
@@ -305,23 +304,25 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         bokehJob?.cancel()
         bokehJob = viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>()
+            val photoData = getCurrentPhoto() ?: return@launch
             val aperture = editComputationalAperture.value
+            if (aperture == null || aperture <= 0) {
+                GalleryManager.getBokehFile(context, photoData.id).takeIf { it.exists() }?.delete()
+                return@launch
+            }
             val focusPointX = editFocusPointX.value
             val focusPointY = editFocusPointY.value
-            val photoData = getCurrentPhoto() ?: return@launch
             val bitmap = GalleryManager.loadOriginalBitmap(context, photoData.id)
                 ?: GalleryManager.loadBitmap(context, photoData.uri) ?: return@launch
             if (!isActive) return@launch
-            val bokeh = aperture?.let {
-                contentRepository.depthBokehProcessor.applyHighQualityBokeh(
-                    context,
-                    photoData.id,
-                    bitmap,
-                    focusPointX,
-                    focusPointY,
-                    it
-                )
-            } ?: bitmap
+            val bokeh = contentRepository.depthBokehProcessor.applyHighQualityBokeh(
+                context,
+                photoData.id,
+                bitmap,
+                focusPointX,
+                focusPointY,
+                aperture
+            )
             if (!isActive) return@launch
             GalleryManager.saveBokehPhoto(context, photoData.id, bokeh)
             photoRefreshKeys[photoData.id] = System.currentTimeMillis()
