@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -1619,26 +1620,12 @@ private fun FilterManagementItem(
                 Text(
                     text = lutInfo.getName(),
                     color = Color.White,
-                    fontSize = 16.sp,
+                    fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
+                    modifier = Modifier.weight(1f, fill = false).basicMarquee()
                 )
-
-                if (lutInfo.isBuiltIn) {
-                    Spacer(modifier = Modifier.width(6.dp))
-
-                    Text(
-                        text = stringResource(R.string.built_in),
-                        color = Color.White.copy(alpha = 0.5f),
-                        fontSize = 10.sp,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(Color.White.copy(alpha = 0.1f))
-                            .padding(horizontal = 4.dp, vertical = 1.dp)
-                    )
-                }
 
                 // VIP 标签
                 if (lutInfo.isVip) {
@@ -1646,7 +1633,8 @@ private fun FilterManagementItem(
                     Text(
                         text = stringResource(R.string.billing_vip_tag),
                         color = Color(0xFFFFD700),
-                        fontSize = 10.sp,
+                        fontSize = 8.sp,
+                        lineHeight = 15.sp,
                         modifier = Modifier
                             .clip(RoundedCornerShape(4.dp))
                             .background(Color(0xFFFFD700).copy(alpha = 0.2f))

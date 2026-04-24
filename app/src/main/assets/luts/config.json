@@ -11,13 +11,22 @@
       "isVip": false
     },
     {
-      "id": "standard",
+      "id": "ricoh_negative",
       "name": {
-        "en": "Standard",
-        "zh": "标准"
+        "en": "Negative",
+        "zh": "理光负片"
       },
-      "path": "standard.plut",
+      "path": "ricoh_negative.plut",
       "isDefault": true,
+      "isVip": false
+    },
+    {
+      "id": "ricoh_positive",
+      "name": {
+        "en": "Positive",
+        "zh": "理光正片"
+      },
+      "path": "ricoh_positive.plut",
       "isVip": false
     },
     {
@@ -39,22 +48,13 @@
       "isVip": false
     },
     {
-      "id": "cc",
-      "name": {
-        "en": "CC",
-        "zh": "富士CC"
-      },
-      "path": "cc.plut",
-      "isVip": true
-    },
-    {
       "id": "nc",
       "name": {
         "en": "NC",
         "zh": "富士NC"
       },
       "path": "nc.plut",
-      "isVip": true
+      "isVip": false
     },
     {
       "id": "pentax",
@@ -63,43 +63,7 @@
         "zh": "宾得明亮"
       },
       "path": "pentax.plut",
-      "isVip": true
-    },
-    {
-      "id": "ricoh_positive",
-      "name": {
-        "en": "Positive",
-        "zh": "理光正片"
-      },
-      "path": "ricoh_positive.plut",
-      "isVip": true
-    },
-    {
-      "id": "ricoh_negative",
-      "name": {
-        "en": "Negative",
-        "zh": "理光负片"
-      },
-      "path": "ricoh_negative.plut",
-      "isVip": true
-    },
-    {
-      "id": "ricoh_green",
-      "name": {
-        "en": "Green",
-        "zh": "电影绿"
-      },
-      "path": "ricoh_green.plut",
-      "isVip": true
-    },
-    {
-      "id": "ricoh_yellow",
-      "name": {
-        "en": "Yellow",
-        "zh": "电影黄"
-      },
-      "path": "ricoh_yellow.plut",
-      "isVip": true
+      "isVip": false
     },
     {
       "id": "fl3",
@@ -108,6 +72,76 @@
         "zh": "FL3"
       },
       "path": "fl3.plut",
+      "isVip": false
+    },
+    {
+      "id": "film_kodak_ultramax_400_2383",
+      "name": {
+        "en": "Ultramax 400 + 2383",
+        "zh": "Ultramax 400 + 2383"
+      },
+      "path": "Kodak_ultramax_400+2383.33.plut",
+      "isDefault": false,
+      "isVip": true
+    },
+    {
+      "id": "film_rollei_cn200_2383",
+      "name": {
+        "en": "CN200 + 2383",
+        "zh": "CN200 + 2383"
+      },
+      "path": "Rollei_CN200+2383.33.plut",
+      "isDefault": false,
+      "isVip": true
+    },
+    {
+      "id": "film_natura_1600_3513",
+      "name": {
+        "en": "Natura 1600 + 3513",
+        "zh": "Natura 1600 + 3513"
+      },
+      "path": "natura1600+3513.33.plut",
+      "isDefault": false,
+      "isVip": true
+    },
+    {
+      "id": "film_superia_1600_3513",
+      "name": {
+        "en": "Superia 1600 + 3513",
+        "zh": "Superia 1600 + 3513"
+      },
+      "path": "superia1600+3513.33.plut",
+      "isDefault": false,
+      "isVip": true
+    },
+    {
+      "id": "film_cinestill_800t",
+      "name": {
+        "en": "Cinestill 800T",
+        "zh": "Cinestill 800T"
+      },
+      "path": "cinestill800t.33.plut",
+      "isDefault": false,
+      "isVip": true
+    },
+    {
+      "id": "film_pro_400h",
+      "name": {
+        "en": "Pro 400H",
+        "zh": "Pro 400H"
+      },
+      "path": "pro400h.33.plut",
+      "isDefault": false,
+      "isVip": true
+    },
+    {
+      "id": "film_velvia_50",
+      "name": {
+        "en": "Velvia 50",
+        "zh": "Velvia 50"
+      },
+      "path": "velvia50.33.plut",
+      "isDefault": false,
       "isVip": true
     }
   ]
