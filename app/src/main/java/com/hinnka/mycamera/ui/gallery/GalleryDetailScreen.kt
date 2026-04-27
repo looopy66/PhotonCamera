@@ -2,6 +2,7 @@ package com.hinnka.mycamera.ui.gallery
 
 import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.graphics.ColorSpace
 import android.net.Uri
@@ -15,7 +16,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -53,7 +59,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.isVisible
 import androidx.media3.ui.AspectRatioFrameLayout
 import coil.request.ImageRequest
+import com.hinnka.mycamera.lut.creator.AiPhotoEvaluation
 import com.hinnka.mycamera.ui.camera.autoRotate
+import com.hinnka.mycamera.ui.components.PaymentDialog
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.viewmodel.GalleryTab
 import kotlinx.coroutines.Dispatchers
@@ -91,6 +99,9 @@ fun GalleryDetailScreen(
     var isSaving by remember { mutableStateOf(false) }
     var isExportingDng by remember { mutableStateOf(false) }
     val isSharing by viewModel.isSharing.collectAsState()
+    val isPurchased by viewModel.isPurchased.collectAsState()
+    var showAiScoreSheet by remember { mutableStateOf(false) }
+    var showMoreSheet by remember { mutableStateOf(false) }
 
     val currentColorSpace = remember { mutableStateOf<ColorSpace?>(null) }
 
@@ -343,131 +354,52 @@ fun GalleryDetailScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp),
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
-                    // 分享
-                    IconButton(
-                        onClick = { currentPhoto?.let { viewModel.sharePhoto(it) } },
-                        enabled = !isSharing && !isSaving,
-                        modifier = Modifier
-                            .size(56.dp)
-                            .background(Color.White.copy(alpha = 0.1f), CircleShape)
-                            .autoRotate()
-                    ) {
-                        if (isSharing) {
-                            CircularProgressIndicator(
-                                color = Color.White,
-                                modifier = Modifier.size(24.dp),
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Default.Share,
-                                contentDescription = stringResource(R.string.share),
-                                tint = Color.White
-                            )
-                        }
+                    // AI 评分
+                    if (currentPhoto?.isImage == true) {
+                        GalleryActionItem(
+                            icon = Icons.Default.AutoAwesome,
+                            text = stringResource(R.string.gallery_ai_analysis),
+                            contentColor = AccentOrange,
+                            containerColor = AccentOrange.copy(alpha = 0.15f),
+                            onClick = { showAiScoreSheet = true },
+                            modifier = Modifier.autoRotate()
+                        )
                     }
 
                     // 编辑
                     if (currentPhoto?.isImage == true) {
-                        IconButton(
+                        GalleryActionItem(
+                            icon = Icons.Default.Edit,
+                            text = stringResource(R.string.edit),
                             onClick = {
                                 viewModel.setCurrentPhoto(pagerState.currentPage)
                                 viewModel.enterEditMode()
                                 onEdit()
                             },
-                            modifier = Modifier
-                                .size(56.dp)
-                                .background(Color.White.copy(alpha = 0.1f), CircleShape)
-                                .autoRotate()
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Edit,
-                                contentDescription = stringResource(R.string.edit),
-                                tint = Color.White
-                            )
-                        }
-                    }
-
-                    // 导出
-                    if (currentPhoto?.isImage == true && (viewModel.selectedTab == GalleryTab.PHOTON || currentPhoto.relatedPhoto != null)) {
-                        IconButton(
-                            onClick = { showExportDialog = true },
-                            modifier = Modifier
-                                .size(56.dp)
-                                .background(Color.White.copy(alpha = 0.1f), CircleShape)
-                                .autoRotate()
-                        ) {
-                            if (isSaving) {
-                                CircularProgressIndicator(
-                                    color = Color.White,
-                                    modifier = Modifier.size(24.dp),
-                                    strokeWidth = 2.dp
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Default.Output,
-                                    contentDescription = stringResource(R.string.export),
-                                    tint = AccentOrange
-                                )
-                            }
-                        }
-                    }
-
-                    if (isCurrentRawPhoto) {
-                        IconButton(
-                            onClick = {
-                                currentPhoto.let {
-                                    isExportingDng = true
-                                    viewModel.exportDng(it) { success ->
-                                        isExportingDng = false
-                                        if (success) {
-                                            Toast.makeText(context, R.string.export_dng_success, Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            Toast.makeText(context, R.string.export_dng_failed, Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                }
-                            },
-                            enabled = !isSaving && !isExportingDng,
-                            modifier = Modifier
-                                .size(56.dp)
-                                .background(Color.White.copy(alpha = 0.1f), CircleShape)
-                                .autoRotate()
-                        ) {
-                            if (isExportingDng) {
-                                CircularProgressIndicator(
-                                    color = Color.White,
-                                    modifier = Modifier.size(24.dp),
-                                    strokeWidth = 2.dp
-                                )
-                            } else {
-                                Text(
-                                    text = "DNG",
-                                    color = Color.White,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
+                            modifier = Modifier.autoRotate()
+                        )
                     }
 
                     // 删除
-                    IconButton(
+                    GalleryActionItem(
+                        icon = Icons.Default.Delete,
+                        text = stringResource(R.string.delete),
+                        contentColor = Color.Red,
+                        containerColor = Color.Red.copy(alpha = 0.2f),
                         onClick = { showDeleteDialog = true },
-                        modifier = Modifier
-                            .size(56.dp)
-                            .background(Color.Red.copy(alpha = 0.2f), CircleShape)
-                            .autoRotate()
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Delete,
-                            contentDescription = stringResource(R.string.delete),
-                            tint = Color.Red
-                        )
-                    }
+                        modifier = Modifier.autoRotate()
+                    )
+
+                    // 更多
+                    GalleryActionItem(
+                        icon = Icons.Default.MoreHoriz,
+                        text = stringResource(R.string.more_options),
+                        onClick = { showMoreSheet = true },
+                        modifier = Modifier.autoRotate()
+                    )
                 }
             }
         },
@@ -735,6 +667,404 @@ fun GalleryDetailScreen(
             textContentColor = Color.White
         )
     }
+
+    // AI 评分 BottomSheet
+    if (showAiScoreSheet && currentPhoto != null && currentPhoto.isImage) {
+        AiScoreBottomSheet(
+            photo = currentPhoto,
+            viewModel = viewModel,
+            isPurchased = isPurchased,
+            onPurchase = { viewModel.showPaymentDialog = true },
+            onDismissRequest = { showAiScoreSheet = false }
+        )
+    }
+
+    if (viewModel.showPaymentDialog) {
+        val activity = context.findActivity()
+        PaymentDialog(
+            onDismiss = { viewModel.showPaymentDialog = false },
+            onPurchase = {
+                if (activity != null) {
+                    viewModel.purchase(activity)
+                }
+                viewModel.showPaymentDialog = false
+            }
+        )
+    }
+
+    // 更多 BottomSheet
+    if (showMoreSheet && currentPhoto != null) {
+        @OptIn(ExperimentalMaterial3Api::class)
+        ModalBottomSheet(
+            onDismissRequest = { showMoreSheet = false },
+            containerColor = Color(0xFF1E1E1E),
+            dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.4f)) }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 32.dp, start = 24.dp, end = 24.dp)
+            ) {
+                Text(
+                    text = stringResource(R.string.more_options),
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 24.dp)
+                )
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // 分享
+                    GalleryActionItem(
+                        icon = Icons.Default.Share,
+                        text = stringResource(R.string.share),
+                        isLoading = isSharing,
+                        enabled = !isSharing && !isSaving,
+                        onClick = {
+                            showMoreSheet = false
+                            viewModel.sharePhoto(currentPhoto)
+                        }
+                    )
+
+                    // 导出
+                    if (currentPhoto.isImage && (viewModel.selectedTab == GalleryTab.PHOTON || currentPhoto.relatedPhoto != null)) {
+                        GalleryActionItem(
+                            icon = Icons.Default.Output,
+                            text = stringResource(R.string.export),
+                            isLoading = isSaving,
+                            onClick = {
+                                showMoreSheet = false
+                                showExportDialog = true
+                            }
+                        )
+                    }
+
+                    // DNG
+                    if (isCurrentRawPhoto) {
+                        GalleryActionItem(
+                            iconText = "DNG",
+                            text = "DNG",
+                            isLoading = isExportingDng,
+                            enabled = !isSaving && !isExportingDng,
+                            onClick = {
+                                showMoreSheet = false
+                                isExportingDng = true
+                                viewModel.exportDng(currentPhoto) { success ->
+                                    isExportingDng = false
+                                    if (success) {
+                                        Toast.makeText(context, R.string.export_dng_success, Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        Toast.makeText(context, R.string.export_dng_failed, Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AiScoreBottomSheet(
+    photo: MediaData,
+    viewModel: GalleryViewModel,
+    isPurchased: Boolean,
+    onPurchase: () -> Unit,
+    onDismissRequest: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var requestToken by remember(photo.id) { mutableIntStateOf(0) }
+    var uiState by remember(photo.id) { mutableStateOf<AiEvaluationUiState>(AiEvaluationUiState.Loading) }
+
+    LaunchedEffect(photo.id, requestToken, isPurchased) {
+        if (!isPurchased) return@LaunchedEffect
+        uiState = AiEvaluationUiState.Loading
+        uiState = viewModel.evaluatePhotoWithAi(photo).fold(
+            onSuccess = { AiEvaluationUiState.Success(it) },
+            onFailure = { AiEvaluationUiState.Error(it) }
+        )
+    }
+
+    val evaluation = (uiState as? AiEvaluationUiState.Success)?.evaluation
+    val score = evaluation?.overallScore ?: 0
+    val (color, rankText) = when {
+        score >= 90 -> Color(0xFFFFD700) to stringResource(R.string.gallery_ai_rank_excellent_plus)
+        score >= 80 -> Color(0xFF4CAF50) to stringResource(R.string.gallery_ai_rank_excellent)
+        score >= 70 -> Color(0xFF8BC34A) to stringResource(R.string.gallery_ai_rank_good)
+        score >= 60 -> Color.White.copy(alpha = 0.8f) to stringResource(R.string.gallery_ai_rank_pass)
+        else -> Color(0xFFFF5252) to stringResource(R.string.gallery_ai_rank_needs_work)
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismissRequest,
+        sheetState = sheetState,
+        containerColor = Color(0xFF1E1E1E),
+        dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.4f)) }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 32.dp, start = 24.dp, end = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = stringResource(R.string.gallery_ai_quality_title),
+                color = Color.White,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 24.dp)
+            )
+
+            if (!isPurchased) {
+                Text(
+                    text = stringResource(R.string.gallery_ai_premium_required),
+                    color = Color.White.copy(alpha = 0.72f),
+                    fontSize = 14.sp,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+                Button(
+                    onClick = onPurchase,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AccentOrange,
+                        contentColor = Color.Black
+                    )
+                ) {
+                    Text(
+                        text = stringResource(R.string.billing_premium_get_access),
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                return@Column
+            }
+
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.size(160.dp)
+            ) {
+                CircularProgressIndicator(
+                    progress = { 1f },
+                    modifier = Modifier.fillMaxSize(),
+                    color = Color.White.copy(alpha = 0.1f),
+                    strokeWidth = 12.dp,
+                    strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
+                )
+                
+                val animatedProgress by animateFloatAsState(
+                    targetValue = score / 100f,
+                    animationSpec = tween(1500, easing = FastOutSlowInEasing),
+                    label = "progress"
+                )
+                val animatedScore by animateIntAsState(
+                    targetValue = score,
+                    animationSpec = tween(1500, easing = FastOutSlowInEasing),
+                    label = "score"
+                )
+
+                CircularProgressIndicator(
+                    progress = { animatedProgress },
+                    modifier = Modifier.fillMaxSize(),
+                    color = color,
+                    strokeWidth = 12.dp,
+                    strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
+                )
+                
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = animatedScore.toString(),
+                        color = color,
+                        fontSize = 48.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = rankText,
+                        color = color.copy(alpha = 0.8f),
+                        fontSize = 14.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            when (val state = uiState) {
+                AiEvaluationUiState.Loading -> {
+                    Spacer(modifier = Modifier.height(32.dp))
+                    CircularProgressIndicator(
+                        color = AccentOrange,
+                        modifier = Modifier.size(28.dp),
+                        strokeWidth = 3.dp
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = stringResource(R.string.gallery_ai_analyzing),
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 14.sp
+                    )
+                }
+
+                is AiEvaluationUiState.Error -> {
+                    Spacer(modifier = Modifier.height(32.dp))
+                    Text(
+                        text = state.error.toString(),
+                        color = Color.White.copy(alpha = 0.75f),
+                        fontSize = 14.sp
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    TextButton(onClick = { requestToken += 1 }) {
+                        Text(stringResource(R.string.lut_creator_try_again), color = AccentOrange)
+                    }
+                }
+
+                is AiEvaluationUiState.Success -> {
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    if (state.evaluation.summary.isNotBlank()) {
+                        Text(
+                            text = state.evaluation.summary,
+                            color = Color.White.copy(alpha = 0.82f),
+                            fontSize = 14.sp,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                    }
+
+                    val dimensions = listOf(
+                        stringResource(R.string.gallery_ai_dimension_image_quality) to state.evaluation.imageQualityScore,
+                        stringResource(R.string.gallery_ai_dimension_composition) to state.evaluation.compositionScore,
+                        stringResource(R.string.gallery_ai_dimension_subject) to state.evaluation.subjectScore,
+                        stringResource(R.string.gallery_ai_dimension_emotion) to state.evaluation.emotionScore
+                    )
+                    dimensions.forEach { (label, value) ->
+                        AiScoreDimensionRow(
+                            label = label,
+                            value = value,
+                            color = color
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AiScoreDimensionRow(
+    label: String,
+    value: Int,
+    color: Color
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            color = Color.White.copy(alpha = 0.7f),
+            fontSize = 14.sp,
+            modifier = Modifier.width(72.dp)
+        )
+
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(8.dp)
+                .background(Color.White.copy(alpha = 0.1f), CircleShape)
+        ) {
+            val animValue by animateFloatAsState(
+                targetValue = value.coerceIn(0, 100) / 100f,
+                animationSpec = tween(1000, delayMillis = 500, easing = FastOutSlowInEasing),
+                label = "dimen"
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(animValue)
+                    .background(color.copy(alpha = 0.8f), CircleShape)
+            )
+        }
+
+        Text(
+            text = value.coerceIn(0, 100).toString(),
+            color = Color.White,
+            fontSize = 14.sp,
+            modifier = Modifier
+                .width(40.dp)
+                .padding(start = 8.dp)
+        )
+    }
+}
+
+private sealed class AiEvaluationUiState {
+    object Loading : AiEvaluationUiState()
+    data class Success(val evaluation: AiPhotoEvaluation) : AiEvaluationUiState()
+    data class Error(val error: Throwable) : AiEvaluationUiState()
+}
+
+@Composable
+private fun GalleryActionItem(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    icon: ImageVector? = null,
+    iconText: String? = null,
+    enabled: Boolean = true,
+    contentColor: Color = Color.White,
+    containerColor: Color = Color.White.copy(alpha = 0.1f),
+    isLoading: Boolean = false
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(enabled = enabled && !isLoading, onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .alpha(if (enabled) 1f else 0.5f)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(52.dp)
+                .background(containerColor, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isLoading) {
+                CircularProgressIndicator(
+                    color = contentColor,
+                    modifier = Modifier.size(24.dp),
+                    strokeWidth = 2.dp
+                )
+            } else if (icon != null) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = text,
+                    tint = contentColor,
+                    modifier = Modifier.size(24.dp)
+                )
+            } else if (iconText != null) {
+                Text(
+                    text = iconText,
+                    color = contentColor,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = text,
+            color = contentColor.copy(alpha = 0.9f),
+            fontSize = 12.sp,
+            maxLines = 1
+        )
+    }
 }
 
 @Composable
@@ -800,6 +1130,15 @@ private fun resolveUriSize(context: Context, uri: Uri): Long {
     }
 
     return 0L
+}
+
+private fun Context.findActivity(): Activity? {
+    var currentContext = this
+    while (currentContext is ContextWrapper) {
+        if (currentContext is Activity) return currentContext
+        currentContext = currentContext.baseContext
+    }
+    return null
 }
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)

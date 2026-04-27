@@ -36,7 +36,6 @@ import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.phantom.PhantomWidgetProvider
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.color.TransferCurve
-import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.ui.camera.CameraGLSurfaceView
@@ -1683,21 +1682,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             _isFetchingAIModels.value = true
-            val isBuiltIn = useBuiltInAiService.value
+            val isBuiltIn = openAIApiKey.value.isNullOrBlank()
             val apiKey = if (isBuiltIn) OpenAIApiClient.BUILT_IN_API_KEY else openAIApiKey.value
-            val baseUrl = if (isBuiltIn) OpenAIApiClient.BUILT_IN_API_URL else openAIUrl.value
 
             if (apiKey.isNullOrBlank()) {
                 _isFetchingAIModels.value = false
                 return@launch
             }
-            if (baseUrl.isNullOrBlank()) {
-                _isFetchingAIModels.value = false
-                return@launch
-            }
 
             try {
-                val client = OpenAIApiClient(apiKey, baseUrl)
+                val client = OpenAIApiClient(apiKey)
                 val result = client.getAvailableModels()
                 result.onSuccess { models ->
                     _availableOpenAIModels.value = models

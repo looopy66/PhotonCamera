@@ -316,7 +316,7 @@
     <string name="settings_frame_management">邊框管理</string>
     <string name="settings_frame_management_description">管理邊框、設定預設、排序</string>
     <string name="settings_openai_api_key">Gemini API Key</string>
-    <string name="settings_openai_api_key_desc">用於 AI 分析提取 LUT 配方的 API 金鑰</string>
+    <string name="settings_openai_api_key_desc">用於 AI 分析的 API 金鑰</string>
     <string name="settings_openai_base_url">Gemini API 網域</string>
     <string name="settings_openai_base_url_desc">允許設定相容大語言模型的自訂介面位址</string>
     <string name="settings_use_built_in_ai">使用內建體驗服務</string>
@@ -511,9 +511,23 @@
     <string name="lut_creator_finish">完成</string>
     <string name="lut_creator_error">錯誤：%s</string>
     <string name="lut_creator_try_again">再試一次</string>
+    <string name="gallery_ai_analysis">AI 分析</string>
+    <string name="gallery_ai_quality_title">AI 質量分析</string>
+    <string name="gallery_ai_premium_required">AI 相片分析是 Pro 功能，升級後可解鎖 AI 評分與點評。</string>
+    <string name="gallery_ai_analyzing">正在分析相片…</string>
+    <string name="gallery_ai_analysis_failed">分析失敗，請檢查 AI 設定後重試。</string>
+    <string name="gallery_ai_rank_excellent_plus">非常優秀</string>
+    <string name="gallery_ai_rank_excellent">優秀</string>
+    <string name="gallery_ai_rank_good">良好</string>
+    <string name="gallery_ai_rank_pass">及格</string>
+    <string name="gallery_ai_rank_needs_work">待改進</string>
+    <string name="gallery_ai_dimension_image_quality">畫質表現</string>
+    <string name="gallery_ai_dimension_composition">構圖美學</string>
+    <string name="gallery_ai_dimension_subject">主題內容</string>
+    <string name="gallery_ai_dimension_emotion">情感故事</string>
 
     <string name="settings_ai_model">AI 提取模型</string>
-    <string name="settings_ai_model_desc">選擇用於抽取色彩風格的 AI 模型。</string>
+    <string name="settings_ai_model_desc">選擇 AI 模型</string>
     <string name="settings_ai_model_loading">載入模型中…</string>
     <string name="settings_ai_model_select">點此選擇模型…</string>
     <string name="settings_ai_model_fetching">正在請求列表…</string>
@@ -544,4 +558,5 @@
     <string name="hdr_label">HDR</string>
     <string name="settings_raw_nlm_base_h">RAW NLM 基础强度</string>
     <string name="settings_raw_nlm_gain_factor">RAW NLM 增益响应</string>
+    <string name="ai_service">AI服务</string>
 </resources>

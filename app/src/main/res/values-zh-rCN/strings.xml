@@ -391,7 +391,7 @@
     <string name="settings_frame_management">边框管理</string>
     <string name="settings_frame_management_description">管理边框，设置默认，排序</string>
     <string name="settings_openai_api_key">Gemini API Key</string>
-    <string name="settings_openai_api_key_desc">用于 AI 分析提取 LUT 配方的 API 秘钥</string>
+    <string name="settings_openai_api_key_desc">用于 AI 分析的 API 秘钥</string>
     <string name="settings_openai_base_url">Gemini API 域名</string>
     <string name="settings_openai_base_url_desc">允许设置兼容大语言模型的自定义接口地址</string>
     <string name="settings_use_built_in_ai">使用内置体验服务</string>
@@ -721,9 +721,23 @@
     <string name="lut_creator_finish">完成</string>
     <string name="lut_creator_error">错误：%s</string>
     <string name="lut_creator_try_again">再试一次</string>
+    <string name="gallery_ai_analysis">AI 分析</string>
+    <string name="gallery_ai_quality_title">AI 质量分析</string>
+    <string name="gallery_ai_premium_required">AI 照片分析是 Pro 功能，升级后可解锁 AI 评分与点评。</string>
+    <string name="gallery_ai_analyzing">正在分析照片…</string>
+    <string name="gallery_ai_analysis_failed">分析失败，请检查 AI 设置后重试。</string>
+    <string name="gallery_ai_rank_excellent_plus">非常优秀</string>
+    <string name="gallery_ai_rank_excellent">优秀</string>
+    <string name="gallery_ai_rank_good">良好</string>
+    <string name="gallery_ai_rank_pass">及格</string>
+    <string name="gallery_ai_rank_needs_work">待改进</string>
+    <string name="gallery_ai_dimension_image_quality">画质表现</string>
+    <string name="gallery_ai_dimension_composition">构图美学</string>
+    <string name="gallery_ai_dimension_subject">主题内容</string>
+    <string name="gallery_ai_dimension_emotion">情感故事</string>
 
     <string name="settings_ai_model">AI 提取模型</string>
-    <string name="settings_ai_model_desc">选择用于抽取色彩风格的 AI 模型。</string>
+    <string name="settings_ai_model_desc">选择 AI 模型。</string>
     <string name="settings_ai_model_loading">加载模型中…</string>
     <string name="settings_ai_model_select">点此选择模型…</string>
     <string name="settings_ai_model_fetching">正在请求列表…</string>
@@ -741,4 +755,5 @@
     <string name="recipe_palette_density">调色盘浓度</string>
     <string name="recipe_palette_advanced">高级调整</string>
     <string name="recipe_tab_palette">调色盘</string>
+    <string name="ai_service">AI服务</string>
 </resources>

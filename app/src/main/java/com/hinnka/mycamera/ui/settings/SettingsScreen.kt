@@ -98,6 +98,7 @@ import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.lut.LutInfo
+import com.hinnka.mycamera.lut.creator.OpenAIApiClient
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.camera.LutEditorTarget
 import com.hinnka.mycamera.ui.camera.autoRotate
@@ -166,8 +167,8 @@ fun SettingsScreen(
     val mirrorFrontCamera by viewModel.mirrorFrontCamera.collectAsState(initial = true)
     val widgetTheme by viewModel.widgetTheme.collectAsState()
     val saveLocation by viewModel.saveLocationEnabled.collectAsState(initial = false)
-    val useBuiltInAiService by viewModel.useBuiltInAiService.collectAsState()
     val openAIApiKey by viewModel.openAIApiKey.collectAsState()
+    val openAIModel by viewModel.openAIModel.collectAsState()
     val availableOpenAIModels by viewModel.availableOpenAIModels.collectAsState()
     val isFetchingAIModels by viewModel.isFetchingAIModels.collectAsState()
     val phantomSaveAsNew by viewModel.phantomSaveAsNew.collectAsState()
@@ -694,12 +695,28 @@ fun SettingsScreen(
 
                 SettingsTab.IMAGING -> {
                     // AI 服务设置
-                    SettingsSection(title = stringResource(R.string.lut_creator_title)) {
+                    SettingsSection(title = stringResource(R.string.ai_service)) {
                         TextInputSettingItem(
                             title = stringResource(R.string.settings_openai_api_key),
                             description = stringResource(R.string.settings_openai_api_key_desc),
                             value = openAIApiKey ?: "",
                             onValueChange = { viewModel.setOpenAIApiKey(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        DropdownSettingItem(
+                            title = stringResource(R.string.settings_ai_model),
+                            description = stringResource(R.string.settings_ai_model_desc),
+                            value = openAIModel ?: OpenAIApiClient.BUILT_IN_MODEL,
+                            options = availableOpenAIModels,
+                            isLoading = isFetchingAIModels,
+                            enabled = !openAIApiKey.isNullOrBlank(),
+                            onExpanded = { viewModel.fetchAvailableAIModels() },
+                            onOptionSelected = { viewModel.setOpenAIModel(it) }
                         )
                     }
 

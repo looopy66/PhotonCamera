@@ -22,9 +22,11 @@ import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.gallery.MediaData
 import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.hdr.UnifiedGainmapProducer
+import com.hinnka.mycamera.lut.creator.AiPhotoEvaluation
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.PhotoTransformation
+import com.hinnka.mycamera.lut.creator.OpenAIApiClient
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.raw.RawProcessingPreferences
@@ -36,6 +38,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Locale
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -239,6 +242,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             return value.allocationByteCount
         }
     }
+
+    private val aiEvaluationCache = mutableMapOf<String, AiPhotoEvaluation>()
 
     // 可用的 LUT 列表
     var availableLuts: List<LutInfo> by mutableStateOf(emptyList())
@@ -1767,6 +1772,71 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 null
             }
         }
+    }
+
+    suspend fun evaluatePhotoWithAi(photo: MediaData): Result<AiPhotoEvaluation> = withContext(Dispatchers.IO) {
+        try {
+            val cacheKey = aiEvaluationCacheKey(photo)
+            aiEvaluationCache[cacheKey]?.let {
+                return@withContext Result.success(it)
+            }
+
+            val prefs = userPreferencesRepository.userPreferences.firstOrNull()
+            val isBuiltIn = prefs?.openAIApiKey.isNullOrBlank()
+            val apiKey = if (isBuiltIn) {
+                OpenAIApiClient.BUILT_IN_API_KEY
+            } else {
+                prefs.openAIApiKey
+            }
+            val baseUrl = if (isBuiltIn) {
+                OpenAIApiClient.BUILT_IN_API_URL
+            } else {
+                prefs.openAIBaseUrl.orEmpty()
+            }
+            val model = prefs?.openAIModel?.ifEmpty { OpenAIApiClient.BUILT_IN_MODEL } ?: OpenAIApiClient.BUILT_IN_MODEL
+
+            if (apiKey.isBlank()) {
+                return@withContext Result.failure(IllegalStateException("AI API key is not configured"))
+            }
+
+            val bitmap = getPreviewBitmap(
+                photo = photo,
+                showOrigin = false,
+                ignoreDenoise = true,
+                maxEdge = 1024
+            ) ?: return@withContext Result.failure(IllegalStateException("Unable to load photo preview"))
+
+            val client = OpenAIApiClient(apiKey)
+            val result = client.evaluateImageQuality(
+                bitmap = bitmap,
+                isBuiltIn = isBuiltIn,
+                model = model,
+                localeTag = Locale.getDefault().toLanguageTag()
+            )
+            result.onSuccess { aiEvaluationCache[cacheKey] = it }
+            result.onFailure { PLog.e(TAG, "AI photo evaluation request failed", it) }
+            result
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to evaluate photo with AI", e)
+            Result.failure(e)
+        }
+    }
+
+    private fun aiEvaluationCacheKey(photo: MediaData): String {
+        val metadata = photo.metadata ?: photo.relatedPhoto?.metadata
+        return listOf(
+            photo.id,
+            photo.uri.toString(),
+            photo.sourceUri?.toString().orEmpty(),
+            photo.thumbnailUri.toString(),
+            photo.displayName,
+            photo.dateAdded.toString(),
+            photo.size.toString(),
+            photo.width.toString(),
+            photo.height.toString(),
+            photo.mimeType.orEmpty(),
+            metadata?.hashCode()?.toString().orEmpty()
+        ).joinToString("|")
     }
 
     fun shouldPrioritizeDetailBitmap(photo: MediaData): Boolean {

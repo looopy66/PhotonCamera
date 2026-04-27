@@ -38,7 +38,7 @@ class LutCreatorViewModel(application: Application) : AndroidViewModel(applicati
                 }
 
                 val userPrefs = userPrefsRepo.userPreferences.firstOrNull()
-                val isBuiltIn = userPrefs?.useBuiltInAiService ?: false
+                val isBuiltIn = false
                 val apiKey = if (isBuiltIn) OpenAIApiClient.BUILT_IN_API_KEY else userPrefs?.openAIApiKey ?: ""
                 val baseUrl = if (isBuiltIn) OpenAIApiClient.BUILT_IN_API_URL else userPrefs?.openAIBaseUrl ?: ""
 
@@ -47,22 +47,23 @@ class LutCreatorViewModel(application: Application) : AndroidViewModel(applicati
                     return@launch
                 }
 
-                val client = OpenAIApiClient(apiKey, baseUrl)
+                val client = OpenAIApiClient(apiKey)
 
                 PLog.d(
                     "LutCreatorViewModel",
                     "Calling Gemini 3.1 for direct image-to-image restoration..."
                 )
 
+                val preparedBitmap = AiImagePreprocessor.prepareForImageToImage(bitmap)
                 val sourceBitmap = client.generateOriginalImage(
-                    bitmap = bitmap,
+                    bitmap = preparedBitmap,
                     isBuiltIn,
                     model = OpenAIApiClient.BUILT_IN_IMAGE_MODEL,
                     customPrompt = customPrompt
                 ).getOrThrow()
 
                 PLog.d("LutCreatorViewModel", "AI generated original image, analyzing pair locally...")
-                val recipe = LocalImageAnalyzer.analyzeSourceTargetImages(sourceBitmap, bitmap)
+                val recipe = LocalImageAnalyzer.analyzeSourceTargetImages(sourceBitmap, preparedBitmap)
 
                 PLog.d("LutCreatorViewModel", "Recipe: $recipe")
 
