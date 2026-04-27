@@ -11,6 +11,16 @@
       "isVip": false
     },
     {
+      "id": "standard",
+      "name": {
+        "en": "Standard",
+        "zh": "标准"
+      },
+      "path": "standard.plut",
+      "isDefault": true,
+      "isVip": false
+    },
+    {
       "id": "ricoh_negative",
       "name": {
         "en": "Negative",
@@ -48,6 +58,15 @@
       "isVip": false
     },
     {
+      "id": "pentax",
+      "name": {
+        "en": "Pentax",
+        "zh": "宾得明亮"
+      },
+      "path": "pentax.plut",
+      "isVip": false
+    },
+    {
       "id": "nc",
       "name": {
         "en": "NC",
@@ -57,12 +76,13 @@
       "isVip": false
     },
     {
-      "id": "pentax",
+      "id": "cc",
       "name": {
-        "en": "Pentax",
-        "zh": "宾得明亮"
+        "en": "CC",
+        "zh": "富士CC"
       },
-      "path": "pentax.plut",
+      "path": "cc.plut",
+      "isDefault": true,
       "isVip": false
     },
     {
