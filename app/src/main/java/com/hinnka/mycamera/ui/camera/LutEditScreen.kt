@@ -239,6 +239,14 @@ fun LutEditBottomSheet(
                 onParamChange = { param, value ->
                     onParamsUpdated(param.setValue(editingParams, value))
                 },
+                onParamsChange = { newParams ->
+                    paletteState = ColorPaletteState(
+                        x = newParams.paletteX,
+                        y = newParams.paletteY,
+                        density = newParams.paletteDensity
+                    ).normalized()
+                    onParamsUpdated(newParams)
+                },
                 onRemarksChange = {
                     onParamsUpdated(editingParams.copy(remarks = it))
                 },
