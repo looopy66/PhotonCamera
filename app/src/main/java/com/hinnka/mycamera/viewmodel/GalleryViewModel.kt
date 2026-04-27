@@ -735,11 +735,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 metadata.postCropRegion.bottom.toFloat() / ch
             )
 
-            editCropAspectOption.value = metadata.ratio?.let { CropAspectOption.FromAspectRatio(it) }
-                ?: CropAspectOption.Custom(
-                    metadata.postCropRegion.width().toFloat(),
-                    metadata.postCropRegion.height().toFloat()
-                )
+            editCropAspectOption.value = CropAspectOption.Custom(
+                metadata.postCropRegion.width().toFloat(),
+                metadata.postCropRegion.height().toFloat()
+            )
         } else {
             editCropRect.value = null
             editCropAspectOption.value = CropAspectOption.Free
@@ -1352,6 +1351,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 设置 LUT
      */
     fun setEditLut(lutId: String?) {
+        if (editLutId.value != lutId) {
+            editPhotoRecipeParams.value = null
+        }
         editLutId.value = lutId
         if (lutId == null) {
             editLutConfig = null
@@ -1635,8 +1637,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                                 (rectF.right * cw).roundToInt(),
                                 (rectF.bottom * ch).roundToInt()
                             )
-                        },
-                        ratio = (editCropAspectOption.value as? CropAspectOption.FromAspectRatio)?.ratio
+                        }
                     )
                     
                     if (ignoreCrop) {
@@ -1837,13 +1838,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     )
                 }
                 
-                // Get AspectRatio enum if it was a preset, otherwise null
-                val finalRatio = (editCropAspectOption.value as? CropAspectOption.FromAspectRatio)?.ratio
-
                 val metadata = currentMediaMetadata?.copy(
                     lutId = editLutId.value,
                     frameId = editFrameId.value,
-                    colorRecipeParams = editPhotoRecipeParams.value ?: editLutRecipeParams.value,
+                    colorRecipeParams = editPhotoRecipeParams.value,
                     sharpening = editSharpening.value,
                     noiseReduction = editNoiseReduction.value,
                     chromaNoiseReduction = editChromaNoiseReduction.value,
@@ -1855,8 +1853,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     computationalAperture = editComputationalAperture.value,
                     focusPointX = editFocusPointX.value,
                     focusPointY = editFocusPointY.value,
-                    postCropRegion = finalCropRegion,
-                    ratio = finalRatio
+                    postCropRegion = finalCropRegion
                 ) ?: run {
                     onComplete(false)
                     return@launch

@@ -27,6 +27,8 @@ import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlin.system.measureTimeMillis
 
 /**
@@ -109,7 +111,7 @@ class PhotoProcessor(
                     width = hdrData.width,
                     height = hdrData.height
                 ).let {
-                    applyFrame(applyCrop(it, metadata), metadata)
+                    applyFrame(applyCrop(it, metadata, "hlg_sidecar_hdr"), metadata)
                 }
                 PLog.d(
                     "PhotoProcessor",
@@ -158,12 +160,12 @@ class PhotoProcessor(
                         finalNoiseReduction,
                         finalChromaNoiseReduction
                     )
-                    sdrBitmap = applyCrop(sdrBitmap, metadata)
+                    sdrBitmap = applyCrop(sdrBitmap, metadata, "hlg_sdr")
                     sdrBitmap = applyFrame(sdrBitmap, metadata)
                 }
 
                 val hdrReferenceBitmap = source.hdrReference?.bitmap?.let {
-                    applyFrame(applyCrop(it, metadata), metadata)
+                    applyFrame(applyCrop(it, metadata, "hlg_hdr"), metadata)
                 }
                 PLog.d(
                     "PhotoProcessor",
@@ -275,9 +277,9 @@ class PhotoProcessor(
             finalChromaNoiseReduction
         )
 
-        sdrBitmap = applyCrop(sdrBitmap, metadata)
+        sdrBitmap = applyCrop(sdrBitmap, metadata, "raw_sdr")
         sdrBitmap = applyFrame(sdrBitmap, metadata)
-        hdrReferenceBitmap = hdrReferenceBitmap?.let { applyFrame(applyCrop(it, metadata), metadata) }
+        hdrReferenceBitmap = hdrReferenceBitmap?.let { applyFrame(applyCrop(it, metadata, "raw_hdr"), metadata) }
 
         GainmapSourceSet(
             sdrBase = sdrBitmap,
@@ -352,7 +354,7 @@ class PhotoProcessor(
         val rawResult = RawDemosaicProcessor.getInstance().processForHdrSources(
             context = context,
             dngFilePath = dngPath,
-            aspectRatio = metadata.ratio ?: AspectRatio.RATIO_4_3,
+            aspectRatio = resolveRawAspectRatio(metadata),
             cropRegion = metadata.cropRegion,
             rotation = metadata.rotation,
             exposureBias = metadata.exposureBias ?: 0f,
@@ -411,7 +413,7 @@ class PhotoProcessor(
         val bitmap = RawDemosaicProcessor.getInstance().process(
             context,
             dngPath,
-            metadata.ratio ?: AspectRatio.RATIO_4_3,
+            resolveRawAspectRatio(metadata),
             cropRegion,
             metadata.rotation,
             metadata.exposureBias ?: 0f,
@@ -446,7 +448,7 @@ class PhotoProcessor(
 
         result ?: return@withContext null
 
-        result = applyCrop(result, metadata)
+        result = applyCrop(result, metadata, "dng")
         result = applyFrame(result, metadata)
 
         result
@@ -504,7 +506,7 @@ class PhotoProcessor(
             )
         }
 
-        result = applyCrop(result, metadata)
+        result = applyCrop(result, metadata, "yuv")
         result = applyFrame(result, metadata)
 
         result
@@ -560,30 +562,34 @@ class PhotoProcessor(
             finalChromaNoiseReduction
         )
 
-        result = applyCrop(result, metadata)
+        result = applyCrop(result, metadata, "bitmap")
         result = applyFrame(result, metadata)
 
         result
     }
 
 
-    private fun applyCrop(input: Bitmap, metadata: MediaMetadata): Bitmap {
+    private fun applyCrop(input: Bitmap, metadata: MediaMetadata, label: String = "bitmap"): Bitmap {
         val cropRegion = metadata.postCropRegion ?: return input
         if (cropRegion.width() <= 0 || cropRegion.height() <= 0) return input
-        
-        // Ensure bounds are valid
-        val safeLeft = cropRegion.left.coerceIn(0, input.width)
-        val safeTop = cropRegion.top.coerceIn(0, input.height)
-        val safeRight = cropRegion.right.coerceIn(0, input.width)
-        val safeBottom = cropRegion.bottom.coerceIn(0, input.height)
-        
+
+        val sourceWidth = metadata.width.takeIf { it > 0 } ?: input.width
+        val sourceHeight = metadata.height.takeIf { it > 0 } ?: input.height
+        val mappedCropRegion = mapPostCropRegionToInput(cropRegion, sourceWidth, sourceHeight, input.width, input.height)
+        if (mappedCropRegion.isEmpty) return input
+
+        val safeLeft = mappedCropRegion.left
+        val safeTop = mappedCropRegion.top
+        val safeRight = mappedCropRegion.right
+        val safeBottom = mappedCropRegion.bottom
+
         val safeWidth = safeRight - safeLeft
         val safeHeight = safeBottom - safeTop
-        
+
         if (safeWidth <= 0 || safeHeight <= 0 || (safeWidth == input.width && safeHeight == input.height)) {
             return input
         }
-        
+
         val cropped = Bitmap.createBitmap(input, safeLeft, safeTop, safeWidth, safeHeight)
         if (input != cropped && !input.isRecycled) {
             // NOTE: processYuv and processBitmap assign 'result', so we can recycle the old one if it is not the original source
@@ -591,6 +597,44 @@ class PhotoProcessor(
             // If it is the original, we should NOT recycle it because it may still be needed/managed outside.
         }
         return cropped
+    }
+
+    private fun mapPostCropRegionToInput(
+        cropRegion: android.graphics.Rect,
+        sourceWidth: Int,
+        sourceHeight: Int,
+        inputWidth: Int,
+        inputHeight: Int
+    ): android.graphics.Rect {
+        val scaleX = inputWidth.toFloat() / sourceWidth.toFloat()
+        val scaleY = inputHeight.toFloat() / sourceHeight.toFloat()
+
+        return android.graphics.Rect(
+            (cropRegion.left * scaleX).roundToInt().coerceIn(0, inputWidth),
+            (cropRegion.top * scaleY).roundToInt().coerceIn(0, inputHeight),
+            (cropRegion.right * scaleX).roundToInt().coerceIn(0, inputWidth),
+            (cropRegion.bottom * scaleY).roundToInt().coerceIn(0, inputHeight)
+        )
+    }
+
+    private fun resolveRawAspectRatio(metadata: MediaMetadata): AspectRatio {
+        val storedRatio = metadata.ratio ?: AspectRatio.RATIO_4_3
+        metadata.postCropRegion ?: return storedRatio
+        val metadataAspect = metadata.width.takeIf { it > 0 }?.let { width ->
+            metadata.height.takeIf { it > 0 }?.let { height ->
+                width.toFloat() / height.toFloat()
+            }
+        } ?: return storedRatio
+        val metadataIsLandscape = metadata.width >= metadata.height
+        val storedAspect = storedRatio.getValue(metadataIsLandscape)
+
+        if (abs(storedAspect - metadataAspect) <= 0.01f) {
+            return storedRatio
+        }
+
+        return AspectRatio.entries.minBy { ratio ->
+            abs(ratio.getValue(metadataIsLandscape) - metadataAspect)
+        }
     }
 
     private suspend fun resolveColorCorrection(

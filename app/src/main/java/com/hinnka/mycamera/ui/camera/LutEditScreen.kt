@@ -148,6 +148,9 @@ fun LutEditBottomSheet(
                                     // 切换前先把当前 scope 的未提交 LUT 改动 flush 掉
                                     if (currentScope == RecipeScope.LUT_GLOBAL) flushLutSave()
                                     currentScope = scope
+                                    if (scope == RecipeScope.LUT_GLOBAL) {
+                                        onPhotoParamsChange.invoke(null)
+                                    }
                                     coroutineScope.launch {
                                         val lutParams = lutEditViewModel.getColorRecipe(lutId, editorTarget.baselineTarget)
                                         loadParamsForScope(scope, lutParams)
