@@ -593,6 +593,17 @@
     <string name="settings_community_group_qq_description">QQ Group: 569605452</string>
     <string name="settings_donation">Donation</string>
     <string name="settings_donation_description">Support the development of Photon Camera</string>
+    <string name="settings_check_update">Check for Updates</string>
+    <string name="settings_check_update_description">Current version: %1$s</string>
+    <string name="settings_check_update_running">Checking and downloading updates...</string>
+    <string name="update_checking">Checking for updates...</string>
+    <string name="update_no_update">You are already on the latest version</string>
+    <string name="update_downloading">Update found. Downloading APK...</string>
+    <string name="update_failed">Update failed. Please try again later.</string>
+    <string name="update_ready_title">Update Ready</string>
+    <string name="update_ready_message">The update APK has been downloaded. Install it now?</string>
+    <string name="update_install_now">Install</string>
+    <string name="update_install_permission_hint">Allow this app to install unknown apps, then tap Install again.</string>
     <string name="settings_default_focal_length">Default Focal Length</string>
     <string name="settings_default_focal_length_description">Set the focal length to automatically switch to when the app starts.</string>
     <string name="settings_custom_lens_ids">Custom Lens IDs</string>

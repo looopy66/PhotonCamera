@@ -110,8 +110,10 @@ import com.hinnka.mycamera.ui.components.SliderSettingItem
 import com.hinnka.mycamera.ui.components.LutSelector
 import com.hinnka.mycamera.ui.components.RawEditPanel
 import com.hinnka.mycamera.ui.components.rememberBackgroundPainter
+import com.hinnka.mycamera.update.AppUpdateManager
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.viewmodel.CameraViewModel
+import java.io.File
 import kotlin.math.roundToInt
 
 enum class SettingsTab {
@@ -263,6 +265,9 @@ fun SettingsScreen(
     var calibrationExpanded by remember { mutableStateOf(false) }
     var showGhostPermissionDialog by remember { mutableStateOf(false) }
     var isGhostPermissionFlowActive by remember { mutableStateOf(false) }
+    var isCheckingUpdate by remember { mutableStateOf(false) }
+    var downloadedUpdateApk by remember { mutableStateOf<File?>(null) }
+    var showInstallUpdateDialog by remember { mutableStateOf(false) }
     var baselinePickerTarget by remember { mutableStateOf<BaselineColorCorrectionTarget?>(null) }
     var baselineRecipeEditorTarget by remember { mutableStateOf<BaselineColorCorrectionTarget?>(null) }
     var multiFrameCountSliderValue by remember(multiFrameCount) {
@@ -389,6 +394,50 @@ fun SettingsScreen(
                 }
             }
         )
+    }
+
+    if (showInstallUpdateDialog) {
+        val apkFile = downloadedUpdateApk
+        if (apkFile != null) {
+            AlertDialog(
+                onDismissRequest = { showInstallUpdateDialog = false },
+                title = {
+                    Text(
+                        text = stringResource(R.string.update_ready_title),
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                },
+                text = {
+                    Text(
+                        text = stringResource(R.string.update_ready_message),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            val installStarted = AppUpdateManager.startInstall(context, apkFile)
+                            if (installStarted) {
+                                showInstallUpdateDialog = false
+                            } else {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    R.string.update_install_permission_hint,
+                                    android.widget.Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    ) {
+                        Text(stringResource(R.string.update_install_now))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showInstallUpdateDialog = false }) {
+                        Text(stringResource(R.string.cancel))
+                    }
+                }
+            )
+        }
     }
 
     val backgroundPainter = rememberBackgroundPainter(viewModel)
@@ -1266,6 +1315,64 @@ fun SettingsScreen(
 
                     // 关于
                     SettingsSection(title = stringResource(R.string.settings_section_about)) {
+                        if (!isGoogleFlavor) {
+                            NavigationSettingItem(
+                                title = stringResource(R.string.settings_check_update),
+                                description = if (isCheckingUpdate) {
+                                    stringResource(R.string.settings_check_update_running)
+                                } else {
+                                    stringResource(
+                                        R.string.settings_check_update_description,
+                                        BuildConfig.VERSION_NAME
+                                    )
+                                },
+                                onClick = {
+                                    if (!isCheckingUpdate) {
+                                        coroutineScope.launch {
+                                            isCheckingUpdate = true
+                                            try {
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    R.string.update_checking,
+                                                    android.widget.Toast.LENGTH_SHORT
+                                                ).show()
+                                                val release = AppUpdateManager.checkForUpdate()
+                                                if (release == null) {
+                                                    android.widget.Toast.makeText(
+                                                        context,
+                                                        R.string.update_no_update,
+                                                        android.widget.Toast.LENGTH_SHORT
+                                                    ).show()
+                                                    return@launch
+                                                }
+
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    R.string.update_downloading,
+                                                    android.widget.Toast.LENGTH_SHORT
+                                                ).show()
+                                                downloadedUpdateApk = AppUpdateManager.downloadApk(context, release)
+                                                showInstallUpdateDialog = true
+                                            } catch (error: Exception) {
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    R.string.update_failed,
+                                                    android.widget.Toast.LENGTH_LONG
+                                                ).show()
+                                            } finally {
+                                                isCheckingUpdate = false
+                                            }
+                                        }
+                                    }
+                                }
+                            )
+
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        }
+
                         NavigationSettingItem(
                             title = stringResource(R.string.settings_community_group),
                             description = communityGroupDescription,

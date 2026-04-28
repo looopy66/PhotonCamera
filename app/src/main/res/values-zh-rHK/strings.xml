@@ -389,6 +389,17 @@
     <string name="settings_community_group_qq_description">QQ 群：569605452</string>
     <string name="settings_donation">捐贈</string>
     <string name="settings_donation_description">支持 Photon Camera 的持續開發</string>
+    <string name="settings_check_update">檢查更新</string>
+    <string name="settings_check_update_description">目前版本：%1$s</string>
+    <string name="settings_check_update_running">正在檢查並下載更新...</string>
+    <string name="update_checking">正在檢查更新...</string>
+    <string name="update_no_update">已是最新版本</string>
+    <string name="update_downloading">發現新版本，正在下載 APK...</string>
+    <string name="update_failed">更新失敗，請稍後再試</string>
+    <string name="update_ready_title">更新已就緒</string>
+    <string name="update_ready_message">更新 APK 已下載完成，現在安裝嗎？</string>
+    <string name="update_install_now">安裝</string>
+    <string name="update_install_permission_hint">請允許本應用安裝未知應用，然後再次點擊安裝。</string>
     <string name="settings_background_description">更改應用背景圖</string>
     <string name="settings_custom_background">自訂...</string>
     <string name="settings_default_focal_length_description">設定啟動 App 時自動切換到的焦段</string>
