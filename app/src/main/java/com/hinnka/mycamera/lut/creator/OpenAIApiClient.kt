@@ -21,6 +21,7 @@ import androidx.core.graphics.scale
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.utils.DeviceUtil
 import kotlinx.coroutines.flow.firstOrNull
+import kotlin.math.roundToInt
 
 class OpenAIApiClient() {
 
@@ -243,32 +244,39 @@ Return JSON only, without markdown, using this exact schema:
             try {
                 val base64Image = bitmapToBase64(bitmap)
                 val prompt = """
-你是挑剔且专业的顶级摄影评论家。请从构图、色彩、光影、主题表达四个维度对照片进行犀利且具有建设性的点评。拒绝任何客套、虚伪的赞美或泛泛而谈。
+你是挑剔且专业的顶级摄影评论家。请采用 PPA 12 Elements of a Merit Image 作为底层评审体系，对照片进行犀利且具有建设性的评分。拒绝任何客套、虚伪的赞美或泛泛而谈。
 
 请默认这是一张 60 分的平庸照片，你需要寻找理由为其加分或大幅扣分。
 
-四个维度定义:
-- 构图: 画面结构、主体位置、边缘处理、空间关系、视觉引导和平衡感。
-- 色彩: 色彩搭配、白平衡、饱和度控制、色彩层次和整体色调是否服务主题。
-- 光影: 曝光、明暗关系、光线方向、层次、质感塑造和高光阴影控制。
-- 主题表达: 主体是否明确，画面情绪、叙事、意图和观看记忆点是否成立。
-
-评分指南 (严禁分数膨胀):
-- 90-100: 殿堂级/顶级大师作品。(极罕见，需具备历史级审美价值)
-- 80-89: 极为优秀的专业商业/艺术作品。(技术完美，具有强烈的个人风格与情绪感染力)
-- 70-79: 优秀的摄影爱好者作品。(有明显闪光点，但仍存在一两处技术或表达上的妥协)
-- 60-69: 结构完整的日常记录, 具有一定的审美价值。(曝光准确，构图规矩，但极度平庸，缺乏艺术生命力，这是大部分照片的归宿)
-- 40-59: 存在明显的技术硬伤。(如：高光彻底溢出、构图杂乱无章、色彩脏乱、明显的后期处理过度痕迹)
-- 0-39: 废片。(缺乏基本的摄影常识和观看价值)
+请分别为 PPA 12 项评分，每项 0-100 分，各项评分各自独立无相关性，无需输出总分。
+- Impact： 照片给人的第一印象。一张好照片在被看到的瞬间，就应该能唤起观众的情感共鸣（震撼、感动、好奇、甚至是不安）。
+- Technical Excellence： 摄影的基础。包括曝光是否准确、焦点是否清晰（且在正确的位置）、白平衡、色彩管理以及后期的质量。
+- Creativity： 摄影师是否用新鲜、独特的视角来展现普通的事物。
+- Style： 作品是否体现了特定流派的特征，或者摄影师本人的强烈个人印记。
+- Composition： 画面元素的排列是否将观众的视线引向主体，并保持视觉平衡。
+- Presentation： 包括照片的裁切、边框、输出材质（如果是实体展出）是否与影像风格统一。
+- Color Balance： 画面中的色彩是否协调。不仅指白平衡准确，还包括色彩的情感表达和色彩对比（冷暖、互补等）。
+- Center of Interest： 画面必须有一个明确的聚焦点，不能让观众的视线在画面中漫无目的地游荡。
+- Lighting： 光线的使用不仅是为了照亮主体，更要塑造形态、质感、维度和氛围。
+- Subject Matter： 拍摄对象本身是否具有吸引力，或者是否与整体表达相契合。
+- Technique： 摄影师在前期拍摄和后期处理中使用的手法，是否巧妙地服务于最终的视觉效果。
+- Storytelling： 影像的最高境界。照片能否在没有文字说明的情况下，激发观众的想象力并传达一个完整的信息或情绪。
 
 The user's current system language is "$localeTag". The "summary" value MUST be written in that language.
 Return JSON only, without markdown formatting, code blocks, or any conversational text, using this exact schema:
 {
-  "overallScore": 0-100 integer,
+  "impactScore": 0-100 integer,
+  "technicalExcellenceScore": 0-100 integer,
+  "creativityScore": 0-100 integer,
+  "styleScore": 0-100 integer,
   "compositionScore": 0-100 integer,
-  "colorScore": 0-100 integer,
+  "presentationScore": 0-100 integer,
+  "colorBalanceScore": 0-100 integer,
+  "centerOfInterestScore": 0-100 integer,
   "lightingScore": 0-100 integer,
-  "themeExpressionScore": 0-100 integer,
+  "subjectMatterScore": 0-100 integer,
+  "techniqueScore": 0-100 integer,
+  "storytellingScore": 0-100 integer,
   "summary": "对照片做一句话总结性评论，有内容有具体指导意见，使用用户系统语言"
 }
                 """.trimIndent()
@@ -353,12 +361,23 @@ Return JSON only, without markdown formatting, code blocks, or any conversationa
             cleaned
         }
         val json = JSONObject(jsonText)
+        val scores = AiPhotoElementScores(
+            impact = json.optInt("impactScore").coerceIn(0, 100),
+            technicalExcellence = json.optInt("technicalExcellenceScore").coerceIn(0, 100),
+            creativity = json.optInt("creativityScore").coerceIn(0, 100),
+            style = json.optInt("styleScore").coerceIn(0, 100),
+            composition = json.optInt("compositionScore").coerceIn(0, 100),
+            presentation = json.optInt("presentationScore").coerceIn(0, 100),
+            colorBalance = json.optInt("colorBalanceScore").coerceIn(0, 100),
+            centerOfInterest = json.optInt("centerOfInterestScore").coerceIn(0, 100),
+            lighting = json.optInt("lightingScore").coerceIn(0, 100),
+            subjectMatter = json.optInt("subjectMatterScore").coerceIn(0, 100),
+            technique = json.optInt("techniqueScore").coerceIn(0, 100),
+            storytelling = json.optInt("storytellingScore").coerceIn(0, 100)
+        )
         return AiPhotoEvaluation(
-            overallScore = json.optInt("overallScore").coerceIn(0, 100),
-            compositionScore = json.optInt("compositionScore").coerceIn(0, 100),
-            colorScore = json.optInt("colorScore").coerceIn(0, 100),
-            lightingScore = json.optInt("lightingScore").coerceIn(0, 100),
-            themeExpressionScore = json.optInt("themeExpressionScore").coerceIn(0, 100),
+            overallScore = scores.weightedOverallScore(),
+            scores = scores,
             summary = json.optString("summary").trim()
         )
     }
@@ -477,9 +496,38 @@ Return JSON only, without markdown formatting, code blocks, or any conversationa
 
 data class AiPhotoEvaluation(
     val overallScore: Int,
-    val compositionScore: Int,
-    val colorScore: Int,
-    val lightingScore: Int,
-    val themeExpressionScore: Int,
+    val scores: AiPhotoElementScores,
     val summary: String
 )
+
+data class AiPhotoElementScores(
+    val impact: Int,
+    val technicalExcellence: Int,
+    val creativity: Int,
+    val style: Int,
+    val composition: Int,
+    val presentation: Int,
+    val colorBalance: Int,
+    val centerOfInterest: Int,
+    val lighting: Int,
+    val subjectMatter: Int,
+    val technique: Int,
+    val storytelling: Int
+) {
+    fun weightedOverallScore(): Int {
+        val weightedSum =
+            impact * 5 +
+                technicalExcellence * 6 +
+                creativity * 7 +
+                style * 7 +
+                composition * 8 +
+                presentation * 8 +
+                colorBalance * 8 +
+                centerOfInterest * 9 +
+                lighting * 9 +
+                subjectMatter * 10 +
+                technique * 11 +
+                storytelling * 12
+        return (weightedSum / 100f).roundToInt().coerceIn(0, 100)
+    }
+}

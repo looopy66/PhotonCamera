@@ -748,10 +748,18 @@
     <string name="gallery_ai_rank_good">良好</string>
     <string name="gallery_ai_rank_pass">及格</string>
     <string name="gallery_ai_rank_needs_work">待改进</string>
-    <string name="gallery_ai_dimension_composition">构图</string>
-    <string name="gallery_ai_dimension_color">色彩</string>
-    <string name="gallery_ai_dimension_lighting">光影</string>
-    <string name="gallery_ai_dimension_theme_expression">主题表达</string>
+    <string name="gallery_ai_element_impact">视觉冲击力</string>
+    <string name="gallery_ai_element_technical_excellence">技术卓越性</string>
+    <string name="gallery_ai_element_creativity">创造力</string>
+    <string name="gallery_ai_element_style">风格</string>
+    <string name="gallery_ai_element_composition">构图</string>
+    <string name="gallery_ai_element_presentation">呈现方式</string>
+    <string name="gallery_ai_element_color_balance">色彩平衡</string>
+    <string name="gallery_ai_element_center_of_interest">视觉中心</string>
+    <string name="gallery_ai_element_lighting">光影</string>
+    <string name="gallery_ai_element_subject_matter">主题</string>
+    <string name="gallery_ai_element_technique">技法</string>
+    <string name="gallery_ai_element_storytelling">故事性</string>
 
     <string name="settings_ai_model">AI 提取模型</string>
     <string name="settings_ai_model_desc">选择 AI 模型。</string>

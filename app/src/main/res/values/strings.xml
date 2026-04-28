@@ -753,10 +753,18 @@
     <string name="gallery_ai_rank_good">Good</string>
     <string name="gallery_ai_rank_pass">Pass</string>
     <string name="gallery_ai_rank_needs_work">Needs Work</string>
-    <string name="gallery_ai_dimension_composition">Composition</string>
-    <string name="gallery_ai_dimension_color">Color</string>
-    <string name="gallery_ai_dimension_lighting">Light</string>
-    <string name="gallery_ai_dimension_theme_expression">Theme</string>
+    <string name="gallery_ai_element_impact">Impact</string>
+    <string name="gallery_ai_element_technical_excellence">Technical</string>
+    <string name="gallery_ai_element_creativity">Creativity</string>
+    <string name="gallery_ai_element_style">Style</string>
+    <string name="gallery_ai_element_composition">Composition</string>
+    <string name="gallery_ai_element_presentation">Presentation</string>
+    <string name="gallery_ai_element_color_balance">Color Balance</string>
+    <string name="gallery_ai_element_center_of_interest">Center</string>
+    <string name="gallery_ai_element_lighting">Lighting</string>
+    <string name="gallery_ai_element_subject_matter">Subject</string>
+    <string name="gallery_ai_element_technique">Technique</string>
+    <string name="gallery_ai_element_storytelling">Storytelling</string>
 
     <string name="settings_ai_model">AI Model</string>
     <string name="settings_ai_model_desc">Select the model for AI.</string>

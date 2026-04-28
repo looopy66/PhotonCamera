@@ -19,6 +19,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
@@ -857,6 +858,7 @@ private fun AiScoreBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(bottom = 32.dp, start = 24.dp, end = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -983,16 +985,24 @@ private fun AiScoreBottomSheet(
                     }
 
                     val dimensions = listOf(
-                        stringResource(R.string.gallery_ai_dimension_composition) to state.evaluation.compositionScore,
-                        stringResource(R.string.gallery_ai_dimension_color) to state.evaluation.colorScore,
-                        stringResource(R.string.gallery_ai_dimension_lighting) to state.evaluation.lightingScore,
-                        stringResource(R.string.gallery_ai_dimension_theme_expression) to state.evaluation.themeExpressionScore
+                        stringResource(R.string.gallery_ai_element_impact) to state.evaluation.scores.impact,
+                        stringResource(R.string.gallery_ai_element_technical_excellence) to state.evaluation.scores.technicalExcellence,
+                        stringResource(R.string.gallery_ai_element_creativity) to state.evaluation.scores.creativity,
+                        stringResource(R.string.gallery_ai_element_style) to state.evaluation.scores.style,
+                        stringResource(R.string.gallery_ai_element_composition) to state.evaluation.scores.composition,
+                        stringResource(R.string.gallery_ai_element_presentation) to state.evaluation.scores.presentation,
+                        stringResource(R.string.gallery_ai_element_color_balance) to state.evaluation.scores.colorBalance,
+                        stringResource(R.string.gallery_ai_element_center_of_interest) to state.evaluation.scores.centerOfInterest,
+                        stringResource(R.string.gallery_ai_element_lighting) to state.evaluation.scores.lighting,
+                        stringResource(R.string.gallery_ai_element_subject_matter) to state.evaluation.scores.subjectMatter,
+                        stringResource(R.string.gallery_ai_element_technique) to state.evaluation.scores.technique,
+                        stringResource(R.string.gallery_ai_element_storytelling) to state.evaluation.scores.storytelling
                     )
                     dimensions.forEach { (label, value) ->
                         AiScoreDimensionRow(
                             label = label,
                             value = value,
-                            color = color
+                            color = aiScoreColor(value)
                         )
                     }
                 }
@@ -1016,8 +1026,8 @@ private fun AiScoreDimensionRow(
         Text(
             text = label,
             color = Color.White.copy(alpha = 0.7f),
-            fontSize = 14.sp,
-            modifier = Modifier.width(72.dp)
+            fontSize = 12.sp,
+            modifier = Modifier.width(128.dp)
         )
 
         Box(
@@ -1041,7 +1051,7 @@ private fun AiScoreDimensionRow(
 
         Text(
             text = value.coerceIn(0, 100).toString(),
-            color = Color.White,
+            color = color,
             fontSize = 14.sp,
             modifier = Modifier
                 .width(40.dp)
@@ -1055,6 +1065,15 @@ private sealed class AiEvaluationUiState {
     data class Success(val evaluation: AiPhotoEvaluation) : AiEvaluationUiState()
     data class Error(val error: Throwable) : AiEvaluationUiState()
 }
+
+private fun aiScoreColor(score: Int): Color =
+    when {
+        score >= 90 -> Color(0xFFFFD700)
+        score >= 80 -> Color(0xFF4CAF50)
+        score >= 70 -> Color(0xFF8BC34A)
+        score >= 60 -> Color.White.copy(alpha = 0.8f)
+        else -> Color(0xFFFF5252)
+    }
 
 @Composable
 private fun HdrStrengthPanel(
