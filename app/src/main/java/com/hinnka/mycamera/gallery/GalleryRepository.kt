@@ -132,6 +132,7 @@ class GalleryRepository(private val context: Context) {
         val projection = arrayOf(
             MediaStore.Images.Media._ID,
             MediaStore.Images.Media.DISPLAY_NAME,
+            MediaStore.Images.Media.DATE_TAKEN,
             MediaStore.Images.Media.DATE_ADDED,
             MediaStore.Images.Media.SIZE,
             MediaStore.Images.Media.WIDTH,
@@ -150,6 +151,7 @@ class GalleryRepository(private val context: Context) {
             ?.use { cursor ->
                 val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
                 val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+                val dateTakenColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
                 val dateColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
                 val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
                 val widthColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.WIDTH)
@@ -159,13 +161,18 @@ class GalleryRepository(private val context: Context) {
                 while (cursor.moveToNext()) {
                     val id = cursor.getLong(idColumn)
                     val contentUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                    val displayDate = resolveSystemMediaDate(
+                        dateTakenMillis = cursor.getLong(dateTakenColumn),
+                        dateAddedSeconds = cursor.getLong(dateColumn),
+                        mediaId = "image_$id"
+                    )
                     items.add(
                         MediaData(
                             id = "image_$id",
                             uri = contentUri,
                             thumbnailUri = contentUri,
                             displayName = cursor.getString(nameColumn),
-                            dateAdded = cursor.getLong(dateColumn) * 1000L,
+                            dateAdded = displayDate,
                             size = cursor.getLong(sizeColumn),
                             width = cursor.getInt(widthColumn),
                             height = cursor.getInt(heightColumn),
@@ -184,6 +191,7 @@ class GalleryRepository(private val context: Context) {
         val projection = arrayOf(
             MediaStore.Video.Media._ID,
             MediaStore.Video.Media.DISPLAY_NAME,
+            MediaStore.Video.Media.DATE_TAKEN,
             MediaStore.Video.Media.DATE_ADDED,
             MediaStore.Video.Media.SIZE,
             MediaStore.Video.Media.WIDTH,
@@ -203,6 +211,7 @@ class GalleryRepository(private val context: Context) {
             ?.use { cursor ->
                 val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
                 val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
+                val dateTakenColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_TAKEN)
                 val dateColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_ADDED)
                 val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
                 val widthColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.WIDTH)
@@ -215,6 +224,11 @@ class GalleryRepository(private val context: Context) {
                     val contentUri = ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id)
                     val mimeType = cursor.getString(mimeColumn)
                     val durationMs = cursor.getLong(durationColumn)
+                    val displayDate = resolveSystemMediaDate(
+                        dateTakenMillis = cursor.getLong(dateTakenColumn),
+                        dateAddedSeconds = cursor.getLong(dateColumn),
+                        mediaId = "video_$id"
+                    )
                     var frameRate: Int? = null
                     var bitrate: Long? = null
                     var rotationDegrees: Int? = null
@@ -238,7 +252,7 @@ class GalleryRepository(private val context: Context) {
                             uri = contentUri,
                             thumbnailUri = contentUri,
                             displayName = cursor.getString(nameColumn),
-                            dateAdded = cursor.getLong(dateColumn) * 1000L,
+                            dateAdded = displayDate,
                             size = cursor.getLong(sizeColumn),
                             width = cursor.getInt(widthColumn),
                             height = cursor.getInt(heightColumn),
@@ -248,7 +262,7 @@ class GalleryRepository(private val context: Context) {
                             sourceUri = contentUri,
                             metadata = MediaMetadata(
                                 mediaType = MediaType.VIDEO,
-                                dateTaken = cursor.getLong(dateColumn) * 1000L,
+                                dateTaken = displayDate,
                                 width = cursor.getInt(widthColumn),
                                 height = cursor.getInt(heightColumn),
                                 sourceUri = contentUri.toString(),
@@ -266,5 +280,17 @@ class GalleryRepository(private val context: Context) {
                 }
             }
         return items
+    }
+
+    private fun resolveSystemMediaDate(
+        dateTakenMillis: Long,
+        dateAddedSeconds: Long,
+        mediaId: String
+    ): Long {
+        if (dateTakenMillis > 0L) return dateTakenMillis
+
+        val fallbackDate = dateAddedSeconds * 1000L
+        PLog.d(TAG, "System media $mediaId has no DATE_TAKEN, fallback to DATE_ADDED")
+        return fallbackDate
     }
 }

@@ -2,6 +2,7 @@ package com.hinnka.mycamera.ui.gallery
 
 import android.app.Activity
 import android.graphics.Bitmap
+import android.text.format.DateUtils
 import android.widget.Toast
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -74,6 +75,8 @@ import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.time.LocalDate
+import java.time.ZoneId
 import kotlin.math.roundToInt
 
 /**
@@ -556,11 +559,11 @@ fun GalleryScreen(
 
                     GalleryFastScrollbar(
                         gridState = currentGridState,
+                        entries = gridEntries,
                         isDragging = isFastScrolling.value,
                         onDragStateChange = { isFastScrolling.value = it },
                         modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .fillMaxHeight()
+                            .matchParentSize()
                             .padding(vertical = 8.dp)
                     )
                 }
@@ -629,17 +632,20 @@ fun GalleryScreen(
 @Composable
 private fun GalleryFastScrollbar(
     gridState: LazyStaggeredGridState,
+    entries: List<GalleryGridEntry>,
     isDragging: Boolean,
     onDragStateChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val density = LocalDensity.current
     val layoutInfo = gridState.layoutInfo
     val totalItems = layoutInfo.totalItemsCount
     val visibleItems = layoutInfo.visibleItemsInfo
     val scrollIndicatorState = gridState.scrollIndicatorState
     var scrollJob by remember { mutableStateOf<Job?>(null) }
+    var dragLabel by remember { mutableStateOf<String?>(null) }
 
     if (
         totalItems <= 0 ||
@@ -681,7 +687,6 @@ private fun GalleryFastScrollbar(
 
     BoxWithConstraints(
         modifier = modifier
-            .width(40.dp)
             .graphicsLayer { this.alpha = alpha },
         contentAlignment = Alignment.TopEnd
     ) {
@@ -702,6 +707,7 @@ private fun GalleryFastScrollbar(
             val targetIndex = (targetProgress * (totalItems - visibleItems.size))
                 .roundToInt()
                 .coerceIn(0, totalItems - 1)
+            dragLabel = entries.getOrNull(targetIndex)?.toFastScrollDateLabel(context)
             scrollJob?.cancel()
             scrollJob = scope.launch {
                 gridState.scrollToItem(targetIndex)
@@ -721,10 +727,12 @@ private fun GalleryFastScrollbar(
                         },
                         onDragEnd = {
                             onDragStateChange(false)
+                            dragLabel = null
                             scrollJob = null
                         },
                         onDragCancel = {
                             onDragStateChange(false)
+                            dragLabel = null
                             scrollJob?.cancel()
                             scrollJob = null
                         },
@@ -754,11 +762,60 @@ private fun GalleryFastScrollbar(
                     .background(AccentOrange.copy(alpha = 0.9f))
             )
         }
+
+        if (isDragging && dragLabel != null) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(
+                        x = (-48).dp,
+                        y = with(density) {
+                            val labelHeightPx = 48.dp.toPx()
+                            (displayedThumbOffsetPx + thumbHeightPx / 2f - labelHeightPx / 2f)
+                                .coerceIn(0f, trackHeightPx - labelHeightPx)
+                                .toDp()
+                        }
+                    ),
+                color = Color.White,
+                contentColor = Color.Black,
+                shape = RoundedCornerShape(999.dp),
+                shadowElevation = 8.dp
+            ) {
+                Text(
+                    text = dragLabel.orEmpty(),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1
+                )
+            }
+        }
     }
 }
 
 private fun Int.takeIfKnown(): Int? =
     takeIf { it != Int.MAX_VALUE && it >= 0 }
+
+private fun GalleryGridEntry.toFastScrollDateLabel(context: android.content.Context): String {
+    val timestamp = when (this) {
+        is GalleryGridEntry.Header -> key.removePrefix("header_")
+            .let { runCatching { LocalDate.parse(it) }.getOrNull() }
+            ?.atStartOfDay(ZoneId.systemDefault())
+            ?.toInstant()
+            ?.toEpochMilli()
+        is GalleryGridEntry.Photo -> photo.dateAdded
+    } ?: return when (this) {
+        is GalleryGridEntry.Header -> title
+        is GalleryGridEntry.Photo -> photo.getFormattedDate()
+    }
+
+    return DateUtils.formatDateTime(
+        context,
+        timestamp,
+        DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_YEAR
+    )
+}
 
 private fun MediaData.shouldUseFullLineSpan(): Boolean {
     if (!isImage) return false
