@@ -37,6 +37,7 @@ import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.StartupTrace
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
@@ -138,6 +139,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     private var systemOffset = 0
     private var photonOffset = 0
+    private val systemLoadMutex = Mutex()
+    private val photonLoadMutex = Mutex()
     var hasMoreSystemPhotos by mutableStateOf(true)
         private set
     var hasMorePhotonPhotos by mutableStateOf(true)
@@ -471,16 +474,18 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     suspend fun loadSystemPhotos(reset: Boolean = false) {
         if (!hasGalleryPermission) return
         if (!reset) return
+        if (!systemLoadMutex.tryLock()) {
+            PLog.d(TAG, "Skip system photos load: already running")
+            return
+        }
 
-        if (reset) {
+        try {
             if (_systemPhotos.value.isEmpty()) {
                 _isLoading.value = true
             }
             systemOffset = 0
             hasMoreSystemPhotos = false
-        }
 
-        try {
             val newPhotos = repository.getAllSystemPhotos()
             _systemPhotos.value = newPhotos
             systemOffset = newPhotos.size
@@ -490,6 +495,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         } finally {
             _isLoading.value = false
             _isSystemLoadingMore.value = false
+            systemLoadMutex.unlock()
         }
     }
 
@@ -498,14 +504,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     suspend fun loadPhotos(reset: Boolean = true) {
         if (!reset) return
-
-        if (reset) {
-            if (_photos.value.isEmpty()) _isLoading.value = true
-            photonOffset = 0
-            hasMorePhotonPhotos = false
+        if (!photonLoadMutex.tryLock()) {
+            PLog.d(TAG, "Skip photon photos load: already running")
+            return
         }
 
         try {
+            if (_photos.value.isEmpty()) _isLoading.value = true
+            photonOffset = 0
+            hasMorePhotonPhotos = false
+
             val newList = repository.getPhotosSync()
             val currentMap = _photos.value.associateBy { it.id }
 
