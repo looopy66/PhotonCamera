@@ -506,6 +506,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             systemOffset = newPhotos.size
             hasMoreSystemPhotos = false
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             PLog.e(TAG, "Failed to load system photos", e)
         } finally {
             _isLoading.value = false
@@ -560,6 +561,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             hasMorePhotonPhotos = false
             _latestPhoto.value = _photos.value.firstOrNull()
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             PLog.e(TAG, "Failed to load photos", e)
         } finally {
             _isLoading.value = false
