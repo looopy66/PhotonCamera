@@ -548,6 +548,26 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         } finally {
             _isLoading.value = false
             _isPhotonLoadingMore.value = false
+            photonLoadMutex.unlock()
+        }
+    }
+
+    private fun removePhotonPhotosFromState(photoIds: Set<String>) {
+        if (photoIds.isEmpty()) return
+        _photos.update { current -> current.filterNot { it.id in photoIds } }
+        selectedPhotos.removeAll { it.id in photoIds }
+        _latestPhoto.value = _photos.value.firstOrNull()
+        if (currentPhotoIndex >= _photos.value.size) {
+            currentPhotoIndex = (_photos.value.size - 1).coerceAtLeast(0)
+        }
+    }
+
+    private fun removeSystemPhotosFromState(photoIds: Set<String>) {
+        if (photoIds.isEmpty()) return
+        _systemPhotos.update { current -> current.filterNot { it.id in photoIds } }
+        selectedPhotos.removeAll { it.id in photoIds }
+        if (currentPhotoIndex >= currentPhotos.value.size) {
+            currentPhotoIndex = (currentPhotos.value.size - 1).coerceAtLeast(0)
         }
     }
 
@@ -920,6 +940,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             val context = getApplication<Application>()
             val success = GalleryManager.deletePhotoOnly(context, photo.id)
             if (success) {
+                removePhotonPhotosFromState(setOf(photo.id))
                 loadPhotos()
                 // 如果删除的是当前照片，调整索引
                 if (photo == getCurrentPhoto() && currentPhotoIndex >= _photos.value.size) {
@@ -959,6 +980,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             val context = getApplication<Application>()
             val success = GalleryManager.deletePhotoOnly(context, photo.id)
             if (success) {
+                removePhotonPhotosFromState(setOf(photo.id))
                 loadPhotos()
 
                 // 如果删除的是当前照片，调整索引
@@ -980,8 +1002,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             pendingDeleteSystemPhoto?.relatedPhoto?.takeIf { it.isVideo }?.let { relatedVideo ->
                 GalleryManager.deletePhotoOnly(getApplication(), relatedVideo.id)
+                removePhotonPhotosFromState(setOf(relatedVideo.id))
                 loadPhotos()
             }
+            pendingDeleteSystemPhoto?.let { removeSystemPhotosFromState(setOf(it.id)) }
             // 系统照片已经被 MediaStore 删除，我们只需要刷新列表
             loadSystemPhotos(reset = true)
 
@@ -1113,17 +1137,20 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             val context = getApplication<Application>()
             var deletedCount = 0
+            val deletedIds = mutableSetOf<String>()
 
             withContext(Dispatchers.IO) {
                 photos.forEach { photo ->
                     val success = GalleryManager.deletePhotoOnly(context, photo.id)
                     if (success) {
                         deletedCount++
+                        deletedIds.add(photo.id)
                     }
                 }
             }
 
             exitSelectionMode()
+            removePhotonPhotosFromState(deletedIds)
             loadPhotos()
             PLog.d(TAG, "Batch deleted $deletedCount photos (app only)")
         }
@@ -1144,23 +1171,28 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     withContext(Dispatchers.IO) {
                         relatedPhotonVideos.forEach { GalleryManager.deletePhotoOnly(context, it.id) }
                     }
+                    removePhotonPhotosFromState(relatedPhotonVideos.map { it.id }.toSet())
                     loadPhotos()
                 }
+                removeSystemPhotosFromState(photos.map { it.id }.toSet())
                 // 系统相册刷新
                 loadSystemPhotos(reset = true)
             } else {
                 // 原有的内部照片删除逻辑
                 val context = getApplication<Application>()
                 var deletedCount = 0
+                val deletedIds = mutableSetOf<String>()
 
                 withContext(Dispatchers.IO) {
                     photos.forEach { photo ->
                         val success = GalleryManager.deletePhotoOnly(context, photo.id)
                         if (success) {
                             deletedCount++
+                            deletedIds.add(photo.id)
                         }
                     }
                 }
+                removePhotonPhotosFromState(deletedIds)
                 loadPhotos()
                 PLog.d(TAG, "Batch deleted $deletedCount internal photos after confirmation")
             }
