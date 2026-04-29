@@ -4,17 +4,28 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
+import android.os.Environment
 import android.provider.Settings
 import androidx.core.content.FileProvider
+import androidx.core.net.toUri
 import com.hinnka.mycamera.BuildConfig
 import com.hinnka.mycamera.utils.PLog
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
@@ -28,11 +39,21 @@ object AppUpdateManager {
     private const val TAG = "AppUpdateManager"
     private const val VERSION_CHECK_URL = "https://camera-api.hinnka.com/api/version/check"
     private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
+    private const val APK_MAGIC_0 = 'P'.code.toByte()
+    private const val APK_MAGIC_1 = 'K'.code.toByte()
+    private const val HTTP_RANGE_NOT_SATISFIABLE = 416
+    private const val MAX_REDIRECTS = 5
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
+    private val downloadScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val downloadLock = Any()
+    private var activeDownload: Pair<String, Deferred<File>>? = null
+    private var activeSilentCheck: Deferred<Unit>? = null
+    private val _readyApk = MutableStateFlow<File?>(null)
+    val readyApk: StateFlow<File?> = _readyApk.asStateFlow()
 
     suspend fun checkForUpdate(currentVersion: String = BuildConfig.VERSION_NAME): AppUpdateRelease? =
         withContext(Dispatchers.IO) {
@@ -45,7 +66,7 @@ object AppUpdateManager {
             runCatching {
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
-                        PLog.w(TAG, "Version check failed: code=${response.code}")
+                        PLog.w(TAG, "Version check failed: code=${response.code} url=${request.url}")
                         return@withContext null
                     }
 
@@ -81,39 +102,41 @@ object AppUpdateManager {
         }
 
     suspend fun downloadApk(context: Context, release: AppUpdateRelease): File =
-        withContext(Dispatchers.IO) {
-            runCatching {
-                val request = Request.Builder()
-                    .url(release.downloadUrl)
-                    .get()
-                    .build()
-                val updateDir = File(context.cacheDir, "updates").apply { mkdirs() }
-                val apkFile = File(updateDir, release.fileName.sanitizeApkFileName())
+        getOrStartDownload(context.applicationContext, release).await()
 
-                client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        throw IllegalStateException("Download failed: code=${response.code}")
-                    }
-
-                    response.body?.byteStream()?.use { input ->
-                        apkFile.outputStream().use { output ->
-                            input.copyTo(output)
-                        }
-                    } ?: throw IllegalStateException("Download body is empty")
+    fun startSilentUpdate(context: Context) {
+        val appContext = context.applicationContext
+        synchronized(downloadLock) {
+            if (activeSilentCheck?.isActive == true) return
+            activeSilentCheck = downloadScope.async {
+                runCatching {
+                    val release = checkForUpdate() ?: return@async
+                    val apkFile = findDownloadedApk(appContext, release)
+                        ?: getOrStartDownload(appContext, release).await()
+                    _readyApk.value = apkFile
+                }.onFailure { error ->
+                    PLog.e(TAG, "Silent update failed", error)
                 }
-
-                PLog.d(TAG, "APK downloaded: ${apkFile.absolutePath}, size=${apkFile.length()}")
-                apkFile
-            }.onFailure { error ->
-                PLog.e(TAG, "APK download error", error)
-            }.getOrThrow()
+            }
         }
+    }
+
+    fun findDownloadedApk(context: Context, release: AppUpdateRelease): File? {
+        val apkFile = resolveApkFile(context.applicationContext, release)
+        return apkFile.takeIf { it.isCompleteApk() }
+    }
+
+    fun consumeReadyApk(apkFile: File?) {
+        if (apkFile == null || _readyApk.value == apkFile) {
+            _readyApk.value = null
+        }
+    }
 
     fun startInstall(context: Context, apkFile: File): Boolean {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
+        if (!context.packageManager.canRequestPackageInstalls()) {
             val permissionIntent = Intent(
                 Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                Uri.parse("package:${context.packageName}")
+                "package:${context.packageName}".toUri()
             ).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
@@ -151,5 +174,120 @@ object AppUpdateManager {
     private fun String.sanitizeApkFileName(): String {
         val safeName = replace(Regex("[^A-Za-z0-9._-]"), "_")
         return if (safeName.endsWith(".apk", ignoreCase = true)) safeName else "$safeName.apk"
+    }
+
+    private fun getOrStartDownload(context: Context, release: AppUpdateRelease): Deferred<File> {
+        val key = "${release.downloadUrl}|${release.fileName}"
+        synchronized(downloadLock) {
+            activeDownload?.let { (activeKey, activeDeferred) ->
+                if (activeKey == key && activeDeferred.isActive) return activeDeferred
+            }
+
+            val deferred = downloadScope.async {
+                runCatching {
+                    val apkFile = resolveApkFile(context, release)
+                    if (apkFile.isCompleteApk()) {
+                        PLog.d(TAG, "Reuse downloaded APK: ${apkFile.absolutePath}, size=${apkFile.length()}")
+                        return@async apkFile
+                    }
+
+                    downloadApkFile(release.downloadUrl, apkFile)
+                    if (!apkFile.isCompleteApk()) {
+                        throw IllegalStateException("Downloaded APK is invalid: ${apkFile.absolutePath}")
+                    }
+                    PLog.d(TAG, "APK downloaded: ${apkFile.absolutePath}, size=${apkFile.length()}")
+                    apkFile
+                }.onFailure { error ->
+                    PLog.e(TAG, "APK download error", error)
+                }.getOrThrow()
+            }
+            activeDownload = key to deferred
+            return deferred
+        }
+    }
+
+    private fun resolveApkFile(context: Context, release: AppUpdateRelease): File {
+        val updateDir = File(
+            context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                ?: File(context.filesDir, Environment.DIRECTORY_DOWNLOADS),
+            "updates"
+        ).apply { mkdirs() }
+        return File(updateDir, release.fileName.sanitizeApkFileName())
+    }
+
+    private fun downloadApkFile(downloadUrl: String, apkFile: File) {
+        val partFile = File("${apkFile.absolutePath}.part")
+        var connection: HttpURLConnection? = null
+        try {
+            val existingBytes = partFile.takeIf { it.exists() }?.length()?.coerceAtLeast(0L) ?: 0L
+            connection = openDownloadConnection(downloadUrl, existingBytes)
+            val responseCode = connection.responseCode
+
+            if (responseCode == HTTP_RANGE_NOT_SATISFIABLE && apkFile.isCompleteApk()) {
+                partFile.delete()
+                return
+            }
+
+            val append = existingBytes > 0L && responseCode == HttpURLConnection.HTTP_PARTIAL
+            if (responseCode !in listOf(HttpURLConnection.HTTP_OK, HttpURLConnection.HTTP_PARTIAL)) {
+                throw IllegalStateException("Download failed: code=$responseCode")
+            }
+            if (!append && partFile.exists()) {
+                partFile.delete()
+            }
+
+            connection.inputStream.use { input ->
+                FileOutputStream(partFile, append).use { output ->
+                    input.copyTo(output)
+                }
+            }
+
+            if (!partFile.isCompleteApk()) {
+                throw IllegalStateException("Downloaded partial file is not a valid APK")
+            }
+            if (apkFile.exists()) apkFile.delete()
+            if (!partFile.renameTo(apkFile)) {
+                partFile.copyTo(apkFile, overwrite = true)
+                partFile.delete()
+            }
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
+    private fun openDownloadConnection(downloadUrl: String, existingBytes: Long): HttpURLConnection {
+        var url = URL(downloadUrl)
+        repeat(MAX_REDIRECTS) {
+            val connection = (url.openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = false
+                connectTimeout = 15_000
+                readTimeout = 0
+                requestMethod = "GET"
+                setRequestProperty("Accept", APK_MIME_TYPE)
+                if (existingBytes > 0L) {
+                    setRequestProperty("Range", "bytes=$existingBytes-")
+                }
+            }
+
+            val responseCode = connection.responseCode
+            if (responseCode in 300..399) {
+                val location = connection.getHeaderField("Location")
+                connection.disconnect()
+                if (location.isNullOrBlank()) {
+                    throw IllegalStateException("Download redirect missing location")
+                }
+                url = URL(url, location)
+            } else {
+                return connection
+            }
+        }
+        throw IllegalStateException("Too many download redirects")
+    }
+
+    private fun File.isCompleteApk(): Boolean {
+        if (!exists() || length() < 2L) return false
+        return inputStream().use { input ->
+            input.read().toByte() == APK_MAGIC_0 && input.read().toByte() == APK_MAGIC_1
+        }
     }
 }
