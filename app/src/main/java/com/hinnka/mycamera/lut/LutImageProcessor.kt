@@ -477,6 +477,62 @@ class LutImageProcessor {
         }
     }
 
+    suspend fun applyChromaDenoise(bitmap: Bitmap, strength: Float = 0.1f): Bitmap = withContext(glDispatcher) {
+        currentCoroutineContext().ensureActive()
+        if (!isInitialized) {
+            if (!initialize()) {
+                return@withContext bitmap
+            }
+        }
+
+        EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+        val width = bitmap.width
+        val height = bitmap.height
+
+        setupFramebuffer(width, height)
+        uploadImageTexture(bitmap)
+
+        val texelW = 1.0f / width
+        val texelH = 1.0f / height
+        val ch = 0.001f + strength * strength * 0.2f
+
+        val identityMatrix = FloatArray(16)
+        android.opengl.Matrix.setIdentityM(identityMatrix, 0)
+
+        // Pass 0: Chroma Denoise
+        GLES30.glUseProgram(nlmChromaProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, imageTextureId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmChromaProgram, "uInputTexture"), 0)
+        GLES30.glUniform2f(GLES30.glGetUniformLocation(nlmChromaProgram, "uTexelSize"), texelW, texelH)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(nlmChromaProgram, "uMVPMatrix"),
+            1,
+            false,
+            identityMatrix,
+            0
+        )
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(nlmChromaProgram, "uH"), ch)
+        drawQuad(nlmChromaProgram)
+
+        val pixelSize = width * height * 4
+        val pixelBuffer = ByteBuffer.allocateDirect(pixelSize).order(ByteOrder.nativeOrder())
+        GLES30.glReadPixels(
+            0, 0, width, height,
+            GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, pixelBuffer
+        )
+        pixelBuffer.position(0)
+        
+        val tempBitmap = createBitmap(width, height, colorSpace = bitmap.colorSpace ?: ColorSpace.get(ColorSpace.Named.SRGB))
+        tempBitmap.copyPixelsFromBuffer(pixelBuffer)
+        
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        
+        tempBitmap
+    }
+
     private fun buildLchAdjustmentArrays(params: ColorRecipeParams?): Triple<FloatArray, FloatArray, FloatArray> {
         if (params == null) {
             return Triple(

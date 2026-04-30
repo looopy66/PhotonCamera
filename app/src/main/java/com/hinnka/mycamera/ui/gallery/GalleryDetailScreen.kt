@@ -808,7 +808,7 @@ fun GalleryDetailScreen(
                                         Toast.makeText(context, R.string.export_dng_failed, Toast.LENGTH_SHORT).show()
                                     }
                                 }
-                            }
+                                }
                         )
                     }
                 }

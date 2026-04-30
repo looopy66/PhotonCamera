@@ -71,7 +71,7 @@ class PhotoProcessor(
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f
     ): GainmapSourceSet? {
-        if (!metadata.manualHdrEffectEnabled) {
+        if (!metadata.manualHdrEffectEnabled || metadata.hasAiDenoisedBase) {
             return null
         }
 
@@ -314,6 +314,23 @@ class PhotoProcessor(
         val dngFile = GalleryManager.getDngFile(context, photoId)
         val yuvFile = GalleryManager.getYuvFile(context, photoId)
         val photoFile = GalleryManager.getPhotoFile(context, photoId)
+
+        if (metadata.hasAiDenoisedBase) {
+            if (photoFile.exists()) {
+                val bitmap = GalleryManager.loadOriginalBitmap(context, photoId) ?: return null
+                return processBitmap(
+                    context,
+                    photoId,
+                    bitmap,
+                    metadata,
+                    sharpening,
+                    noiseReduction,
+                    chromaNoiseReduction,
+                    true
+                )
+            }
+            return null
+        }
 
         if (dngFile.exists()) {
             return processDng(

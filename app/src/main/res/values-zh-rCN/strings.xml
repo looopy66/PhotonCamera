@@ -787,4 +787,9 @@
     <string name="recipe_palette_advanced">高级调整</string>
     <string name="recipe_tab_palette">调色盘</string>
     <string name="ai_service">AI服务</string>
+    <string name="ai_denoise_title">AI 深度降噪</string>
+    <string name="ai_denoise_description">使用神经网络重构画质细节</string>
+    <string name="ai_denoise_processing">正在处理... %1$.1f%%</string>
+    <string name="ai_denoise_success">AI 降噪成功</string>
+    <string name="ai_denoise_failed">AI 降噪失败</string>
 </resources>

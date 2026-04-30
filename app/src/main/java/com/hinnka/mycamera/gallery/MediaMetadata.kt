@@ -97,7 +97,8 @@ data class MediaMetadata(
     val hasEmbeddedGainmap: Boolean = false,
     val dynamicRangeProfile: String? = null,
     val captureMode: String? = null,
-    val multipleExposureFrameCount: Int? = null
+    val multipleExposureFrameCount: Int? = null,
+    val hasAiDenoisedBase: Boolean = false
 ) {
     /**
      * 将元数据转换为 CaptureInfo，用于写入 EXIF
@@ -260,6 +261,7 @@ data class MediaMetadata(
             put("dynamicRangeProfile", dynamicRangeProfile ?: JSONObject.NULL)
             put("captureMode", captureMode ?: JSONObject.NULL)
             put("multipleExposureFrameCount", multipleExposureFrameCount ?: JSONObject.NULL)
+            put("hasAiDenoisedBase", hasAiDenoisedBase)
         }.toString(2)
     }
 
@@ -429,6 +431,7 @@ data class MediaMetadata(
                     dynamicRangeProfile = if (obj.isNull("dynamicRangeProfile")) null else obj.optString("dynamicRangeProfile"),
                     captureMode = if (obj.isNull("captureMode")) null else obj.optString("captureMode"),
                     multipleExposureFrameCount = if (obj.isNull("multipleExposureFrameCount")) null else obj.optInt("multipleExposureFrameCount"),
+                    hasAiDenoisedBase = obj.optBoolean("hasAiDenoisedBase", false),
                 )
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to parse JSON", e)

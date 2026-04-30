@@ -7,6 +7,7 @@ import android.graphics.BitmapFactory
 import android.graphics.RectF
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.provider.MediaStore
 import android.util.LruCache
 import androidx.compose.runtime.*
@@ -348,6 +349,69 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             if (!isActive) return@launch
             GalleryManager.saveBokehPhoto(context, photoData.id, bokeh)
             photoRefreshKeys[photoData.id] = System.currentTimeMillis()
+        }
+    }
+
+    fun applyDnCNNDenoise(photo: MediaData, onProgress: ((Float) -> Unit)? = null, onComplete: (Boolean) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            try {
+                var bitmap = GalleryManager.loadOriginalBitmap(context, photo.id) ?: GalleryManager.loadBitmap(context, photo.uri)
+                if (bitmap == null) {
+                    withContext(Dispatchers.Main) { onComplete(false) }
+                    return@launch
+                }
+                
+                if (!isRawInGallery(photo.id)) {
+                    // 非 RAW 照片，先进行一次色度降噪
+                    val lutProcessor = com.hinnka.mycamera.lut.LutImageProcessor()
+                    val chromaDenoised = lutProcessor.applyChromaDenoise(bitmap, strength = 0.5f)
+                    lutProcessor.release()
+                    if (chromaDenoised !== bitmap) {
+                        bitmap.recycle()
+                        bitmap = chromaDenoised
+                    }
+                }
+                
+                val estimator = com.hinnka.mycamera.ml.DnCNNDenoiseEstimator(context)
+                val denoised = estimator.denoisePatchwise(bitmap) { p ->
+                    onProgress?.invoke(p)
+                }
+                estimator.close()
+                bitmap.recycle()
+                
+                if (denoised == null) {
+                    withContext(Dispatchers.Main) { onComplete(false) }
+                    return@launch
+                }
+                
+                val photoDir = File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES), "photos/${photo.id}")
+                val file = File(photoDir, "original.jpg")
+                FileOutputStream(file).use { outputStream ->
+                    denoised.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                }
+                
+                // Update metadata to mark that we have an AI denoised base
+                val metadata = currentMediaMetadata ?: photo.metadata ?: MediaMetadata()
+                val updatedMetadata = metadata.copy(hasAiDenoisedBase = true)
+                GalleryManager.saveMetadata(context, photo.id, updatedMetadata)
+                currentMediaMetadata = updatedMetadata
+                
+                val updatedPhotos = _photos.value.map { p ->
+                    if (p.id == photo.id) p.copy(metadata = updatedMetadata) else p
+                }
+                _photos.value = updatedPhotos
+                if (_latestPhoto.value?.id == photo.id) {
+                    _latestPhoto.value = _latestPhoto.value?.copy(metadata = updatedMetadata)
+                }
+                
+                photoRefreshKeys[photo.id] = System.currentTimeMillis()
+                invalidatePreviewCache(photo.id)
+                withContext(Dispatchers.Main) { onComplete(true) }
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to apply DnCNN denoise", e)
+                withContext(Dispatchers.Main) { onComplete(false) }
+            }
         }
     }
 

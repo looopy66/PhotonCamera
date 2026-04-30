@@ -747,6 +747,41 @@ fun PhotoEditScreen(
                             }
                         } else if (editTab == 1) {
                             Spacer(modifier = Modifier.height(16.dp))
+                            var isDnCNNDenoising by remember { mutableStateOf(false) }
+                            var dnCNNProgress by remember { mutableFloatStateOf(0f) }
+
+                            SwitchSettingItem(
+                                title = stringResource(R.string.ai_denoise_title),
+                                description = if (isDnCNNDenoising) stringResource(R.string.ai_denoise_processing, dnCNNProgress * 100) else stringResource(R.string.ai_denoise_description),
+                                checked = isDnCNNDenoising,
+                                onCheckedChange = { checked ->
+                                    if (checked && !isDnCNNDenoising) {
+                                        isDnCNNDenoising = true
+                                        dnCNNProgress = 0f
+                                        viewModel.applyDnCNNDenoise(
+                                            photo = currentPhoto,
+                                            onProgress = { p -> dnCNNProgress = p },
+                                            onComplete = { success ->
+                                                isDnCNNDenoising = false
+                                                if (success) {
+                                                    Toast.makeText(context, context.getString(R.string.ai_denoise_success), Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    Toast.makeText(context, context.getString(R.string.ai_denoise_failed), Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        )
+                                    }
+                                }
+                            )
+                            if (isDnCNNDenoising) {
+                                LinearProgressIndicator(
+                                    progress = { dnCNNProgress },
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                                    color = AccentOrange,
+                                    trackColor = Color.White.copy(alpha = 0.2f),
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
                             // 细节处理调整 (锐化, 降噪, 杂色降噪)
                             val aperture = editComputationalAperture
                             SliderSettingItem(
@@ -788,7 +823,6 @@ fun PhotoEditScreen(
                                 onValueChange = { viewModel.setChromaNoiseReduction(it) },
                                 onValueChangeFinished = { }
                             )
-                            Spacer(modifier = Modifier.height(8.dp))
                         } else if (editTab == 2) {
                             RawEditPanel(
                                 selectedDcpId = editRawDcpId,
