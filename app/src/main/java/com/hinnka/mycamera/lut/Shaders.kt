@@ -954,111 +954,89 @@ object Shaders {
         }
     """.trimIndent()
 
-    val FGF_COEFFS_FRAGMENT_SHADER = """#version 300 es
+    /**
+     * 无缝联合双边上采样 (Seamless JBU)
+     * 采用标准的 2x2 邻域双线性混合，配合颜色权重，彻底消除网格感。
+     */
+    val JBU_UPSAMPLE_FRAGMENT_SHADER = """#version 300 es
         precision highp float;
         in vec2 vTexCoord;
         out vec4 fragColor;
 
-        uniform sampler2D uLowResDepth;
-        uniform sampler2D uLowResGuide; // 通常是对原图做过预降采样后的版本
-        uniform vec2 uTexelSize; // 低分辨率下的像素步进
+        uniform sampler2D uLowResDepth;  
+        uniform sampler2D uHighResGuide; 
+        uniform vec2 uLowResTexelSize;   
 
-        const vec3 W = vec3(0.2126, 0.7152, 0.0722);
-        const float eps = 0.01 * 0.01; // 减小 epsilon，使系数更灵敏地响应引导图边缘
+        const float SIGMA_R = 0.12; 
 
         void main() {
-            float mean_I = 0.0;
-            float mean_p = 0.0;
-            float mean_Ip = 0.0;
-            float mean_II = 0.0;
-            float sumW = 0.0;
+            vec3 guideColor = texture(uHighResGuide, vTexCoord).rgb;
+            
+            // 基础线性混合深度，作为极端情况下的保底
+            float baseDepth = texture(uLowResDepth, vTexCoord).r;
+            
+            // 计算在低分辨率纹理空间下的坐标
+            vec2 pos = vTexCoord / uLowResTexelSize - 0.5;
+            vec2 p0 = floor(pos);
+            vec2 f = fract(pos);
+            
+            float totalWeight = 0.0;
+            float totalDepth = 0.0;
 
-            // 优化：采用更紧凑、密集的 5x5 窗口 (stride=1)，提高边缘系数的精确度
-            // 之前的 stride=4 太粗糙，导致跨越边缘时系数过度平滑
-            for(int y = -2; y <= 2; y++) {
-                for(int x = -2; x <= 2; x++) {
-                    vec2 offset = vec2(float(x), float(y)) * uTexelSize;
-                    vec2 sampleUV = vTexCoord + offset;
+            // 采样相邻的 2x2 个低分中心点 (标准双线性权重范围)
+            for(int y = 0; y <= 1; y++) {
+                for(int x = 0; x <= 1; x++) {
+                    vec2 offset = vec2(float(x), float(y));
+                    vec2 sampleCoord = (p0 + offset + 0.5) * uLowResTexelSize;
+                    
+                    float d = texture(uLowResDepth, sampleCoord).r;
+                    vec3 c = texture(uHighResGuide, sampleCoord).rgb;
 
-                    float p = texture(uLowResDepth, sampleUV).r;
-                    float I = dot(texture(uLowResGuide, sampleUV).rgb, W);
+                    // 1. 标准双线性空间权重 (线性连续，无边界跳变)
+                    float wS = (x == 0 ? (1.0 - f.x) : f.x) * (y == 0 ? (1.0 - f.y) : f.y);
 
-                    // 使用高斯权重，使中心像素贡献更高，进一步抑制边缘扩散
-                    float wS = exp(-float(x*x + y*y) / 2.0);
+                    // 2. 颜色相似度权重
+                    float dC = distance(guideColor, c);
+                    float wC = exp(-(dC * dC) / (2.0 * SIGMA_R * SIGMA_R));
 
-                    mean_I += I * wS;
-                    mean_p += p * wS;
-                    mean_Ip += I * p * wS;
-                    mean_II += I * I * wS;
-                    sumW += wS;
+                    float w = wS * wC;
+                    totalDepth += d * w;
+                    totalWeight += w;
                 }
             }
 
-            mean_I /= sumW;
-            mean_p /= sumW;
-            mean_Ip /= sumW;
-            mean_II /= sumW;
-
-            float var_I = mean_II - mean_I * mean_I;
-            float cov_Ip = mean_Ip - mean_I * mean_p;
-
-            float a = cov_Ip / (var_I + eps);
-            float b = mean_p - a * mean_I;
-
-            // 输出 a, b 和 mean_I 到 RGB 通道 (支持 Guidance-Aware Upsampling)
-            fragColor = vec4(a, b, mean_I, 1.0);
+            float finalDepth = totalWeight > 0.001 ? totalDepth / totalWeight : baseDepth;
+            fragColor = vec4(vec3(finalDepth), 1.0);
         }
     """.trimIndent()
 
-    val FGF_APPLY_FRAGMENT_SHADER = """#version 300 es
+    /**
+     * 软细节增强 (Soft Detail Refiner)
+     * 取代暴力的锐化，只做温和的边缘收缩
+     */
+    val DEPTH_SHARPEN_FRAGMENT_SHADER = """#version 300 es
         precision highp float;
         in vec2 vTexCoord;
         out vec4 fragColor;
 
-        uniform sampler2D uHighResGuide; // 高清原图
-        uniform sampler2D uLowResCoeffs; // FGF Pass 1 生成的 (a, b, mean_I) 纹理
-        uniform vec2 uLowResTexelSize;   // 低分辨率系数纹理的像素尺寸
-
-        const vec3 W = vec3(0.2126, 0.7152, 0.0722);
+        uniform sampler2D uDepthTexture;
+        uniform vec2 uTexelSize;
 
         void main() {
-            // 获取当前像素的高清亮度 I
-            vec3 guideRGB = texture(uHighResGuide, vTexCoord).rgb;
-            float I = dot(guideRGB, W);
+            float center = texture(uDepthTexture, vTexCoord).r;
+            
+            // 采用极小半径平滑
+            float n = texture(uDepthTexture, vTexCoord + vec2(0, uTexelSize.y)).r;
+            float s = texture(uDepthTexture, vTexCoord - vec2(0, uTexelSize.y)).r;
+            float e = texture(uDepthTexture, vTexCoord + vec2(uTexelSize.x, 0)).r;
+            float w = texture(uDepthTexture, vTexCoord - vec2(uTexelSize.x, 0)).r;
 
-            // 优化：Guidance-Aware Upsampling (系数级的联合双边上采样)
-            // 解决常规双线性插值在边缘导致 a, b 混叠的问题
-            vec2 pos = vTexCoord / uLowResTexelSize - 0.5;
-            vec2 p0 = floor(pos);
-            vec2 f = pos - p0;
-
-            // 采样相邻的 4 个低分系数块
-            vec3 c00 = texture(uLowResCoeffs, (p0 + vec2(0.5, 0.5)) * uLowResTexelSize).rgb;
-            vec3 c10 = texture(uLowResCoeffs, (p0 + vec2(1.5, 0.5)) * uLowResTexelSize).rgb;
-            vec3 c01 = texture(uLowResCoeffs, (p0 + vec2(0.5, 1.5)) * uLowResTexelSize).rgb;
-            vec3 c11 = texture(uLowResCoeffs, (p0 + vec2(1.5, 1.5)) * uLowResTexelSize).rgb;
-
-            // 计算亮度权重：只采纳那些平均亮度与当前高清像素亮度接近的低分块生成的系数
-            // 这样当高清像素在主体内时，背景侧的 low-res 系数即便物理位置近，权重也会被压低
-            float sigma = 0.12; 
-            float w00 = (1.0 - f.x) * (1.0 - f.y) * exp(-abs(I - c00.z) / sigma);
-            float w10 = f.x * (1.0 - f.y) * exp(-abs(I - c10.z) / sigma);
-            float w01 = (1.0 - f.x) * f.y * exp(-abs(I - c01.z) / sigma);
-            float w11 = f.x * f.y * exp(-abs(I - c11.z) / sigma);
-
-            float sumW = w00 + w10 + w01 + w11;
-            vec2 coeffs;
-            if (sumW > 0.01) {
-                coeffs = (c00.xy * w00 + c10.xy * w10 + c01.xy * w01 + c11.xy * w11) / sumW;
-            } else {
-                // 回退：如果亮度差异都太大，使用基础双线性插值
-                coeffs = mix(mix(c00.xy, c10.xy, f.x), mix(c01.xy, c11.xy, f.x), f.y);
-            }
-
-            float finalDepth = coeffs.x * I + coeffs.y;
-            finalDepth = clamp(finalDepth, 0.0, 1.0);
-
-            fragColor = vec4(finalDepth, finalDepth, finalDepth, 1.0);
+            float avg = (n + s + e + w + center) / 5.0;
+            
+            // 温和的对比度拉伸，不产生硬边缘
+            float refined = mix(center, smoothstep(0.05, 0.95, center), 0.3);
+            
+            fragColor = vec4(vec3(clamp(refined, 0.0, 1.0)), 1.0);
         }
     """.trimIndent()
 
