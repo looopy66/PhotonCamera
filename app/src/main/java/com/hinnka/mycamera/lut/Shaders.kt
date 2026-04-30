@@ -1084,18 +1084,23 @@ object Shaders {
 
         const float PI = 3.14159265359;
         const float GOLDEN_ANGLE = 2.39996323;
-        const int SAMPLES = 400;
+        const int SAMPLES = 640;
         const float LENS_GAMMA = 2.2;
 
+        // 简单的哈希函数，用于产生像素级的抖动
+        float hash(vec2 p) {
+            return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+        }
+
         float backgroundGap(float depth) {
-            return max(uFocusDepth - depth - 0.028, 0.0);
+            return max(uFocusDepth - depth - 0.025, 0.0);
         }
 
         float computeCoc(float depth) {
             // Align with BokehMe: Symmetric defocus for both foreground and background
-            float gap = max(abs(uFocusDepth - depth) - 0.028, 0.0);
-            float defocus = pow(gap, 1.45);
-            return clamp(defocus * uMaxBlurRadius * (1.0 / max(uAperture, 0.5)), 0.0, uMaxBlurRadius);
+            float gap = max(abs(uFocusDepth - depth) - 0.015, 0.0);
+            float defocus = pow(gap, 1.1);
+            return clamp(defocus * uMaxBlurRadius * (1.0 / max(uAperture, 0.45)), 0.0, uMaxBlurRadius);
         }
 
         float apertureWeight(vec2 offsetPixels, float coc) {
@@ -1103,10 +1108,9 @@ object Shaders {
             float lenP = length(p);
             
             // Perfect circular "creamy" bokeh with a soap bubble rim.
-            // Circular is universally considered more aesthetic than hexagonal.
-            float inside = smoothstep(1.0, 0.85, lenP);
-            float rim = smoothstep(0.6, 0.95, lenP);
-            return inside * (1.0 + rim * 0.4); // 40% brighter edge ring, softer than 80%
+            float inside = smoothstep(1.0, 0.88, lenP);
+            float rim = smoothstep(0.7, 0.98, lenP);
+            return inside * (1.0 + rim * 0.4); 
         }
 
         vec3 toLinear(vec3 color) {
@@ -1122,83 +1126,67 @@ object Shaders {
             vec4 centerColor = texture(uInputTexture, vTexCoord);
             float centerDepth = texture(uDepthTexture, depthUV).r;
 
-            float centerBackgroundGap = backgroundGap(centerDepth);
-
             float centerCoc = computeCoc(centerDepth);
 
-            // Match BokehMe's focus protection: keep only the narrow focus band
-            // sharp. Do not protect every foreground-side pixel by default, or
-            // background regions with imperfect depth will stop blurring.
             if (centerCoc < 0.2) {
                 fragColor = centerColor;
                 return;
             }
 
-            // 2. 初始权重：赋予较高的权重以定性，防止背景渗色
-            float centerWeight = 6.0 / (centerCoc * 0.4 + 1.0);
+            // 引入随机旋转抖动，打破 Vogel Spiral 的环状条纹
+            float noise = hash(vTexCoord + 0.5);
+            float rotation = noise * PI * 2.0;
+
+            float centerWeight = 4.0 / (centerCoc * 0.3 + 1.0);
             vec3 accColor = toLinear(centerColor.rgb) * centerWeight;
             float accWeight = centerWeight;
 
-            float softBase = max(3.0, uMaxBlurRadius * 0.1);
+            float softBase = max(2.5, uMaxBlurRadius * 0.08);
 
             for (int i = 0; i < SAMPLES; i++) {
                 float f = float(i + 1);
                 float r = sqrt(f / float(SAMPLES)) * uMaxBlurRadius;
-                float theta = f * GOLDEN_ANGLE;
+                float theta = f * GOLDEN_ANGLE + rotation;
 
                 vec2 offset = vec2(cos(theta), sin(theta)) * r * uTexelSize;
                 vec2 sampleUV = clamp(vTexCoord + offset, 0.0, 1.0);
                 vec2 offsetPixels = offset / uTexelSize;
 
-                // Adjust LOD to be slightly blurrier to guarantee points merge smoothly
-                float lod = log2(r * 0.4 + 2.0);
+                // 第一遍采样获取亮度，用于决定 LOD
+                vec3 sColorBase = textureLod(uInputTexture, sampleUV, 2.0).rgb;
+                float baseLuma = dot(sColorBase, vec3(0.299, 0.587, 0.114));
+                
+                // 动态 LOD：高光处使用更高的 LOD 使其融合，消除条纹
+                float lod = log2(r * 0.3 + 1.8) + smoothstep(0.4, 0.9, baseLuma) * 1.5;
                 vec3 sColor = textureLod(uInputTexture, sampleUV, lod).rgb;
+                
                 vec2 sDepthUV = clamp((uDepthMatrix * vec4(sampleUV, 0.0, 1.0)).xy, 0.0, 1.0);
                 float sDepth = texture(uDepthTexture, sDepthUV).r;
 
-                // --- 颜色引导保护 (Edge Protection Logic) ---
-                // 如果采样点颜色与中心色非常接近，说明它可能是主体的一部分
-                // 我们限制其散景半径，防止它作为一个模糊点去“泼溅”覆盖中心点
-                float colorDist = distance(centerColor.rgb, sColor);
-                float colorSimilarity = smoothstep(0.15, 0.01, colorDist);
+                float sCoc = computeCoc(sDepth);
 
-                float rawCoc = computeCoc(sDepth);
-                // 关键：如果颜色相似度高，则强制将采样点的 CoC 压低，视为主体保护区
-                float sCoc = mix(rawCoc, min(rawCoc, centerCoc), colorSimilarity);
-
-                // 4. 重构权重逻辑 (Strict Occlusion Weighting)
-                // If sCoc > r, the sample's blur circle covers the center, so fW > 0.
                 float fW = smoothstep(r - softBase, r + softBase * 0.5, sCoc);
-                // If centerCoc > r, the center's blur circle covers the sample, so bW > 0.
                 float bW = smoothstep(r - softBase, r + softBase * 0.5, centerCoc);
 
                 float depthDiff = sDepth - centerDepth;
-                // Tight transition: if it's 0.02 to 0.06 nearer, it's definitively foreground.
-                float isNearer = smoothstep(0.015, 0.055, depthDiff);
+                float isNearer = smoothstep(0.01, 0.04, depthDiff);
 
-                // If sample is nearer, it can ONLY contribute if its OWN blur circle reaches us (fW).
-                // If it's same depth or further, it contributes based on OUR blur circle reaching it (bW).
                 float weight = mix(bW, fW, isNearer);
-
-                // Enhance separation: boost weight if colors match (likely same object)
-                weight *= (1.0 + colorSimilarity * 0.8);
                 weight *= apertureWeight(offsetPixels, max(sCoc, centerCoc));
 
-                // Strict sharp edge protection: if the sample is foreground AND sharp, 
-                // absolutely reject it to prevent ghosts.
-                float isSharpForeground = isNearer * (1.0 - smoothstep(0.5, 2.5, sCoc));
+                float isSharpForeground = isNearer * (1.0 - smoothstep(0.3, 2.0, sCoc));
                 weight *= (1.0 - isSharpForeground);
 
                 if (weight > 0.0001) {
                     vec3 sLinear = toLinear(sColor);
                     float luma = dot(sLinear, vec3(0.2126, 0.7152, 0.0722));
                     
-                    // Reduced highlight boost to prevent Vogel spiral points from isolating and tearing
-                    float highlight = max(0.0, luma - 0.60);
-                    float hdrBoost = 1.0 + pow(highlight, 2.0) * 15.0 * smoothstep(1.5, 5.0, sCoc);
+                    // 更加平滑的高光增强曲线
+                    float highlight = max(0.0, luma - 0.55);
+                    float hdrBoost = 1.0 + pow(highlight, 1.8) * 18.0 * smoothstep(1.5, 5.0, sCoc);
 
-                    float edge = smoothstep(0.7, 1.05, r / max(sCoc, 0.1));
-                    float ring = 1.0 + edge * 0.28 * smoothstep(1.5, 5.0, sCoc);
+                    float edge = smoothstep(0.75, 1.03, r / max(sCoc, 0.1));
+                    float ring = 1.0 + edge * 0.3 * smoothstep(1.5, 5.0, sCoc);
 
                     float fw = weight * ring;
                     accColor += sLinear * hdrBoost * fw;

@@ -38,7 +38,7 @@ class OglBokehProcessor {
             initGL()
 
             val inputTex = createTexture(originalImage, mipmap = true)
-            val lowResDepthTex = createTexture(lowResDepthMap, filterNearest = false, mipmap = true)
+            val lowResDepthTex = createTexture(lowResDepthMap, filterNearest = true, mipmap = false)
 
             var finalDepthTex = lowResDepthTex
             val fbo = IntArray(1)
