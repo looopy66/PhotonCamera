@@ -71,13 +71,15 @@ class PhotoProcessor(
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f
     ): GainmapSourceSet? {
-        if (!metadata.manualHdrEffectEnabled || metadata.hasAiDenoisedBase) {
+        if (!metadata.manualHdrEffectEnabled) {
             return null
         }
 
+        var source: GainmapSourceSet? = null
+
         val dngFile = GalleryManager.getDngFile(context, photoId)
         if (dngFile.exists()) {
-            return processDngForUltraHdr(
+            source = processDngForUltraHdr(
                 context = context,
                 photoId = photoId,
                 dngPath = dngFile.absolutePath,
@@ -86,114 +88,144 @@ class PhotoProcessor(
                 noiseReduction = noiseReduction,
                 chromaNoiseReduction = chromaNoiseReduction
             )
-        }
-
-        val yuvFile = GalleryManager.getYuvFile(context, photoId)
-        if (hlgImageProcessor.isHlgCapture(metadata)) {
-            val prepareStart = System.currentTimeMillis()
-            val hdrData = GalleryManager.loadHdrData(
-                context = context,
-                photoId = photoId,
-                fallbackWidth = metadata.width,
-                fallbackHeight = metadata.height
-            )
-            if (hdrData != null) {
-                val photoFile = GalleryManager.getPhotoFile(context, photoId)
-                val photoBitmap = BitmapFactory.decodeFile(photoFile.absolutePath) ?: return null
-                val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
-                val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
-                val finalChromaNoiseReduction =
-                    metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
-
-                val sdrPostElapsedStart = System.currentTimeMillis()
-                val sdrBitmap = processBitmap(
+        } else {
+            val yuvFile = GalleryManager.getYuvFile(context, photoId)
+            if (hlgImageProcessor.isHlgCapture(metadata)) {
+                val prepareStart = System.currentTimeMillis()
+                val hdrData = GalleryManager.loadHdrData(
                     context = context,
                     photoId = photoId,
-                    input = photoBitmap,
-                    metadata = metadata,
-                    sharpening = finalSharpening,
-                    noiseReduction = finalNoiseReduction,
-                    chromaNoiseReduction = finalChromaNoiseReduction,
-                    useComputationalAperture = true
+                    fallbackWidth = metadata.width,
+                    fallbackHeight = metadata.height
                 )
-                val hdrReferenceBitmap = hlgImageProcessor.createHdrReferenceFromRawSidecar(
-                    buffer = hdrData.buffer,
-                    width = hdrData.width,
-                    height = hdrData.height
-                ).let {
-                    applyFrame(applyCrop(it, metadata, "hlg_sidecar_hdr"), metadata)
-                }
-                PLog.d(
-                    "PhotoProcessor",
-                    "prepareUltraHdrSource(HLG sidecar) took ${System.currentTimeMillis() - prepareStart}ms " +
-                            "(sdrPost=${System.currentTimeMillis() - sdrPostElapsedStart}ms, " +
-                            "hasHdr=true, sidecar=${hdrData.width}x${hdrData.height}, compressed=${hdrData.compressed})"
-                )
-                return GainmapSourceSet(
-                    sdrBase = sdrBitmap,
-                    hdrReference = HdrBuffer(hdrReferenceBitmap, "hlg_sidecar_rgba16"),
-                    sourceKind = SourceKind.HLG_CAPTURE,
-                    confidence = 0.75f,
-                    displayHdrSdrRatio = readDisplayHdrSdrRatio()
-                )
-            }
+                if (hdrData != null) {
+                    val photoFile = GalleryManager.getPhotoFile(context, photoId)
+                    val photoBitmap = BitmapFactory.decodeFile(photoFile.absolutePath) ?: return null
+                    val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
+                    val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
+                    val finalChromaNoiseReduction =
+                        metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
 
-            if (!yuvFile.exists()) {
-                return null
-            }
-            val data = GalleryManager.loadYuvData(context, photoId) ?: return null
-            return try {
-                val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
-                val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
-                val finalChromaNoiseReduction =
-                    metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
-                val colorCorrection = resolveColorCorrection(
-                    metadata = metadata,
-                    fallbackTarget = BaselineColorCorrectionTarget.JPG
-                )
-                var source: GainmapSourceSet
-                val sourceElapsed = measureTimeMillis {
-                    source = hlgImageProcessor.createSourceFromCompressedArgb(
-                        buffer = data,
-                        width = metadata.width,
-                        height = metadata.height
+                    val sdrPostElapsedStart = System.currentTimeMillis()
+                    val sdrBitmap = processBitmap(
+                        context = context,
+                        photoId = photoId,
+                        input = photoBitmap,
+                        metadata = metadata,
+                        sharpening = finalSharpening,
+                        noiseReduction = finalNoiseReduction,
+                        chromaNoiseReduction = finalChromaNoiseReduction,
+                        useComputationalAperture = true
                     )
-                }
-                var sdrBitmap = source.sdrBase
-                val sdrPostElapsed = measureTimeMillis {
-                    sdrBitmap = lutImageProcessor.applyLutStack(
-                        sdrBitmap,
-                        isHlgInput = false,
-                        colorCorrection.baselineLayer,
-                        colorCorrection.creativeLayer,
-                        finalSharpening,
-                        finalNoiseReduction,
-                        finalChromaNoiseReduction
+                    val hdrReferenceBitmap = hlgImageProcessor.createHdrReferenceFromRawSidecar(
+                        buffer = hdrData.buffer,
+                        width = hdrData.width,
+                        height = hdrData.height
+                    ).let {
+                        applyFrame(applyCrop(it, metadata, "hlg_sidecar_hdr"), metadata)
+                    }
+                    PLog.d(
+                        "PhotoProcessor",
+                        "prepareUltraHdrSource(HLG sidecar) took ${System.currentTimeMillis() - prepareStart}ms " +
+                                "(sdrPost=${System.currentTimeMillis() - sdrPostElapsedStart}ms, " +
+                                "hasHdr=true, sidecar=${hdrData.width}x${hdrData.height}, compressed=${hdrData.compressed})"
                     )
-                    sdrBitmap = applyCrop(sdrBitmap, metadata, "hlg_sdr")
-                    sdrBitmap = applyFrame(sdrBitmap, metadata)
-                }
+                    source = GainmapSourceSet(
+                        sdrBase = sdrBitmap,
+                        hdrReference = HdrBuffer(hdrReferenceBitmap, "hlg_sidecar_rgba16"),
+                        sourceKind = SourceKind.HLG_CAPTURE,
+                        confidence = 0.75f,
+                        displayHdrSdrRatio = readDisplayHdrSdrRatio()
+                    )
+                } else if (yuvFile.exists()) {
+                    val data = GalleryManager.loadYuvData(context, photoId)
+                    if (data != null) {
+                        try {
+                            val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
+                            val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
+                            val finalChromaNoiseReduction =
+                                metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
+                            val colorCorrection = resolveColorCorrection(
+                                metadata = metadata,
+                                fallbackTarget = BaselineColorCorrectionTarget.JPG
+                            )
+                            val sourceElapsed = measureTimeMillis {
+                                source = hlgImageProcessor.createSourceFromCompressedArgb(
+                                    buffer = data,
+                                    width = metadata.width,
+                                    height = metadata.height
+                                )
+                            }
+                            var sdrBitmap = source!!.sdrBase
+                            val sdrPostElapsed = measureTimeMillis {
+                                sdrBitmap = lutImageProcessor.applyLutStack(
+                                    sdrBitmap,
+                                    isHlgInput = false,
+                                    colorCorrection.baselineLayer,
+                                    colorCorrection.creativeLayer,
+                                    finalSharpening,
+                                    finalNoiseReduction,
+                                    finalChromaNoiseReduction
+                                )
+                                sdrBitmap = applyCrop(sdrBitmap, metadata, "hlg_sdr")
+                                sdrBitmap = applyFrame(sdrBitmap, metadata)
+                            }
 
-                val hdrReferenceBitmap = source.hdrReference?.bitmap?.let {
-                    applyFrame(applyCrop(it, metadata, "hlg_hdr"), metadata)
-                }
-                PLog.d(
-                    "PhotoProcessor",
-                    "prepareUltraHdrSource(HLG) took ${System.currentTimeMillis() - prepareStart}ms " +
-                            "(source=${sourceElapsed}ms, sdrPost=${sdrPostElapsed}ms, hasHdr=${hdrReferenceBitmap != null})"
-                )
+                            val hdrReferenceBitmap = source!!.hdrReference?.bitmap?.let {
+                                applyFrame(applyCrop(it, metadata, "hlg_hdr"), metadata)
+                            }
+                            PLog.d(
+                                "PhotoProcessor",
+                                "prepareUltraHdrSource(HLG) took ${System.currentTimeMillis() - prepareStart}ms " +
+                                        "(source=${sourceElapsed}ms, sdrPost=${sdrPostElapsed}ms, hasHdr=${hdrReferenceBitmap != null})"
+                            )
 
-                GainmapSourceSet(
-                    sdrBase = sdrBitmap,
-                    hdrReference = hdrReferenceBitmap?.let { HdrBuffer(it, "hlg_bt2020_linear") },
-                    sourceKind = SourceKind.HLG_CAPTURE,
-                    confidence = source.confidence,
-                    displayHdrSdrRatio = readDisplayHdrSdrRatio()
-                )
-            } finally {
-                YuvProcessor.free(data)
+                            source = GainmapSourceSet(
+                                sdrBase = sdrBitmap,
+                                hdrReference = hdrReferenceBitmap?.let { HdrBuffer(it, "hlg_bt2020_linear") },
+                                sourceKind = SourceKind.HLG_CAPTURE,
+                                confidence = source!!.confidence,
+                                displayHdrSdrRatio = readDisplayHdrSdrRatio()
+                            )
+                        } finally {
+                            YuvProcessor.free(data)
+                        }
+                    }
+                }
             }
         }
+
+        // If source was generated from DNG/YUV, and we have an AI denoised base, replace the sdrBase
+        if (source != null && metadata.hasAiDenoisedBase) {
+            val photoFile = GalleryManager.getPhotoFile(context, photoId)
+            if (photoFile.exists()) {
+                val bitmap = BitmapFactory.decodeFile(photoFile.absolutePath)
+                if (bitmap != null) {
+                    val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
+                    val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
+                    val finalChromaNoiseReduction =
+                        metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
+                        
+                    val sdrBitmap = processBitmap(
+                        context = context,
+                        photoId = photoId,
+                        input = bitmap,
+                        metadata = metadata,
+                        sharpening = finalSharpening,
+                        noiseReduction = finalNoiseReduction,
+                        chromaNoiseReduction = finalChromaNoiseReduction,
+                        useComputationalAperture = true
+                    )
+                    source.sdrBase.recycle()
+                    source = source!!.copy(sdrBase = sdrBitmap)
+                }
+            }
+        }
+
+        if (source != null) {
+            return source
+        }
+
 
         val photoFile = GalleryManager.getPhotoFile(context, photoId)
         if (photoFile.exists()) {

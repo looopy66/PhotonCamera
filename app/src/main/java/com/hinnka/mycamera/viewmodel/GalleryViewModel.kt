@@ -407,6 +407,18 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 
                 photoRefreshKeys[photo.id] = System.currentTimeMillis()
                 invalidatePreviewCache(photo.id)
+                
+                // Clear and rebuild HDR cache so the user sees the new denoised image in HDR view
+                GalleryManager.deleteDetailHdrFile(context, photo.id)
+                GalleryManager.queueDetailHdrCacheBuild(
+                    context = context,
+                    photoId = photo.id,
+                    metadata = updatedMetadata,
+                    sharpening = updatedMetadata.sharpening ?: 0f,
+                    noiseReduction = updatedMetadata.noiseReduction ?: 0f,
+                    chromaNoiseReduction = updatedMetadata.chromaNoiseReduction ?: 0f
+                )
+
                 withContext(Dispatchers.Main) { onComplete(true) }
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to apply DnCNN denoise", e)
