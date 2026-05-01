@@ -29,6 +29,8 @@ fun RawEditPanel(
     availableDcps: List<DcpInfo>,
     rawNlmNoiseFactor: Float,
     rawExposureCompensation: Float,
+    rawAutoExposure: Boolean,
+    rawMeteringCenterWeight: Float,
     rawBlackPointCorrection: Float,
     rawWhitePointCorrection: Float,
     onSelectDcp: (String?) -> Unit,
@@ -36,6 +38,8 @@ fun RawEditPanel(
     onDeleteDcp: (DcpInfo) -> Unit,
     onRawNlmNoiseFactorChange: (Float) -> Unit,
     onRawExposureCompensationChange: (Float) -> Unit,
+    onRawAutoExposureChange: (Boolean) -> Unit,
+    onRawMeteringCenterWeightChange: (Float) -> Unit,
     onRawBlackPointCorrectionChange: (Float) -> Unit,
     onRawWhitePointCorrectionChange: (Float) -> Unit,
     onAdjustmentStart: () -> Unit,
@@ -56,14 +60,22 @@ fun RawEditPanel(
             onDeleteDcp = onDeleteDcp
         )
         Spacer(modifier = Modifier.height(16.dp))
+        RawSwitchSettingItem(
+            title = stringResource(R.string.settings_raw_auto_exposure),
+            description = stringResource(R.string.settings_raw_auto_exposure_description),
+            checked = rawAutoExposure,
+            onCheckedChange = onRawAutoExposureChange
+        )
         SliderSettingItem(
-            title = stringResource(R.string.settings_raw_nlm_noise_factor),
-            value = rawNlmNoiseFactor,
+            title = stringResource(R.string.settings_raw_metering_center_weight),
+            description = stringResource(R.string.settings_raw_metering_center_weight_description),
+            value = rawMeteringCenterWeight,
             valueRange = 0f..1f,
-            resetValue = 0f,
+            resetValue = 0.5f,
+            enabled = rawAutoExposure,
             onValueChange = {
                 onAdjustmentStart()
-                onRawNlmNoiseFactorChange(it)
+                onRawMeteringCenterWeightChange(it)
             },
             onValueChangeFinished = onAdjustmentEnd
         )
@@ -75,6 +87,17 @@ fun RawEditPanel(
             onValueChange = {
                 onAdjustmentStart()
                 onRawExposureCompensationChange(it)
+            },
+            onValueChangeFinished = onAdjustmentEnd
+        )
+        SliderSettingItem(
+            title = stringResource(R.string.settings_raw_nlm_noise_factor),
+            value = rawNlmNoiseFactor,
+            valueRange = 0f..1f,
+            resetValue = 0f,
+            onValueChange = {
+                onAdjustmentStart()
+                onRawNlmNoiseFactorChange(it)
             },
             onValueChangeFinished = onAdjustmentEnd
         )
@@ -99,6 +122,50 @@ fun RawEditPanel(
                 onRawWhitePointCorrectionChange(it)
             },
             onValueChangeFinished = onAdjustmentEnd
+        )
+    }
+}
+
+@Composable
+private fun RawSwitchSettingItem(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Normal
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = description,
+                color = Color.White.copy(alpha = 0.6f),
+                fontSize = 13.sp,
+                lineHeight = 18.sp
+            )
+        }
+        Spacer(modifier = Modifier.width(16.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Color.White,
+                checkedTrackColor = Color(0xFFFF6B35),
+                uncheckedThumbColor = Color.Gray,
+                uncheckedTrackColor = Color.White.copy(alpha = 0.2f),
+                uncheckedBorderColor = Color.Transparent
+            )
         )
     }
 }

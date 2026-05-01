@@ -638,6 +638,10 @@
     <string name="settings_raw_nlm_gain_factor">RAW NLM Gain Response</string>
     <string name="settings_raw_nlm_noise_factor">RAW Denoise</string>
     <string name="settings_raw_exposure_compensation">RAW Exposure Compensation</string>
+    <string name="settings_raw_auto_exposure">RAW Auto Exposure</string>
+    <string name="settings_raw_auto_exposure_description">Automatically meters RAW linear data during development and applies exposure compensation.</string>
+    <string name="settings_raw_metering_center_weight">RAW Metering Center Weight</string>
+    <string name="settings_raw_metering_center_weight_description">Lower values are closer to evaluative metering; higher values tighten and emphasize the center area.</string>
     <string name="settings_raw_black_point_correction">RAW Black Point Correction</string>
     <string name="settings_raw_white_point_correction">RAW White Point Correction</string>
     <string name="settings_export_dng_with_raw_export">Export DNG with RAW photos</string>

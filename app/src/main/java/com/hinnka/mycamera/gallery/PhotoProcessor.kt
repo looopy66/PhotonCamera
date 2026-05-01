@@ -63,6 +63,16 @@ class PhotoProcessor(
             ?: (userPreferencesRepository.userPreferences.firstOrNull()?.rawAutoWhiteBalanceEstimate ?: false)
     }
 
+    private suspend fun resolveRawAutoExposure(metadata: MediaMetadata): Boolean {
+        return metadata.rawAutoExposure
+            ?: (userPreferencesRepository.userPreferences.firstOrNull()?.rawAutoExposure ?: false)
+    }
+
+    private suspend fun resolveRawMeteringCenterWeight(metadata: MediaMetadata): Float {
+        return metadata.rawMeteringCenterWeight
+            ?: (userPreferencesRepository.userPreferences.firstOrNull()?.rawMeteringCenterWeight ?: 0.5f)
+    }
+
     suspend fun prepareUltraHdrSource(
         context: Context,
         photoId: String,
@@ -424,6 +434,8 @@ class PhotoProcessor(
             rotation = metadata.rotation,
             exposureBias = metadata.exposureBias ?: 0f,
             rawExposureCompensation = metadata.rawExposureCompensation ?: 0f,
+            rawAutoExposure = resolveRawAutoExposure(metadata),
+            rawMeteringCenterWeight = resolveRawMeteringCenterWeight(metadata),
             rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
             rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(metadata),
@@ -485,6 +497,8 @@ class PhotoProcessor(
             metadata.rotation,
             metadata.exposureBias ?: 0f,
             rawExposureCompensation = metadata.rawExposureCompensation ?: 0f,
+            rawAutoExposure = resolveRawAutoExposure(metadata),
+            rawMeteringCenterWeight = resolveRawMeteringCenterWeight(metadata),
             rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
             rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(metadata),

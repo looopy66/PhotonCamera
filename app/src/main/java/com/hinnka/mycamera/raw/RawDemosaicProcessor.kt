@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import android.media.Image
 import android.opengl.*
+import android.util.Half
 import android.util.Log
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.camera.AspectRatio
@@ -255,6 +256,8 @@ class RawDemosaicProcessor {
         rotation: Int,
         exposureBias: Float = 0f,
         rawExposureCompensation: Float = 0f,
+        rawAutoExposure: Boolean = false,
+        rawMeteringCenterWeight: Float = 0.5f,
         rawBlackPointCorrection: Float = 0f,
         rawWhitePointCorrection: Float = 0f,
         rawAutoWhiteBalanceEstimate: Boolean = false,
@@ -279,6 +282,8 @@ class RawDemosaicProcessor {
                 rotation = rotation,
                 exposureBias = exposureBias,
                 rawExposureCompensation = rawExposureCompensation,
+                rawAutoExposure = rawAutoExposure,
+                rawMeteringCenterWeight = rawMeteringCenterWeight,
                 rawBlackPointCorrection = rawBlackPointCorrection,
                 rawWhitePointCorrection = rawWhitePointCorrection,
                 rawAutoWhiteBalanceEstimate = rawAutoWhiteBalanceEstimate,
@@ -310,6 +315,8 @@ class RawDemosaicProcessor {
         cropRegion: Rect?,
         rotation: Int,
         rawExposureCompensation: Float = 0f,
+        rawAutoExposure: Boolean = false,
+        rawMeteringCenterWeight: Float = 0.5f,
         rawBlackPointCorrection: Float = 0f,
         rawWhitePointCorrection: Float = 0f,
         rawAutoWhiteBalanceEstimate: Boolean = false,
@@ -339,6 +346,8 @@ class RawDemosaicProcessor {
                 cropRegion = cropRegion,
                 rotation = rotation,
                 rawExposureCompensation = rawExposureCompensation,
+                rawAutoExposure = rawAutoExposure,
+                rawMeteringCenterWeight = rawMeteringCenterWeight,
                 rawBlackPointCorrection = rawBlackPointCorrection,
                 rawWhitePointCorrection = rawWhitePointCorrection,
                 rawAutoWhiteBalanceEstimate = rawAutoWhiteBalanceEstimate,
@@ -363,6 +372,8 @@ class RawDemosaicProcessor {
         rotation: Int,
         exposureBias: Float = 0f,
         rawExposureCompensation: Float = 0f,
+        rawAutoExposure: Boolean = false,
+        rawMeteringCenterWeight: Float = 0.5f,
         rawBlackPointCorrection: Float = 0f,
         rawWhitePointCorrection: Float = 0f,
         rawAutoWhiteBalanceEstimate: Boolean = false,
@@ -387,6 +398,8 @@ class RawDemosaicProcessor {
                 rotation = rotation,
                 exposureBias = exposureBias,
                 rawExposureCompensation = rawExposureCompensation,
+                rawAutoExposure = rawAutoExposure,
+                rawMeteringCenterWeight = rawMeteringCenterWeight,
                 rawBlackPointCorrection = rawBlackPointCorrection,
                 rawWhitePointCorrection = rawWhitePointCorrection,
                 rawAutoWhiteBalanceEstimate = rawAutoWhiteBalanceEstimate,
@@ -420,6 +433,8 @@ class RawDemosaicProcessor {
         rotation: Int,
         exposureBias: Float = 0f,
         rawExposureCompensation: Float = 0f,
+        rawAutoExposure: Boolean = false,
+        rawMeteringCenterWeight: Float = 0.5f,
         rawBlackPointCorrection: Float = 0f,
         rawWhitePointCorrection: Float = 0f,
         rawAutoWhiteBalanceEstimate: Boolean = false,
@@ -581,6 +596,23 @@ class RawDemosaicProcessor {
                 rawWhitePointCorrection = rawWhitePointCorrection,
                 dcpRenderPlan = resolvedDcpRenderPlan
             )
+            val autoExposureEv = if (rawAutoExposure) {
+                resolveRawAutoExposureEv(
+                    metadata = actualMetadata,
+                    rawMeteringCenterWeight = rawMeteringCenterWeight
+                )
+            } else {
+                0f
+            }
+            if (autoExposureEv != 0f) {
+                renderLinearPass(
+                    metadata = actualMetadata,
+                    rawExposureCompensation = rawExposureCompensation + autoExposureEv,
+                    rawBlackPointCorrection = rawBlackPointCorrection,
+                    rawWhitePointCorrection = rawWhitePointCorrection,
+                    dcpRenderPlan = resolvedDcpRenderPlan
+                )
+            }
             // rawTextureId 已被 linearPass 消费，提前释放 GPU 显存
             if (rawTextureId != 0) {
                 GLES30.glDeleteTextures(1, intArrayOf(rawTextureId), 0)
@@ -2089,6 +2121,86 @@ class RawDemosaicProcessor {
             whiteLevel[0], whiteLevel[1], whiteLevel[2]
         )
         drawQuad(linearProgram)
+    }
+
+    private fun resolveRawAutoExposureEv(
+        metadata: RawMetadata,
+        rawMeteringCenterWeight: Float
+    ): Float {
+        val meteringWidth = minOf(metadata.width, 256).coerceAtLeast(1)
+        val meteringHeight = minOf(metadata.height, 256).coerceAtLeast(1)
+        return try {
+            setupOutputFramebuffer(meteringWidth, meteringHeight)
+            renderMeteringPass(
+                width = meteringWidth,
+                height = meteringHeight,
+                sourceTextureId = demosaicTextureId
+            )
+            val halfBuffer = ByteBuffer
+                .allocateDirect(meteringWidth * meteringHeight * 4 * 2)
+                .order(ByteOrder.nativeOrder())
+                .asShortBuffer()
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, outputFramebufferId)
+            GLES30.glReadPixels(
+                0,
+                0,
+                meteringWidth,
+                meteringHeight,
+                GLES30.GL_RGBA,
+                GLES30.GL_HALF_FLOAT,
+                halfBuffer
+            )
+            checkGlError("resolveRawAutoExposureEv")
+            halfBuffer.position(0)
+            val buffer = ByteBuffer
+                .allocateDirect(meteringWidth * meteringHeight * 4 * 4)
+                .order(ByteOrder.nativeOrder())
+                .asFloatBuffer()
+            while (halfBuffer.hasRemaining()) {
+                buffer.put(Half.toFloat(halfBuffer.get()))
+            }
+            buffer.position(0)
+            val gain = MeteringSystem.analyze(
+                floatBuffer = buffer,
+                width = meteringWidth,
+                height = meteringHeight,
+                metadata = metadata,
+                centerWeight = rawMeteringCenterWeight
+            )
+            val ev = (ln(gain) / ln(2f)).coerceIn(-2f, 4f)
+            PLog.d(
+                TAG,
+                "RAW auto exposure: gain=$gain ev=$ev centerWeight=${rawMeteringCenterWeight.coerceIn(0f, 2f)}"
+            )
+            ev
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to resolve RAW auto exposure", e)
+            0f
+        }
+    }
+
+    private fun renderMeteringPass(
+        width: Int,
+        height: Int,
+        sourceTextureId: Int
+    ) {
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, outputFramebufferId)
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+        GLES30.glUseProgram(passthroughProgram)
+
+        val identityMatrix = FloatArray(16)
+        GlMatrix.setIdentityM(identityMatrix, 0)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(passthroughProgram, "uTexMatrix"),
+            1, false, identityMatrix, 0
+        )
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(passthroughProgram, "uTexture"), 0)
+        drawQuad(passthroughProgram)
+        checkGlError("renderMeteringPass")
     }
 
     private fun resolveLinearInputLevels(

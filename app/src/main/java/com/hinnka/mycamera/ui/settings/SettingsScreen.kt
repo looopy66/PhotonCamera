@@ -194,6 +194,8 @@ fun SettingsScreen(
     val rawDcpId by viewModel.rawDcpId.collectAsState()
     val rawNlmNoiseFactor by viewModel.rawNlmNoiseFactor.collectAsState()
     val rawExposureCompensation by viewModel.rawExposureCompensation.collectAsState()
+    val rawAutoExposure by viewModel.rawAutoExposure.collectAsState()
+    val rawMeteringCenterWeight by viewModel.rawMeteringCenterWeight.collectAsState()
     val rawBlackPointCorrection by viewModel.rawBlackPointCorrection.collectAsState()
     val rawWhitePointCorrection by viewModel.rawWhitePointCorrection.collectAsState()
     val rawAutoWhiteBalanceEstimate by viewModel.rawAutoWhiteBalanceEstimate.collectAsState()
@@ -1180,6 +1182,8 @@ fun SettingsScreen(
                         availableDcps = availableDcps,
                         rawNlmNoiseFactor = rawNlmNoiseFactor,
                         rawExposureCompensation = rawExposureCompensation,
+                        rawAutoExposure = rawAutoExposure,
+                        rawMeteringCenterWeight = rawMeteringCenterWeight,
                         rawBlackPointCorrection = rawBlackPointCorrection,
                         rawWhitePointCorrection = rawWhitePointCorrection,
                         onSelectDcp = { viewModel.setRawDcpId(it) },
@@ -1195,6 +1199,8 @@ fun SettingsScreen(
                         },
                         onRawNlmNoiseFactorChange = { viewModel.setRawNlmNoiseFactor(it) },
                         onRawExposureCompensationChange = { viewModel.setRawExposureCompensation(it) },
+                        onRawAutoExposureChange = { viewModel.setRawAutoExposure(it) },
+                        onRawMeteringCenterWeightChange = { viewModel.setRawMeteringCenterWeight(it) },
                         onRawBlackPointCorrectionChange = { viewModel.setRawBlackPointCorrection(it) },
                         onRawWhitePointCorrectionChange = { viewModel.setRawWhitePointCorrection(it) },
                         onAdjustmentStart = { },

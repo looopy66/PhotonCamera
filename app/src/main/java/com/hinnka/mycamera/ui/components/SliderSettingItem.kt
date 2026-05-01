@@ -36,9 +36,10 @@ fun SliderSettingItem(
     resetValue: Float? = null,
     toggleValue: Boolean? = null,
     onToggleChange: (Boolean) -> Unit = {},
+    enabled: Boolean = toggleValue ?: true,
     modifier: Modifier = Modifier
 ) {
-    val enabled = toggleValue ?: true
+    val shouldShowSlider = enabled || toggleValue == null
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -50,7 +51,7 @@ fun SliderSettingItem(
         ) {
             Text(
                 text = title,
-                color = Color.White,
+                color = if (enabled) Color.White else Color.White.copy(alpha = 0.45f),
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Normal
             )
@@ -73,10 +74,10 @@ fun SliderSettingItem(
 
             Spacer(modifier = Modifier.weight(1f))
             
-            if (enabled) {
+            if (shouldShowSlider) {
                 Text(
                     text = valueTextFormatter(value),
-                    color = Color.White.copy(alpha = 0.8f),
+                    color = Color.White.copy(alpha = if (enabled) 0.8f else 0.35f),
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium
                 )
@@ -87,25 +88,26 @@ fun SliderSettingItem(
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = it,
-                color = Color.White.copy(alpha = 0.6f),
+                color = Color.White.copy(alpha = if (enabled) 0.6f else 0.35f),
                 fontSize = 13.sp,
                 lineHeight = 18.sp
             )
         }
         
-        if (enabled) {
+        if (shouldShowSlider) {
             Spacer(modifier = Modifier.height(8.dp))
 
             CustomSliderThinThumb(
                 value = value,
                 onValueChange = onValueChange,
                 onValueChangeFinished = onValueChangeFinished,
+                enabled = enabled,
                 valueRange = valueRange,
-                thumbColor = Color.White,
-                activeTrackColor = Color(0xFFFF6B35),
-                inactiveTrackColor = Color.White.copy(alpha = 0.2f),
+                thumbColor = Color.White.copy(alpha = if (enabled) 1f else 0.35f),
+                activeTrackColor = Color(0xFFFF6B35).copy(alpha = if (enabled) 1f else 0.35f),
+                inactiveTrackColor = Color.White.copy(alpha = if (enabled) 0.2f else 0.12f),
                 onDoubleTap = {
-                    if (resetValue != null) {
+                    if (enabled && resetValue != null) {
                         onValueChange(resetValue)
                         onValueChangeFinished?.invoke()
                     }
