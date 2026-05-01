@@ -486,8 +486,24 @@ static AutoBlackLevelChoice chooseAutoBlackLevelPreset(
   }
   int counts[4] = {};
   auto *rawImage = rawProcessor.imgdata.rawdata.raw_image;
-  for (int y = top; y <= bottom; ++y) {
-    for (int x = left; x <= right; ++x) {
+  int left_margin = static_cast<int>(rawProcessor.imgdata.sizes.left_margin);
+  int top_margin = static_cast<int>(rawProcessor.imgdata.sizes.top_margin);
+  bool useMargins = (left_margin > 2 || top_margin > 2 || (rawWidth - left - activeWidth) > 2 || (rawHeight - top - activeHeight) > 2);
+  const float percentile = useMargins ? 0.5f : 0.001f;
+  for (int y = 0; y < rawHeight; ++y) {
+    if (useMargins && (y >= top && y <= bottom)) {
+      continue;
+    }
+    if (!useMargins && !(y >= top && y <= bottom)) {
+      continue;
+    }
+    for (int x = 0; x < rawWidth; ++x) {
+      if (useMargins && (x >= left && x <= right)) {
+        continue;
+      }
+      if (!useMargins && !(x >= left && x <= right)) {
+        continue;
+      }
       const int channel = rawProcessor.FC(y, x);
       if (channel < 0 || channel > 3) {
         continue;
@@ -505,11 +521,16 @@ static AutoBlackLevelChoice chooseAutoBlackLevelPreset(
       continue;
     }
     estimated[channel] = static_cast<float>(
-        percentileFromHistogram(histograms[channel], counts[channel], 0.001f));
+        percentileFromHistogram(histograms[channel], counts[channel], percentile));
     ++validChannels;
   }
   if (validChannels <= 0) {
     return choice;
+  }
+
+  if (useMargins) {
+    LOGI("dng auto black level: using %d masked pixels",
+         counts[0] + counts[1] + counts[2] + counts[3]);
   }
 
   const float fixedPresets[] = {0.0f, 16.0f, 64.0f, 100.0f};
@@ -534,12 +555,15 @@ static AutoBlackLevelChoice chooseAutoBlackLevelPreset(
 
     const float metadataDistance =
         std::abs(estimated[channel] - metadataBlackLevels[channel]);
-    if (metadataDistance <= bestDistance) {
-      choice.selected[channel] = metadataBlackLevels[channel];
-      choice.usesMetadata[channel] = true;
-    } else {
+
+    // Only override if the estimation is close to a known preset
+    // and it's closer to that preset than it is to the metadata.
+    if (bestDistance < 32.0f && bestDistance < metadataDistance) {
       choice.selected[channel] = bestValue;
       choice.usesMetadata[channel] = false;
+    } else {
+      choice.selected[channel] = metadataBlackLevels[channel];
+      choice.usesMetadata[channel] = true;
     }
   }
 
