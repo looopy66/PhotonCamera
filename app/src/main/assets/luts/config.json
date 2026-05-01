@@ -113,42 +113,52 @@
       "isVip": false
     },
     {
-      "id": "film_kodak_ultramax_400_2383",
+      "id": "film_kodak_ultramax_400",
       "name": {
-        "en": "Ultramax 400 + 2383",
-        "zh": "Ultramax 400 + 2383"
+        "en": "Ultramax 400",
+        "zh": "Ultramax 400"
       },
-      "path": "Kodak_ultramax_400+2383.33.plut",
+      "path": "ultramax400.plut",
       "isDefault": false,
       "isVip": true
     },
     {
-      "id": "film_rollei_cn200_2383",
+      "id": "e100",
       "name": {
-        "en": "CN200 + 2383",
-        "zh": "CN200 + 2383"
+        "en": "E100",
+        "zh": "E100"
       },
-      "path": "Rollei_CN200+2383.33.plut",
+      "path": "e100.plut",
       "isDefault": false,
       "isVip": true
     },
     {
-      "id": "film_natura_1600_3513",
+      "id": "film_rollei_cn200",
       "name": {
-        "en": "Natura 1600 + 3513",
-        "zh": "Natura 1600 + 3513"
+        "en": "CN200",
+        "zh": "CN200"
       },
-      "path": "natura1600+3513.33.plut",
+      "path": "cn200.plut",
       "isDefault": false,
       "isVip": true
     },
     {
-      "id": "film_superia_1600_3513",
+      "id": "film_natura_1600",
       "name": {
-        "en": "Superia 1600 + 3513",
-        "zh": "Superia 1600 + 3513"
+        "en": "Natura 1600",
+        "zh": "Natura 1600"
       },
-      "path": "superia1600+3513.33.plut",
+      "path": "nature1600.plut",
+      "isDefault": false,
+      "isVip": true
+    },
+    {
+      "id": "film_superia_1600",
+      "name": {
+        "en": "Superia 1600",
+        "zh": "Superia 1600"
+      },
+      "path": "superia1600.plut",
       "isDefault": false,
       "isVip": true
     },
@@ -159,26 +169,6 @@
         "zh": "Cinestill 800T"
       },
       "path": "cinestill800t.33.plut",
-      "isDefault": false,
-      "isVip": true
-    },
-    {
-      "id": "film_pro_400h",
-      "name": {
-        "en": "Pro 400H",
-        "zh": "Pro 400H"
-      },
-      "path": "pro400h.33.plut",
-      "isDefault": false,
-      "isVip": true
-    },
-    {
-      "id": "film_velvia_50",
-      "name": {
-        "en": "Velvia 50",
-        "zh": "Velvia 50"
-      },
-      "path": "velvia50.33.plut",
       "isDefault": false,
       "isVip": true
     }
