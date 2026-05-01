@@ -55,7 +55,7 @@ class PhotoProcessor(
 
     private suspend fun resolveRawAutoBlackLevelCorrection(metadata: MediaMetadata): Boolean {
         return metadata.rawAutoBlackLevelCorrection
-            ?: (userPreferencesRepository.userPreferences.firstOrNull()?.rawAutoBlackLevelCorrection ?: false)
+            ?: (userPreferencesRepository.userPreferences.firstOrNull()?.rawAutoBlackLevelCorrection ?: true)
     }
 
     private suspend fun resolveRawAutoWhiteBalanceEstimate(metadata: MediaMetadata): Boolean {
@@ -65,12 +65,12 @@ class PhotoProcessor(
 
     private suspend fun resolveRawAutoExposure(metadata: MediaMetadata): Boolean {
         return metadata.rawAutoExposure
-            ?: (userPreferencesRepository.userPreferences.firstOrNull()?.rawAutoExposure ?: false)
+            ?: (userPreferencesRepository.userPreferences.firstOrNull()?.rawAutoExposure ?: true)
     }
 
     private suspend fun resolveRawMeteringCenterWeight(metadata: MediaMetadata): Float {
         return metadata.rawMeteringCenterWeight
-            ?: (userPreferencesRepository.userPreferences.firstOrNull()?.rawMeteringCenterWeight ?: 0.5f)
+            ?: (userPreferencesRepository.userPreferences.firstOrNull()?.rawMeteringCenterWeight ?: 0f)
     }
 
     suspend fun prepareUltraHdrSource(

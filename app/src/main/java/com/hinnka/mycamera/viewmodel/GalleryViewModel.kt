@@ -289,9 +289,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         private set
     var editRawExposureCompensation = MutableStateFlow(0f)
         private set
-    var editRawAutoExposure = MutableStateFlow(false)
+    var editRawAutoExposure = MutableStateFlow(true)
         private set
-    var editRawMeteringCenterWeight = MutableStateFlow(0.5f)
+    var editRawMeteringCenterWeight = MutableStateFlow(0f)
         private set
     var editRawBlackPointCorrection = MutableStateFlow(0f)
         private set
@@ -1019,8 +1019,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editChromaNoiseReduction.value = m.chromaNoiseReduction ?: 0f
             editRawDenoise.value = m.rawDenoiseValue ?: 0f
             editRawExposureCompensation.value = m.rawExposureCompensation ?: 0f
-            editRawAutoExposure.value = m.rawAutoExposure ?: false
-            editRawMeteringCenterWeight.value = m.rawMeteringCenterWeight ?: 0.5f
+            editRawAutoExposure.value = m.rawAutoExposure ?: true
+            editRawMeteringCenterWeight.value = m.rawMeteringCenterWeight ?: 0f
             editRawBlackPointCorrection.value = m.rawBlackPointCorrection ?: 0f
             editRawWhitePointCorrection.value = m.rawWhitePointCorrection ?: 0f
             editRawDcpId.value = m.rawDcpId
@@ -1566,8 +1566,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
             editRawDenoise.value = metadata.rawDenoiseValue ?: 0f
             editRawExposureCompensation.value = metadata.rawExposureCompensation ?: 0f
-            editRawAutoExposure.value = metadata.rawAutoExposure ?: false
-            editRawMeteringCenterWeight.value = metadata.rawMeteringCenterWeight ?: 0.5f
+            editRawAutoExposure.value = metadata.rawAutoExposure ?: true
+            editRawMeteringCenterWeight.value = metadata.rawMeteringCenterWeight ?: 0f
             editRawBlackPointCorrection.value = metadata.rawBlackPointCorrection ?: 0f
             editRawWhitePointCorrection.value = metadata.rawWhitePointCorrection ?: 0f
             editRawDcpId.value = metadata.rawDcpId
@@ -1585,8 +1585,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editChromaNoiseReduction.value = chromaNoiseReduction.value
             editRawDenoise.value = 0.2f
             editRawExposureCompensation.value = 0f
-            editRawAutoExposure.value = false
-            editRawMeteringCenterWeight.value = 0.5f
+            editRawAutoExposure.value = true
+            editRawMeteringCenterWeight.value = 0f
             editRawBlackPointCorrection.value = 0f
             editRawWhitePointCorrection.value = 0f
             editRawDcpId.value = null
@@ -1619,8 +1619,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editCropAspectOption.value = CropAspectOption.Free
         editRawDenoise.value = 0.2f
         editRawExposureCompensation.value = 0f
-        editRawAutoExposure.value = false
-        editRawMeteringCenterWeight.value = 0.5f
+        editRawAutoExposure.value = true
+        editRawMeteringCenterWeight.value = 0f
         editRawBlackPointCorrection.value = 0f
         editRawWhitePointCorrection.value = 0f
         editRawDcpId.value = null
@@ -1756,7 +1756,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun saveRawMeteringCenterWeightValue(mediaData: MediaData, value: Float) {
-        editRawMeteringCenterWeight.value = value.coerceIn(0f, 2f)
+        editRawMeteringCenterWeight.value = value.coerceIn(0f, 1f)
         persistRawEditMetadata(mediaData)
     }
 

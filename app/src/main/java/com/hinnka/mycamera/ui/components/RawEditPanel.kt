@@ -71,7 +71,7 @@ fun RawEditPanel(
             description = stringResource(R.string.settings_raw_metering_center_weight_description),
             value = rawMeteringCenterWeight,
             valueRange = 0f..1f,
-            resetValue = 0.5f,
+            resetValue = 0f,
             enabled = rawAutoExposure,
             onValueChange = {
                 onAdjustmentStart()

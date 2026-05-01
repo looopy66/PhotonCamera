@@ -15,7 +15,7 @@ object MeteringSystem {
         width: Int,
         height: Int,
         metadata: RawMetadata?,
-        centerWeight: Float = 0.5f
+        centerWeight: Float = 0f
     ): Float {
         val pixelCount = width * height
         val allLumas = FloatArray(pixelCount)
@@ -95,7 +95,7 @@ object MeteringSystem {
             // 1. 基础权重：画面中心
             val distSqC = (pzx - 0.5f).let { it * it } + (pzy - 0.5f).let { it * it }
 
-            val normalizedCenterWeight = (centerWeight.coerceIn(0f, 2f) / 2f).toDouble()
+            val normalizedCenterWeight = centerWeight.coerceIn(0f, 1f).toDouble()
             val evaluativeWeight = 1.0
             val centerSigma = 0.22 - 0.19 * normalizedCenterWeight
             val centerBoost = 1.0 + 7.0 * normalizedCenterWeight

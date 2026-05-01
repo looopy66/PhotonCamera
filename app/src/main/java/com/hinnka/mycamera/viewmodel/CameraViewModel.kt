@@ -233,10 +233,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
     val rawAutoExposure: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.rawAutoExposure }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
     val rawMeteringCenterWeight: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.rawMeteringCenterWeight }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 0.5f)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
     val rawBlackPointCorrection: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.rawBlackPointCorrection }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
@@ -248,7 +248,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val rawAutoBlackLevelCorrection: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.rawAutoBlackLevelCorrection }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
     val exportDngWithRawExport: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.exportDngWithRawExport }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -864,12 +864,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawDcpId = userPrefs?.rawDcpId,
             rawDenoiseValue = userPrefs?.rawNlmNoiseFactor ?: 0f,
             rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
-            rawAutoExposure = userPrefs?.rawAutoExposure ?: false,
-            rawMeteringCenterWeight = userPrefs?.rawMeteringCenterWeight ?: 0.5f,
+            rawAutoExposure = userPrefs?.rawAutoExposure ?: true,
+            rawMeteringCenterWeight = userPrefs?.rawMeteringCenterWeight ?: 0f,
             rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
             rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
-            rawAutoBlackLevelCorrection = userPrefs?.rawAutoBlackLevelCorrection ?: false,
+            rawAutoBlackLevelCorrection = userPrefs?.rawAutoBlackLevelCorrection ?: true,
             width = width,
             height = height,
             ratio = aspectRatio,
@@ -2542,12 +2542,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawDcpId = userPrefs?.rawDcpId,
                 rawDenoiseValue = userPrefs?.rawNlmNoiseFactor ?: 0f,
                 rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
-                rawAutoExposure = userPrefs?.rawAutoExposure ?: false,
-                rawMeteringCenterWeight = userPrefs?.rawMeteringCenterWeight ?: 0.5f,
+                rawAutoExposure = userPrefs?.rawAutoExposure ?: true,
+                rawMeteringCenterWeight = userPrefs?.rawMeteringCenterWeight ?: 0f,
                 rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
                 rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
                 rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
-                rawAutoBlackLevelCorrection = userPrefs?.rawAutoBlackLevelCorrection ?: false,
+                rawAutoBlackLevelCorrection = userPrefs?.rawAutoBlackLevelCorrection ?: true,
                 width = image.width,
                 height = image.height,
                 ratio = aspectRatio,
@@ -2654,12 +2654,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawDcpId = userPrefs?.rawDcpId,
                 rawDenoiseValue = userPrefs?.rawNlmNoiseFactor ?: 0f,
                 rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
-                rawAutoExposure = userPrefs?.rawAutoExposure ?: false,
-                rawMeteringCenterWeight = userPrefs?.rawMeteringCenterWeight ?: 0.5f,
+                rawAutoExposure = userPrefs?.rawAutoExposure ?: true,
+                rawMeteringCenterWeight = userPrefs?.rawMeteringCenterWeight ?: 0f,
                 rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
                 rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
                 rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
-                rawAutoBlackLevelCorrection = userPrefs?.rawAutoBlackLevelCorrection ?: false,
+                rawAutoBlackLevelCorrection = userPrefs?.rawAutoBlackLevelCorrection ?: true,
                 width = bitmap.width,
                 height = bitmap.height,
                 ratio = mapVideoAspectRatioToPhotoAspectRatio(currentState.videoConfig.aspectRatio),
@@ -2795,12 +2795,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawDcpId = userPrefs?.rawDcpId,
                 rawDenoiseValue = userPrefs?.rawNlmNoiseFactor ?: 0f,
                 rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
-                rawAutoExposure = userPrefs?.rawAutoExposure ?: false,
-                rawMeteringCenterWeight = userPrefs?.rawMeteringCenterWeight ?: 0.5f,
+                rawAutoExposure = userPrefs?.rawAutoExposure ?: true,
+                rawMeteringCenterWeight = userPrefs?.rawMeteringCenterWeight ?: 0f,
                 rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
                 rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
                 rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
-                rawAutoBlackLevelCorrection = userPrefs?.rawAutoBlackLevelCorrection ?: false,
+                rawAutoBlackLevelCorrection = userPrefs?.rawAutoBlackLevelCorrection ?: true,
                 width = (images[0].width.toFloat() * superResScale).roundToInt(),
                 height = (images[0].height.toFloat() * superResScale).roundToInt(),
                 ratio = aspectRatio,
@@ -2944,12 +2944,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawDcpId = userPrefs?.rawDcpId,
             rawDenoiseValue = userPrefs?.rawNlmNoiseFactor ?: 0f,
             rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
-            rawAutoExposure = userPrefs?.rawAutoExposure ?: false,
-            rawMeteringCenterWeight = userPrefs?.rawMeteringCenterWeight ?: 0.5f,
+            rawAutoExposure = userPrefs?.rawAutoExposure ?: true,
+            rawMeteringCenterWeight = userPrefs?.rawMeteringCenterWeight ?: 0f,
             rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
             rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
-            rawAutoBlackLevelCorrection = userPrefs?.rawAutoBlackLevelCorrection ?: false,
+            rawAutoBlackLevelCorrection = userPrefs?.rawAutoBlackLevelCorrection ?: true,
             width = image.width,
             height = image.height,
             ratio = aspectRatio,

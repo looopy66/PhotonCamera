@@ -117,7 +117,7 @@ object GalleryManager {
     ): Boolean {
         return metadata?.rawAutoBlackLevelCorrection
             ?: (ContentRepository.getInstance(context).userPreferencesRepository.userPreferences.firstOrNull()
-                ?.rawAutoBlackLevelCorrection ?: false)
+                ?.rawAutoBlackLevelCorrection ?: true)
     }
 
     private suspend fun resolveRawAutoWhiteBalanceEstimate(
@@ -135,7 +135,7 @@ object GalleryManager {
     ): Boolean {
         return metadata?.rawAutoExposure
             ?: (ContentRepository.getInstance(context).userPreferencesRepository.userPreferences.firstOrNull()
-                ?.rawAutoExposure ?: false)
+                ?.rawAutoExposure ?: true)
     }
 
     private suspend fun resolveRawMeteringCenterWeight(
@@ -144,7 +144,7 @@ object GalleryManager {
     ): Float {
         return metadata?.rawMeteringCenterWeight
             ?: (ContentRepository.getInstance(context).userPreferencesRepository.userPreferences.firstOrNull()
-                ?.rawMeteringCenterWeight ?: 0.5f)
+                ?.rawMeteringCenterWeight ?: 0f)
     }
     private val _photoLibraryChangedEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 16)
     val photoLibraryChangedEvents: SharedFlow<Unit> = _photoLibraryChangedEvents.asSharedFlow()

@@ -58,12 +58,12 @@ data class UserPreferences(
     val rawDcpId: String? = null,
     val rawNlmNoiseFactor: Float = 0f,
     val rawExposureCompensation: Float = 0f,
-    val rawAutoExposure: Boolean = false,
-    val rawMeteringCenterWeight: Float = 0.5f,
+    val rawAutoExposure: Boolean = true,
+    val rawMeteringCenterWeight: Float = 0f,
     val rawBlackPointCorrection: Float = 0f,
     val rawWhitePointCorrection: Float = 0f,
     val rawAutoWhiteBalanceEstimate: Boolean = false,
-    val rawAutoBlackLevelCorrection: Boolean = false,
+    val rawAutoBlackLevelCorrection: Boolean = true,
     val exportDngWithRawExport: Boolean = false,
     val frameId: String? = null,
     val showHistogram: Boolean = true,
@@ -253,12 +253,12 @@ class UserPreferencesRepository(private val context: Context) {
                 rawDcpId = preferences[RAW_DCP_ID_KEY],
                 rawNlmNoiseFactor = preferences[RAW_NLM_NOISE_FACTOR_KEY] ?: 0f,
                 rawExposureCompensation = preferences[RAW_EXPOSURE_COMPENSATION_KEY] ?: 0f,
-                rawAutoExposure = preferences[RAW_AUTO_EXPOSURE_KEY] ?: false,
-                rawMeteringCenterWeight = preferences[RAW_METERING_CENTER_WEIGHT_KEY]?.coerceIn(0f, 2f) ?: 0.5f,
+                rawAutoExposure = preferences[RAW_AUTO_EXPOSURE_KEY] ?: true,
+                rawMeteringCenterWeight = preferences[RAW_METERING_CENTER_WEIGHT_KEY]?.coerceIn(0f, 1f) ?: 0f,
                 rawBlackPointCorrection = preferences[RAW_BLACK_POINT_CORRECTION_KEY] ?: 0f,
                 rawWhitePointCorrection = preferences[RAW_WHITE_POINT_CORRECTION_KEY] ?: 0f,
                 rawAutoWhiteBalanceEstimate = preferences[RAW_AUTO_WHITE_BALANCE_ESTIMATE_KEY] ?: false,
-                rawAutoBlackLevelCorrection = preferences[RAW_AUTO_BLACK_LEVEL_CORRECTION_KEY] ?: false,
+                rawAutoBlackLevelCorrection = preferences[RAW_AUTO_BLACK_LEVEL_CORRECTION_KEY] ?: true,
                 exportDngWithRawExport = preferences[EXPORT_DNG_WITH_RAW_EXPORT_KEY] ?: false,
                 phantomBaselineLutId = preferences[PHANTOM_BASELINE_LUT_ID_KEY],
                 frameId = preferences[FRAME_ID_KEY],
@@ -499,7 +499,7 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun saveRawMeteringCenterWeight(value: Float) {
         context.dataStore.edit { preferences ->
-            preferences[RAW_METERING_CENTER_WEIGHT_KEY] = value.coerceIn(0f, 2f)
+            preferences[RAW_METERING_CENTER_WEIGHT_KEY] = value.coerceIn(0f, 1f)
         }
     }
 
