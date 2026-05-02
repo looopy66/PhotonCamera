@@ -431,180 +431,36 @@ static float sampleDngGainMapBilinear(const DngGainMap &gainMap, float x, float 
   return top + (bottom - top) * ty;
 }
 
-struct AutoBlackLevelChoice {
-  bool valid = false;
-  bool usesMetadata[4] = {true, true, true, true};
-  float estimated[4] = {};
-  float selected[4] = {};
-};
-
-static int percentileFromHistogram(const std::vector<int> &histogram, int count,
-                                   float percentile) {
-  if (count <= 0) {
-    return 0;
-  }
-  const int target = static_cast<int>((count - 1) * percentile);
-  int cumulative = 0;
-  for (int value = 0; value < static_cast<int>(histogram.size()); ++value) {
-    cumulative += histogram[value];
-    if (cumulative > target) {
-      return value;
+static void computeEffectiveBlackLevels(LibRaw &rawProcessor, float out[4]) {
+  const float base = static_cast<float>(rawProcessor.imgdata.color.black);
+  const unsigned cols = rawProcessor.imgdata.color.cblack[4];
+  const unsigned rows = rawProcessor.imgdata.color.cblack[5];
+  for (int ch = 0; ch < 4; ++ch) {
+    float total = base + static_cast<float>(rawProcessor.imgdata.color.cblack[ch]);
+    // Add the repeat pattern contribution for this CFA channel.
+    if (cols > 0 && rows > 0) {
+      float sum = 0.0f;
+      int count = 0;
+      for (unsigned r = 0; r < rows; ++r) {
+        for (unsigned c = 0; c < cols; ++c) {
+          if (rawProcessor.FC(r, c) == ch) {
+            sum += static_cast<float>(
+                rawProcessor.imgdata.color.cblack[6 + r * cols + c]);
+            ++count;
+          }
+        }
+      }
+      if (count > 0) {
+        total += sum / static_cast<float>(count);
+      }
     }
+    out[ch] = total;
   }
-  return static_cast<int>(histogram.size()) - 1;
 }
 
-static AutoBlackLevelChoice chooseAutoBlackLevelPreset(
-    LibRaw &rawProcessor, const float metadataBlackLevels[4]) {
-  AutoBlackLevelChoice choice;
-  if (!rawProcessor.imgdata.rawdata.raw_image ||
-      !rawProcessor.imgdata.idata.filters) {
-    return choice;
-  }
 
-  const int rawWidth = rawProcessor.imgdata.sizes.raw_width;
-  const int rawHeight = rawProcessor.imgdata.sizes.raw_height;
-  const int rawPitch = rawProcessor.imgdata.sizes.raw_pitch > 0
-                           ? rawProcessor.imgdata.sizes.raw_pitch /
-                                 static_cast<int>(sizeof(ushort))
-                           : rawWidth;
-  const int left =
-      std::max(0, static_cast<int>(rawProcessor.imgdata.sizes.left_margin));
-  const int top =
-      std::max(0, static_cast<int>(rawProcessor.imgdata.sizes.top_margin));
-  const int activeWidth = static_cast<int>(rawProcessor.imgdata.sizes.width);
-  const int activeHeight = static_cast<int>(rawProcessor.imgdata.sizes.height);
-  const int right = std::min(rawWidth - 1, left + activeWidth - 1);
-  const int bottom = std::min(rawHeight - 1, top + activeHeight - 1);
-  if (right < left || bottom < top) {
-    return choice;
-  }
+// Metadata-based black level calculation is now handled by computeEffectiveBlackLevels.
 
-  std::vector<int> histograms[4];
-  for (auto &histogram : histograms) {
-    histogram.assign(65536, 0);
-  }
-  int counts[4] = {};
-  auto *rawImage = rawProcessor.imgdata.rawdata.raw_image;
-  int left_margin = static_cast<int>(rawProcessor.imgdata.sizes.left_margin);
-  int top_margin = static_cast<int>(rawProcessor.imgdata.sizes.top_margin);
-  bool useMargins = (left_margin > 2 || top_margin > 2 || (rawWidth - left - activeWidth) > 2 || (rawHeight - top - activeHeight) > 2);
-  const float percentile = useMargins ? 0.5f : 0.001f;
-  for (int y = 0; y < rawHeight; ++y) {
-    if (useMargins && (y >= top && y <= bottom)) {
-      continue;
-    }
-    if (!useMargins && !(y >= top && y <= bottom)) {
-      continue;
-    }
-    for (int x = 0; x < rawWidth; ++x) {
-      if (useMargins && (x >= left && x <= right)) {
-        continue;
-      }
-      if (!useMargins && !(x >= left && x <= right)) {
-        continue;
-      }
-      const int channel = rawProcessor.FC(y, x);
-      if (channel < 0 || channel > 3) {
-        continue;
-      }
-      const int value = rawImage[y * rawPitch + x] & 0xFFFF;
-      histograms[channel][value]++;
-      counts[channel]++;
-    }
-  }
-
-  int validChannels = 0;
-  float estimated[4] = {};
-  for (int channel = 0; channel < 4; ++channel) {
-    if (counts[channel] <= 0) {
-      continue;
-    }
-    estimated[channel] = static_cast<float>(
-        percentileFromHistogram(histograms[channel], counts[channel], percentile));
-    ++validChannels;
-  }
-  if (validChannels <= 0) {
-    return choice;
-  }
-
-  if (useMargins) {
-    LOGI("dng auto black level: using %d masked pixels",
-         counts[0] + counts[1] + counts[2] + counts[3]);
-  }
-
-  const float fixedPresets[] = {0.0f, 16.0f, 64.0f, 100.0f};
-  for (int channel = 0; channel < 4; ++channel) {
-    choice.estimated[channel] = estimated[channel];
-    choice.selected[channel] = metadataBlackLevels[channel];
-    choice.usesMetadata[channel] = true;
-
-    if (counts[channel] <= 0) {
-      continue;
-    }
-
-    float bestValue = fixedPresets[0];
-    float bestDistance = std::abs(estimated[channel] - fixedPresets[0]);
-    for (int i = 1; i < 4; ++i) {
-      const float distance = std::abs(estimated[channel] - fixedPresets[i]);
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        bestValue = fixedPresets[i];
-      }
-    }
-
-    const float metadataDistance =
-        std::abs(estimated[channel] - metadataBlackLevels[channel]);
-
-    // Only override if the estimation is close to a known preset
-    // and it's closer to that preset than it is to the metadata.
-    if (bestDistance < 32.0f && bestDistance < metadataDistance) {
-      choice.selected[channel] = bestValue;
-      choice.usesMetadata[channel] = false;
-    } else {
-      choice.selected[channel] = metadataBlackLevels[channel];
-      choice.usesMetadata[channel] = true;
-    }
-  }
-
-  choice.valid = true;
-  LOGI("dng auto black level: estimated=%0.2f/%0.2f/%0.2f/%0.2f "
-       "selected=%s%0.2f/%s%0.2f/%s%0.2f/%s%0.2f metadata=%0.2f/%0.2f/%0.2f/%0.2f",
-       choice.estimated[0], choice.estimated[1], choice.estimated[2],
-       choice.estimated[3],
-       choice.usesMetadata[0] ? "metadata:" : "", choice.selected[0],
-       choice.usesMetadata[1] ? "metadata:" : "", choice.selected[1],
-       choice.usesMetadata[2] ? "metadata:" : "", choice.selected[2],
-       choice.usesMetadata[3] ? "metadata:" : "", choice.selected[3],
-       metadataBlackLevels[0], metadataBlackLevels[1], metadataBlackLevels[2],
-       metadataBlackLevels[3]);
-  return choice;
-}
-
-static void overrideLibRawBlackLevels(LibRaw &rawProcessor,
-                                      const float blackLevels[4]) {
-  rawProcessor.imgdata.params.user_black = 0;
-  rawProcessor.imgdata.color.black = 0;
-  rawProcessor.imgdata.color.dng_levels.dng_black = 0;
-  rawProcessor.imgdata.color.dng_levels.dng_fblack = 0.0f;
-
-  for (int i = 0; i < 4; ++i) {
-    const unsigned level =
-        static_cast<unsigned>(std::max(0.0f, blackLevels[i]) + 0.5f);
-    rawProcessor.imgdata.params.user_cblack[i] = static_cast<int>(level);
-    rawProcessor.imgdata.color.cblack[i] = level;
-    rawProcessor.imgdata.color.dng_levels.dng_cblack[i] = level;
-    rawProcessor.imgdata.color.dng_levels.dng_fcblack[i] =
-        static_cast<float>(level);
-  }
-
-  rawProcessor.imgdata.color.cblack[4] = 0;
-  rawProcessor.imgdata.color.cblack[5] = 0;
-  rawProcessor.imgdata.color.dng_levels.dng_cblack[4] = 0;
-  rawProcessor.imgdata.color.dng_levels.dng_cblack[5] = 0;
-  rawProcessor.imgdata.color.dng_levels.dng_fcblack[4] = 0.0f;
-  rawProcessor.imgdata.color.dng_levels.dng_fcblack[5] = 0.0f;
-}
 
 static bool applySupportedDngGainMaps(LibRaw &rawProcessor, const float blackLevels[4]) {
   if (!rawProcessor.imgdata.rawdata.raw_image || !rawProcessor.imgdata.idata.filters) {
@@ -2024,8 +1880,7 @@ JNIEXPORT jobject JNICALL
 Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     JNIEnv *env, jobject /* this */, jstring filePath, jfloat xr, jfloat yr,
     jfloat xg, jfloat yg, jfloat xb, jfloat yb, jfloat xw, jfloat yw,
-    jboolean useRawAutoWhiteBalanceEstimate,
-    jboolean useRawAutoBlackLevelCorrection) {
+    jboolean useRawAutoWhiteBalanceEstimate) {
 
   const char *path = env->GetStringUTFChars(filePath, nullptr);
   if (path == nullptr) {
@@ -2084,40 +1939,11 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
          libraw_strerror(ret));
   }*/
 
+  // Read the TOTAL effective black level per channel.
+  // LibRaw stores it as: color.black + cblack[channel] + repeat_pattern[position].
   float dngBlackLevels[4] = {};
-  for (int i = 0; i < 4; ++i) {
-    dngBlackLevels[i] = static_cast<float>(RawProcessor.imgdata.color.dng_levels.dng_cblack[6 + i]);
-  }
-  LOGI("dng black levels: %f %f %f %f", dngBlackLevels[0], dngBlackLevels[1], dngBlackLevels[2], dngBlackLevels[3]);
-  const float metadataBlackLevels[4] = {
-      dngBlackLevels[0], dngBlackLevels[1], dngBlackLevels[2], dngBlackLevels[3]};
-  if (useRawAutoBlackLevelCorrection == JNI_TRUE) {
-    const AutoBlackLevelChoice choice =
-        chooseAutoBlackLevelPreset(RawProcessor, metadataBlackLevels);
-    bool shouldOverrideBlackLevels = false;
-    if (choice.valid) {
-      for (int i = 0; i < 4; ++i) {
-        if (!choice.usesMetadata[i]) {
-          shouldOverrideBlackLevels = true;
-          break;
-        }
-      }
-    }
-    if (choice.valid && shouldOverrideBlackLevels) {
-      for (int i = 0; i < 4; ++i) {
-        dngBlackLevels[i] = choice.selected[i];
-      }
-      overrideLibRawBlackLevels(RawProcessor, dngBlackLevels);
-      LOGI("dng black levels auto override: %f %f %f %f", dngBlackLevels[0],
-           dngBlackLevels[1], dngBlackLevels[2], dngBlackLevels[3]);
-    } else if (choice.valid) {
-      LOGI("dng auto black level: using metadata black levels");
-    } else {
-      LOGI("dng auto black level: unavailable, using metadata black levels");
-    }
-  } else {
-    LOGI("dng auto black level: disabled, using metadata black levels");
-  }
+  computeEffectiveBlackLevels(RawProcessor, dngBlackLevels);
+  LOGI("dng black levels (metadata): %f %f %f %f", dngBlackLevels[0], dngBlackLevels[1], dngBlackLevels[2], dngBlackLevels[3]);
   const bool appliedDngGainMap = applySupportedDngGainMaps(RawProcessor, dngBlackLevels);
   LOGI("dng gain map: opcode2_len=%u applied=%d", RawProcessor.imgdata.color.dng_levels.rawopcodes[1].len,
        appliedDngGainMap ? 1 : 0);

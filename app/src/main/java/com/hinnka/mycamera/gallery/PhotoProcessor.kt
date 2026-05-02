@@ -53,11 +53,6 @@ class PhotoProcessor(
         return userPreferencesRepository.userPreferences.firstOrNull()?.hlgHardwareCompatibilityEnabled ?: true
     }
 
-    private suspend fun resolveRawAutoBlackLevelCorrection(metadata: MediaMetadata): Boolean {
-        return metadata.rawAutoBlackLevelCorrection
-            ?: (userPreferencesRepository.userPreferences.firstOrNull()?.rawAutoBlackLevelCorrection ?: true)
-    }
-
     private suspend fun resolveRawAutoWhiteBalanceEstimate(metadata: MediaMetadata): Boolean {
         return metadata.rawAutoWhiteBalanceEstimate
             ?: (userPreferencesRepository.userPreferences.firstOrNull()?.rawAutoWhiteBalanceEstimate ?: false)
@@ -439,7 +434,6 @@ class PhotoProcessor(
             rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
             rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(metadata),
-            rawAutoBlackLevelCorrection = resolveRawAutoBlackLevelCorrection(metadata),
             sharpeningValue = 0.4f,
             denoiseValue = metadata.rawDenoiseValue,
             rawDcpId = metadata.rawDcpId
@@ -502,7 +496,6 @@ class PhotoProcessor(
             rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
             rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(metadata),
-            rawAutoBlackLevelCorrection = resolveRawAutoBlackLevelCorrection(metadata),
             denoiseValue = metadata.rawDenoiseValue,
             rawDcpId = metadata.rawDcpId
         )

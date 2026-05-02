@@ -246,9 +246,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val rawAutoWhiteBalanceEstimate: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.rawAutoWhiteBalanceEstimate }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val rawAutoBlackLevelCorrection: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.rawAutoBlackLevelCorrection }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    val rawBlackLevelMode: StateFlow<String> = combine(
+        state.map { it.currentCameraId }.distinctUntilChanged(),
+        userPreferencesRepository.userPreferences
+    ) { cameraId, prefs ->
+        prefs.rawBlackLevelModes[cameraId] ?: "Default"
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, "Default")
+    val rawCustomBlackLevel: StateFlow<Float> = combine(
+        state.map { it.currentCameraId }.distinctUntilChanged(),
+        userPreferencesRepository.userPreferences
+    ) { cameraId, prefs ->
+        prefs.rawCustomBlackLevels[cameraId] ?: 0f
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
     val exportDngWithRawExport: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.exportDngWithRawExport }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -718,8 +727,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setRawAutoWhiteBalanceEstimate(enabled: Boolean) {
         viewModelScope.launch { userPreferencesRepository.saveRawAutoWhiteBalanceEstimate(enabled) }
     }
-    fun setRawAutoBlackLevelCorrection(enabled: Boolean) {
-        viewModelScope.launch { userPreferencesRepository.saveRawAutoBlackLevelCorrection(enabled) }
+    fun setRawBlackLevelMode(mode: String) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveRawBlackLevelMode(state.value.currentCameraId, mode)
+        }
+    }
+    fun setRawCustomBlackLevel(value: Float) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveRawCustomBlackLevel(state.value.currentCameraId, value)
+        }
     }
     fun importRawDcp(uri: android.net.Uri, onComplete: (Boolean) -> Unit) {
         viewModelScope.launch {
@@ -869,7 +885,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
             rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
-            rawAutoBlackLevelCorrection = userPrefs?.rawAutoBlackLevelCorrection ?: true,
+            rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
+            rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
+            cameraId = currentCameraId,
             width = width,
             height = height,
             ratio = aspectRatio,
@@ -2548,7 +2566,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
                 rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
                 rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
-                rawAutoBlackLevelCorrection = userPrefs?.rawAutoBlackLevelCorrection ?: true,
+                rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
+                rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
+                cameraId = currentCameraId,
                 width = image.width,
                 height = image.height,
                 ratio = aspectRatio,
@@ -2649,6 +2669,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val shouldMirror = cameraController.getLensFacing() == CameraCharacteristics.LENS_FACING_FRONT &&
                     (userPrefs?.mirrorFrontCamera ?: true)
             val baselineMetadata = resolveBaselineMetadata(BaselineColorCorrectionTarget.JPG, userPrefs)
+            val currentCameraId = cameraController.getCurrentCameraId()
 
             val metadata = MediaMetadata(
                 lutId = currentLutId.value,
@@ -2668,7 +2689,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
                 rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
                 rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
-                rawAutoBlackLevelCorrection = userPrefs?.rawAutoBlackLevelCorrection ?: true,
+                rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
+                rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
+                cameraId = currentCameraId,
                 width = bitmap.width,
                 height = bitmap.height,
                 ratio = mapVideoAspectRatioToPhotoAspectRatio(currentState.videoConfig.aspectRatio),
@@ -2809,7 +2832,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
                 rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
                 rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
-                rawAutoBlackLevelCorrection = userPrefs?.rawAutoBlackLevelCorrection ?: true,
+                rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
+                rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
+                cameraId = currentCameraId,
                 width = (images[0].width.toFloat() * superResScale).roundToInt(),
                 height = (images[0].height.toFloat() * superResScale).roundToInt(),
                 ratio = aspectRatio,
@@ -2958,7 +2983,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
             rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
-            rawAutoBlackLevelCorrection = userPrefs?.rawAutoBlackLevelCorrection ?: true,
+            rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
+            rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
+            cameraId = currentCameraId,
             width = image.width,
             height = image.height,
             ratio = aspectRatio,

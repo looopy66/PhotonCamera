@@ -27,6 +27,7 @@ import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawProcessingPreferences
 import com.hinnka.mycamera.utils.BitmapUtils
+import com.hinnka.mycamera.utils.DngBlackLevelPatcher
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.RawProcessor
 import com.hinnka.mycamera.utils.YuvProcessor
@@ -113,15 +114,6 @@ object GalleryManager {
     private val detailHdrBuildJobs = ConcurrentHashMap<String, Job>()
     private val _detailHdrReadyEvents = MutableSharedFlow<String>(extraBufferCapacity = 16)
     val detailHdrReadyEvents: SharedFlow<String> = _detailHdrReadyEvents.asSharedFlow()
-
-    private suspend fun resolveRawAutoBlackLevelCorrection(
-        context: Context,
-        metadata: MediaMetadata?
-    ): Boolean {
-        return metadata?.rawAutoBlackLevelCorrection
-            ?: (ContentRepository.getInstance(context).userPreferencesRepository.userPreferences.firstOrNull()
-                ?.rawAutoBlackLevelCorrection ?: true)
-    }
 
     private suspend fun resolveRawAutoWhiteBalanceEstimate(
         context: Context,
@@ -1163,6 +1155,7 @@ object GalleryManager {
                 tempDngFile.delete()
                 return@withContext
             }
+            patchSavedDngBlackLevel(tempDngFile, metadata)
             if (dngFile.exists()) {
                 dngFile.delete()
             }
@@ -1187,7 +1180,6 @@ object GalleryManager {
                 rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
                 rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
                 rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(context, metadata),
-                rawAutoBlackLevelCorrection = resolveRawAutoBlackLevelCorrection(context, metadata),
                 sharpeningValue = 0.4f,
                 rawDcpId = metadata.rawDcpId
             ) ?: return@withContext
@@ -1754,7 +1746,6 @@ object GalleryManager {
                     rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
                     rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
                     rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(context, metadata),
-                    rawAutoBlackLevelCorrection = resolveRawAutoBlackLevelCorrection(context, metadata),
                     sharpeningValue = 0.4f,
                     denoiseValue = 0.2f,
                     rawDcpId = metadata.rawDcpId
@@ -1839,6 +1830,7 @@ object GalleryManager {
             tempDngFile.delete()
             return false
         }
+        patchSavedDngBlackLevel(tempDngFile, metadata)
 
         try {
             if (dngFile.exists()) {
@@ -1862,6 +1854,17 @@ object GalleryManager {
         }
 
         return true
+    }
+
+    private fun patchSavedDngBlackLevel(dngFile: File, metadata: MediaMetadata) {
+        val patched = DngBlackLevelPatcher.patchFromMode(
+            file = dngFile,
+            mode = metadata.rawBlackLevelMode,
+            customBlackLevel = metadata.rawCustomBlackLevel
+        )
+        if (patched) {
+            PLog.d(TAG, "Applied DNG BlackLevel correction (${metadata.rawBlackLevelMode}) to ${dngFile.name}")
+        }
     }
 
 
@@ -2634,7 +2637,6 @@ object GalleryManager {
                         rawBlackPointCorrection = updatedMetadata.rawBlackPointCorrection ?: 0f,
                         rawWhitePointCorrection = updatedMetadata.rawWhitePointCorrection ?: 0f,
                         rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(context, updatedMetadata),
-                        rawAutoBlackLevelCorrection = resolveRawAutoBlackLevelCorrection(context, updatedMetadata),
                         sharpeningValue = 0.4f,
                         denoiseValue = updatedMetadata.rawDenoiseValue,
                         rawDcpId = updatedMetadata.rawDcpId,
@@ -2752,7 +2754,6 @@ object GalleryManager {
                     rawBlackPointCorrection = updatedMetadata?.rawBlackPointCorrection ?: 0f,
                     rawWhitePointCorrection = updatedMetadata?.rawWhitePointCorrection ?: 0f,
                     rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(context, updatedMetadata),
-                    rawAutoBlackLevelCorrection = resolveRawAutoBlackLevelCorrection(context, updatedMetadata),
                     sharpeningValue = 0.4f,
                     denoiseValue = (updatedMetadata ?: MediaMetadata()).rawDenoiseValue,
                     rawDcpId = updatedMetadata?.rawDcpId,

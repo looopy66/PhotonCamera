@@ -199,7 +199,8 @@ fun SettingsScreen(
     val rawBlackPointCorrection by viewModel.rawBlackPointCorrection.collectAsState()
     val rawWhitePointCorrection by viewModel.rawWhitePointCorrection.collectAsState()
     val rawAutoWhiteBalanceEstimate by viewModel.rawAutoWhiteBalanceEstimate.collectAsState()
-    val rawAutoBlackLevelCorrection by viewModel.rawAutoBlackLevelCorrection.collectAsState()
+    val rawBlackLevelMode by viewModel.rawBlackLevelMode.collectAsState()
+    val rawCustomBlackLevel by viewModel.rawCustomBlackLevel.collectAsState()
     val availableDcps = viewModel.availableDcps
     val availableLuts = viewModel.availableLutList
     val previewThumbnail = viewModel.previewThumbnail
@@ -1165,11 +1166,44 @@ fun SettingsScreen(
                         color = Color.White.copy(alpha = 0.1f)
                     )
 
-                    SwitchSettingItem(
-                        title = stringResource(R.string.settings_raw_auto_black_level_correction),
-                        description = stringResource(R.string.settings_raw_auto_black_level_correction_description),
-                        checked = rawAutoBlackLevelCorrection,
-                        onCheckedChange = { viewModel.setRawAutoBlackLevelCorrection(it) }
+                    val rawBlackLevelCorrectionTitle = state.getCurrentCameraInfo()?.let { info ->
+                        stringResource(
+                            R.string.settings_raw_black_level_correction_with_lens,
+                            info.cameraId,
+                            info.focalLength35mmEquivalent.roundToInt()
+                        )
+                    } ?: stringResource(R.string.settings_raw_black_level_correction)
+
+                    QualityLevelSetting(
+                        title = rawBlackLevelCorrectionTitle,
+                        description = stringResource(R.string.settings_raw_black_level_correction_description),
+                        levels = listOf(
+                            "Default" to stringResource(R.string.settings_black_level_default),
+                            "0" to "0",
+                            "16" to "16",
+                            "64" to "64",
+                            "256" to "256",
+                            "512" to "512",
+                            "Custom" to stringResource(R.string.settings_black_level_custom)
+                        ),
+                        currentLevel = rawBlackLevelMode,
+                        onLevelSelected = { viewModel.setRawBlackLevelMode(it) }
+                    )
+
+                    if (rawBlackLevelMode == "Custom") {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextInputSettingItem(
+                            title = stringResource(R.string.settings_black_level_custom),
+                            description = null,
+                            value = if (rawCustomBlackLevel == 0f) "" else rawCustomBlackLevel.toString(),
+                            onValueChange = {
+                                it.toFloatOrNull()?.let { value -> viewModel.setRawCustomBlackLevel(value) }
+                            }
+                        )
+                    }
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        color = Color.White.copy(alpha = 0.1f)
                     )
 
                     HorizontalDivider(

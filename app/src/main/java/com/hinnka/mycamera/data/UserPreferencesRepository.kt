@@ -63,7 +63,8 @@ data class UserPreferences(
     val rawBlackPointCorrection: Float = 0f,
     val rawWhitePointCorrection: Float = 0f,
     val rawAutoWhiteBalanceEstimate: Boolean = false,
-    val rawAutoBlackLevelCorrection: Boolean = true,
+    val rawBlackLevelModes: Map<String, String> = emptyMap(),
+    val rawCustomBlackLevels: Map<String, Float> = emptyMap(),
     val exportDngWithRawExport: Boolean = false,
     val frameId: String? = null,
     val showHistogram: Boolean = true,
@@ -156,7 +157,8 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_BLACK_POINT_CORRECTION_KEY = floatPreferencesKey("raw_black_point_correction")
         private val RAW_WHITE_POINT_CORRECTION_KEY = floatPreferencesKey("raw_white_point_correction")
         private val RAW_AUTO_WHITE_BALANCE_ESTIMATE_KEY = booleanPreferencesKey("raw_auto_white_balance_estimate")
-        private val RAW_AUTO_BLACK_LEVEL_CORRECTION_KEY = booleanPreferencesKey("raw_auto_black_level_correction")
+        private val RAW_BLACK_LEVEL_MODES_KEY = stringPreferencesKey("raw_black_level_modes")
+        private val RAW_CUSTOM_BLACK_LEVELS_KEY = stringPreferencesKey("raw_custom_black_levels")
         private val EXPORT_DNG_WITH_RAW_EXPORT_KEY = booleanPreferencesKey("export_dng_with_raw_export")
         private val PHANTOM_BASELINE_LUT_ID_KEY = stringPreferencesKey("phantom_baseline_lut_id")
         private val FRAME_ID_KEY = stringPreferencesKey("frame_id")
@@ -258,7 +260,8 @@ class UserPreferencesRepository(private val context: Context) {
                 rawBlackPointCorrection = preferences[RAW_BLACK_POINT_CORRECTION_KEY] ?: 0f,
                 rawWhitePointCorrection = preferences[RAW_WHITE_POINT_CORRECTION_KEY] ?: 0f,
                 rawAutoWhiteBalanceEstimate = preferences[RAW_AUTO_WHITE_BALANCE_ESTIMATE_KEY] ?: false,
-                rawAutoBlackLevelCorrection = preferences[RAW_AUTO_BLACK_LEVEL_CORRECTION_KEY] ?: true,
+                rawBlackLevelModes = parseMapString(preferences[RAW_BLACK_LEVEL_MODES_KEY]),
+                rawCustomBlackLevels = parseMapFloat(preferences[RAW_CUSTOM_BLACK_LEVELS_KEY]),
                 exportDngWithRawExport = preferences[EXPORT_DNG_WITH_RAW_EXPORT_KEY] ?: false,
                 phantomBaselineLutId = preferences[PHANTOM_BASELINE_LUT_ID_KEY],
                 frameId = preferences[FRAME_ID_KEY],
@@ -385,6 +388,41 @@ class UserPreferencesRepository(private val context: Context) {
         return offsets.entries
             .filter { it.value in listOf(0, 90, 180, 270) }
             .joinToString(",") { "${it.key}:${it.value}" }
+    }
+
+    private fun parseMapString(value: String?): Map<String, String> {
+        if (value.isNullOrEmpty()) return emptyMap()
+        return value.split(",")
+            .mapNotNull { entry ->
+                val parts = entry.split(":")
+                if (parts.size == 2) {
+                    parts[0] to parts[1]
+                } else null
+            }
+            .toMap()
+    }
+
+    private fun serializeMapString(map: Map<String, String>): String {
+        return map.entries.joinToString(",") { "${it.key}:${it.value}" }
+    }
+
+    private fun parseMapFloat(value: String?): Map<String, Float> {
+        if (value.isNullOrEmpty()) return emptyMap()
+        return value.split(",")
+            .mapNotNull { entry ->
+                val parts = entry.split(":")
+                if (parts.size == 2) {
+                    val floatValue = parts[1].toFloatOrNull()
+                    if (floatValue != null) {
+                        parts[0] to floatValue
+                    } else null
+                } else null
+            }
+            .toMap()
+    }
+
+    private fun serializeMapFloat(map: Map<String, Float>): String {
+        return map.entries.joinToString(",") { "${it.key}:${it.value}" }
     }
 
     private fun parseCustomLensIds(value: String?): List<String> {
@@ -521,9 +559,21 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
-    suspend fun saveRawAutoBlackLevelCorrection(enabled: Boolean) {
+    suspend fun saveRawBlackLevelMode(cameraId: String, mode: String) {
         context.dataStore.edit { preferences ->
-            preferences[RAW_AUTO_BLACK_LEVEL_CORRECTION_KEY] = enabled
+            val current = parseMapString(preferences[RAW_BLACK_LEVEL_MODES_KEY])
+            val updated = current.toMutableMap()
+            updated[cameraId] = mode
+            preferences[RAW_BLACK_LEVEL_MODES_KEY] = serializeMapString(updated)
+        }
+    }
+
+    suspend fun saveRawCustomBlackLevel(cameraId: String, value: Float) {
+        context.dataStore.edit { preferences ->
+            val current = parseMapFloat(preferences[RAW_CUSTOM_BLACK_LEVELS_KEY])
+            val updated = current.toMutableMap()
+            updated[cameraId] = value
+            preferences[RAW_CUSTOM_BLACK_LEVELS_KEY] = serializeMapFloat(updated)
         }
     }
 

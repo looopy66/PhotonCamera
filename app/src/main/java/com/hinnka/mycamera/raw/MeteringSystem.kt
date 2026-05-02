@@ -2,6 +2,7 @@ package com.hinnka.mycamera.raw
 
 import com.hinnka.mycamera.color.TransferCurve
 import java.nio.FloatBuffer
+import kotlin.math.exp
 import kotlin.math.pow
 
 /**
@@ -92,16 +93,12 @@ object MeteringSystem {
 
             val zoneAvg = zoneSum[i] / zonePixCount[i]
 
-            // 1. 基础权重：画面中心
+            // 1. 基础权重：从评价测光连续过渡到中央重点测光。
             val distSqC = (pzx - 0.5f).let { it * it } + (pzy - 0.5f).let { it * it }
 
             val normalizedCenterWeight = centerWeight.coerceIn(0f, 1f).toDouble()
-            val evaluativeWeight = 1.0
-            val centerSigma = 0.22 - 0.19 * normalizedCenterWeight
-            val centerBoost = 1.0 + 7.0 * normalizedCenterWeight
-            val centerWeightedWeight = kotlin.math.exp(-distSqC / centerSigma) * centerBoost
-            var weight = evaluativeWeight * (1.0 - normalizedCenterWeight) +
-                centerWeightedWeight * normalizedCenterWeight
+            val centerInfluence = normalizedCenterWeight * normalizedCenterWeight
+            var weight = calculateSpatialMeteringWeight(distSqC.toDouble(), centerInfluence)
 
             // 2. 肤色密度补偿
             val skinDensity = zoneSkinCount[i].toDouble() / zonePixCount[i]
@@ -110,23 +107,17 @@ object MeteringSystem {
             }
 
             // 3. 高光评价逻辑 (Sky/Highlight handling)
-            // 中心权重越高，越主动排除中心附近的亮天空/背景，避免逆光场景继续压黑主体。
-            val highlightThreshold = 0.75 - 0.5 * normalizedCenterWeight
-            if (zoneAvg > highlightThreshold) {
-                weight *= 0.15 / (1.0 + 2.0 * normalizedCenterWeight)
-            }
+            weight *= calculateHighlightSuppression(zoneAvg, centerInfluence)
 
             // 4. 逆光补偿 (Backlight compensation)
             // 如果对焦中心区域明显暗于全局平均，说明可能处于大面积强光背后的阴影中，大幅增加权重以拉亮主体
-            if (zoneAvg < globalAvgLog - 0.05) {
-                weight *= 3.0 + 9.0 * normalizedCenterWeight
-            }
+            weight *= calculateCenterBacklightBoost(zoneAvg, globalAvgLog, distSqC.toDouble(), centerInfluence)
 
             // 5. 中央重点暗部优先
             // 高中心权重时，暗的中心区域应主导测光；否则大面积天空会把平均值抬高，肉眼上仍然欠曝。
-            if (normalizedCenterWeight > 0.0 && distSqC < 0.12 && zoneAvg < TransferCurve.LINEAR.middleGray) {
+            if (centerInfluence > 0.0 && distSqC < 0.12 && zoneAvg < TransferCurve.LINEAR.middleGray) {
                 val darkness = 1.0 - (zoneAvg / TransferCurve.LINEAR.middleGray).coerceIn(0.0, 1.0)
-                weight *= 1.0 + darkness * 12.0 * normalizedCenterWeight
+                weight *= 1.0 + darkness * 8.0 * centerInfluence
             }
 
             weightedSumLog += zoneAvg * weight
@@ -149,6 +140,40 @@ object MeteringSystem {
         val targetLumaIRE = TransferCurve.LINEAR.middleGray
         val gain = targetLumaIRE * biasMultiplier / avg
         return gain.coerceIn(0.25f, 16f)
+    }
+
+    private fun calculateSpatialMeteringWeight(distSqC: Double, centerInfluence: Double): Double {
+        if (centerInfluence <= 0.0) {
+            return 1.0
+        }
+
+        val centerSigma = 0.24 - 0.17 * centerInfluence
+        val centerBoost = 1.0 + 3.0 * centerInfluence
+        val centerWeightedWeight = exp(-distSqC / centerSigma) * centerBoost
+        return 1.0 * (1.0 - centerInfluence) + centerWeightedWeight * centerInfluence
+    }
+
+    private fun calculateHighlightSuppression(zoneAvg: Double, centerInfluence: Double): Double {
+        val highlightThreshold = 0.75 - 0.25 * centerInfluence
+        if (zoneAvg <= highlightThreshold) {
+            return 1.0
+        }
+
+        return 0.25 / (1.0 + centerInfluence)
+    }
+
+    private fun calculateCenterBacklightBoost(
+        zoneAvg: Double,
+        globalAvg: Double,
+        distSqC: Double,
+        centerInfluence: Double
+    ): Double {
+        if (centerInfluence <= 0.0 || zoneAvg >= globalAvg - 0.05) {
+            return 1.0
+        }
+
+        val centerProximity = exp(-distSqC / 0.08)
+        return 1.0 + centerProximity * (3.0 + 6.0 * centerInfluence) * centerInfluence
     }
 
 }

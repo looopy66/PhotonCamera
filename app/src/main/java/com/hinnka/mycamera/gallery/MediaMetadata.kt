@@ -23,7 +23,7 @@ import kotlin.math.log2
  * 保存 LUT、边框水印、编辑信息和拍摄参数，用于非破坏性编辑和边框水印渲染
  */
 data class MediaMetadata(
-    val version: Int = 15,  // Added RAW DCP support
+    val version: Int = 16,
     val mediaType: MediaType = MediaType.IMAGE,
     // 编辑配置
     val lutId: String? = null,
@@ -43,7 +43,6 @@ data class MediaMetadata(
     val rawBlackPointCorrection: Float? = null,
     val rawWhitePointCorrection: Float? = null,
     val rawAutoWhiteBalanceEstimate: Boolean? = null,
-    val rawAutoBlackLevelCorrection: Boolean? = null,
     val rawDcpId: String? = null,
     // 边框水印配置
     val frameId: String? = null,
@@ -101,7 +100,10 @@ data class MediaMetadata(
     val captureMode: String? = null,
     val multipleExposureFrameCount: Int? = null,
     val hasAiDenoisedBase: Boolean = false,
-    val aiDenoiseStrength: Float? = null
+    val aiDenoiseStrength: Float? = null,
+    val rawBlackLevelMode: String? = null,
+    val rawCustomBlackLevel: Float? = null,
+    val cameraId: String? = null,
 ) {
     /**
      * 将元数据转换为 CaptureInfo，用于写入 EXIF
@@ -187,8 +189,10 @@ data class MediaMetadata(
             put("rawBlackPointCorrection", rawBlackPointCorrection?.toDouble() ?: JSONObject.NULL)
             put("rawWhitePointCorrection", rawWhitePointCorrection?.toDouble() ?: JSONObject.NULL)
             put("rawAutoWhiteBalanceEstimate", rawAutoWhiteBalanceEstimate ?: JSONObject.NULL)
-            put("rawAutoBlackLevelCorrection", rawAutoBlackLevelCorrection ?: JSONObject.NULL)
             put("rawDcpId", rawDcpId ?: JSONObject.NULL)
+            put("rawBlackLevelMode", rawBlackLevelMode ?: JSONObject.NULL)
+            put("rawCustomBlackLevel", rawCustomBlackLevel?.toDouble() ?: JSONObject.NULL)
+            put("cameraId", cameraId ?: JSONObject.NULL)
 
             put("frameId", frameId ?: JSONObject.NULL)
             put("width", width)
@@ -362,8 +366,10 @@ data class MediaMetadata(
                     rawBlackPointCorrection = if (obj.isNull("rawBlackPointCorrection")) null else obj.optDouble("rawBlackPointCorrection").toFloat(),
                     rawWhitePointCorrection = if (obj.isNull("rawWhitePointCorrection")) null else obj.optDouble("rawWhitePointCorrection").toFloat(),
                     rawAutoWhiteBalanceEstimate = if (obj.isNull("rawAutoWhiteBalanceEstimate")) null else obj.optBoolean("rawAutoWhiteBalanceEstimate"),
-                    rawAutoBlackLevelCorrection = if (obj.isNull("rawAutoBlackLevelCorrection")) null else obj.optBoolean("rawAutoBlackLevelCorrection"),
                     rawDcpId = if (obj.isNull("rawDcpId")) null else obj.optString("rawDcpId"),
+                    rawBlackLevelMode = if (obj.isNull("rawBlackLevelMode")) null else obj.optString("rawBlackLevelMode"),
+                    rawCustomBlackLevel = if (obj.isNull("rawCustomBlackLevel")) null else obj.optDouble("rawCustomBlackLevel").toFloat(),
+                    cameraId = if (obj.isNull("cameraId")) null else obj.optString("cameraId"),
                     frameId = if (obj.isNull("frameId")) null else obj.optString("frameId"),
                     width = obj.optInt("width", 0),
                     height = obj.optInt("height", 0),
