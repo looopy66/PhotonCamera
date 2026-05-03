@@ -844,7 +844,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         val sensorOrientation = cameraController.getSensorOrientation()
         val lensFacing = cameraController.getLensFacing()
-        val deviceRotation = OrientationObserver.rotationDegrees.toInt()
+        val deviceRotation = OrientationObserver.captureRotationDegrees.toInt()
         val baseRotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
             (sensorOrientation - deviceRotation + 360) % 360
         } else {
@@ -1838,7 +1838,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun capturePreviewThumbnailRotation(): Float {
-        val deviceRotation = OrientationObserver.rotationDegrees.toInt()
+        val deviceRotation = OrientationObserver.captureRotationDegrees.toInt()
         val lensFacing = cameraController.getLensFacing()
         val baseRotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
             (360 - deviceRotation) % 360
@@ -2516,7 +2516,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // 计算旋转角度
             val sensorOrientation = cameraController.getSensorOrientation()
             val lensFacing = cameraController.getLensFacing()
-            val deviceRotation = OrientationObserver.rotationDegrees.toInt()
+            val deviceRotation = OrientationObserver.captureRotationDegrees.toInt()
 
             // 基础旋转角度计算
             val baseRotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
@@ -2779,7 +2779,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // 计算旋转角度
             val sensorOrientation = cameraController.getSensorOrientation()
             val lensFacing = cameraController.getLensFacing()
-            val deviceRotation = OrientationObserver.rotationDegrees.toInt()
+            val deviceRotation = OrientationObserver.captureRotationDegrees.toInt()
 
             // 基础旋转角度计算
             val baseRotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
@@ -2933,7 +2933,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 计算旋转角度
         val sensorOrientation = cameraController.getSensorOrientation()
         val lensFacing = cameraController.getLensFacing()
-        val deviceRotation = OrientationObserver.rotationDegrees.toInt()
+        val deviceRotation = OrientationObserver.captureRotationDegrees.toInt()
 
         // 基础旋转角度计算
         val baseRotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {

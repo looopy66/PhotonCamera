@@ -28,6 +28,10 @@ object OrientationObserver {
     var rotationDegrees by mutableStateOf(0f)
         private set
 
+    // 存储拍摄方向，包含反向竖屏，用于照片保存/处理
+    var captureRotationDegrees by mutableStateOf(0f)
+        private set
+
     // 更新方向，只在横竖屏切换时才更新状态
     fun updateOrientation(orientation: Int) {
         if (orientation == OrientationEventListener.ORIENTATION_UNKNOWN) {
@@ -41,6 +45,7 @@ object OrientationObserver {
         // 右侧朝上（手机顺时针旋转90°）
         when (orientation) {
             in 45..135 -> {
+                captureRotationDegrees = 90f
                 if (!isLandscape || rotationDegrees != 90f) {
                     isLandscape = true
                     rotationDegrees = 90f
@@ -49,14 +54,25 @@ object OrientationObserver {
             }
             // 左侧朝上（手机逆时针旋转90°）
             in 225..315 -> {
+                captureRotationDegrees = 270f
                 if (!isLandscape || rotationDegrees != 270f) {
                     isLandscape = true
                     rotationDegrees = 270f
                     PLog.d(TAG, "Orientation locked to landscape-left, orientation=$orientation")
                 }
             }
+            // 反向竖屏
+            in 135..225 -> {
+                captureRotationDegrees = 180f
+                if (isLandscape || rotationDegrees != 0f) {
+                    isLandscape = false
+                    rotationDegrees = 0f
+                    PLog.d(TAG, "Orientation locked to reverse-portrait, orientation=$orientation")
+                }
+            }
             // 竖屏
             else -> {
+                captureRotationDegrees = 0f
                 if (isLandscape || rotationDegrees != 0f) {
                     isLandscape = false
                     rotationDegrees = 0f
