@@ -7,14 +7,14 @@ import java.nio.FloatBuffer
 import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.pow
+import kotlin.math.sqrt
 
 /**
  * 评价测光与场景分析系统
  */
 object MeteringSystem {
     private const val TAG = "MeteringSystem"
-    private const val DISPLAY_TARGET_LUMA = 0.52f
-    private const val DISPLAY_HIGHLIGHT_LIMIT = 0.98f
+    private const val DISPLAY_TARGET_LUMA = 0.5f
 
     fun analyze(
         floatBuffer: FloatBuffer,
@@ -153,79 +153,65 @@ object MeteringSystem {
         height: Int,
         centerWeight: Float = 0f
     ): Float {
-        val gridRows = 12
-        val gridCols = 12
-        val zoneSum = DoubleArray(gridRows * gridCols)
-        val zonePixCount = IntArray(gridRows * gridCols)
-        val lumas = FloatArray(width * height)
-        var validPixelCount = 0
+        val pixelCount = width * height
+        if (pixelCount == 0) return 0f
 
-        byteBuffer.position(0)
-        for (y in 0 until height) {
-            val gy = (y.toFloat() / height * gridRows).toInt().coerceIn(0, gridRows - 1)
-            for (x in 0 until width) {
-                val gx = (x.toFloat() / width * gridCols).toInt().coerceIn(0, gridCols - 1)
-                val zi = gy * gridCols + gx
-
-                val r = (byteBuffer.get().toInt() and 0xFF) / 255f
-                val g = (byteBuffer.get().toInt() and 0xFF) / 255f
-                val b = (byteBuffer.get().toInt() and 0xFF) / 255f
-                byteBuffer.get()
-
-                val luma = r * 0.2126f + g * 0.7152f + b * 0.0722f
-                lumas[validPixelCount++] = luma
-                zoneSum[zi] += luma.toDouble()
-                zonePixCount[zi]++
-            }
-        }
-
-        if (validPixelCount == 0) {
-            return 0f
-        }
-
+        val lumas = FloatArray(pixelCount)
+        var totalWeightedLuma = 0.0
         var totalWeight = 0.0
-        var weightedSum = 0.0
+        
         val normalizedCenterWeight = centerWeight.coerceIn(0f, 1f).toDouble()
         val centerInfluence = normalizedCenterWeight * normalizedCenterWeight
 
-        for (i in 0 until gridRows * gridCols) {
-            if (zonePixCount[i] == 0) continue
+        byteBuffer.position(0)
+        for (y in 0 until height) {
+            val py = (y + 0.5f) / height
+            for (x in 0 until width) {
+                val px = (x + 0.5f) / width
+                
+                val r = (byteBuffer.get().toInt() and 0xFF) / 255f
+                val g = (byteBuffer.get().toInt() and 0xFF) / 255f
+                val b = (byteBuffer.get().toInt() and 0xFF) / 255f
+                byteBuffer.get() // skip alpha
 
-            val gy = i / gridCols
-            val gx = i % gridCols
-            val pzx = (gx + 0.5f) / gridCols
-            val pzy = (gy + 0.5f) / gridRows
-            val distSqC = (pzx - 0.5f).let { it * it } + (pzy - 0.5f).let { it * it }
-            val weight = calculateSpatialMeteringWeight(distSqC.toDouble(), centerInfluence)
-            val zoneAvg = zoneSum[i] / zonePixCount[i]
+                val luma = r * 0.2126f + g * 0.7152f + b * 0.0722f
+                val idx = y * width + x
+                lumas[idx] = luma
 
-            weightedSum += zoneAvg * weight
-            totalWeight += weight
+                // Calculate spatial weight for the average (subject reference)
+                val distSqC = (px - 0.5f).let { it * it } + (py - 0.5f).let { it * it }
+                val weight = calculateSpatialMeteringWeight(distSqC.toDouble(), centerInfluence)
+                totalWeightedLuma += luma * weight
+                totalWeight += weight
+            }
         }
 
-        if (totalWeight <= 0.0) {
-            return 0f
+        if (totalWeight <= 0.0) return 0f
+
+        // 1. Statistical analysis: Sort to find percentiles
+        lumas.sort()
+        val p998 = lumas[(pixelCount * 0.998f).toInt().coerceIn(0, pixelCount - 1)]
+        
+        val highlightAnchorGain = 1f / p998.coerceAtLeast(0.01f)
+
+        // 3. Midtone Balance Logic (Spatial Average)
+        val avgLuma = (totalWeightedLuma / totalWeight).toFloat()
+        val midToneGain = DISPLAY_TARGET_LUMA / avgLuma.coerceAtLeast(0.001f)
+
+        // 4. Fusion Strategy: Highlight Priority (LR-style)
+        val dynamicRangeGap = midToneGain / highlightAnchorGain
+        val adaptiveGain = if (dynamicRangeGap > 3.0f) {
+            sqrt(highlightAnchorGain * midToneGain)
+        } else if (dynamicRangeGap > 0.66f) {
+            highlightAnchorGain
+        } else {
+            midToneGain
         }
 
-        val averageLuma = (weightedSum / totalWeight).toFloat()
-        if (averageLuma <= 0.000001f) {
-            return 0f
-        }
-
-//        val histogram = lumas.copyOf(validPixelCount)
-//        histogram.sort()
-//        val highlightPercentile = percentile(histogram, 0.995f)
-        val meteredEv = log2(DISPLAY_TARGET_LUMA / averageLuma)
-//        val highlightLimitedEv = if (meteredEv > 0f && highlightPercentile > 0f) {
-//            minOf(meteredEv, log2(DISPLAY_HIGHLIGHT_LIMIT / highlightPercentile).coerceAtLeast(0f))
-//        } else {
-//            meteredEv
-//        }
-//        PLog.d(
-//            TAG,
-//            "Rendered metering: avg=$averageLuma p99.5=$highlightPercentile ev=$meteredEv limited=$highlightLimitedEv"
-//        )
-//        return highlightLimitedEv.coerceIn(-2f, 2f)
+        val meteredEv = log2(adaptiveGain.coerceIn(0.25f, 4.0f))
+        
+        PLog.d("MeteringSystem", "Smart AE: p998=$p998 avg=$avgLuma midToneGain=$midToneGain highlightAnchorGain=$highlightAnchorGain gain=$adaptiveGain ev=$meteredEv")
+        
         return meteredEv.coerceIn(-2f, 4f)
     }
 
