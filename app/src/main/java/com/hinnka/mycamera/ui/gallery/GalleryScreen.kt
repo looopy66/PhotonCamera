@@ -573,7 +573,7 @@ fun GalleryScreen(
 
     // 删除确认对话框
     if (showDeleteDialog) {
-        var deleteExported by remember { mutableStateOf(false) }
+        var deleteExported by remember { mutableStateOf(true) }
 
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
