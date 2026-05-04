@@ -1,13 +1,13 @@
 package com.hinnka.mycamera.viewmodel
 
 import android.app.Application
-import android.content.Context
 import android.content.Intent
-import android.graphics.RectF
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.RectF
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.provider.MediaStore
 import android.util.LruCache
 import androidx.compose.runtime.*
@@ -19,24 +19,32 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.frame.FrameInfo
-import com.hinnka.mycamera.gallery.MediaData
 import com.hinnka.mycamera.gallery.GalleryManager
+import com.hinnka.mycamera.gallery.MediaData
 import com.hinnka.mycamera.gallery.MediaMetadata
+import com.hinnka.mycamera.hdr.HdrGainmapStrength
 import com.hinnka.mycamera.hdr.UnifiedGainmapProducer
+import com.hinnka.mycamera.lut.creator.AiPhotoEvaluation
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.PhotoTransformation
+import com.hinnka.mycamera.lut.creator.OpenAIApiClient
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.raw.RawProcessingPreferences
-import com.hinnka.mycamera.utils.PLog
-import com.hinnka.mycamera.utils.StartupTrace
 import com.hinnka.mycamera.ui.gallery.CropAspectOption
 import com.hinnka.mycamera.ui.gallery.calculateInitialCropRect
+import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.utils.StartupTrace
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import java.io.File
 import java.io.FileOutputStream
-import kotlin.math.max
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
@@ -93,6 +101,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         .map { it.droMode }
         .stateIn(viewModelScope, SharingStarted.Eagerly, "OFF")
 
+    val openAIApiKey = userPreferencesRepository.userPreferences.map { it.openAIApiKey }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+
     // 计费管理器
     private val billingManager = com.hinnka.mycamera.billing.BillingManagerImpl(application)
     val isPurchased = billingManager.isPurchased
@@ -135,7 +146,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     private var systemOffset = 0
     private var photonOffset = 0
-    private val pageSize = 50
+    private val systemLoadMutex = Mutex()
+    private val photonLoadMutex = Mutex()
     var hasMoreSystemPhotos by mutableStateOf(true)
         private set
     var hasMorePhotonPhotos by mutableStateOf(true)
@@ -218,6 +230,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     // 照片刷新密钥，用于强制 UI 重新加载图片
     val photoRefreshKeys = SnapshotStateMap<String, Long>()
+    val rawPhotoStates = SnapshotStateMap<String, Boolean>()
 
     // 正在刷新的照片 ID 集合
     val refreshingPhotos = mutableStateListOf<String>()
@@ -240,8 +253,22 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    private val gridThumbnailCache = object : LruCache<String, Bitmap>(
+        (Runtime.getRuntime().maxMemory() / 16).toInt()
+    ) {
+        override fun sizeOf(key: String, value: Bitmap): Int {
+            return value.allocationByteCount
+        }
+    }
+    private val gridThumbnailSemaphore = Semaphore(4)
+
+    private val aiEvaluationCache = mutableMapOf<String, AiPhotoEvaluation>()
+
     // 可用的 LUT 列表
     var availableLuts: List<LutInfo> by mutableStateOf(emptyList())
+        private set
+
+    var availableDcps: List<DcpInfo> by mutableStateOf(emptyList())
         private set
 
     // 边框编辑状态
@@ -261,6 +288,18 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         private set
     var editRawDenoise = MutableStateFlow(0f)
         private set
+    var editRawExposureCompensation = MutableStateFlow(0f)
+        private set
+    var editRawAutoExposure = MutableStateFlow(true)
+        private set
+    var editRawMeteringCenterWeight = MutableStateFlow(0f)
+        private set
+    var editRawBlackPointCorrection = MutableStateFlow(0f)
+        private set
+    var editRawWhitePointCorrection = MutableStateFlow(0f)
+        private set
+    var editRawDcpId = MutableStateFlow<String?>(null)
+        private set
 
     // Computational Bokeh editing state
     var editComputationalAperture = MutableStateFlow<Float?>(null)
@@ -276,6 +315,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     var editCropAspectOption = MutableStateFlow<CropAspectOption>(CropAspectOption.Free)
         private set
 
+    private val _editAiDenoiseStrength = MutableStateFlow(1.0f)
+    val editAiDenoiseStrength = _editAiDenoiseStrength.asStateFlow()
+
+    private val _isAiDenoising = MutableStateFlow(false)
+    val isAiDenoising = _isAiDenoising.asStateFlow()
+
+    private val _aiDenoiseProgress = MutableStateFlow(0f)
+    val aiDenoiseProgress = _aiDenoiseProgress.asStateFlow()
+
     private var bokehJob: Job? = null
 
     fun setComputationalAperture(value: Float?) {
@@ -289,30 +337,218 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         updateBokehPhoto()
     }
 
+    private suspend fun updatePhotoMetadata(
+        photoId: String,
+        transform: (MediaMetadata) -> MediaMetadata
+    ): MediaMetadata? {
+        val context = getApplication<Application>()
+        val current = GalleryManager.loadMetadata(context, photoId)
+            ?: _photos.value.firstOrNull { it.id == photoId }?.metadata
+            ?: MediaMetadata()
+        val updated = transform(current)
+        if (!GalleryManager.saveMetadata(context, photoId, updated)) return null
+        withContext(Dispatchers.Main) {
+            if (currentPhotoMetadataId == photoId) {
+                currentMediaMetadata = updated
+            }
+            _photos.value = _photos.value.map { p ->
+                if (p.id == photoId) p.copy(metadata = updated) else p
+            }
+            if (_latestPhoto.value?.id == photoId) {
+                _latestPhoto.value = _latestPhoto.value?.copy(metadata = updated)
+            }
+        }
+        return updated
+    }
+
     private fun updateBokehPhoto() {
         bokehJob?.cancel()
         bokehJob = viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>()
+            val photoData = getCurrentPhoto() ?: return@launch
             val aperture = editComputationalAperture.value
+            if (aperture == null || aperture <= 0) {
+                GalleryManager.getBokehFile(context, photoData.id).takeIf { it.exists() }?.delete()
+                GalleryManager.deleteDetailHdrFile(context, photoData.id)
+                return@launch
+            }
             val focusPointX = editFocusPointX.value
             val focusPointY = editFocusPointY.value
-            val photoData = getCurrentPhoto() ?: return@launch
-            val bitmap = GalleryManager.loadOriginalBitmap(context, photoData.id)
+            val metadata = GalleryManager.loadMetadata(context, photoData.id) ?: photoData.metadata ?: MediaMetadata()
+            val bitmap = if (metadata.hasAiDenoisedBase) {
+                GalleryManager.loadBitmap(context, Uri.fromFile(GalleryManager.getAiDenoiseFile(context, photoData.id)))
+            } else {
+                GalleryManager.loadOriginalBitmap(context, photoData.id)
+            }
                 ?: GalleryManager.loadBitmap(context, photoData.uri) ?: return@launch
             if (!isActive) return@launch
-            val bokeh = aperture?.let {
-                contentRepository.depthBokehProcessor.applyHighQualityBokeh(
-                    context,
-                    photoData.id,
-                    bitmap,
-                    focusPointX,
-                    focusPointY,
-                    it
-                )
-            } ?: bitmap
+            val bokeh = contentRepository.depthBokehProcessor.applyHighQualityBokeh(
+                context,
+                photoData.id,
+                bitmap,
+                focusPointX,
+                focusPointY,
+                aperture
+            )
             if (!isActive) return@launch
             GalleryManager.saveBokehPhoto(context, photoData.id, bokeh)
+            GalleryManager.deleteDetailHdrFile(context, photoData.id)
             photoRefreshKeys[photoData.id] = System.currentTimeMillis()
+        }
+    }
+
+    fun setAiDenoiseStrength(value: Float) {
+        _editAiDenoiseStrength.value = value
+    }
+
+    fun applyDnCNNDenoise(photo: MediaData, strength: Float = 1.0f, onComplete: (Boolean) -> Unit) {
+        if (_isAiDenoising.value) return
+        _isAiDenoising.value = true
+        _aiDenoiseProgress.value = 0f
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            try {
+                var bitmap = GalleryManager.loadOriginalBitmap(context, photo.id) ?: GalleryManager.loadBitmap(context, photo.uri)
+                if (bitmap == null) {
+                    _isAiDenoising.value = false
+                    withContext(Dispatchers.Main) { onComplete(false) }
+                    return@launch
+                }
+                
+                if (!isRawInGallery(photo.id)) {
+                    // 非 RAW 照片，先进行一次色度降噪
+                    val lutProcessor = com.hinnka.mycamera.lut.LutImageProcessor()
+                    val chromaDenoised = lutProcessor.applyChromaDenoise(bitmap, strength = 0.5f)
+                    lutProcessor.release()
+                    if (chromaDenoised !== bitmap) {
+                        bitmap.recycle()
+                        bitmap = chromaDenoised
+                    }
+                }
+                
+                val estimator = com.hinnka.mycamera.ml.DnCNNDenoiseEstimator(context)
+                val denoised = estimator.denoisePatchwise(bitmap, strength = strength) { p ->
+                    _aiDenoiseProgress.value = p
+                }
+                estimator.close()
+                bitmap.recycle()
+                
+                if (denoised == null) {
+                    _isAiDenoising.value = false
+                    withContext(Dispatchers.Main) { onComplete(false) }
+                    return@launch
+                }
+                
+                val file = GalleryManager.getAiDenoiseFile(context, photo.id)
+                file.parentFile?.mkdirs()
+                FileOutputStream(file).use { outputStream ->
+                    denoised.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                }
+                
+                // Update metadata to mark that we have an AI denoised base
+                val metadata = currentMediaMetadata ?: photo.metadata ?: MediaMetadata()
+                val aperture = metadata.computationalAperture ?: 0f
+                if (aperture > 0f) {
+                    val bokeh = contentRepository.depthBokehProcessor.applyHighQualityBokeh(
+                        context,
+                        photo.id,
+                        denoised,
+                        metadata.focusPointX,
+                        metadata.focusPointY,
+                        aperture
+                    )
+                    GalleryManager.saveBokehPhoto(context, photo.id, bokeh)
+                    if (bokeh !== denoised && !bokeh.isRecycled) {
+                        bokeh.recycle()
+                    }
+                }
+                val updatedMetadata = metadata.copy(
+                    hasAiDenoisedBase = true,
+                    aiDenoiseStrength = strength
+                )
+                GalleryManager.saveMetadata(context, photo.id, updatedMetadata)
+                currentMediaMetadata = updatedMetadata
+                
+                val updatedPhotos = _photos.value.map { p ->
+                    if (p.id == photo.id) p.copy(metadata = updatedMetadata) else p
+                }
+                _photos.value = updatedPhotos
+                if (_latestPhoto.value?.id == photo.id) {
+                    _latestPhoto.value = _latestPhoto.value?.copy(metadata = updatedMetadata)
+                }
+                
+                photoRefreshKeys[photo.id] = System.currentTimeMillis()
+                invalidatePreviewCache(photo.id)
+                
+                // Clear and rebuild HDR cache so the user sees the new denoised image in HDR view
+                GalleryManager.deleteDetailHdrFile(context, photo.id)
+                GalleryManager.queueDetailHdrCacheBuild(
+                    context = context,
+                    photoId = photo.id,
+                    metadata = updatedMetadata,
+                    sharpening = updatedMetadata.sharpening ?: 0f,
+                    noiseReduction = updatedMetadata.noiseReduction ?: 0f,
+                    chromaNoiseReduction = updatedMetadata.chromaNoiseReduction ?: 0f
+                )
+
+                _isAiDenoising.value = false
+                withContext(Dispatchers.Main) { onComplete(true) }
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to apply DnCNN denoise", e)
+                _isAiDenoising.value = false
+                withContext(Dispatchers.Main) { onComplete(false) }
+            }
+        }
+    }
+
+    fun resetDnCNNDenoise(photo: MediaData, onComplete: (Boolean) -> Unit = {}) {
+        if (_isAiDenoising.value) return
+        _isAiDenoising.value = true
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            try {
+                GalleryManager.getAiDenoiseFile(context, photo.id).takeIf { it.exists() }?.delete()
+                val updatedMetadata = updatePhotoMetadata(photo.id) {
+                    it.copy(hasAiDenoisedBase = false, aiDenoiseStrength = 0.0f)
+                } ?: run {
+                    _isAiDenoising.value = false
+                    withContext(Dispatchers.Main) { onComplete(false) }
+                    return@launch
+                }
+
+                val aperture = updatedMetadata.computationalAperture ?: 0f
+                if (aperture > 0f) {
+                    val originalBitmap = GalleryManager.loadOriginalBitmap(context, photo.id)
+                    if (originalBitmap != null) {
+                        GalleryManager.generateBokehPhoto(context, photo.id, updatedMetadata, originalBitmap)
+                        if (!originalBitmap.isRecycled) originalBitmap.recycle()
+                    }
+                } else {
+                    GalleryManager.getBokehFile(context, photo.id).takeIf { it.exists() }?.delete()
+                }
+
+                GalleryManager.deleteDetailHdrFile(context, photo.id)
+                if (updatedMetadata.manualHdrEffectEnabled) {
+                    GalleryManager.queueDetailHdrCacheBuild(
+                        context = context,
+                        photoId = photo.id,
+                        metadata = updatedMetadata,
+                        sharpening = updatedMetadata.sharpening ?: 0f,
+                        noiseReduction = updatedMetadata.noiseReduction ?: 0f,
+                        chromaNoiseReduction = updatedMetadata.chromaNoiseReduction ?: 0f
+                    )
+                }
+                invalidatePreviewCache(photo.id)
+                photoRefreshKeys[photo.id] = System.currentTimeMillis()
+                _isAiDenoising.value = false
+                withContext(Dispatchers.Main) { onComplete(true) }
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to reset AI denoise", e)
+                _isAiDenoising.value = false
+                withContext(Dispatchers.Main) { onComplete(false) }
+            }
         }
     }
 
@@ -395,6 +631,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 availableFrames = sortedFrames
             }
         }
+
+        viewModelScope.launch {
+            contentRepository.availableDcps.collect { dcps ->
+                availableDcps = dcps.sortedBy { it.getName() }
+            }
+        }
         StartupTrace.mark("GalleryViewModel.init end")
     }
 
@@ -409,10 +651,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     suspend fun loadCurrentTabMore() {
-        when (selectedTab) {
-            GalleryTab.SYSTEM -> loadSystemPhotos(reset = false)
-            GalleryTab.PHOTON -> loadPhotos(reset = false)
-        }
+        // 当前相册列表使用全量加载，底部触发不再追加分页数据。
+        hasMoreSystemPhotos = false
+        hasMorePhotonPhotos = false
     }
 
     /**
@@ -447,34 +688,26 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 加载系统照片
      */
     suspend fun loadSystemPhotos(reset: Boolean = false) {
-        if (!hasGalleryPermission) return
-        if (!reset && (!hasMoreSystemPhotos || _isSystemLoadingMore.value)) return
+        if (!hasGalleryPermission || !reset) return
+        systemLoadMutex.withLock {
+            loadSystemPhotosInternal()
+        }
+    }
 
-        val loadCount = if (reset) max(pageSize, _systemPhotos.value.size) else pageSize
-        val loadOffset = if (reset) 0 else systemOffset
-
-        if (reset) {
+    private suspend fun loadSystemPhotosInternal() {
+        try {
             if (_systemPhotos.value.isEmpty()) {
                 _isLoading.value = true
             }
             systemOffset = 0
-            hasMoreSystemPhotos = true
-        } else {
-            _isSystemLoadingMore.value = true
-        }
+            hasMoreSystemPhotos = false
 
-        try {
-            val newPhotos = repository.getSystemPhotos(loadOffset, loadCount)
-            if (reset) {
-                _systemPhotos.value = newPhotos
-                systemOffset = newPhotos.size
-                hasMoreSystemPhotos = newPhotos.size >= loadCount
-            } else {
-                _systemPhotos.value = (_systemPhotos.value + newPhotos).distinctBy { it.id }
-                systemOffset += newPhotos.size
-                hasMoreSystemPhotos = newPhotos.size >= loadCount
-            }
+            val newPhotos = repository.getAllSystemPhotos()
+            _systemPhotos.value = newPhotos
+            systemOffset = newPhotos.size
+            hasMoreSystemPhotos = false
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             PLog.e(TAG, "Failed to load system photos", e)
         } finally {
             _isLoading.value = false
@@ -486,40 +719,108 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 加载照片列表
      */
     suspend fun loadPhotos(reset: Boolean = true) {
-        if (!reset && (!hasMorePhotonPhotos || _isPhotonLoadingMore.value)) return
+        if (!reset) return
+        photonLoadMutex.withLock {
+            loadPhotosInternal()
+        }
+    }
 
-        val loadCount = if (reset) max(pageSize, _photos.value.size) else pageSize
-        val loadOffset = if (reset) 0 else photonOffset
-
-        if (reset) {
+    private suspend fun loadPhotosInternal() {
+        try {
             if (_photos.value.isEmpty()) _isLoading.value = true
             photonOffset = 0
-            hasMorePhotonPhotos = true
-        } else {
-            _isPhotonLoadingMore.value = true
-        }
+            hasMorePhotonPhotos = false
 
-        try {
-            val newList = repository.getPhotosPage(offset = loadOffset, limit = loadCount)
+            val newList = repository.getPhotosSync()
             val currentMap = _photos.value.associateBy { it.id }
 
-            // 保留现有元数据和运行时状态，避免分页追加时丢失信息
-            val mergedList = newList.map { currentMap[it.id] ?: it }
-            if (reset) {
-                _photos.value = mergedList
-                photonOffset = mergedList.size
-                hasMorePhotonPhotos = newList.size >= loadCount
-            } else {
-                _photos.value = (_photos.value + mergedList).distinctBy { it.id }
-                photonOffset += newList.size
-                hasMorePhotonPhotos = newList.size >= loadCount
+            // 保留运行时状态，但使用最新加载到的 metadata/sourceUri 等持久化信息
+            val mergedList = newList.map { fresh ->
+                currentMap[fresh.id]?.let { existing ->
+                    existing.copy(
+                        uri = fresh.uri,
+                        thumbnailUri = fresh.thumbnailUri,
+                        displayName = fresh.displayName,
+                        dateAdded = fresh.dateAdded,
+                        size = fresh.size,
+                        width = fresh.width,
+                        height = fresh.height,
+                        mediaType = fresh.mediaType,
+                        mimeType = fresh.mimeType,
+                        durationMs = fresh.durationMs,
+                        sourceUri = fresh.sourceUri,
+                        isMotionPhoto = fresh.isMotionPhoto,
+                        isBurstPhoto = fresh.isBurstPhoto,
+                        metadata = fresh.metadata,
+                        relatedPhoto = fresh.relatedPhoto
+                    )
+                } ?: fresh
             }
+            _photos.value = mergedList
+            updateRawPhotoStates(mergedList)
+            photonOffset = mergedList.size
+            hasMorePhotonPhotos = false
             _latestPhoto.value = _photos.value.firstOrNull()
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             PLog.e(TAG, "Failed to load photos", e)
         } finally {
             _isLoading.value = false
             _isPhotonLoadingMore.value = false
+        }
+    }
+
+    private fun removePhotonPhotosFromState(photoIds: Set<String>) {
+        if (photoIds.isEmpty()) return
+        _photos.update { current -> current.filterNot { it.id in photoIds } }
+        selectedPhotos.removeAll { it.id in photoIds }
+        photoIds.forEach {
+            rawPhotoStates.remove(it)
+            invalidateGridThumbnailCache(it)
+        }
+        _latestPhoto.value = _photos.value.firstOrNull()
+        if (currentPhotoIndex >= _photos.value.size) {
+            currentPhotoIndex = (_photos.value.size - 1).coerceAtLeast(0)
+        }
+    }
+
+    private fun removeSystemPhotosFromState(photoIds: Set<String>) {
+        if (photoIds.isEmpty()) return
+        _systemPhotos.update { current -> current.filterNot { it.id in photoIds } }
+        selectedPhotos.removeAll { it.id in photoIds }
+        if (currentPhotoIndex >= currentPhotos.value.size) {
+            currentPhotoIndex = (currentPhotos.value.size - 1).coerceAtLeast(0)
+        }
+    }
+
+    private suspend fun updateRawPhotoStates(photos: List<MediaData>) {
+        val context = getApplication<Application>()
+        val states = withContext(Dispatchers.IO) {
+            photos.associate { photo ->
+                photo.id to (photo.isImage && GalleryManager.getDngFile(context, photo.id).exists())
+            }
+        }
+        rawPhotoStates.clear()
+        rawPhotoStates.putAll(states)
+    }
+
+    fun isRawInGallery(photoId: String): Boolean {
+        return rawPhotoStates[photoId] == true
+    }
+
+    suspend fun getGridThumbnailBitmap(photo: MediaData): Bitmap? {
+        val refreshKey = photoRefreshKeys[photo.id] ?: 0L
+        val cacheKey = "${photo.id}_${photo.thumbnailUri}_$refreshKey"
+        gridThumbnailCache.get(cacheKey)?.takeIf { !it.isRecycled }?.let { return it }
+
+        return gridThumbnailSemaphore.withPermit {
+            gridThumbnailCache.get(cacheKey)?.takeIf { !it.isRecycled }?.let { return@withPermit it }
+
+            withContext(Dispatchers.IO) {
+                loadThumbnail(photo)
+            }?.also { bitmap ->
+                gridThumbnailCache.put(cacheKey, bitmap)
+            }
         }
     }
 
@@ -696,11 +997,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 metadata.postCropRegion.bottom.toFloat() / ch
             )
 
-            editCropAspectOption.value = metadata.ratio?.let { CropAspectOption.FromAspectRatio(it) }
-                ?: CropAspectOption.Custom(
-                    metadata.postCropRegion.width().toFloat(),
-                    metadata.postCropRegion.height().toFloat()
-                )
+            editCropAspectOption.value = CropAspectOption.Custom(
+                metadata.postCropRegion.width().toFloat(),
+                metadata.postCropRegion.height().toFloat()
+            )
         } else {
             editCropRect.value = null
             editCropAspectOption.value = CropAspectOption.Free
@@ -718,6 +1018,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editNoiseReduction.value = m.noiseReduction ?: 0f
             editChromaNoiseReduction.value = m.chromaNoiseReduction ?: 0f
             editRawDenoise.value = m.rawDenoiseValue ?: 0f
+            editRawExposureCompensation.value = m.rawExposureCompensation ?: 0f
+            editRawAutoExposure.value = m.rawAutoExposure ?: true
+            editRawMeteringCenterWeight.value = m.rawMeteringCenterWeight ?: 0f
+            editRawBlackPointCorrection.value = m.rawBlackPointCorrection ?: 0f
+            editRawWhitePointCorrection.value = m.rawWhitePointCorrection ?: 0f
+            editRawDcpId.value = m.rawDcpId
+            _editAiDenoiseStrength.value = if (m.hasAiDenoisedBase) m.aiDenoiseStrength ?: 1.0f else 0.0f
             restoreCropEditState(photo, m)
 
             // 加载 LUT 配置
@@ -728,7 +1035,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
             }
-        } ?: restoreCropEditState(photo, null)
+        } ?: run {
+            _editAiDenoiseStrength.value = 0.0f
+            restoreCropEditState(photo, null)
+        }
     }
 
     fun loadThumbnail(photo: MediaData): Bitmap? {
@@ -886,17 +1196,22 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     private fun deletePhotoOnlyInternal(photo: MediaData) {
         viewModelScope.launch {
-            val context = getApplication<Application>()
-            val success = GalleryManager.deletePhotoOnly(context, photo.id)
-            if (success) {
-                loadPhotos()
-                // 如果删除的是当前照片，调整索引
-                if (photo == getCurrentPhoto() && currentPhotoIndex >= _photos.value.size) {
-                    currentPhotoIndex = (_photos.value.size - 1).coerceAtLeast(0)
+            photonLoadMutex.withLock {
+                val context = getApplication<Application>()
+                val success = withContext(Dispatchers.IO) {
+                    GalleryManager.deletePhotoOnly(context, photo.id)
                 }
-                PLog.d(TAG, "Photo deleted (app only): ${photo.id}")
-            } else {
-                PLog.e(TAG, "Failed to delete photo: ${photo.id}")
+                if (success) {
+                    removePhotonPhotosFromState(setOf(photo.id))
+                    loadPhotosInternal()
+                    // 如果删除的是当前照片，调整索引
+                    if (photo == getCurrentPhoto() && currentPhotoIndex >= _photos.value.size) {
+                        currentPhotoIndex = (_photos.value.size - 1).coerceAtLeast(0)
+                    }
+                    PLog.d(TAG, "Photo deleted (app only): ${photo.id}")
+                } else {
+                    PLog.e(TAG, "Failed to delete photo: ${photo.id}")
+                }
             }
         }
     }
@@ -925,20 +1240,25 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun deletePhotoAfterConfirmation(onComplete: (Boolean) -> Unit = {}) {
         val photo = pendingDeletePhoto ?: return
         viewModelScope.launch {
-            val context = getApplication<Application>()
-            val success = GalleryManager.deletePhotoOnly(context, photo.id)
-            if (success) {
-                loadPhotos()
-
-                // 如果删除的是当前照片，调整索引
-                if (photo == getCurrentPhoto() && currentPhotoIndex >= _photos.value.size) {
-                    currentPhotoIndex = (_photos.value.size - 1).coerceAtLeast(0)
+            photonLoadMutex.withLock {
+                val context = getApplication<Application>()
+                val success = withContext(Dispatchers.IO) {
+                    GalleryManager.deletePhotoOnly(context, photo.id)
                 }
+                if (success) {
+                    removePhotonPhotosFromState(setOf(photo.id))
+                    loadPhotosInternal()
 
-                PLog.d(TAG, "Photo deleted after confirmation: ${photo.id}")
+                    // 如果删除的是当前照片，调整索引
+                    if (photo == getCurrentPhoto() && currentPhotoIndex >= _photos.value.size) {
+                        currentPhotoIndex = (_photos.value.size - 1).coerceAtLeast(0)
+                    }
+
+                    PLog.d(TAG, "Photo deleted after confirmation: ${photo.id}")
+                }
+                clearDeleteRequest()
+                onComplete(success)
             }
-            clearDeleteRequest()
-            onComplete(success)
         }
     }
 
@@ -947,20 +1267,28 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     fun deleteSystemPhotoAfterConfirmation(onComplete: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
-            pendingDeleteSystemPhoto?.relatedPhoto?.takeIf { it.isVideo }?.let { relatedVideo ->
-                GalleryManager.deletePhotoOnly(getApplication(), relatedVideo.id)
-                loadPhotos()
-            }
-            // 系统照片已经被 MediaStore 删除，我们只需要刷新列表
-            loadSystemPhotos(reset = true)
+            systemLoadMutex.withLock {
+                pendingDeleteSystemPhoto?.relatedPhoto?.takeIf { it.isVideo }?.let { relatedVideo ->
+                    photonLoadMutex.withLock {
+                        withContext(Dispatchers.IO) {
+                            GalleryManager.deletePhotoOnly(getApplication(), relatedVideo.id)
+                        }
+                        removePhotonPhotosFromState(setOf(relatedVideo.id))
+                        loadPhotosInternal()
+                    }
+                }
+                pendingDeleteSystemPhoto?.let { removeSystemPhotosFromState(setOf(it.id)) }
+                // 系统照片已经被 MediaStore 删除，我们只需要刷新列表
+                loadSystemPhotosInternal()
 
-            // 调整索引
-            if (currentPhotoIndex >= currentPhotos.value.size) {
-                currentPhotoIndex = (currentPhotos.value.size - 1).coerceAtLeast(0)
-            }
+                // 调整索引
+                if (currentPhotoIndex >= currentPhotos.value.size) {
+                    currentPhotoIndex = (currentPhotos.value.size - 1).coerceAtLeast(0)
+                }
 
-            clearDeleteRequest()
-            onComplete(true)
+                clearDeleteRequest()
+                onComplete(true)
+            }
         }
     }
 
@@ -1080,21 +1408,26 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     private fun deleteBatchPhotosOnlyInternal(photos: List<MediaData>) {
         viewModelScope.launch {
-            val context = getApplication<Application>()
-            var deletedCount = 0
+            photonLoadMutex.withLock {
+                val context = getApplication<Application>()
+                var deletedCount = 0
+                val deletedIds = mutableSetOf<String>()
 
-            withContext(Dispatchers.IO) {
-                photos.forEach { photo ->
-                    val success = GalleryManager.deletePhotoOnly(context, photo.id)
-                    if (success) {
-                        deletedCount++
+                withContext(Dispatchers.IO) {
+                    photos.forEach { photo ->
+                        val success = GalleryManager.deletePhotoOnly(context, photo.id)
+                        if (success) {
+                            deletedCount++
+                            deletedIds.add(photo.id)
+                        }
                     }
                 }
-            }
 
-            exitSelectionMode()
-            loadPhotos()
-            PLog.d(TAG, "Batch deleted $deletedCount photos (app only)")
+                exitSelectionMode()
+                removePhotonPhotosFromState(deletedIds)
+                loadPhotosInternal()
+                PLog.d(TAG, "Batch deleted $deletedCount photos (app only)")
+            }
         }
     }
 
@@ -1107,31 +1440,42 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
         viewModelScope.launch {
             if (selectedTab == GalleryTab.SYSTEM) {
-                val relatedPhotonVideos = photos.mapNotNull { it.relatedPhoto }.filter { it.isVideo }
-                if (relatedPhotonVideos.isNotEmpty()) {
-                    val context = getApplication<Application>()
-                    withContext(Dispatchers.IO) {
-                        relatedPhotonVideos.forEach { GalleryManager.deletePhotoOnly(context, it.id) }
-                    }
-                    loadPhotos()
-                }
-                // 系统相册刷新
-                loadSystemPhotos(reset = true)
-            } else {
-                // 原有的内部照片删除逻辑
-                val context = getApplication<Application>()
-                var deletedCount = 0
-
-                withContext(Dispatchers.IO) {
-                    photos.forEach { photo ->
-                        val success = GalleryManager.deletePhotoOnly(context, photo.id)
-                        if (success) {
-                            deletedCount++
+                systemLoadMutex.withLock {
+                    val relatedPhotonVideos = photos.mapNotNull { it.relatedPhoto }.filter { it.isVideo }
+                    if (relatedPhotonVideos.isNotEmpty()) {
+                        photonLoadMutex.withLock {
+                            val context = getApplication<Application>()
+                            withContext(Dispatchers.IO) {
+                                relatedPhotonVideos.forEach { GalleryManager.deletePhotoOnly(context, it.id) }
+                            }
+                            removePhotonPhotosFromState(relatedPhotonVideos.map { it.id }.toSet())
+                            loadPhotosInternal()
                         }
                     }
+                    removeSystemPhotosFromState(photos.map { it.id }.toSet())
+                    // 系统相册刷新
+                    loadSystemPhotosInternal()
                 }
-                loadPhotos()
-                PLog.d(TAG, "Batch deleted $deletedCount internal photos after confirmation")
+            } else {
+                // 原有的内部照片删除逻辑
+                photonLoadMutex.withLock {
+                    val context = getApplication<Application>()
+                    var deletedCount = 0
+                    val deletedIds = mutableSetOf<String>()
+
+                    withContext(Dispatchers.IO) {
+                        photos.forEach { photo ->
+                            val success = GalleryManager.deletePhotoOnly(context, photo.id)
+                            if (success) {
+                                deletedCount++
+                                deletedIds.add(photo.id)
+                            }
+                        }
+                    }
+                    removePhotonPhotosFromState(deletedIds)
+                    loadPhotosInternal()
+                    PLog.d(TAG, "Batch deleted $deletedCount internal photos after confirmation")
+                }
             }
 
             exitSelectionMode()
@@ -1243,6 +1587,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 metadata.chromaNoiseReduction
                     ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
             editRawDenoise.value = metadata.rawDenoiseValue ?: 0f
+            editRawExposureCompensation.value = metadata.rawExposureCompensation ?: 0f
+            editRawAutoExposure.value = metadata.rawAutoExposure ?: true
+            editRawMeteringCenterWeight.value = metadata.rawMeteringCenterWeight ?: 0f
+            editRawBlackPointCorrection.value = metadata.rawBlackPointCorrection ?: 0f
+            editRawWhitePointCorrection.value = metadata.rawWhitePointCorrection ?: 0f
+            editRawDcpId.value = metadata.rawDcpId
             
             editComputationalAperture.value = metadata.computationalAperture
             editFocusPointX.value = metadata.focusPointX
@@ -1256,6 +1606,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editNoiseReduction.value = noiseReduction.value
             editChromaNoiseReduction.value = chromaNoiseReduction.value
             editRawDenoise.value = 0.2f
+            editRawExposureCompensation.value = 0f
+            editRawAutoExposure.value = true
+            editRawMeteringCenterWeight.value = 0f
+            editRawBlackPointCorrection.value = 0f
+            editRawWhitePointCorrection.value = 0f
+            editRawDcpId.value = null
             editComputationalAperture.value = null
             editFocusPointX.value = null
             editFocusPointY.value = null
@@ -1284,6 +1640,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editCropRect.value = null
         editCropAspectOption.value = CropAspectOption.Free
         editRawDenoise.value = 0.2f
+        editRawExposureCompensation.value = 0f
+        editRawAutoExposure.value = true
+        editRawMeteringCenterWeight.value = 0f
+        editRawBlackPointCorrection.value = 0f
+        editRawWhitePointCorrection.value = 0f
+        editRawDcpId.value = null
     }
 
     /**
@@ -1297,6 +1659,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 设置 LUT
      */
     fun setEditLut(lutId: String?) {
+        if (editLutId.value != lutId) {
+            editPhotoRecipeParams.value = null
+        }
         editLutId.value = lutId
         if (lutId == null) {
             editLutConfig = null
@@ -1376,16 +1741,101 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editChromaNoiseReduction.value = value
     }
 
-    fun saveRawDenoiseValue(mediaData: MediaData, value: Float) {
-        editRawDenoise.value = value
+    private fun persistRawEditMetadata(mediaData: MediaData) {
+        val metadata = (mediaData.metadata ?: currentMediaMetadata)?.copy(
+            rawDenoiseValue = editRawDenoise.value,
+            rawExposureCompensation = editRawExposureCompensation.value,
+            rawAutoExposure = editRawAutoExposure.value,
+            rawMeteringCenterWeight = editRawMeteringCenterWeight.value,
+            rawBlackPointCorrection = editRawBlackPointCorrection.value,
+            rawWhitePointCorrection = editRawWhitePointCorrection.value,
+            rawDcpId = editRawDcpId.value,
+        )
+        if (metadata != null) {
+            currentMediaMetadata = metadata
+        }
         viewModelScope.launch {
-            val metadata = mediaData.metadata?.copy(
-                rawDenoiseValue = editRawDenoise.value,
-            )
             val context = getApplication<Application>()
             metadata?.let {
                 GalleryManager.saveMetadata(context, mediaData.id, it)
             }
+        }
+    }
+
+    fun saveRawDenoiseValue(mediaData: MediaData, value: Float) {
+        editRawDenoise.value = value
+        persistRawEditMetadata(mediaData)
+    }
+
+    fun saveRawExposureCompensationValue(mediaData: MediaData, value: Float) {
+        editRawExposureCompensation.value = value
+        persistRawEditMetadata(mediaData)
+    }
+
+    fun saveRawAutoExposureValue(mediaData: MediaData, enabled: Boolean) {
+        editRawAutoExposure.value = enabled
+        persistRawEditMetadata(mediaData)
+    }
+
+    fun saveRawMeteringCenterWeightValue(mediaData: MediaData, value: Float) {
+        editRawMeteringCenterWeight.value = value.coerceIn(0f, 1f)
+        persistRawEditMetadata(mediaData)
+    }
+
+    fun saveRawBlackPointCorrectionValue(mediaData: MediaData, value: Float) {
+        editRawBlackPointCorrection.value = value
+        persistRawEditMetadata(mediaData)
+    }
+
+    fun saveRawWhitePointCorrectionValue(mediaData: MediaData, value: Float) {
+        editRawWhitePointCorrection.value = value
+        persistRawEditMetadata(mediaData)
+    }
+
+    fun saveRawDcpSelection(mediaData: MediaData, dcpId: String?) {
+        editRawDcpId.value = dcpId
+        persistRawEditMetadata(mediaData)
+    }
+
+    suspend fun importRawDcp(uri: Uri): DcpInfo? {
+        val importedId = withContext(Dispatchers.IO) {
+            contentRepository.getCustomImportManager().importDcp(uri)
+        } ?: return null
+        contentRepository.refreshCustomContent()
+        return contentRepository.getAvailableDcps().firstOrNull { it.id == importedId }?.also {
+            editRawDcpId.value = it.id
+        }
+    }
+
+    suspend fun importRawDcps(uris: List<Uri>): List<DcpInfo> {
+        if (uris.isEmpty()) return emptyList()
+        val importedIds = withContext(Dispatchers.IO) {
+            uris.mapNotNull { uri ->
+                contentRepository.getCustomImportManager().importDcp(uri)
+            }
+        }
+        if (importedIds.isEmpty()) return emptyList()
+
+        contentRepository.refreshCustomContent()
+        val dcpById = contentRepository.getAvailableDcps().associateBy { it.id }
+        val importedDcps = importedIds.mapNotNull { dcpById[it] }
+        importedDcps.lastOrNull()?.let { editRawDcpId.value = it.id }
+        return importedDcps
+    }
+
+    fun deleteRawDcp(mediaData: MediaData, dcpId: String, onComplete: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val success = withContext(Dispatchers.IO) {
+                contentRepository.getCustomImportManager().deleteCustomDcp(dcpId)
+            }
+            if (success) {
+                if (editRawDcpId.value == dcpId) {
+                    editRawDcpId.value = null
+                    persistRawEditMetadata(mediaData)
+                }
+                contentRepository.refreshCustomContent()
+            }
+            onComplete(success)
         }
     }
 
@@ -1486,6 +1936,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         detailSnapshot.keys.filter { it.contains("detail_${photoId}_") }.forEach {
             detailBitmapCache.remove(it)
         }
+        invalidateGridThumbnailCache(photoId)
+    }
+
+    private fun invalidateGridThumbnailCache(photoId: String) {
+        val snapshot = gridThumbnailCache.snapshot()
+        snapshot.keys.filter { it.startsWith("${photoId}_") }.forEach {
+            gridThumbnailCache.remove(it)
+        }
     }
 
     /**
@@ -1526,6 +1984,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         noiseReduction = editNoiseReduction.value,
                         chromaNoiseReduction = editChromaNoiseReduction.value,
                         rawDenoiseValue = editRawDenoise.value,
+                        rawExposureCompensation = editRawExposureCompensation.value,
+                        rawAutoExposure = editRawAutoExposure.value,
+                        rawMeteringCenterWeight = editRawMeteringCenterWeight.value,
+                        rawBlackPointCorrection = editRawBlackPointCorrection.value,
+                        rawWhitePointCorrection = editRawWhitePointCorrection.value,
+                        rawDcpId = editRawDcpId.value,
                         computationalAperture = editComputationalAperture.value,
                         focusPointX = editFocusPointX.value,
                         focusPointY = editFocusPointY.value,
@@ -1538,8 +2002,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                                 (rectF.right * cw).roundToInt(),
                                 (rectF.bottom * ch).roundToInt()
                             )
-                        },
-                        ratio = (editCropAspectOption.value as? CropAspectOption.FromAspectRatio)?.ratio
+                        }
                     )
                     
                     if (ignoreCrop) {
@@ -1575,15 +2038,24 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
 
                 // 2. 原始底图缓存（按 maxEdge 加载，快速预览走小尺寸，正式预览走高分辨率）
-                val currentBitmap = bitmap ?: if (selectedTab == GalleryTab.PHOTON) {
-                    GalleryManager.loadBitmap(context, photo.id, maxEdge)
+                val currentBitmap = bitmap ?: if (showOrigin) {
+                    GalleryManager.loadOriginalBitmap(context, photo.id, maxEdge)
+                        ?: if (selectedTab == GalleryTab.SYSTEM) GalleryManager.loadBitmap(context, photo.uri, maxEdge) else null
                 } else {
-                    GalleryManager.loadBitmap(context, photo.id, maxEdge)
-                        ?: GalleryManager.loadBitmap(context, photo.uri, maxEdge)
+                    val bokehFile = GalleryManager.getBokehFile(context, photo.id)
+                    when {
+                        bokehFile.exists() -> GalleryManager.loadBitmap(context, Uri.fromFile(bokehFile), maxEdge)
+                        finalMetadata.hasAiDenoisedBase -> GalleryManager.loadBitmap(
+                            context,
+                            Uri.fromFile(GalleryManager.getAiDenoiseFile(context, photo.id)),
+                            maxEdge
+                        )
+                        else -> GalleryManager.loadOriginalBitmap(context, photo.id, maxEdge)
+                    } ?: if (selectedTab == GalleryTab.SYSTEM) GalleryManager.loadBitmap(context, photo.uri, maxEdge) else null
                 } ?: return@withContext null
 
                 // 只在全分辨率路径下缓存原始底图（避免低分辨率污染 origin 缓存）
-                if (maxEdge >= 4096) {
+                if (showOrigin && maxEdge >= 4096) {
                     previewBitmapCache.put(previewCacheKey(photo, finalMetadata, true), currentBitmap)
                 }
 
@@ -1671,6 +2143,53 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    suspend fun evaluatePhotoWithAi(photo: MediaData): Result<AiPhotoEvaluation> = withContext(Dispatchers.IO) {
+        try {
+            val cacheKey = aiEvaluationCacheKey(photo)
+            aiEvaluationCache[cacheKey]?.let {
+                return@withContext Result.success(it)
+            }
+
+            val bitmap = getPreviewBitmap(
+                photo = photo,
+                showOrigin = false,
+                ignoreDenoise = true,
+                maxEdge = 1024
+            ) ?: return@withContext Result.failure(IllegalStateException("Unable to load photo preview"))
+
+            val context = getApplication<Application>()
+            val client = OpenAIApiClient()
+            client.initialize(context)
+            val result = client.evaluateImageQuality(
+                bitmap = bitmap,
+                localeTag = Locale.getDefault().toLanguageTag()
+            )
+            result.onSuccess { aiEvaluationCache[cacheKey] = it }
+            result.onFailure { PLog.e(TAG, "AI photo evaluation request failed", it) }
+            result
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to evaluate photo with AI", e)
+            Result.failure(e)
+        }
+    }
+
+    private fun aiEvaluationCacheKey(photo: MediaData): String {
+        val metadata = photo.metadata ?: photo.relatedPhoto?.metadata
+        return listOf(
+            photo.id,
+            photo.uri.toString(),
+            photo.sourceUri?.toString().orEmpty(),
+            photo.thumbnailUri.toString(),
+            photo.displayName,
+            photo.dateAdded.toString(),
+            photo.size.toString(),
+            photo.width.toString(),
+            photo.height.toString(),
+            photo.mimeType.orEmpty(),
+            metadata?.hashCode()?.toString().orEmpty()
+        ).joinToString("|")
+    }
+
     fun shouldPrioritizeDetailBitmap(photo: MediaData): Boolean {
         val context = getApplication<Application>()
         val metadata =
@@ -1740,22 +2259,24 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     )
                 }
                 
-                // Get AspectRatio enum if it was a preset, otherwise null
-                val finalRatio = (editCropAspectOption.value as? CropAspectOption.FromAspectRatio)?.ratio
-
                 val metadata = currentMediaMetadata?.copy(
                     lutId = editLutId.value,
                     frameId = editFrameId.value,
-                    colorRecipeParams = editPhotoRecipeParams.value ?: editLutRecipeParams.value,
+                    colorRecipeParams = editPhotoRecipeParams.value,
                     sharpening = editSharpening.value,
                     noiseReduction = editNoiseReduction.value,
                     chromaNoiseReduction = editChromaNoiseReduction.value,
                     rawDenoiseValue = editRawDenoise.value,
+                    rawExposureCompensation = editRawExposureCompensation.value,
+                    rawAutoExposure = editRawAutoExposure.value,
+                    rawMeteringCenterWeight = editRawMeteringCenterWeight.value,
+                    rawBlackPointCorrection = editRawBlackPointCorrection.value,
+                    rawWhitePointCorrection = editRawWhitePointCorrection.value,
+                    rawDcpId = editRawDcpId.value,
                     computationalAperture = editComputationalAperture.value,
                     focusPointX = editFocusPointX.value,
                     focusPointY = editFocusPointY.value,
-                    postCropRegion = finalCropRegion,
-                    ratio = finalRatio
+                    postCropRegion = finalCropRegion
                 ) ?: run {
                     onComplete(false)
                     return@launch
@@ -1821,6 +2342,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     RawProcessingPreferences.DROMode.valueOf(droMode.value)
                 )
                 if (result != null) {
+                    updatePhotoMetadata(photo.id) { it }
                     // 更新刷新密钥以强制 UI 重新加载
                     photoRefreshKeys[photo.id] = System.currentTimeMillis()
                     invalidatePreviewCache(photo.id)
@@ -1878,6 +2400,35 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun exportDng(
+        photo: MediaData,
+        onComplete: (Boolean) -> Unit = {}
+    ) {
+        if (photo.isVideo) {
+            onComplete(false)
+            return
+        }
+        viewModelScope.launch {
+            var photoId = photo.id
+            if (selectedTab == GalleryTab.SYSTEM) {
+                photoId = photo.relatedPhoto?.id ?: photoId
+            }
+            val context = getApplication<Application>()
+            val dngFile = GalleryManager.getDngFile(context, photoId)
+            val metadata = GalleryManager.loadMetadata(context, photoId) ?: photo.metadata ?: MediaMetadata()
+            val success = if (dngFile.exists() && dngFile.length() > 0L) {
+                GalleryManager.exportDng(context, photoId, dngFile, metadata)
+                true
+            } else {
+                false
+            }
+            if (success) {
+                loadPhotos()
+            }
+            onComplete(success)
+        }
+    }
+
     /**
      * 批量导出选中的照片
      */
@@ -1901,7 +2452,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         if (selectedTab == GalleryTab.SYSTEM) {
                             photoId = photo.relatedPhoto?.id ?: return@forEachIndexed
                         }
-                        
                         val metadata = GalleryManager.loadMetadata(context, photoId) ?: photo.metadata ?: MediaMetadata()
                         GalleryManager.exportPhoto(
                             context, photoId, null, contentRepository.photoProcessor, metadata,
@@ -2063,6 +2613,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         return metadata.hasEmbeddedGainmap ||
             metadata.dynamicRangeProfile == "HLG10" ||
             GalleryManager.getDngFile(getApplication(), photo.id).exists() ||
+            GalleryManager.getYuvFile(getApplication(), photo.id).exists() ||
             GalleryManager.getPhotoFile(getApplication(), photo.id).exists()
     }
 
@@ -2070,6 +2621,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         if (photo.isVideo) return false
         val metadata = photo.metadata ?: photo.relatedPhoto?.metadata ?: return false
         return metadata.manualHdrEffectEnabled
+    }
+
+    fun getManualHdrStrength(photo: MediaData): Float {
+        val metadata = photo.metadata ?: photo.relatedPhoto?.metadata
+        return HdrGainmapStrength.coerce(metadata?.hdrEffectStrength)
     }
 
     fun toggleManualHdrEnhance(photo: MediaData, onComplete: (Boolean) -> Unit = {}) {
@@ -2117,6 +2673,58 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 onComplete(success)
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to toggle manual HDR enhance", e)
+                onComplete(false)
+            }
+        }
+    }
+
+    fun setManualHdrStrength(
+        photo: MediaData,
+        strength: Float,
+        onComplete: (Boolean) -> Unit = {}
+    ) {
+        if (!canToggleManualHdrEnhance(photo)) {
+            onComplete(false)
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val context = getApplication<Application>()
+                val currentMetadata = photo.metadata ?: photo.relatedPhoto?.metadata ?: run {
+                    onComplete(false)
+                    return@launch
+                }
+                val updatedMetadata = currentMetadata.copy(
+                    manualHdrEffectEnabled = true,
+                    hdrEffectStrength = HdrGainmapStrength.coerce(strength)
+                )
+                val success = GalleryManager.saveMetadata(context, photo.id, updatedMetadata)
+                if (success) {
+                    val updatedPhotos = _photos.value.map { p ->
+                        if (p.id == photo.id) p.copy(metadata = updatedMetadata) else p
+                    }
+                    _photos.value = updatedPhotos
+                    if (_latestPhoto.value?.id == photo.id) {
+                        _latestPhoto.value = _latestPhoto.value?.copy(metadata = updatedMetadata)
+                    }
+                    if (currentPhotoMetadataId == photo.id) {
+                        currentMediaMetadata = updatedMetadata
+                    }
+                    invalidatePreviewCache(photo.id)
+                    GalleryManager.deleteDetailHdrFile(context, photo.id)
+                    GalleryManager.queueDetailHdrCacheBuild(
+                        context = context,
+                        photoId = photo.id,
+                        metadata = updatedMetadata,
+                        sharpening = updatedMetadata.sharpening ?: 0f,
+                        noiseReduction = updatedMetadata.noiseReduction ?: 0f,
+                        chromaNoiseReduction = updatedMetadata.chromaNoiseReduction ?: 0f
+                    )
+                    photoRefreshKeys[photo.id] = System.currentTimeMillis()
+                }
+                onComplete(success)
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to update manual HDR strength", e)
                 onComplete(false)
             }
         }

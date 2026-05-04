@@ -35,8 +35,8 @@ import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.phantom.PhantomWidgetProvider
 import com.hinnka.mycamera.raw.ColorSpace
+import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.color.TransferCurve
-import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.ui.camera.CameraGLSurfaceView
@@ -223,6 +223,47 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val phantomBaselineLutId: StateFlow<String?> = userPreferencesRepository.userPreferences
         .map { it.phantomBaselineLutId }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val rawDcpId: StateFlow<String?> = userPreferencesRepository.userPreferences
+        .map { it.rawDcpId }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val rawNlmNoiseFactor: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.rawNlmNoiseFactor }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
+    val rawExposureCompensation: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.rawExposureCompensation }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
+    val rawAutoExposure: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.rawAutoExposure }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    val rawMeteringCenterWeight: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.rawMeteringCenterWeight }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
+    val rawBlackPointCorrection: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.rawBlackPointCorrection }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
+    val rawWhitePointCorrection: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.rawWhitePointCorrection }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
+    val rawAutoWhiteBalanceEstimate: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.rawAutoWhiteBalanceEstimate }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val rawBlackLevelMode: StateFlow<String> = combine(
+        state.map { it.currentCameraId }.distinctUntilChanged(),
+        userPreferencesRepository.userPreferences
+    ) { cameraId, prefs ->
+        prefs.rawBlackLevelModes[cameraId] ?: "Default"
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, "Default")
+    val rawCustomBlackLevel: StateFlow<Float> = combine(
+        state.map { it.currentCameraId }.distinctUntilChanged(),
+        userPreferencesRepository.userPreferences
+    ) { cameraId, prefs ->
+        prefs.rawCustomBlackLevels[cameraId] ?: 0f
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
+    val exportDngWithRawExport: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.exportDngWithRawExport }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    var availableDcps: List<com.hinnka.mycamera.raw.DcpInfo> by mutableStateOf(emptyList())
+        private set
     val phantomLutId: StateFlow<String?> = userPreferencesRepository.userPreferences
         .map { it.phantomLutId }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -379,10 +420,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     var showGhostPermissions by mutableStateOf(false)
 
     init {
-        StartupTrace.mark("CameraViewModel.init start")
-        StartupTrace.measure("CameraViewModel.cameraController.initialize") {
-            cameraController.initialize()
-        }
+        cameraController.initialize()
         cameraController.onImageCaptured = { image, captureInfo, characteristics, captureResult ->
             if (state.value.burstCapturing) {
                 if (burstCaptureInfo == null) {
@@ -468,7 +506,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoLogProfile(it.videoLogProfile)
                 cameraController.setVideoBitrate(it.videoBitrate)
                 cameraController.setVideoAudioInputId(it.videoAudioInputId)
-                cameraController.setVideoStabilizationEnabled(it.videoStabilizationEnabled)
+                cameraController.setVideoStabilizationMode(it.videoStabilizationMode)
                 cameraController.setVideoTorchEnabled(it.videoTorchEnabled)
                 cameraController.setVideoCodec(it.videoCodec)
                 multipleExposureState = multipleExposureState.copy(
@@ -479,13 +517,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setUseLivePhoto(it.useLivePhoto && it.captureMode == CaptureMode.PHOTO)
                 // 同步 Ultra HDR 设置到相机控制器
                 cameraController.setApplyUltraHDR(it.applyUltraHDR)
-                // 同步 RAW 色彩空间和 Log 曲线到解马赛克处理器
-                RawDemosaicProcessor.getInstance().setRawColorSpace(it.colorSpace)
-                RawDemosaicProcessor.getInstance().setRawLogCurve(it.logCurve)
-                // 同步当前 Log 曲线对应的 RAW LUT
-                val currentRawLut = it.rawLuts[it.logCurve.name]
-                    ?: RawProfile.defaultLutFor(it.colorSpace, it.logCurve)
-                RawDemosaicProcessor.getInstance().setRawLut(application, currentRawLut)
                 // 同步 P010 设置到相机控制器
                 cameraController.setUseP010(it.useP010)
                 // 同步 HLG10 设置到相机控制器
@@ -523,6 +554,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }.collect { sortedLuts ->
                 availableLutList = sortedLuts
+            }
+        }
+
+        viewModelScope.launch {
+            contentRepository.availableDcps.collect { dcps ->
+                availableDcps = dcps.sortedBy { it.getName() }
             }
         }
 
@@ -577,7 +614,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoLogProfile(prefs.videoLogProfile)
                 cameraController.setVideoBitrate(prefs.videoBitrate)
                 cameraController.setVideoAudioInputId(prefs.videoAudioInputId)
-                cameraController.setVideoStabilizationEnabled(prefs.videoStabilizationEnabled)
+                cameraController.setVideoStabilizationMode(prefs.videoStabilizationMode)
                 cameraController.setVideoTorchEnabled(prefs.videoTorchEnabled)
                 cameraController.setVideoCodec(prefs.videoCodec)
 
@@ -644,6 +681,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     currentState.focusPoint?.let { fp ->
                         view.setFocusPoint(android.graphics.PointF(fp.first, fp.second))
                     }
+                    view.setAutoFocus(currentState.isAutoFocus)
                 }
             }
         }
@@ -665,6 +703,83 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             PLog.e(TAG, "Failed to list raw luts", e)
         }
         return emptyList()
+    }
+
+    fun setRawDcpId(dcpId: String?) {
+        viewModelScope.launch { userPreferencesRepository.saveRawDcpId(dcpId) }
+    }
+    fun setRawNlmNoiseFactor(value: Float) {
+        viewModelScope.launch { userPreferencesRepository.saveRawNlmNoiseFactor(value) }
+    }
+    fun setRawExposureCompensation(value: Float) {
+        viewModelScope.launch { userPreferencesRepository.saveRawExposureCompensation(value) }
+    }
+    fun setRawAutoExposure(enabled: Boolean) {
+        viewModelScope.launch { userPreferencesRepository.saveRawAutoExposure(enabled) }
+    }
+    fun setRawMeteringCenterWeight(value: Float) {
+        viewModelScope.launch { userPreferencesRepository.saveRawMeteringCenterWeight(value) }
+    }
+    fun setRawBlackPointCorrection(value: Float) {
+        viewModelScope.launch { userPreferencesRepository.saveRawBlackPointCorrection(value) }
+    }
+    fun setRawWhitePointCorrection(value: Float) {
+        viewModelScope.launch { userPreferencesRepository.saveRawWhitePointCorrection(value) }
+    }
+    fun setRawAutoWhiteBalanceEstimate(enabled: Boolean) {
+        viewModelScope.launch { userPreferencesRepository.saveRawAutoWhiteBalanceEstimate(enabled) }
+    }
+    fun setRawBlackLevelMode(mode: String) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveRawBlackLevelMode(state.value.currentCameraId, mode)
+        }
+    }
+    fun setRawCustomBlackLevel(value: Float) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveRawCustomBlackLevel(state.value.currentCameraId, value)
+        }
+    }
+    fun importRawDcp(uri: android.net.Uri, onComplete: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val success = contentRepository.getCustomImportManager().importDcp(uri) != null
+            if (success) {
+                contentRepository.refreshCustomContent()
+            }
+            onComplete(success)
+        }
+    }
+
+    fun importRawDcps(uris: List<Uri>, onComplete: (importedDcps: List<DcpInfo>, failedCount: Int) -> Unit) {
+        viewModelScope.launch {
+            val importedIds = withContext(Dispatchers.IO) {
+                uris.mapNotNull { uri ->
+                    contentRepository.getCustomImportManager().importDcp(uri)
+                }
+            }
+            val importedDcps = if (importedIds.isNotEmpty()) {
+                contentRepository.refreshCustomContent()
+                val dcpById = contentRepository.getAvailableDcps().associateBy { it.id }
+                importedIds.mapNotNull { dcpById[it] }
+            } else {
+                emptyList()
+            }
+            onComplete(importedDcps, uris.size - importedDcps.size)
+        }
+    }
+
+    fun deleteRawDcp(dcpId: String, onComplete: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val success = withContext(Dispatchers.IO) {
+                contentRepository.getCustomImportManager().deleteCustomDcp(dcpId)
+            }
+            if (success) {
+                if (rawDcpId.firstOrNull() == dcpId) {
+                    userPreferencesRepository.saveRawDcpId(null)
+                }
+                contentRepository.refreshCustomContent()
+            }
+            onComplete(success)
+        }
     }
 
     /**
@@ -749,7 +864,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         val sensorOrientation = cameraController.getSensorOrientation()
         val lensFacing = cameraController.getLensFacing()
-        val deviceRotation = OrientationObserver.rotationDegrees.toInt()
+        val deviceRotation = OrientationObserver.captureRotationDegrees.toInt()
         val baseRotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
             (sensorOrientation - deviceRotation + 360) % 360
         } else {
@@ -782,6 +897,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             sharpening = sharpeningValue,
             noiseReduction = noiseReductionValue,
             chromaNoiseReduction = chromaNoiseReductionValue,
+            rawDcpId = userPrefs?.rawDcpId,
+            rawDenoiseValue = userPrefs?.rawNlmNoiseFactor ?: 0f,
+            rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
+            rawAutoExposure = userPrefs?.rawAutoExposure ?: true,
+            rawMeteringCenterWeight = userPrefs?.rawMeteringCenterWeight ?: 0f,
+            rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
+            rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
+            rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
+            rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
+            rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
+            cameraId = currentCameraId,
             width = width,
             height = height,
             ratio = aspectRatio,
@@ -1219,6 +1345,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.setVirtualApertureEnabled(enabled)
     }
 
+    fun setAutoFocus(auto: Boolean) {
+        cameraController.setAutoFocus(auto)
+    }
+
+    fun setFocusDistance(distance: Float) {
+        cameraController.setFocusDistance(distance)
+    }
+
     /**
      * 设置变焦倍数
      */
@@ -1279,6 +1413,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun setVideoStabilizationMode(mode: com.hinnka.mycamera.video.VideoStabilizationMode) {
+        cameraController.setVideoStabilizationMode(mode)
+        viewModelScope.launch {
+            userPreferencesRepository.saveVideoStabilizationMode(mode)
+        }
+    }
+
     fun setVideoLogProfile(logProfile: VideoLogProfile) {
         cameraController.setVideoLogProfile(logProfile)
         reopenCamera()
@@ -1302,10 +1443,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun setVideoStabilizationEnabled(enabled: Boolean) {
-        cameraController.setVideoStabilizationEnabled(enabled)
+    fun cycleVideoStabilizationMode() {
+        val currentMode = state.value.videoConfig.stabilizationMode
+        val availableModes = state.value.videoCapabilities.availableStabilizationModes
+        if (availableModes.isEmpty()) return
+        val nextMode = availableModes[(availableModes.indexOf(currentMode) + 1) % availableModes.size]
+        cameraController.setVideoStabilizationMode(nextMode)
         viewModelScope.launch {
-            userPreferencesRepository.saveVideoStabilizationEnabled(enabled)
+            userPreferencesRepository.saveVideoStabilizationMode(nextMode)
         }
     }
 
@@ -1367,6 +1512,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun setAwbTemperature(kelvin: Int) {
         cameraController.setAwbTemperature(kelvin)
+    }
+
+    fun setMeteringMode(mode: com.hinnka.mycamera.camera.MeteringMode) {
+        cameraController.setMeteringMode(mode)
     }
 
     // ==================== 计费相关方法 ====================
@@ -1629,21 +1778,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             _isFetchingAIModels.value = true
-            val isBuiltIn = useBuiltInAiService.value
-            val apiKey = if (isBuiltIn) OpenAIApiClient.BUILT_IN_API_KEY else openAIApiKey.value
-            val baseUrl = if (isBuiltIn) OpenAIApiClient.BUILT_IN_API_URL else openAIUrl.value
-
-            if (apiKey.isNullOrBlank()) {
-                _isFetchingAIModels.value = false
-                return@launch
-            }
-            if (baseUrl.isNullOrBlank()) {
-                _isFetchingAIModels.value = false
-                return@launch
-            }
 
             try {
-                val client = OpenAIApiClient(apiKey, baseUrl)
+                val context = getApplication<Application>()
+                val client = OpenAIApiClient()
+                client.initialize(context)
                 val result = client.getAvailableModels()
                 result.onSuccess { models ->
                     _availableOpenAIModels.value = models
@@ -1731,7 +1870,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun capturePreviewThumbnailRotation(): Float {
-        val deviceRotation = OrientationObserver.rotationDegrees.toInt()
+        val deviceRotation = OrientationObserver.captureRotationDegrees.toInt()
         val lensFacing = cameraController.getLensFacing()
         val baseRotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
             (360 - deviceRotation) % 360
@@ -1775,6 +1914,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun handleMeteringUpdate(totalWeight: Double, weightedSumLuminance: Double) {
         cameraController.calculateAutoMetering(totalWeight, weightedSumLuminance)
+    }
+
+    fun handleHighlightPointUpdate(x: Float, y: Float) {
+        cameraController.updateHighlightPoint(x, y)
     }
 
     fun handleDepthMapUpdate(bitmap: android.graphics.Bitmap) {
@@ -1890,7 +2033,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (enabled) {
             setUseMultipleExposure(false)
             setUseMFNR(false)
-            setUseRaw(false)
         }
         cameraController.setUseMFSR(enabled)
         viewModelScope.launch {
@@ -1967,13 +2109,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setUseRaw(useRaw: Boolean) {
         if (useRaw) {
             setUseMultipleExposure(false)
-            setUseMFSR(false)
         }
         cameraController.setUseRaw(useRaw)
         viewModelScope.launch {
             userPreferencesRepository.saveUseRaw(useRaw)
         }
         reopenCamera()
+    }
+
+    fun setExportDngWithRawExport(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveExportDngWithRawExport(enabled)
+        }
     }
 
     // ==================== 新增设置项方法 ====================
@@ -2214,15 +2361,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    /**
-     * 设置 RAW 还原 LUT
-     */
-    fun setRawLut(logCurve: TransferCurve, lut: String) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveRawLut(logCurve, lut)
-        }
-    }
-
     fun setRawProfile(rawProfile: RawProfile) {
         viewModelScope.launch {
             userPreferencesRepository.saveRawProfile(rawProfile)
@@ -2389,6 +2527,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         characteristics: CameraCharacteristics?,
         captureResult: CaptureResult?
     ) {
+        var ownsImage = true
         try {
             PLog.d(TAG, "saveImage started - dimensions: ${image.width}x${image.height}, format: ${image.format}")
             val context = getApplication<Application>()
@@ -2413,7 +2552,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // 计算旋转角度
             val sensorOrientation = cameraController.getSensorOrientation()
             val lensFacing = cameraController.getLensFacing()
-            val deviceRotation = OrientationObserver.rotationDegrees.toInt()
+            val deviceRotation = OrientationObserver.captureRotationDegrees.toInt()
 
             // 基础旋转角度计算
             val baseRotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
@@ -2455,6 +2594,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 sharpening = sharpeningValue,
                 noiseReduction = noiseReductionValue,
                 chromaNoiseReduction = chromaNoiseReductionValue,
+                rawDcpId = userPrefs?.rawDcpId,
+                rawDenoiseValue = userPrefs?.rawNlmNoiseFactor ?: 0f,
+                rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
+                rawAutoExposure = userPrefs?.rawAutoExposure ?: true,
+                rawMeteringCenterWeight = userPrefs?.rawMeteringCenterWeight ?: 0f,
+                rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
+                rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
+                rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
+                rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
+                rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
+                cameraId = currentCameraId,
                 width = image.width,
                 height = image.height,
                 ratio = aspectRatio,
@@ -2489,7 +2639,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 deferred
             } else null
 
-            characteristics ?: return
+            val resolvedCharacteristics = characteristics ?: run {
+                PLog.e(TAG, "Failed to save image: camera characteristics unavailable")
+                return
+            }
             val photoId =
                 GalleryManager.preparePhoto(
                     context,
@@ -2504,6 +2657,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 PLog.e(TAG, "Failed to save image")
                 return
             }
+            ownsImage = false
             viewModelScope.launch(Dispatchers.IO) {
                 GalleryManager.saveVideo(context, photoId, livePhotoVideoDeferred)
 
@@ -2514,7 +2668,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     previewThumbnail,
                     rotation,
                     aspectRatio,
-                    characteristics,
+                    resolvedCharacteristics,
                     captureResult,
                     shouldAutoSave,
                     contentRepository.photoProcessor,
@@ -2524,12 +2678,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     photoQualityValue,
                     exposureBias = state.value.exposureBias,
                     droMode = droModeForProcessing,
+                    exportDngWithRawExport = exportDngWithRawExport.value,
                 )
             }
             PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
             _imageSavedEvent.emit(Unit)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save image", e)
+        } finally {
+            if (ownsImage) {
+                image.close()
+            }
         }
     }
 
@@ -2546,6 +2705,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val shouldMirror = cameraController.getLensFacing() == CameraCharacteristics.LENS_FACING_FRONT &&
                     (userPrefs?.mirrorFrontCamera ?: true)
             val baselineMetadata = resolveBaselineMetadata(BaselineColorCorrectionTarget.JPG, userPrefs)
+            val currentCameraId = cameraController.getCurrentCameraId()
 
             val metadata = MediaMetadata(
                 lutId = currentLutId.value,
@@ -2557,6 +2717,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 sharpening = sharpeningValue,
                 noiseReduction = noiseReductionValue,
                 chromaNoiseReduction = chromaNoiseReductionValue,
+                rawDcpId = userPrefs?.rawDcpId,
+                rawDenoiseValue = userPrefs?.rawNlmNoiseFactor ?: 0f,
+                rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
+                rawAutoExposure = userPrefs?.rawAutoExposure ?: true,
+                rawMeteringCenterWeight = userPrefs?.rawMeteringCenterWeight ?: 0f,
+                rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
+                rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
+                rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
+                rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
+                rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
+                cameraId = currentCameraId,
                 width = bitmap.width,
                 height = bitmap.height,
                 ratio = mapVideoAspectRatioToPhotoAspectRatio(currentState.videoConfig.aspectRatio),
@@ -2644,7 +2815,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // 计算旋转角度
             val sensorOrientation = cameraController.getSensorOrientation()
             val lensFacing = cameraController.getLensFacing()
-            val deviceRotation = OrientationObserver.rotationDegrees.toInt()
+            val deviceRotation = OrientationObserver.captureRotationDegrees.toInt()
 
             // 基础旋转角度计算
             val baseRotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
@@ -2689,6 +2860,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 sharpening = sharpeningValue,
                 noiseReduction = noiseReductionValue,
                 chromaNoiseReduction = chromaNoiseReductionValue,
+                rawDcpId = userPrefs?.rawDcpId,
+                rawDenoiseValue = userPrefs?.rawNlmNoiseFactor ?: 0f,
+                rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
+                rawAutoExposure = userPrefs?.rawAutoExposure ?: true,
+                rawMeteringCenterWeight = userPrefs?.rawMeteringCenterWeight ?: 0f,
+                rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
+                rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
+                rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
+                rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
+                rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
+                cameraId = currentCameraId,
                 width = (images[0].width.toFloat() * superResScale).roundToInt(),
                 height = (images[0].height.toFloat() * superResScale).roundToInt(),
                 ratio = aspectRatio,
@@ -2763,7 +2945,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     superResolutionScale = superResScale,
                     useGpuAcceleration = useGpuAcceleration.value,
                     exposureBias = state.value.exposureBias,
-                    droMode = droModeForProcessing
+                    droMode = droModeForProcessing,
+                    exportDngWithRawExport = exportDngWithRawExport.value
                 )
             }
             PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
@@ -2786,7 +2969,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 计算旋转角度
         val sensorOrientation = cameraController.getSensorOrientation()
         val lensFacing = cameraController.getLensFacing()
-        val deviceRotation = OrientationObserver.rotationDegrees.toInt()
+        val deviceRotation = OrientationObserver.captureRotationDegrees.toInt()
 
         // 基础旋转角度计算
         val baseRotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
@@ -2828,6 +3011,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             sharpening = sharpeningValue,
             noiseReduction = noiseReductionValue,
             chromaNoiseReduction = chromaNoiseReductionValue,
+            rawDcpId = userPrefs?.rawDcpId,
+            rawDenoiseValue = userPrefs?.rawNlmNoiseFactor ?: 0f,
+            rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
+            rawAutoExposure = userPrefs?.rawAutoExposure ?: true,
+            rawMeteringCenterWeight = userPrefs?.rawMeteringCenterWeight ?: 0f,
+            rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
+            rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
+            rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
+            rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
+            rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
+            cameraId = currentCameraId,
             width = image.width,
             height = image.height,
             ratio = aspectRatio,

@@ -87,6 +87,15 @@ uvec2 readGreenAccum(int familyIndex, int x, int y) {
     return (familyIndex == 0) ? greenPhase0.data[idx] : greenPhase1.data[idx];
 }
 
+float clampRawNorm(float v) {
+    return clamp(v, 0.0, 1.0);
+}
+
+float computeObservationNorm(float meanVal, int bayerIndex) {
+    float whiteRange = max(pc.whiteLevel - pc.blackLevel[bayerIndex], 1.0);
+    return clampRawNorm((meanVal * 65535.0) / whiteRange);
+}
+
 void gatherGreenNeighborhood(int familyIndex, int centerX, int centerY,
                              out float meanVal, out float support) {
     float sum = 0.0;
@@ -164,9 +173,10 @@ void main() {
     float observationNorm = 0.0;
     float observationSupport = 0.0;
     float normalizedRaw = 0.0;
+    float primaryConfidence = 0.0;
     if (primary.y > 0u || primaryNeighborSupport > 0.0) {
         float primaryVal = accumMean(primary);
-        float primaryConfidence = clamp(float(primary.y) / 768.0, 0.0, 1.0);
+        primaryConfidence = clamp(float(primary.y) / 768.0, 0.0, 1.0);
         observationSupport = max(primaryConfidence, 0.28 * primaryNeighborSupport);
         float val = (primary.y > 0u) ? primaryVal : primaryNeighborVal;
 
@@ -174,8 +184,7 @@ void main() {
             val = mix(primaryNeighborVal, val, primaryConfidence);
         }
 
-        float whiteRange = max(pc.whiteLevel - pc.blackLevel[bayerIndex], 1.0);
-        observationNorm = (val * 65535.0) / whiteRange;
+        observationNorm = computeObservationNorm(val, bayerIndex);
     }
 
     if (observationSupport > 0.0 && priorSupport > 0.0) {
@@ -186,6 +195,37 @@ void main() {
         normalizedRaw = observationNorm;
     } else if (priorSupport > 0.0) {
         normalizedRaw = priorNorm;
+    }
+
+    // Mild Y-equivalent denoise on the green plane only when frame support is low.
+    // Keep the range tight so edge detail stays in the luminance proxy.
+    if (observationSupport > 0.0 && observationSupport < 0.85) {
+        float centerNorm = normalizedRaw;
+        float denoiseStrength =
+            smoothstep(0.85, 0.10, max(observationSupport, 0.75 * primaryConfidence));
+        float sigmaRangeSq = mix(0.00008, 0.00030, denoiseStrength);
+        float sum = centerNorm;
+        float wsum = 1.0;
+
+        for (int oy = -1; oy <= 1; ++oy) {
+            for (int ox = -1; ox <= 1; ++ox) {
+                if (ox == 0 && oy == 0) continue;
+                uvec2 neighAccum = readGreenAccum(familyIndex, int(tx) + ox, int(ty) + oy);
+                float neighSupport = clamp(float(neighAccum.y) / 768.0, 0.0, 1.0);
+                if (neighSupport <= 0.0) continue;
+
+                float neighNorm = computeObservationNorm(accumMean(neighAccum), bayerIndex);
+                float spatialW = (ox == 0 || oy == 0) ? 0.7 : 0.45;
+                float d = neighNorm - centerNorm;
+                float rangeW = exp(-(d * d) / max(2.0 * sigmaRangeSq, 1e-8));
+                float w = spatialW * neighSupport * rangeW;
+                sum += neighNorm * w;
+                wsum += w;
+            }
+        }
+
+        float denoisedNorm = sum / max(wsum, 1e-4);
+        normalizedRaw = mix(centerNorm, denoisedNorm, denoiseStrength);
     }
 
     outputBuffer.data[outIndex] = uint16_t(clamp(normalizedRaw * 65535.0, 0.0, 65535.0));

@@ -8,9 +8,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.CameraState
 
 @Composable
@@ -58,13 +60,12 @@ fun CameraParameterBar(
             onClick = { onParameterClick(CameraParameter.ISO) }
         )
         ParameterItem(
-            label = "Av",
-            value = String.format("f/%.1f", if (state.isVirtualApertureEnabled) state.virtualAperture else state.physicalAperture),
+            label = "AF",
+            value = if (state.isAutoFocus) "AUTO" else formatFocusDistance(state.focusDistance),
             labelColor = yellow,
-            valueColor = if (state.isVirtualApertureEnabled) Color(0xFF00E5FF) else null, // 开启虚拟光圈时显示青色
-            isSelected = selectedParameter == CameraParameter.APERTURE,
-            isEnabled = true, // Enabled for computational bokeh
-            onClick = { onParameterClick(CameraParameter.APERTURE) }
+            isSelected = selectedParameter == CameraParameter.FOCUS,
+            isEnabled = true,
+            onClick = { onParameterClick(CameraParameter.FOCUS) }
         )
         ParameterItem(
             label = "AWB",
@@ -118,5 +119,14 @@ fun ParameterItem(
             fontSize = 11.sp,
             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Bold
         )
+    }
+}
+
+internal fun formatFocusDistance(value: Float): String {
+    return if (value <= 0.01f) "∞"
+    else {
+        val meters = 1.0f / value
+        if (meters >= 1.0f) String.format("%.1fm", meters)
+        else String.format("%dcm", (meters * 100).toInt())
     }
 }

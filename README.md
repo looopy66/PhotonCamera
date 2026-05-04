@@ -35,6 +35,12 @@ Photon Camera 是一款专注于静态摄影的开源 Android 相机应用，旨
 * **AI 驱动**：集成基于高通优化的 **midas-v2** 深度检测本地 AI 模型。
 * **精准测距**：提供较为准确的深度信息检测，实现自然的虚化过渡效果（持续优化中）。
 
+新增支持Deep Anything V3
+
+使用方法：
+1. 访问https://huggingface.co/qualcomm/Depth-Anything-V3 下载 tflite版本，放入 assets中
+2. DepthBokehProcessor中depthEstimator初始化改为使用DepthEstimator(appContext, DepthEstimator.MODEL_DEPTH_ANYTHING)
+
 ### 7. 幻影模式 (Phantom Mode)
 * **画质飞跃**：直接调用系统相机进行采集，通过挂载 Photon Camera 的 LUT 引擎，完美绕过第三方相机 API 画面质量差、锐化过度的问题。
 
@@ -53,3 +59,7 @@ Photon Camera 是一款专注于静态摄影的开源 Android 相机应用，旨
 如果你觉得这个项目对你有帮助，欢迎请作者打赏一杯咖啡！
 
 <img src="./doc/alipay_qr.webp" width="300" alt="Alipay QR Code">
+
+## 交流
+
+QQ群(光子相机): 569605452

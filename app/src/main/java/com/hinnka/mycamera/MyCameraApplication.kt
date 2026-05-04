@@ -8,6 +8,7 @@ import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.phantom.PhantomService
 import com.hinnka.mycamera.phantom.PhantomShortcutActivity
 import com.hinnka.mycamera.screencapture.PhantomPipPreviewCoordinator
+import com.hinnka.mycamera.update.AppUpdateManager
 import com.hinnka.mycamera.utils.BuglyHelper
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.StartupTrace
@@ -33,6 +34,7 @@ class MyCameraApplication : Application() {
         phantomService = StartupTrace.measure("PhantomService()") {
             PhantomService(this)
         }
+        AppUpdateManager.startSilentUpdate(this)
 
         val userPreferencesRepository = contentRepository.userPreferencesRepository
         MainScope().launch {

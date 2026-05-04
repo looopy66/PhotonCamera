@@ -2,6 +2,7 @@ package com.hinnka.mycamera.ui.gallery
 
 import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.graphics.ColorSpace
 import android.net.Uri
@@ -12,10 +13,17 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -53,6 +61,11 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.isVisible
 import androidx.media3.ui.AspectRatioFrameLayout
 import coil.request.ImageRequest
+import com.hinnka.mycamera.hdr.HdrGainmapStrength
+import com.hinnka.mycamera.lut.creator.AiPhotoEvaluation
+import com.hinnka.mycamera.ui.camera.autoRotate
+import com.hinnka.mycamera.ui.components.CustomSliderThinThumb
+import com.hinnka.mycamera.ui.components.PaymentDialog
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.viewmodel.GalleryTab
 import kotlinx.coroutines.Dispatchers
@@ -63,6 +76,7 @@ import me.saket.telephoto.zoomable.rememberZoomableState
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
  * 照片详情界面
@@ -88,7 +102,12 @@ fun GalleryDetailScreen(
     var isZoomed by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
+    var isExportingDng by remember { mutableStateOf(false) }
     val isSharing by viewModel.isSharing.collectAsState()
+    val isPurchased by viewModel.isPurchased.collectAsState()
+    var showAiScoreSheet by remember { mutableStateOf(false) }
+    var showMoreSheet by remember { mutableStateOf(false) }
+    var showHdrStrengthPanel by remember { mutableStateOf(false) }
 
     val currentColorSpace = remember { mutableStateOf<ColorSpace?>(null) }
 
@@ -99,7 +118,7 @@ fun GalleryDetailScreen(
         if (result.resultCode == Activity.RESULT_OK) {
             // User confirmed deletion, delete internal photo
             viewModel.deletePhotoAfterConfirmation { success ->
-                if (success) {
+                if (success && viewModel.currentPhotos.value.isEmpty()) {
                     onBack()
                 }
             }
@@ -114,7 +133,7 @@ fun GalleryDetailScreen(
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             viewModel.deleteSystemPhotoAfterConfirmation { success ->
-                if (success) {
+                if (success && viewModel.currentPhotos.value.isEmpty()) {
                     onBack()
                 }
             }
@@ -195,6 +214,18 @@ fun GalleryDetailScreen(
     }
 
     val currentPhoto = photos.getOrNull(pagerState.currentPage)
+    var hdrStrengthSliderValue by remember(currentPhoto?.id) {
+        mutableFloatStateOf(currentPhoto?.let { viewModel.getManualHdrStrength(it) } ?: HdrGainmapStrength.DEFAULT)
+    }
+    LaunchedEffect(currentPhoto?.id, currentPhoto?.metadata?.hdrEffectStrength) {
+        hdrStrengthSliderValue = currentPhoto?.let { viewModel.getManualHdrStrength(it) } ?: HdrGainmapStrength.DEFAULT
+    }
+    LaunchedEffect(currentPhoto?.id) {
+        showHdrStrengthPanel = false
+    }
+    val isCurrentRawPhoto = currentPhoto?.let {
+        it.isImage && (viewModel.selectedTab == GalleryTab.PHOTON || it.relatedPhoto != null) && viewModel.isRaw(it.id)
+    } == true
     var displayPhotoSize by remember(currentPhoto?.id) { mutableLongStateOf(currentPhoto?.size ?: 0L) }
 
     LaunchedEffect(currentPhoto?.id, currentPhoto?.size, currentPhoto?.uri, currentPhoto?.sourceUri) {
@@ -221,12 +252,13 @@ fun GalleryDetailScreen(
                 title = {
                     Text(
                         text = "${pagerState.currentPage + 1} / ${photos.size}",
+                        maxLines = 1,
                         color = Color.White
                     )
                 },
                 navigationIcon = {
                     if (!isExpanded) {
-                        IconButton(onClick = onBack) {
+                        IconButton(onClick = onBack, modifier = Modifier.autoRotate()) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = stringResource(R.string.back),
@@ -274,7 +306,8 @@ fun GalleryDetailScreen(
                                     }
                                 }
                             },
-                            enabled = !isRefreshing
+                            enabled = !isRefreshing,
+                            modifier = Modifier.autoRotate()
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Refresh,
@@ -289,7 +322,7 @@ fun GalleryDetailScreen(
                         }
                     }
                     if (currentPhoto != null && currentPhoto.isImage && currentPhoto.isBurstPhoto) {
-                        IconButton(onClick = { onViewBurst?.invoke(currentPhoto.id) }) {
+                        IconButton(onClick = { onViewBurst?.invoke(currentPhoto.id) }, modifier = Modifier.autoRotate()) {
                             Icon(
                                 imageVector = Icons.Default.BurstMode,
                                 contentDescription = "查看连拍照片", // 连拍照片
@@ -297,16 +330,18 @@ fun GalleryDetailScreen(
                             )
                         }
                     }
-                    if (currentPhoto != null && currentPhoto.isImage && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !DeviceUtil.isHarmonyOS) {
+                    if (
+                        currentPhoto != null &&
+                        currentPhoto.isImage &&
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                        !DeviceUtil.isHarmonyOS &&
+                        viewModel.canToggleManualHdrEnhance(currentPhoto)
+                    ) {
                         val hdrEnabled = viewModel.isManualHdrEnhanceEnabled(currentPhoto)
                         TextButton(
-                                    onClick = {
-                                        viewModel.toggleManualHdrEnhance(currentPhoto) { success ->
-                                            if (!success) {
-                                                Toast.makeText(context, R.string.hdr_toggle_failed, Toast.LENGTH_SHORT).show()
-                                            }
-                                        }
-                                    }
+                            onClick = {
+                                showHdrStrengthPanel = !showHdrStrengthPanel
+                            },
                         ) {
                             Text(
                                 text = stringResource(R.string.hdr_label),
@@ -315,7 +350,7 @@ fun GalleryDetailScreen(
                             )
                         }
                     }
-                    IconButton(onClick = { showInfoDialog = true }) {
+                    IconButton(onClick = { showInfoDialog = true }, modifier = Modifier.autoRotate()) {
                         Icon(
                             imageVector = Icons.Default.Info,
                             contentDescription = stringResource(if (currentPhoto?.isVideo == true) R.string.video_info else R.string.photo_info),
@@ -336,89 +371,48 @@ fun GalleryDetailScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp),
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
-                    // 分享
-                    IconButton(
-                        onClick = { currentPhoto?.let { viewModel.sharePhoto(it) } },
-                        enabled = !isSharing && !isSaving,
-                        modifier = Modifier
-                            .size(56.dp)
-                            .background(Color.White.copy(alpha = 0.1f), CircleShape)
-                    ) {
-                        if (isSharing) {
-                            CircularProgressIndicator(
-                                color = Color.White,
-                                modifier = Modifier.size(24.dp),
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Default.Share,
-                                contentDescription = stringResource(R.string.share),
-                                tint = Color.White
-                            )
-                        }
+                    // AI 评分
+                    if (currentPhoto?.isImage == true) {
+                        GalleryActionItem(
+                            icon = Icons.Default.AutoAwesome,
+                            text = stringResource(R.string.gallery_ai_analysis),
+                            contentColor = AccentOrange,
+                            containerColor = AccentOrange.copy(alpha = 0.15f),
+                            onClick = { showAiScoreSheet = true },
+                        )
                     }
 
                     // 编辑
                     if (currentPhoto?.isImage == true) {
-                        IconButton(
+                        GalleryActionItem(
+                            icon = Icons.Default.Edit,
+                            text = stringResource(R.string.edit),
                             onClick = {
                                 viewModel.setCurrentPhoto(pagerState.currentPage)
                                 viewModel.enterEditMode()
                                 onEdit()
                             },
-                            modifier = Modifier
-                                .size(56.dp)
-                                .background(Color.White.copy(alpha = 0.1f), CircleShape)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Edit,
-                                contentDescription = stringResource(R.string.edit),
-                                tint = Color.White
-                            )
-                        }
-                    }
-
-                    // 导出
-                    if (currentPhoto?.isImage == true && (viewModel.selectedTab == GalleryTab.PHOTON || currentPhoto.relatedPhoto != null)) {
-                        IconButton(
-                            onClick = { showExportDialog = true },
-                            modifier = Modifier
-                                .size(56.dp)
-                                .background(Color.White.copy(alpha = 0.1f), CircleShape)
-                        ) {
-                            if (isSaving) {
-                                CircularProgressIndicator(
-                                    color = Color.White,
-                                    modifier = Modifier.size(24.dp),
-                                    strokeWidth = 2.dp
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Default.Output,
-                                    contentDescription = stringResource(R.string.export),
-                                    tint = AccentOrange
-                                )
-                            }
-                        }
+                        )
                     }
 
                     // 删除
-                    IconButton(
+                    GalleryActionItem(
+                        icon = Icons.Default.Delete,
+                        text = stringResource(R.string.delete),
+                        contentColor = Color.Red,
+                        containerColor = Color.Red.copy(alpha = 0.2f),
                         onClick = { showDeleteDialog = true },
-                        modifier = Modifier
-                            .size(56.dp)
-                            .background(Color.Red.copy(alpha = 0.2f), CircleShape)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Delete,
-                            contentDescription = stringResource(R.string.delete),
-                            tint = Color.Red
-                        )
-                    }
+                    )
+
+                    // 更多
+                    GalleryActionItem(
+                        icon = Icons.Default.MoreHoriz,
+                        text = stringResource(R.string.more_options),
+                        onClick = { showMoreSheet = true },
+                    )
                 }
             }
         },
@@ -540,12 +534,43 @@ fun GalleryDetailScreen(
                     }
                 }
             }
+            if (
+                showHdrStrengthPanel &&
+                currentPhoto != null &&
+                currentPhoto.isImage &&
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                !DeviceUtil.isHarmonyOS &&
+                viewModel.canToggleManualHdrEnhance(currentPhoto)
+            ) {
+                HdrStrengthPanel(
+                    enabled = viewModel.isManualHdrEnhanceEnabled(currentPhoto),
+                    strength = hdrStrengthSliderValue,
+                    onEnabledChange = {
+                        viewModel.toggleManualHdrEnhance(currentPhoto) { success ->
+                            if (!success) {
+                                Toast.makeText(context, R.string.hdr_toggle_failed, Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    },
+                    onStrengthChange = { hdrStrengthSliderValue = it },
+                    onStrengthChangeFinished = {
+                        viewModel.setManualHdrStrength(currentPhoto, hdrStrengthSliderValue) { success ->
+                            if (!success) {
+                                Toast.makeText(context, R.string.hdr_strength_update_failed, Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 12.dp, end = 12.dp)
+                )
+            }
         }
     }
 
     // 删除确认对话框
     if (showDeleteDialog) {
-        var deleteExported by remember { mutableStateOf(false) }
+        var deleteExported by remember { mutableStateOf(true) }
 
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
@@ -686,6 +711,499 @@ fun GalleryDetailScreen(
             textContentColor = Color.White
         )
     }
+
+    // AI 评分 BottomSheet
+    if (showAiScoreSheet && currentPhoto != null && currentPhoto.isImage) {
+        AiScoreBottomSheet(
+            photo = currentPhoto,
+            viewModel = viewModel,
+            isPurchased = isPurchased,
+            onPurchase = { viewModel.showPaymentDialog = true },
+            onDismissRequest = { showAiScoreSheet = false }
+        )
+    }
+
+    if (viewModel.showPaymentDialog) {
+        val activity = context.findActivity()
+        PaymentDialog(
+            onDismiss = { viewModel.showPaymentDialog = false },
+            onPurchase = {
+                if (activity != null) {
+                    viewModel.purchase(activity)
+                }
+                viewModel.showPaymentDialog = false
+            }
+        )
+    }
+
+    // 更多 BottomSheet
+    if (showMoreSheet && currentPhoto != null) {
+        @OptIn(ExperimentalMaterial3Api::class)
+        ModalBottomSheet(
+            onDismissRequest = { showMoreSheet = false },
+            containerColor = Color(0xFF1E1E1E),
+            dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.4f)) }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 32.dp, start = 24.dp, end = 24.dp)
+            ) {
+                Text(
+                    text = stringResource(R.string.more_options),
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 24.dp)
+                )
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // 分享
+                    GalleryActionItem(
+                        icon = Icons.Default.Share,
+                        text = stringResource(R.string.share),
+                        isLoading = isSharing,
+                        enabled = !isSharing && !isSaving,
+                        onClick = {
+                            showMoreSheet = false
+                            viewModel.sharePhoto(currentPhoto)
+                        }
+                    )
+
+                    // 导出
+                    if (currentPhoto.isImage && (viewModel.selectedTab == GalleryTab.PHOTON || currentPhoto.relatedPhoto != null)) {
+                        GalleryActionItem(
+                            icon = Icons.Default.Output,
+                            text = stringResource(R.string.export),
+                            isLoading = isSaving,
+                            onClick = {
+                                showMoreSheet = false
+                                showExportDialog = true
+                            }
+                        )
+                    }
+
+                    // DNG
+                    if (isCurrentRawPhoto) {
+                        GalleryActionItem(
+                            iconText = "DNG",
+                            text = "DNG",
+                            isLoading = isExportingDng,
+                            enabled = !isSaving && !isExportingDng,
+                            onClick = {
+                                showMoreSheet = false
+                                isExportingDng = true
+                                viewModel.exportDng(currentPhoto) { success ->
+                                    isExportingDng = false
+                                    if (success) {
+                                        Toast.makeText(context, R.string.export_dng_success, Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        Toast.makeText(context, R.string.export_dng_failed, Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                                }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AiScoreBottomSheet(
+    photo: MediaData,
+    viewModel: GalleryViewModel,
+    isPurchased: Boolean,
+    onPurchase: () -> Unit,
+    onDismissRequest: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var requestToken by remember(photo.id) { mutableIntStateOf(0) }
+    var uiState by remember(photo.id) { mutableStateOf<AiEvaluationUiState>(AiEvaluationUiState.Loading) }
+
+    val openAIKey by viewModel.openAIApiKey.collectAsState()
+
+    LaunchedEffect(photo.id, requestToken, isPurchased) {
+        if (!isPurchased) return@LaunchedEffect
+        uiState = AiEvaluationUiState.Loading
+        uiState = viewModel.evaluatePhotoWithAi(photo).fold(
+            onSuccess = { AiEvaluationUiState.Success(it) },
+            onFailure = { AiEvaluationUiState.Error(it) }
+        )
+    }
+
+    val evaluation = (uiState as? AiEvaluationUiState.Success)?.evaluation
+    val score = evaluation?.overallScore ?: 0
+    val (color, rankText) = when {
+        score >= 90 -> Color(0xFFFFD700) to stringResource(R.string.gallery_ai_rank_excellent_plus)
+        score >= 80 -> Color(0xFF4CAF50) to stringResource(R.string.gallery_ai_rank_excellent)
+        score >= 70 -> Color(0xFF8BC34A) to stringResource(R.string.gallery_ai_rank_good)
+        score >= 60 -> Color.White.copy(alpha = 0.8f) to stringResource(R.string.gallery_ai_rank_pass)
+        else -> Color(0xFFFF5252) to stringResource(R.string.gallery_ai_rank_needs_work)
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismissRequest,
+        sheetState = sheetState,
+        containerColor = Color(0x881E1E1E),
+        dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.4f)) }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 32.dp, start = 24.dp, end = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = stringResource(R.string.gallery_ai_quality_title),
+                color = Color.White,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 24.dp)
+            )
+
+            if (!isPurchased && openAIKey.isNullOrBlank()) {
+                Text(
+                    text = stringResource(R.string.gallery_ai_premium_required),
+                    color = Color.White.copy(alpha = 0.72f),
+                    fontSize = 14.sp,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+                Button(
+                    onClick = onPurchase,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AccentOrange,
+                        contentColor = Color.Black
+                    )
+                ) {
+                    Text(
+                        text = stringResource(R.string.billing_premium_get_access),
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                return@Column
+            }
+
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.size(160.dp)
+            ) {
+                CircularProgressIndicator(
+                    progress = { 1f },
+                    modifier = Modifier.fillMaxSize(),
+                    color = Color.White.copy(alpha = 0.1f),
+                    strokeWidth = 12.dp,
+                    strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
+                )
+                
+                val animatedProgress by animateFloatAsState(
+                    targetValue = score / 100f,
+                    animationSpec = tween(1500, easing = FastOutSlowInEasing),
+                    label = "progress"
+                )
+                val animatedScore by animateIntAsState(
+                    targetValue = score,
+                    animationSpec = tween(1500, easing = FastOutSlowInEasing),
+                    label = "score"
+                )
+
+                CircularProgressIndicator(
+                    progress = { animatedProgress },
+                    modifier = Modifier.fillMaxSize(),
+                    color = color,
+                    strokeWidth = 12.dp,
+                    strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
+                )
+                
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = animatedScore.toString(),
+                        color = color,
+                        fontSize = 48.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = rankText,
+                        color = color.copy(alpha = 0.8f),
+                        fontSize = 14.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            when (val state = uiState) {
+                AiEvaluationUiState.Loading -> {
+                    Spacer(modifier = Modifier.height(32.dp))
+                    CircularProgressIndicator(
+                        color = AccentOrange,
+                        modifier = Modifier.size(28.dp),
+                        strokeWidth = 3.dp
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = stringResource(R.string.gallery_ai_analyzing),
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 14.sp
+                    )
+                }
+
+                is AiEvaluationUiState.Error -> {
+                    Spacer(modifier = Modifier.height(32.dp))
+                    Text(
+                        text = state.error.toString(),
+                        color = Color.White.copy(alpha = 0.75f),
+                        fontSize = 14.sp
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    TextButton(onClick = { requestToken += 1 }) {
+                        Text(stringResource(R.string.lut_creator_try_again), color = AccentOrange)
+                    }
+                }
+
+                is AiEvaluationUiState.Success -> {
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    if (state.evaluation.summary.isNotBlank()) {
+                        Text(
+                            text = state.evaluation.summary,
+                            color = Color.White.copy(alpha = 0.82f),
+                            fontSize = 14.sp,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                    }
+
+                    val dimensions = listOf(
+                        stringResource(R.string.gallery_ai_element_impact) to state.evaluation.scores.impact,
+                        stringResource(R.string.gallery_ai_element_technical_excellence) to state.evaluation.scores.technicalExcellence,
+                        stringResource(R.string.gallery_ai_element_creativity) to state.evaluation.scores.creativity,
+                        stringResource(R.string.gallery_ai_element_style) to state.evaluation.scores.style,
+                        stringResource(R.string.gallery_ai_element_composition) to state.evaluation.scores.composition,
+                        stringResource(R.string.gallery_ai_element_presentation) to state.evaluation.scores.presentation,
+                        stringResource(R.string.gallery_ai_element_color_balance) to state.evaluation.scores.colorBalance,
+                        stringResource(R.string.gallery_ai_element_center_of_interest) to state.evaluation.scores.centerOfInterest,
+                        stringResource(R.string.gallery_ai_element_lighting) to state.evaluation.scores.lighting,
+                        stringResource(R.string.gallery_ai_element_subject_matter) to state.evaluation.scores.subjectMatter,
+                        stringResource(R.string.gallery_ai_element_technique) to state.evaluation.scores.technique,
+                        stringResource(R.string.gallery_ai_element_storytelling) to state.evaluation.scores.storytelling
+                    )
+                    dimensions.forEach { (label, value) ->
+                        AiScoreDimensionRow(
+                            label = label,
+                            value = value,
+                            color = aiScoreColor(value)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AiScoreDimensionRow(
+    label: String,
+    value: Int,
+    color: Color
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            color = Color.White.copy(alpha = 0.7f),
+            fontSize = 12.sp,
+            modifier = Modifier.width(128.dp)
+        )
+
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(8.dp)
+                .background(Color.White.copy(alpha = 0.1f), CircleShape)
+        ) {
+            val animValue by animateFloatAsState(
+                targetValue = value.coerceIn(0, 100) / 100f,
+                animationSpec = tween(1000, delayMillis = 500, easing = FastOutSlowInEasing),
+                label = "dimen"
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(animValue)
+                    .background(color.copy(alpha = 0.8f), CircleShape)
+            )
+        }
+
+        Text(
+            text = value.coerceIn(0, 100).toString(),
+            color = color,
+            fontSize = 14.sp,
+            modifier = Modifier
+                .width(40.dp)
+                .padding(start = 8.dp)
+        )
+    }
+}
+
+private sealed class AiEvaluationUiState {
+    object Loading : AiEvaluationUiState()
+    data class Success(val evaluation: AiPhotoEvaluation) : AiEvaluationUiState()
+    data class Error(val error: Throwable) : AiEvaluationUiState()
+}
+
+private fun aiScoreColor(score: Int): Color =
+    when {
+        score >= 90 -> Color(0xFFFFD700)
+        score >= 80 -> Color(0xFF4CAF50)
+        score >= 70 -> Color(0xFF8BC34A)
+        score >= 60 -> Color.White.copy(alpha = 0.8f)
+        else -> Color(0xFFFF5252)
+    }
+
+@Composable
+private fun HdrStrengthPanel(
+    enabled: Boolean,
+    strength: Float,
+    onEnabledChange: (Boolean) -> Unit,
+    onStrengthChange: (Float) -> Unit,
+    onStrengthChangeFinished: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        color = Color(0x881E1E1E),
+        shape = RoundedCornerShape(16.dp),
+        modifier = modifier.width(200.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = stringResource(R.string.hdr_label),
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = onEnabledChange,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = AccentOrange,
+                        uncheckedThumbColor = Color.LightGray,
+                        uncheckedTrackColor = Color.DarkGray
+                    )
+                )
+            }
+
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(R.string.hdr_strength_label),
+                        color = Color.White.copy(alpha = 0.86f),
+                        fontSize = 9.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        text = "${(strength * 100f).roundToInt()}%",
+                        color = AccentOrange,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 9.sp
+                    )
+                }
+                CustomSliderThinThumb(
+                    value = strength,
+                    onValueChange = onStrengthChange,
+                    valueRange = HdrGainmapStrength.MIN..HdrGainmapStrength.MAX,
+                    enabled = enabled,
+                    onValueChangeFinished = onStrengthChangeFinished,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GalleryActionItem(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    icon: ImageVector? = null,
+    iconText: String? = null,
+    enabled: Boolean = true,
+    contentColor: Color = Color.White,
+    containerColor: Color = Color.White.copy(alpha = 0.1f),
+    isLoading: Boolean = false
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(enabled = enabled && !isLoading, onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .alpha(if (enabled) 1f else 0.5f)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(52.dp)
+                .background(containerColor, CircleShape)
+                .autoRotate(),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isLoading) {
+                CircularProgressIndicator(
+                    color = contentColor,
+                    modifier = Modifier.size(24.dp),
+                    strokeWidth = 2.dp
+                )
+            } else if (icon != null) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = text,
+                    tint = contentColor,
+                    modifier = Modifier.size(24.dp)
+                )
+            } else if (iconText != null) {
+                Text(
+                    text = iconText,
+                    color = contentColor,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = text,
+            color = contentColor.copy(alpha = 0.9f),
+            fontSize = 12.sp,
+            maxLines = 1
+        )
+    }
 }
 
 @Composable
@@ -753,6 +1271,15 @@ private fun resolveUriSize(context: Context, uri: Uri): Long {
     return 0L
 }
 
+private fun Context.findActivity(): Activity? {
+    var currentContext = this
+    while (currentContext is ContextWrapper) {
+        if (currentContext is Activity) return currentContext
+        currentContext = currentContext.baseContext
+    }
+    return null
+}
+
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 private fun VideoDetailPlayer(
@@ -796,7 +1323,7 @@ private fun VideoDetailPlayer(
             it.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
             it.isVisible = true
         },
-        modifier = modifier
+        modifier = modifier.autoRotate(matchParentSize = true)
     )
 }
 
@@ -889,7 +1416,7 @@ private fun ZoomableImage(
                 contentDescription = photo.displayName,
                 contentScale = ContentScale.Fit,
                 state = zoomableState,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize().autoRotate(matchParentSize = true)
             )
         }
 
@@ -906,7 +1433,7 @@ private fun ZoomableImage(
                 contentDescription = photo.displayName,
                 contentScale = ContentScale.Fit,
                 state = zoomableState,
-                modifier = Modifier.fillMaxSize().alpha(hdrAlpha)
+                modifier = Modifier.fillMaxSize().alpha(hdrAlpha).autoRotate(matchParentSize = true)
             )
         }
 
@@ -968,6 +1495,6 @@ fun MotionPhotoPlayer(
             it.isVisible = isPlaying
             it.alpha = if (isReadyToShow) 1f else 0f
         },
-        modifier = modifier
+        modifier = modifier.autoRotate(matchParentSize = true)
     )
 }

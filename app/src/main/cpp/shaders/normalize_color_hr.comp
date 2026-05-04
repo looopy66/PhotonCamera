@@ -66,6 +66,52 @@ float accumMean(uvec2 accum) {
     return float(accum.x) / max(float(accum.y), 1.0) / 65535.0;
 }
 
+float clampRawNorm(float v) {
+    return clamp(v, 0.0, 1.0);
+}
+
+float computeObservationNorm(float meanVal, int bayerIndex) {
+    float whiteRange = max(pc.whiteLevel - pc.blackLevel[bayerIndex], 1.0);
+    return clampRawNorm((meanVal * 65535.0) / whiteRange);
+}
+
+float readOutputNorm(int x, int y) {
+    x = clamp(x, 0, int(pc.width) - 1);
+    y = clamp(y, 0, int(pc.height) - 1);
+    uint idx = uint(y) * pc.width + uint(x);
+    return float(outputBuffer.data[idx]) / 65535.0;
+}
+
+float readGuidedGreenNorm(uint gx, uint gy) {
+    uint leftX = (gx > 0u) ? gx - 1u : gx;
+    uint rightX = min(gx + 1u, pc.width - 1u);
+    uint upY = (gy > 0u) ? gy - 1u : gy;
+    uint downY = min(gy + 1u, pc.height - 1u);
+
+    float sum = 0.0;
+    float wsum = 0.0;
+    if ((leftX & 1u) != (gx & 1u)) {
+        sum += readOutputNorm(int(leftX), int(gy));
+        wsum += 1.0;
+    }
+    if ((rightX & 1u) != (gx & 1u)) {
+        sum += readOutputNorm(int(rightX), int(gy));
+        wsum += 1.0;
+    }
+    if ((upY & 1u) != (gy & 1u)) {
+        sum += readOutputNorm(int(gx), int(upY));
+        wsum += 1.0;
+    }
+    if ((downY & 1u) != (gy & 1u)) {
+        sum += readOutputNorm(int(gx), int(downY));
+        wsum += 1.0;
+    }
+    if (wsum > 0.0) {
+        return sum / wsum;
+    }
+    return readOutputNorm(int(gx), int(gy));
+}
+
 void gatherNeighborhoodEstimate(int centerX, int centerY,
                                 out float meanVal, out float support) {
     float sum = 0.0;
@@ -155,8 +201,7 @@ void main() {
 
     float normalizedRaw = 0.0;
     if (hasEstimate) {
-        float whiteRange = max(pc.whiteLevel - pc.blackLevel[bayerIndex], 1.0);
-        observationNorm = (val * 65535.0) / whiteRange;
+        observationNorm = computeObservationNorm(val, bayerIndex);
     }
 
     if (hasEstimate && priorSupport > 0.0) {
@@ -167,6 +212,51 @@ void main() {
         normalizedRaw = observationNorm;
     } else if (priorSupport > 0.0) {
         normalizedRaw = priorNorm;
+    }
+
+    // Strong C-equivalent denoise: filter in the color-difference domain,
+    // with the already-normalized green plane acting as the luminance guide.
+    if (hasEstimate) {
+        float centerGreen = readGuidedGreenNorm(globalX, globalY);
+        float centerDiff = normalizedRaw - centerGreen;
+        float centerSupport = max(observationSupport, 0.4 * priorSupport);
+
+        float diffSum = centerDiff;
+        float diffW = 1.0;
+        const int stepScale = 2;
+        const float spatialSigmaSq = 3.0;
+        const float greenSigmaSq = 0.0008;
+        const float chromaSigmaSq = 0.0045;
+
+        for (int gy = -2; gy <= 2; ++gy) {
+            for (int gx = -2; gx <= 2; ++gx) {
+                if (gx == 0 && gy == 0) continue;
+                int nx = int(tx) + gx * stepScale;
+                int ny = int(ty) + gy * stepScale;
+                uvec2 neighAccum = readAccum(nx, ny);
+                float neighLocalSupport = clamp(float(neighAccum.y) / 768.0, 0.0, 1.0);
+                if (neighLocalSupport <= 0.0) continue;
+
+                uint neighGlobalX = uint(offset.x) + uint(clamp(nx, 0, int(pc.tileW) - 1)) * 2u;
+                uint neighGlobalY = uint(offset.y) + uint(clamp(ny, 0, int(pc.tileH) - 1)) * 2u;
+                float neighNorm = computeObservationNorm(accumMean(neighAccum), bayerIndex);
+                float neighGreen = readGuidedGreenNorm(neighGlobalX, neighGlobalY);
+                float neighDiff = neighNorm - neighGreen;
+
+                float wS = exp(-float(gx * gx + gy * gy) / (2.0 * spatialSigmaSq));
+                float dG = neighGreen - centerGreen;
+                float wL = exp(-(dG * dG) / (2.0 * greenSigmaSq));
+                float dC = neighDiff - centerDiff;
+                float wC = exp(-(dC * dC) / (2.0 * chromaSigmaSq));
+                float w = wS * wL * wC * neighLocalSupport;
+                diffSum += neighDiff * w;
+                diffW += w;
+            }
+        }
+
+        float filteredDiff = diffSum / max(diffW, 1e-4);
+        float chromaStrength = smoothstep(1.00, 0.12, centerSupport);
+        normalizedRaw = clampRawNorm(centerGreen + mix(centerDiff, filteredDiff, chromaStrength));
     }
 
     outputBuffer.data[outIndex] = uint16_t(clamp(normalizedRaw * 65535.0, 0.0, 65535.0));

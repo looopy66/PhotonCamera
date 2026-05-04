@@ -171,6 +171,40 @@ object Shaders {
     """.trimIndent()
 
     /**
+     * Focus Peaking Shader
+     */
+    val FRAGMENT_SHADER_FOCUS_PEAKING = """
+        #version 300 es
+        precision highp float;
+        in vec2 vTexCoord;
+        out vec4 fragColor;
+        uniform sampler2D uInputTexture;
+        uniform vec2 uTexelSize;
+        uniform float uThreshold;
+        uniform vec3 uPeakColor;
+
+        void main() {
+            vec4 color = texture(uInputTexture, vTexCoord);
+
+            // Sobel edge detection
+            float l00 = dot(texture(uInputTexture, vTexCoord + vec2(-uTexelSize.x, -uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
+            float l10 = dot(texture(uInputTexture, vTexCoord + vec2(0.0, -uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
+            float l20 = dot(texture(uInputTexture, vTexCoord + vec2(uTexelSize.x, -uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
+            float l01 = dot(texture(uInputTexture, vTexCoord + vec2(-uTexelSize.x, 0.0)).rgb, vec3(0.299, 0.587, 0.114));
+            float l21 = dot(texture(uInputTexture, vTexCoord + vec2(uTexelSize.x, 0.0)).rgb, vec3(0.299, 0.587, 0.114));
+            float l02 = dot(texture(uInputTexture, vTexCoord + vec2(-uTexelSize.x, uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
+            float l12 = dot(texture(uInputTexture, vTexCoord + vec2(0.0, uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
+            float l22 = dot(texture(uInputTexture, vTexCoord + vec2(uTexelSize.x, uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
+
+            float gx = l00 + 2.0 * l01 + l02 - l20 - 2.0 * l21 - l22;
+            float gy = l00 + 2.0 * l10 + l20 - l02 - 2.0 * l12 - l22;
+            float edge = sqrt(gx * gx + gy * gy);
+            float peakFactor = smoothstep(uThreshold, uThreshold * 1.5, edge);
+            fragColor = vec4(mix(color.rgb, uPeakColor, peakFactor * 0.9), color.a);
+        }
+    """.trimIndent()
+
+    /**
      * 片元着色器 - 带色彩配方和 3D LUT 支持
      *
      * 处理流程：相机采样 → 色彩配方调整 → LUT处理（可选） → 输出
@@ -954,111 +988,89 @@ object Shaders {
         }
     """.trimIndent()
 
-    val FGF_COEFFS_FRAGMENT_SHADER = """#version 300 es
+    /**
+     * 无缝联合双边上采样 (Seamless JBU)
+     * 采用标准的 2x2 邻域双线性混合，配合颜色权重，彻底消除网格感。
+     */
+    val JBU_UPSAMPLE_FRAGMENT_SHADER = """#version 300 es
         precision highp float;
         in vec2 vTexCoord;
         out vec4 fragColor;
 
-        uniform sampler2D uLowResDepth;
-        uniform sampler2D uLowResGuide; // 通常是对原图做过预降采样后的版本
-        uniform vec2 uTexelSize; // 低分辨率下的像素步进
+        uniform sampler2D uLowResDepth;  
+        uniform sampler2D uHighResGuide; 
+        uniform vec2 uLowResTexelSize;   
 
-        const vec3 W = vec3(0.2126, 0.7152, 0.0722);
-        const float eps = 0.01 * 0.01; // 减小 epsilon，使系数更灵敏地响应引导图边缘
+        const float SIGMA_R = 0.12; 
 
         void main() {
-            float mean_I = 0.0;
-            float mean_p = 0.0;
-            float mean_Ip = 0.0;
-            float mean_II = 0.0;
-            float sumW = 0.0;
+            vec3 guideColor = texture(uHighResGuide, vTexCoord).rgb;
+            
+            // 基础线性混合深度，作为极端情况下的保底
+            float baseDepth = texture(uLowResDepth, vTexCoord).r;
+            
+            // 计算在低分辨率纹理空间下的坐标
+            vec2 pos = vTexCoord / uLowResTexelSize - 0.5;
+            vec2 p0 = floor(pos);
+            vec2 f = fract(pos);
+            
+            float totalWeight = 0.0;
+            float totalDepth = 0.0;
 
-            // 优化：采用更紧凑、密集的 5x5 窗口 (stride=1)，提高边缘系数的精确度
-            // 之前的 stride=4 太粗糙，导致跨越边缘时系数过度平滑
-            for(int y = -2; y <= 2; y++) {
-                for(int x = -2; x <= 2; x++) {
-                    vec2 offset = vec2(float(x), float(y)) * uTexelSize;
-                    vec2 sampleUV = vTexCoord + offset;
+            // 采样相邻的 2x2 个低分中心点 (标准双线性权重范围)
+            for(int y = 0; y <= 1; y++) {
+                for(int x = 0; x <= 1; x++) {
+                    vec2 offset = vec2(float(x), float(y));
+                    vec2 sampleCoord = (p0 + offset + 0.5) * uLowResTexelSize;
+                    
+                    float d = texture(uLowResDepth, sampleCoord).r;
+                    vec3 c = texture(uHighResGuide, sampleCoord).rgb;
 
-                    float p = texture(uLowResDepth, sampleUV).r;
-                    float I = dot(texture(uLowResGuide, sampleUV).rgb, W);
+                    // 1. 标准双线性空间权重 (线性连续，无边界跳变)
+                    float wS = (x == 0 ? (1.0 - f.x) : f.x) * (y == 0 ? (1.0 - f.y) : f.y);
 
-                    // 使用高斯权重，使中心像素贡献更高，进一步抑制边缘扩散
-                    float wS = exp(-float(x*x + y*y) / 2.0);
+                    // 2. 颜色相似度权重
+                    float dC = distance(guideColor, c);
+                    float wC = exp(-(dC * dC) / (2.0 * SIGMA_R * SIGMA_R));
 
-                    mean_I += I * wS;
-                    mean_p += p * wS;
-                    mean_Ip += I * p * wS;
-                    mean_II += I * I * wS;
-                    sumW += wS;
+                    float w = wS * wC;
+                    totalDepth += d * w;
+                    totalWeight += w;
                 }
             }
 
-            mean_I /= sumW;
-            mean_p /= sumW;
-            mean_Ip /= sumW;
-            mean_II /= sumW;
-
-            float var_I = mean_II - mean_I * mean_I;
-            float cov_Ip = mean_Ip - mean_I * mean_p;
-
-            float a = cov_Ip / (var_I + eps);
-            float b = mean_p - a * mean_I;
-
-            // 输出 a, b 和 mean_I 到 RGB 通道 (支持 Guidance-Aware Upsampling)
-            fragColor = vec4(a, b, mean_I, 1.0);
+            float finalDepth = totalWeight > 0.001 ? totalDepth / totalWeight : baseDepth;
+            fragColor = vec4(vec3(finalDepth), 1.0);
         }
     """.trimIndent()
 
-    val FGF_APPLY_FRAGMENT_SHADER = """#version 300 es
+    /**
+     * 软细节增强 (Soft Detail Refiner)
+     * 取代暴力的锐化，只做温和的边缘收缩
+     */
+    val DEPTH_SHARPEN_FRAGMENT_SHADER = """#version 300 es
         precision highp float;
         in vec2 vTexCoord;
         out vec4 fragColor;
 
-        uniform sampler2D uHighResGuide; // 高清原图
-        uniform sampler2D uLowResCoeffs; // FGF Pass 1 生成的 (a, b, mean_I) 纹理
-        uniform vec2 uLowResTexelSize;   // 低分辨率系数纹理的像素尺寸
-
-        const vec3 W = vec3(0.2126, 0.7152, 0.0722);
+        uniform sampler2D uDepthTexture;
+        uniform vec2 uTexelSize;
 
         void main() {
-            // 获取当前像素的高清亮度 I
-            vec3 guideRGB = texture(uHighResGuide, vTexCoord).rgb;
-            float I = dot(guideRGB, W);
+            float center = texture(uDepthTexture, vTexCoord).r;
+            
+            // 采用极小半径平滑
+            float n = texture(uDepthTexture, vTexCoord + vec2(0, uTexelSize.y)).r;
+            float s = texture(uDepthTexture, vTexCoord - vec2(0, uTexelSize.y)).r;
+            float e = texture(uDepthTexture, vTexCoord + vec2(uTexelSize.x, 0)).r;
+            float w = texture(uDepthTexture, vTexCoord - vec2(uTexelSize.x, 0)).r;
 
-            // 优化：Guidance-Aware Upsampling (系数级的联合双边上采样)
-            // 解决常规双线性插值在边缘导致 a, b 混叠的问题
-            vec2 pos = vTexCoord / uLowResTexelSize - 0.5;
-            vec2 p0 = floor(pos);
-            vec2 f = pos - p0;
-
-            // 采样相邻的 4 个低分系数块
-            vec3 c00 = texture(uLowResCoeffs, (p0 + vec2(0.5, 0.5)) * uLowResTexelSize).rgb;
-            vec3 c10 = texture(uLowResCoeffs, (p0 + vec2(1.5, 0.5)) * uLowResTexelSize).rgb;
-            vec3 c01 = texture(uLowResCoeffs, (p0 + vec2(0.5, 1.5)) * uLowResTexelSize).rgb;
-            vec3 c11 = texture(uLowResCoeffs, (p0 + vec2(1.5, 1.5)) * uLowResTexelSize).rgb;
-
-            // 计算亮度权重：只采纳那些平均亮度与当前高清像素亮度接近的低分块生成的系数
-            // 这样当高清像素在主体内时，背景侧的 low-res 系数即便物理位置近，权重也会被压低
-            float sigma = 0.12; 
-            float w00 = (1.0 - f.x) * (1.0 - f.y) * exp(-abs(I - c00.z) / sigma);
-            float w10 = f.x * (1.0 - f.y) * exp(-abs(I - c10.z) / sigma);
-            float w01 = (1.0 - f.x) * f.y * exp(-abs(I - c01.z) / sigma);
-            float w11 = f.x * f.y * exp(-abs(I - c11.z) / sigma);
-
-            float sumW = w00 + w10 + w01 + w11;
-            vec2 coeffs;
-            if (sumW > 0.01) {
-                coeffs = (c00.xy * w00 + c10.xy * w10 + c01.xy * w01 + c11.xy * w11) / sumW;
-            } else {
-                // 回退：如果亮度差异都太大，使用基础双线性插值
-                coeffs = mix(mix(c00.xy, c10.xy, f.x), mix(c01.xy, c11.xy, f.x), f.y);
-            }
-
-            float finalDepth = coeffs.x * I + coeffs.y;
-            finalDepth = clamp(finalDepth, 0.0, 1.0);
-
-            fragColor = vec4(finalDepth, finalDepth, finalDepth, 1.0);
+            float avg = (n + s + e + w + center) / 5.0;
+            
+            // 温和的对比度拉伸，不产生硬边缘
+            float refined = mix(center, smoothstep(0.05, 0.95, center), 0.3);
+            
+            fragColor = vec4(vec3(clamp(refined, 0.0, 1.0)), 1.0);
         }
     """.trimIndent()
 
@@ -1084,78 +1096,117 @@ object Shaders {
 
         const float PI = 3.14159265359;
         const float GOLDEN_ANGLE = 2.39996323;
-        const int SAMPLES = 160;
+        const int SAMPLES = 640;
+        const float LENS_GAMMA = 2.2;
+
+        // 简单的哈希函数，用于产生像素级的抖动
+        float hash(vec2 p) {
+            return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+        }
+
+        float backgroundGap(float depth) {
+            return max(uFocusDepth - depth - 0.025, 0.0);
+        }
+
+        float computeCoc(float depth) {
+            // Align with BokehMe: Symmetric defocus for both foreground and background
+            float gap = max(abs(uFocusDepth - depth) - 0.015, 0.0);
+            float defocus = pow(gap, 1.1);
+            return clamp(defocus * uMaxBlurRadius * (1.0 / max(uAperture, 0.45)), 0.0, uMaxBlurRadius);
+        }
+
+        float apertureWeight(vec2 offsetPixels, float coc) {
+            vec2 p = offsetPixels / max(coc, 0.001);
+            float lenP = length(p);
+            
+            // Perfect circular "creamy" bokeh with a soap bubble rim.
+            float inside = smoothstep(1.0, 0.88, lenP);
+            float rim = smoothstep(0.7, 0.98, lenP);
+            return inside * (1.0 + rim * 0.4); 
+        }
+
+        vec3 toLinear(vec3 color) {
+            return pow(clamp(color, 0.0, 1.0), vec3(LENS_GAMMA));
+        }
+
+        vec3 toDisplay(vec3 color) {
+            return pow(max(color, vec3(0.0)), vec3(1.0 / LENS_GAMMA));
+        }
 
         void main() {
             vec2 depthUV = clamp((uDepthMatrix * vec4(vTexCoord, 0.0, 1.0)).xy, 0.0, 1.0);
             vec4 centerColor = texture(uInputTexture, vTexCoord);
             float centerDepth = texture(uDepthTexture, depthUV).r;
 
-            float centerCoc = abs(centerDepth - uFocusDepth) * uMaxBlurRadius * (1.0 / uAperture);
-            centerCoc = clamp(centerCoc, 0.0, uMaxBlurRadius);
+            float centerCoc = computeCoc(centerDepth);
 
-            // 1. 强力保护机制：对于清晰主体，保持 100% 锐度
             if (centerCoc < 0.2) {
                 fragColor = centerColor;
                 return;
             }
 
-            // 2. 初始权重：赋予较高的权重以定性，防止背景渗色
-            float centerWeight = 6.0 / (centerCoc * 0.4 + 1.0);
-            vec3 accColor = centerColor.rgb * centerWeight;
+            // 引入随机旋转抖动，打破 Vogel Spiral 的环状条纹
+            float noise = hash(vTexCoord + 0.5);
+            float rotation = noise * PI * 2.0;
+
+            float centerWeight = 4.0 / (centerCoc * 0.3 + 1.0);
+            vec3 accColor = toLinear(centerColor.rgb) * centerWeight;
             float accWeight = centerWeight;
 
-            float softBase = max(3.0, uMaxBlurRadius * 0.1);
+            float softBase = max(2.5, uMaxBlurRadius * 0.08);
 
             for (int i = 0; i < SAMPLES; i++) {
                 float f = float(i + 1);
                 float r = sqrt(f / float(SAMPLES)) * uMaxBlurRadius;
-                float theta = f * GOLDEN_ANGLE;
+                float theta = f * GOLDEN_ANGLE + rotation;
 
                 vec2 offset = vec2(cos(theta), sin(theta)) * r * uTexelSize;
                 vec2 sampleUV = clamp(vTexCoord + offset, 0.0, 1.0);
+                vec2 offsetPixels = offset / uTexelSize;
 
-                float lod = log2(r * 0.3 + 1.5);
+                // 第一遍采样获取亮度，用于决定 LOD
+                vec3 sColorBase = textureLod(uInputTexture, sampleUV, 2.0).rgb;
+                float baseLuma = dot(sColorBase, vec3(0.299, 0.587, 0.114));
+                
+                // 动态 LOD：高光处使用更高的 LOD 使其融合，消除条纹
+                float lod = log2(r * 0.3 + 1.8) + smoothstep(0.4, 0.9, baseLuma) * 1.5;
                 vec3 sColor = textureLod(uInputTexture, sampleUV, lod).rgb;
+                
                 vec2 sDepthUV = clamp((uDepthMatrix * vec4(sampleUV, 0.0, 1.0)).xy, 0.0, 1.0);
                 float sDepth = texture(uDepthTexture, sDepthUV).r;
 
-                // --- 颜色引导保护 (Edge Protection Logic) ---
-                // 如果采样点颜色与中心色非常接近，说明它可能是主体的一部分
-                // 我们限制其散景半径，防止它作为一个模糊点去“泼溅”覆盖中心点
-                float colorDist = distance(centerColor.rgb, sColor);
-                float colorSimilarity = smoothstep(0.15, 0.01, colorDist);
+                float sCoc = computeCoc(sDepth);
 
-                float rawCoc = abs(sDepth - uFocusDepth) * uMaxBlurRadius * (1.0 / uAperture);
-                // 关键：如果颜色相似度高，则强制将采样点的 CoC 压低，视为主体保护区
-                float sCoc = mix(rawCoc, min(rawCoc, centerCoc), colorSimilarity);
-                sCoc = clamp(sCoc, 0.0, uMaxBlurRadius);
-
-                // 4. 重构权重逻辑
                 float fW = smoothstep(r - softBase, r + softBase * 0.5, sCoc);
                 float bW = smoothstep(r - softBase, r + softBase * 0.5, centerCoc);
 
                 float depthDiff = sDepth - centerDepth;
-                float isNearer = smoothstep(-0.1, 0.1, depthDiff);
+                float isNearer = smoothstep(0.01, 0.04, depthDiff);
 
-                // 引入相似度加成，让主体边缘的像素更倾向于互相保护而不是混入背景
-                float weight = mix(bW * (1.1 - isNearer), fW, isNearer);
-                weight *= (1.0 + colorSimilarity * 0.8);
+                float weight = mix(bW, fW, isNearer);
+                weight *= apertureWeight(offsetPixels, max(sCoc, centerCoc));
+
+                float isSharpForeground = isNearer * (1.0 - smoothstep(0.3, 2.0, sCoc));
+                weight *= (1.0 - isSharpForeground);
 
                 if (weight > 0.0001) {
-                    float luma = dot(sColor, vec3(0.2126, 0.7152, 0.0722));
-                    float hdrBoost = 1.0 + pow(max(0.0, luma - 0.75), 2.0) * 4.0 * smoothstep(1.0, 5.0, sCoc);
+                    vec3 sLinear = toLinear(sColor);
+                    float luma = dot(sLinear, vec3(0.2126, 0.7152, 0.0722));
+                    
+                    // 更加平滑的高光增强曲线
+                    float highlight = max(0.0, luma - 0.55);
+                    float hdrBoost = 1.0 + pow(highlight, 1.8) * 18.0 * smoothstep(1.5, 5.0, sCoc);
 
-                    float edge = smoothstep(0.7, 1.05, r / max(sCoc, 0.1));
-                    float ring = 1.0 + edge * 0.4 * smoothstep(1.5, 5.0, sCoc);
+                    float edge = smoothstep(0.75, 1.03, r / max(sCoc, 0.1));
+                    float ring = 1.0 + edge * 0.3 * smoothstep(1.5, 5.0, sCoc);
 
                     float fw = weight * ring;
-                    accColor += sColor * hdrBoost * fw;
+                    accColor += sLinear * hdrBoost * fw;
                     accWeight += fw;
                 }
             }
 
-            vec3 finalColor = accWeight > 0.001 ? (accColor / accWeight) : centerColor.rgb;
+            vec3 finalColor = accWeight > 0.001 ? toDisplay(accColor / accWeight) : centerColor.rgb;
             finalColor = clamp(finalColor, 0.0, 1.0);
 
             fragColor = vec4(finalColor, centerColor.a);

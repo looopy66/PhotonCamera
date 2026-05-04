@@ -195,13 +195,14 @@ private fun VideoTopBar(
                         contentDescription = stringResource(R.string.video_torch_chip)
                     )
 
-                    VideoActionIcon(
-                        icon = Icons.Default.Vibration,
-                        active = videoConfig.stabilizationEnabled,
-                        enabled = videoCapabilities.supportsStabilization,
-                        onClick = onVideoStabilizationToggle,
-                        contentDescription = stringResource(R.string.video_stabilization_chip)
-                    )
+                    if (videoCapabilities.availableStabilizationModes.size > 1) {
+                        TextActionIcon(
+                            title = videoConfig.stabilizationMode.displayName,
+                            active = videoConfig.stabilizationMode != com.hinnka.mycamera.video.VideoStabilizationMode.OFF,
+                            enabled = true,
+                            onClick = onVideoStabilizationToggle,
+                        )
+                    }
 
                     IconButton(onClick = onSettingsClick) {
                         Icon(
@@ -299,6 +300,34 @@ private fun VideoActionIcon(
                 Color.White.copy(alpha = 0.3f)
             }
         )
+    }
+}
+
+@Composable
+private fun TextActionIcon(
+    title: String,
+    active: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    IconButton(
+        onClick = onClick,
+        enabled = enabled
+    ) {
+        Box(modifier = Modifier.width(30.dp).height(20.dp), contentAlignment = Alignment.Center) {
+            Text(
+                text = title,
+                fontSize = 12.sp,
+                lineHeight = 12.sp,
+                maxLines = 1,
+                fontWeight = FontWeight.Bold,
+                color = if (enabled) {
+                    if (active) Color(0xFFFFD700) else Color.White
+                } else {
+                    Color.White.copy(alpha = 0.3f)
+                },
+            )
+        }
     }
 }
 

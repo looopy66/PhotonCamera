@@ -41,6 +41,7 @@ import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.video.VideoRecorder
 import com.hinnka.mycamera.video.VideoResolutionPreset
 import com.hinnka.mycamera.video.VideoRecordingState
+import com.hinnka.mycamera.video.VideoStabilizationMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -73,7 +74,8 @@ class Camera2Controller(private val context: Context) {
         // 自定义错误代码
         const val ERROR_CAMERA_DISCONNECTED = 1000
 
-        const val MAX_IMAGES = 20
+        private const val SINGLE_CAPTURE_READER_MAX_IMAGES = 2
+        private const val BURST_CAPTURE_BATCH_SIZE = 8
 
         // 拍照状态机常量
         private const val STATE_PREVIEW = 0 // Showing camera preview.
@@ -81,6 +83,10 @@ class Camera2Controller(private val context: Context) {
         private const val STATE_WAITING_NON_PRECAPTURE =
             3 // Waiting for the exposure state to be something other than precapture.
         private const val STATE_PICTURE_TAKEN = 4 // Picture is already taken.
+
+        // 场景变化检测阈值
+        private const val SCENE_CHANGE_EXPOSURE_RATIO = 3.0 // 曝光乘积变化超过 3x (~1.6 EV) 判定为场景变化
+        private const val SCENE_CHANGE_CONFIRM_FRAMES = 3   // 连续 N 帧检测到变化才确认
     }
 
     private val cameraManager: CameraManager by lazy {
@@ -125,6 +131,7 @@ class Camera2Controller(private val context: Context) {
     private var isFlashSupported = false
     private var maxAfRegions = 0
     private var maxAeRegions = 0
+    private var availableAfModes: IntArray = intArrayOf()
     private var availableEdgeModes: IntArray = intArrayOf()
     private var availableNoiseReductionModes: IntArray = intArrayOf()
     private var availableTonemapModes: IntArray = intArrayOf()
@@ -178,14 +185,31 @@ class Camera2Controller(private val context: Context) {
     // 缓存 CaptureResult 和 Image 用于配对 (timestamp -> Data)
     private val pendingResults = ConcurrentHashMap<Long, TotalCaptureResult>()
     private val pendingImages = ConcurrentHashMap<Long, SafeImage>()
+    private val pendingCaptureStartedTimestamps = ConcurrentHashMap<Long, Long>()
     private val pendingCloseReaders = mutableListOf<ImageReader>()
     private val openImagesCount = AtomicInteger(0)
+    private var imageReaderMaxImages = SINGLE_CAPTURE_READER_MAX_IMAGES
 
     private var burstCapturing = false
 
     // 保留最近的一个结果作为后备
     @Volatile
     private var lastCaptureResult: TotalCaptureResult? = null
+
+    // 场景变化检测：用于替代固定延迟恢复连续对焦
+    private var isFocusLockedWaitingForSceneChange = false
+    private var focusLockedReferenceIso: Int = 0
+    private var focusLockedReferenceExposureNs: Long = 0L
+    private var sceneChangeFrameCount = 0
+
+    // 高光优先测光：最亮区域坐标（归一化 0-1）及平滑状态
+    @Volatile
+    private var highlightPointX: Float = 0.5f
+    @Volatile
+    private var highlightPointY: Float = 0.5f
+    private var highlightPointSmoothedX: Float = 0.5f
+    private var highlightPointSmoothedY: Float = 0.5f
+    private var highlightPointInitialized = false
 
     // 图片拍摄回调（携带 CaptureInfo, CameraCharacteristics 和 CaptureResult 用于 RAW 处理）
     var onImageCaptured: ((SafeImage, CaptureInfo, CameraCharacteristics?, CaptureResult?) -> Unit)? = null
@@ -195,6 +219,12 @@ class Camera2Controller(private val context: Context) {
             openImagesCount.getAndIncrement()
         }
         return image?.let { SafeImage(it, this) }
+    }
+
+    private fun getCaptureTimestamp(result: TotalCaptureResult): Long? {
+        val frameNumber = result.frameNumber
+        val startedTimestamp = pendingCaptureStartedTimestamps.remove(frameNumber)
+        return result.get(CaptureResult.SENSOR_TIMESTAMP) ?: startedTimestamp
     }
 
     // 快门音效播放回调
@@ -210,13 +240,48 @@ class Camera2Controller(private val context: Context) {
 
     fun onImageRelease() {
         val count = openImagesCount.decrementAndGet()
-        if (MAX_IMAGES - count >= state.value.multiFrameCount) {
+        if (imageReaderMaxImages - count >= activeCaptureImageRequestCount()) {
             _state.value = _state.value.copy(isCapturing = false)
         }
         if (count == 0) {
             _state.value = _state.value.copy(isCapturing = false)
             checkAndClosePendingReaders()
         }
+    }
+
+    private fun resolveImageReaderMaxImages(): Int {
+        val currentState = _state.value
+        val requestedImages = when {
+            currentState.useMFNR || currentState.useMFSR -> currentState.multiFrameCount.coerceIn(
+                MultiFrameConfig.MIN_FRAME_COUNT,
+                MultiFrameConfig.MAX_FRAME_COUNT
+            )
+
+            else -> BURST_CAPTURE_BATCH_SIZE
+        }
+        return maxOf(SINGLE_CAPTURE_READER_MAX_IMAGES, requestedImages)
+    }
+
+    private fun activeCaptureImageRequestCount(): Int {
+        val currentState = _state.value
+        return when {
+            currentState.burstCapturing -> BURST_CAPTURE_BATCH_SIZE
+            currentState.useMFNR || currentState.useMFSR -> currentState.multiFrameCount.coerceIn(
+                MultiFrameConfig.MIN_FRAME_COUNT,
+                MultiFrameConfig.MAX_FRAME_COUNT
+            )
+
+            else -> 1
+        }
+    }
+
+    private fun canAcquireImage(logPrefix: String): Boolean {
+        val openImages = openImagesCount.get()
+        if (openImages >= imageReaderMaxImages) {
+            PLog.w(TAG, "$logPrefix ($openImages/$imageReaderMaxImages), skipping acquire")
+            return false
+        }
+        return true
     }
 
     private val previewCallback = object : CameraCaptureSession.CaptureCallback() {
@@ -251,16 +316,51 @@ class Camera2Controller(private val context: Context) {
 
             // 监听对焦状态
             val afState = result.get(CaptureResult.CONTROL_AF_STATE)
+            if (afState != null && afState != lastAfState) {
+                lastAfState = afState
+                PLog.d(
+                    TAG,
+                    "AF state changed: state=$afState, mode=${request.get(CaptureRequest.CONTROL_AF_MODE)}, " +
+                            "lensState=${result.get(CaptureResult.LENS_STATE)}, " +
+                            "focusDistance=${result.get(CaptureResult.LENS_FOCUS_DISTANCE)}"
+                )
+            }
             if (_state.value.isFocusing) {
                 when (afState) {
                     CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED -> {
                         // 对焦成功并锁定
                         _state.value = _state.value.copy(focusSuccess = true)
+                        // 记录当前曝光值作为场景变化检测的参考基准
+                        recordFocusLockExposure(result)
                     }
 
                     CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED -> {
                         // 对焦失败但已锁定
                         _state.value = _state.value.copy(focusSuccess = false)
+                        recordFocusLockExposure(result)
+                    }
+                }
+            }
+
+            // 场景变化检测：对焦锁定后持续监测曝光变化
+            if (isFocusLockedWaitingForSceneChange) {
+                val currentIso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0
+                val currentExposure = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
+                if (focusLockedReferenceIso > 0 && focusLockedReferenceExposureNs > 0 &&
+                    currentIso > 0 && currentExposure > 0L
+                ) {
+                    val refProduct = focusLockedReferenceIso.toDouble() * focusLockedReferenceExposureNs.toDouble()
+                    val curProduct = currentIso.toDouble() * currentExposure.toDouble()
+                    if (refProduct > 0) {
+                        val ratio = if (curProduct > refProduct) curProduct / refProduct else refProduct / curProduct
+                        if (ratio > SCENE_CHANGE_EXPOSURE_RATIO) {
+                            sceneChangeFrameCount++
+                            if (sceneChangeFrameCount >= SCENE_CHANGE_CONFIRM_FRAMES) {
+                                restoreContinuousAf()
+                            }
+                        } else {
+                            sceneChangeFrameCount = 0
+                        }
                     }
                 }
             }
@@ -276,6 +376,7 @@ class Camera2Controller(private val context: Context) {
             val exposureCompensation = result.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION) ?: 0
             val awbMode = result.get(CaptureResult.CONTROL_AWB_MODE) ?: CameraMetadata.CONTROL_AWB_MODE_AUTO
             val aperture = result.get(CaptureResult.LENS_APERTURE)
+            val focusDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE) ?: 0f
 
             // 关键修复：只在自动曝光模式下更新 ISO 和快门速度
             // 手动模式下保持用户设置不变（因为预览使用的是限制后的曝光时间，不是用户设置的值）
@@ -285,11 +386,13 @@ class Camera2Controller(private val context: Context) {
                     ?: _state.value.shutterSpeed else _state.value.shutterSpeed,
                 awbMode = awbMode,
                 physicalAperture = aperture ?: _state.value.physicalAperture,
+                focusDistance = focusDistance
             )
         }
     }
 
     private var lastAeState = 0
+    private var lastAfState: Int? = null
 
     private fun logVideoCaptureStats(result: TotalCaptureResult) {
         if (!_state.value.videoRecordingState.isRecording) return
@@ -576,6 +679,8 @@ class Camera2Controller(private val context: Context) {
                 isFlashSupported = cachedCharacteristics?.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
                 maxAfRegions = cachedCharacteristics?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0
                 maxAeRegions = cachedCharacteristics?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AE) ?: 0
+                availableAfModes =
+                    cachedCharacteristics?.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
                 availableEdgeModes =
                     cachedCharacteristics?.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES) ?: intArrayOf()
                 availableNoiseReductionModes =
@@ -640,7 +745,8 @@ class Camera2Controller(private val context: Context) {
 
                 PLog.i(
                     TAG, "Camera characteristics cached - ID: $cameraId, Level: $hardwareLevelName, " +
-                            "ManualSensor: $isManualSensorSupported, ManualPost: $isManualPostProcessingSupported, RAW: $isRawSupported, P010: $isP010Supported"
+                            "ManualSensor: $isManualSensorSupported, ManualPost: $isManualPostProcessingSupported, " +
+                            "RAW: $isRawSupported, P010: $isP010Supported, AF modes: ${availableAfModes.joinToString()}"
                 )
 
                 val selectableNrModes = buildSelectableNoiseReductionModes(availableNoiseReductionModes)
@@ -650,7 +756,8 @@ class Camera2Controller(private val context: Context) {
                     isP010Supported = isP010Supported,
                     isHlg10Supported = isHlg10Supported,
                     availableNrModes = selectableNrModes,
-                    currentPreviewSize = previewSize
+                    currentPreviewSize = previewSize,
+                    minimumFocusDistance = cachedCharacteristics?.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
                 )
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to cache camera characteristics", e)
@@ -666,8 +773,16 @@ class Camera2Controller(private val context: Context) {
             if (captureMode == CaptureMode.PHOTO) {
                 val aspectRatio = state.value.aspectRatio
                 val effectivelyUseRaw = state.value.useRaw && isRawSupported
-                val captureSize = if (effectivelyUseRaw) {
-                    CameraUtils.getRawCaptureSize(context, cameraId) ?: CameraUtils.getBestCaptureSize(
+                val rawCaptureSize = if (effectivelyUseRaw) {
+                    CameraUtils.getRawCaptureSize(context, cameraId)
+                } else {
+                    null
+                }
+                val captureSize = if (rawCaptureSize != null) {
+                    rawCaptureSize
+                } else if (effectivelyUseRaw) {
+                    PLog.w(TAG, "RAW requested for camera $cameraId but no RAW_SENSOR output size was reported")
+                    CameraUtils.getBestCaptureSize(
                         context,
                         cameraId,
                         aspectRatio
@@ -675,7 +790,7 @@ class Camera2Controller(private val context: Context) {
                 } else {
                     CameraUtils.getBestCaptureSize(context, cameraId, aspectRatio)
                 }
-                val captureFormat = if (effectivelyUseRaw && CameraUtils.getRawCaptureSize(context, cameraId) != null) {
+                val captureFormat = if (rawCaptureSize != null) {
                     ImageFormat.RAW_SENSOR
                 } else if (isP010Supported && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && state.value.useP010) {
                     ImageFormat.YCBCR_P010
@@ -691,6 +806,9 @@ class Camera2Controller(private val context: Context) {
 
                 _state.value = _state.value.copy(isP3Supported = isP3Supported)
 
+                val readerMaxImages = resolveImageReaderMaxImages()
+                imageReaderMaxImages = readerMaxImages
+
                 PLog.d(
                     TAG,
                     "拍照尺寸: ${captureSize.width}x${captureSize.height}, 预览尺寸: ${previewSize.width}x${previewSize.height}, 格式: ${
@@ -699,18 +817,17 @@ class Camera2Controller(private val context: Context) {
                             ImageFormat.YCBCR_P010 -> "P010"
                             else -> "YUV"
                         }
-                    }, isP3Supported: $isP3Supported"
+                    }, isP3Supported: $isP3Supported, imageReaderMaxImages: $readerMaxImages"
                 )
                 imageReader = ImageReader.newInstance(
                     captureSize.width,
                     captureSize.height,
                     captureFormat,
-                    MAX_IMAGES
+                    readerMaxImages
                 ).apply {
                     setOnImageAvailableListener({ reader ->
                         try {
-                            if (openImagesCount.get() >= MAX_IMAGES) {
-                                PLog.w(TAG, "Too many open images ($openImagesCount), skipping acquire")
+                            if (!canAcquireImage("Too many open images")) {
                                 return@setOnImageAvailableListener
                             }
                             val rawImage = when {
@@ -721,7 +838,7 @@ class Camera2Controller(private val context: Context) {
                             }
                             val image = trackImage(rawImage)
                             if (image != null) {
-                                if (effectivelyUseRaw) {
+                                if (image.image.format == ImageFormat.RAW_SENSOR) {
                                     val timestamp = image.timestamp
                                     val pendingResult = pendingResults.remove(timestamp)
                                     if (pendingResult != null) {
@@ -745,6 +862,8 @@ class Camera2Controller(private val context: Context) {
                             }
                         } catch (e: Exception) {
                             PLog.e(TAG, "Error in onImageAvailable", e)
+                            _state.value = _state.value.copy(isCapturing = false)
+                            resetPreviewAfterCapture()
                         }
                     }, cameraHandler)
                 }
@@ -970,11 +1089,6 @@ class Camera2Controller(private val context: Context) {
                 if (captureMode == CaptureMode.VIDEO) CameraDevice.TEMPLATE_RECORD else CameraDevice.TEMPLATE_PREVIEW
             ).apply {
                 addTarget(surface)
-                // 设置连续自动对焦
-                val initialAfMode = CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
-                set(CaptureRequest.CONTROL_AF_MODE, initialAfMode)
-                // 更新 State 中的 AF 模式
-                _state.value = _state.value.copy(currentAfMode = initialAfMode)
 
                 // 应用所有相机参数（曝光、白平衡、闪光灯、变焦、色调映射）
                 applyBaseCameraSettings(this, isCapture = false)
@@ -1069,7 +1183,7 @@ class Camera2Controller(private val context: Context) {
                                     "readerFormat=${imageFormatToString(readerFormat)}, " +
                                     "sessionColorSpace=${if (shouldUseP3ColorSpace()) "DISPLAY_P3" else "DEFAULT"}"
                         )
-                        if (useHlgCapture) {
+                       if (useHlgCapture) {
                             PLog.w(TAG, "Retrying preview session with STANDARD dynamic range fallback")
                             _state.value = _state.value.copy(currentDynamicRangeProfile = "STANDARD")
                             createPreviewSession(forceStandardSession = true)
@@ -1084,7 +1198,7 @@ class Camera2Controller(private val context: Context) {
             }
             device.createCaptureSession(sessionConfig)
         } catch (e: Exception) {
-            PLog.e(TAG, "Failed to create preview session")
+            PLog.e(TAG, "Failed to create preview session", e)
         }
     }
 
@@ -1092,6 +1206,9 @@ class Camera2Controller(private val context: Context) {
         captureSession = session
 
         try {
+            // 根据测光模式设置默认 AE 区域
+            applyMeteringRegions()
+
             // 开始预览
             // 关键修复: 不再动态添加 surface，因为已经在创建 builder 时添加了
             previewRequestBuilder?.let { builder ->
@@ -1120,6 +1237,10 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
+    private fun isRawCaptureReader(reader: ImageReader?): Boolean {
+        return reader?.imageFormat == ImageFormat.RAW_SENSOR
+    }
+
 // ==================== 统一参数配置 ====================
 
     /**
@@ -1129,8 +1250,13 @@ class Camera2Controller(private val context: Context) {
      *
      * @param builder 需要配置的 Builder
      * @param isCapture 是否为拍摄请求（预览时某些参数有限制）
+     * @param isRawCapture 是否为 RAW 拍摄请求（跳过 RAW 不需要的 ISP 后处理参数）
      */
-    private fun applyBaseCameraSettings(builder: CaptureRequest.Builder, isCapture: Boolean = false) {
+    private fun applyBaseCameraSettings(
+        builder: CaptureRequest.Builder,
+        isCapture: Boolean = false,
+        isRawCapture: Boolean = false
+    ) {
         val currentState = _state.value
 
         // 1. 曝光设置
@@ -1145,17 +1271,24 @@ class Camera2Controller(private val context: Context) {
         // 4. 变焦设置
         applyZoomSettings(builder, currentState)
 
-        // 6. 图像质量设置（锐化、降噪）
-        applyImageQualitySettings(builder, isCapture)
+        // 5. 自动对焦设置
+        applyAutoFocusSettings(builder, currentState)
 
-        // 7. 视频 Log / 色调映射设置
-        applyToneMapSettings(builder, currentState, isCapture)
+        if (!isRawCapture) {
+            // 6. 图像质量设置（锐化、降噪）
+            applyImageQualitySettings(builder, isCapture)
+
+            // 7. 视频 Log / 色调映射设置
+            applyToneMapSettings(builder, currentState, isCapture)
+        }
 
         // 8. 防抖设置
         applyStabilizationSettings(builder, currentState)
 
-        // 9. 静态拍照后处理质量设置
-        applyStillPostProcessingSettings(builder, currentState, isCapture)
+        if (!isRawCapture) {
+            // 9. 静态拍照后处理质量设置
+            applyStillPostProcessingSettings(builder, currentState, isCapture)
+        }
 
         // 10. 统计信息设置
         if (availableLensShadingMapModes.contains(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON)) {
@@ -1164,6 +1297,49 @@ class Camera2Controller(private val context: Context) {
                 CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON
             )
         }
+    }
+
+    /**
+     * 应用连续自动对焦设置。
+     *
+     * 一些设备不会很好地处理未声明支持的 AF 模式，或者在单次 AF 触发后保持旧触发状态。
+     * 这里统一按能力选择默认 AF 模式，并显式复位触发器，避免预览请求停在不稳定状态。
+     */
+    private fun applyAutoFocusSettings(builder: CaptureRequest.Builder, state: CameraState) {
+        val afMode = resolveAutoFocusMode(state.captureMode)
+
+        builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+        builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
+        builder.set(CaptureRequest.CONTROL_AF_MODE, afMode)
+
+        if (_state.value.currentAfMode != afMode) {
+            _state.value = _state.value.copy(currentAfMode = afMode)
+        }
+    }
+
+    private fun resolveAutoFocusMode(captureMode: CaptureMode): Int {
+        if (availableAfModes.isEmpty()) {
+            return CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+        }
+
+        val preferredModes = if (captureMode == CaptureMode.VIDEO) {
+            intArrayOf(
+                CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO,
+                CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE,
+                CaptureRequest.CONTROL_AF_MODE_AUTO,
+                CaptureRequest.CONTROL_AF_MODE_OFF
+            )
+        } else {
+            intArrayOf(
+                CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE,
+                CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO,
+                CaptureRequest.CONTROL_AF_MODE_AUTO,
+                CaptureRequest.CONTROL_AF_MODE_OFF
+            )
+        }
+
+        return preferredModes.firstOrNull { availableAfModes.contains(it) }
+            ?: availableAfModes.first()
     }
 
     /**
@@ -1389,11 +1565,11 @@ class Camera2Controller(private val context: Context) {
     private fun applyStabilizationSettings(builder: CaptureRequest.Builder, state: CameraState) {
         try {
             if (state.captureMode == CaptureMode.VIDEO) {
-                val enable = state.videoConfig.stabilizationEnabled
+                val mode = state.videoConfig.stabilizationMode
                 if (availableVideoStabilizationModes.contains(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON)) {
                     builder.set(
                         CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-                        if (enable) {
+                        if (mode == VideoStabilizationMode.EIS) {
                             CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
                         } else {
                             CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
@@ -1403,7 +1579,7 @@ class Camera2Controller(private val context: Context) {
                 if (availableOpticalStabilizationModes.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)) {
                     builder.set(
                         CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                        if (enable && !availableVideoStabilizationModes.contains(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON)) {
+                        if (mode == VideoStabilizationMode.OIS) {
                             CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
                         } else {
                             CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
@@ -2037,6 +2213,111 @@ class Camera2Controller(private val context: Context) {
     }
 
     /**
+     * 设置测光模式
+     */
+    fun setMeteringMode(mode: MeteringMode) {
+        _state.value = _state.value.copy(meteringMode = mode)
+        applyMeteringRegions()
+        updatePreview()
+        PLog.d(TAG, "测光模式: $mode")
+    }
+
+    /**
+     * 更新高光区域坐标（由 GL 测光回调调用）
+     * 使用 EMA 平滑防止 AE 频繁跳动
+     */
+    fun updateHighlightPoint(x: Float, y: Float) {
+        highlightPointX = x
+        highlightPointY = y
+        if (!highlightPointInitialized) {
+            highlightPointSmoothedX = x
+            highlightPointSmoothedY = y
+            highlightPointInitialized = true
+        } else {
+            val alpha = 0.3
+            highlightPointSmoothedX = (alpha * x + (1 - alpha) * highlightPointSmoothedX).toFloat()
+            highlightPointSmoothedY = (alpha * y + (1 - alpha) * highlightPointSmoothedY).toFloat()
+        }
+        if (_state.value.meteringMode == MeteringMode.HIGHLIGHT_PRIORITY) {
+            applyMeteringRegions()
+        }
+    }
+
+    /**
+     * 根据当前测光模式设置默认 AE 区域
+     *
+     * 点测光和中央重点模式在画面中心（或对焦点）设置加权区域；
+     * 平均测光模式清除 AE 区域，使用硬件默认全画面测光。
+     */
+    private fun applyMeteringRegions() {
+        if (maxAeRegions <= 0) return
+        val builder = previewRequestBuilder ?: return
+        val mode = _state.value.meteringMode
+
+        if (mode == MeteringMode.AVERAGE) {
+            builder.set(CaptureRequest.CONTROL_AE_REGIONS, null)
+            return
+        }
+
+        try {
+            val characteristics = cachedCharacteristics ?: return
+            val activeRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
+            val sensorOrientation = getSensorOrientation()
+            val lensFacing = getLensFacing()
+
+            // 选择测光坐标：高光优先使用最亮区域，其他模式使用对焦点或画面中心
+            val normX: Float
+            val normY: Float
+            if (mode == MeteringMode.HIGHLIGHT_PRIORITY && highlightPointInitialized) {
+                normX = highlightPointSmoothedX
+                normY = highlightPointSmoothedY
+            } else {
+                val focus = _state.value.focusPoint
+                normX = focus?.first ?: 0.5f
+                normY = focus?.second ?: 0.5f
+            }
+
+            val (sensorX, sensorY) = when (sensorOrientation) {
+                0 -> Pair(normX, normY)
+                90 -> Pair(normY, 1 - normX)
+                180 -> Pair(1 - normX, 1 - normY)
+                270 -> Pair(1 - normY, normX)
+                else -> Pair(normX, normY)
+            }
+            val (finalX, finalY) = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+                Pair(1 - sensorX, sensorY)
+            } else {
+                Pair(sensorX, sensorY)
+            }
+
+            val centerX = (finalX * activeRect.width()).toInt()
+            val centerY = (finalY * activeRect.height()).toInt()
+            val regionSizeFraction = when (mode) {
+                MeteringMode.SPOT -> 0.03f
+                MeteringMode.CENTER_WEIGHTED -> 0.1f
+                MeteringMode.HIGHLIGHT_PRIORITY -> 0.15f
+            }
+            val regionSize = (activeRect.width() * regionSizeFraction).toInt()
+
+            val rect = android.graphics.Rect(
+                (centerX - regionSize).coerceAtLeast(0),
+                (centerY - regionSize).coerceAtLeast(0),
+                (centerX + regionSize).coerceAtMost(activeRect.width()),
+                (centerY + regionSize).coerceAtMost(activeRect.height())
+            )
+            builder.set(
+                CaptureRequest.CONTROL_AE_REGIONS,
+                arrayOf(android.hardware.camera2.params.MeteringRectangle(
+                    rect,
+                    android.hardware.camera2.params.MeteringRectangle.METERING_WEIGHT_MAX
+                ))
+            )
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to apply metering regions", e)
+        }
+    }
+
+    /**
      * 将色温转换为最接近的预设 AWB 模式
      *
      * 预设模式对应的近似色温:
@@ -2220,7 +2501,69 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
+    /**
+     * 设置自动对焦开关
+     */
+    fun setAutoFocus(auto: Boolean) {
+        _state.value = _state.value.copy(isAutoFocus = auto)
+        previewRequestBuilder?.apply {
+            if (auto) {
+                set(CaptureRequest.CONTROL_AF_MODE, resolveAutoFocusMode(_state.value.captureMode))
+                set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
+            } else {
+                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+                set(CaptureRequest.LENS_FOCUS_DISTANCE, _state.value.focusDistance)
+            }
+            updatePreview()
+        }
+    }
+
+    /**
+     * 设置对焦距离 (0.0 ~ minimumFocusDistance)
+     */
+    fun setFocusDistance(distance: Float) {
+        val minFocusDistance = _state.value.minimumFocusDistance
+        if (minFocusDistance <= 0) return
+
+        val clampedDistance = distance.coerceIn(0f, minFocusDistance)
+        _state.value = _state.value.copy(focusDistance = clampedDistance)
+
+        if (!_state.value.isAutoFocus) {
+            previewRequestBuilder?.apply {
+                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+                set(CaptureRequest.LENS_FOCUS_DISTANCE, clampedDistance)
+                updatePreview()
+            }
+        }
+    }
+
 // ==================== 对焦控制 ====================
+
+    private fun recordFocusLockExposure(result: CaptureResult) {
+        val iso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: return
+        val exposure = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: return
+        focusLockedReferenceIso = iso
+        focusLockedReferenceExposureNs = exposure
+        isFocusLockedWaitingForSceneChange = true
+        sceneChangeFrameCount = 0
+    }
+
+    private fun restoreContinuousAf() {
+        isFocusLockedWaitingForSceneChange = false
+        sceneChangeFrameCount = 0
+        focusLockedReferenceIso = 0
+        focusLockedReferenceExposureNs = 0L
+
+        previewRequestBuilder?.apply {
+            set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
+            val afMode = resolveAutoFocusMode(_state.value.captureMode)
+            set(CaptureRequest.CONTROL_AF_MODE, afMode)
+            _state.value = _state.value.copy(currentAfMode = afMode)
+            applyMeteringRegions()
+            updatePreview()
+        }
+        _state.value = _state.value.copy(isFocusing = false, focusSuccess = null)
+    }
 
     /**
      * 点击对焦
@@ -2228,6 +2571,10 @@ class Camera2Controller(private val context: Context) {
     fun focusOnPoint(x: Float, y: Float, viewWidth: Int, viewHeight: Int) {
         val cameraId = _state.value.currentCameraId
         if (cameraId.isEmpty()) return
+
+        // 重置场景变化检测状态（新的对焦覆盖旧的）
+        isFocusLockedWaitingForSceneChange = false
+        sceneChangeFrameCount = 0
 
         try {
             val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
@@ -2266,7 +2613,13 @@ class Camera2Controller(private val context: Context) {
             // 映射到传感器坐标
             val focusX = (finalX * activeRect.width()).toInt()
             val focusY = (finalY * activeRect.height()).toInt()
-            val focusSize = (activeRect.width() * 0.1f).toInt()  // 对焦区域大小为传感器宽度的10%
+            val focusSizeFraction = when (_state.value.meteringMode) {
+                MeteringMode.SPOT -> 0.03f           // 点测光: 3% 传感器宽度
+                MeteringMode.CENTER_WEIGHTED -> 0.1f  // 中央重点: 10% 传感器宽度
+                MeteringMode.AVERAGE -> 0.1f          // 平均测光: AF 区域不变，仅跳过 AE 区域
+                MeteringMode.HIGHLIGHT_PRIORITY -> 0.15f // 高光优先: 15% 传感器宽度
+            }
+            val focusSize = (activeRect.width() * focusSizeFraction).toInt()
 
             val focusRect = android.graphics.Rect(
                 (focusX - focusSize).coerceAtLeast(0),
@@ -2280,13 +2633,14 @@ class Camera2Controller(private val context: Context) {
                 android.hardware.camera2.params.MeteringRectangle.METERING_WEIGHT_MAX
             )
 
-            PLog.d(TAG, "Focus: UI($normX, $normY) -> Sensor($finalX, $finalY) -> Rect($focusX, $focusY)")
+            PLog.d(TAG, "Focus: UI($normX, $normY) -> Sensor($finalX, $finalY) -> Rect($focusX, $focusY), metering=${_state.value.meteringMode}")
 
             previewRequestBuilder?.apply {
                 if (maxAfRegions > 0) {
                     set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(meteringRectangle))
                 }
-                if (maxAeRegions > 0) {
+                // 平均测光模式下不设置 AE 区域，让硬件使用全画面默认测光
+                if (maxAeRegions > 0 && _state.value.meteringMode != MeteringMode.AVERAGE) {
                     set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(meteringRectangle))
                 }
                 val afMode = CaptureRequest.CONTROL_AF_MODE_AUTO
@@ -2296,17 +2650,7 @@ class Camera2Controller(private val context: Context) {
                 updatePreview()
             }
 
-            // 延迟恢复连续对焦
-            cameraHandler?.postDelayed({
-                previewRequestBuilder?.apply {
-                    set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
-                    val afMode = CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
-                    set(CaptureRequest.CONTROL_AF_MODE, afMode)
-                    _state.value = _state.value.copy(currentAfMode = afMode)
-                    updatePreview()
-                }
-                _state.value = _state.value.copy(isFocusing = false, focusSuccess = null)
-            }, 3000)
+            // 对焦后通过场景变化检测自动恢复连续对焦（不再使用固定延迟）
 
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to focus", e)
@@ -2397,12 +2741,13 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    fun setVideoStabilizationEnabled(enabled: Boolean) {
+    fun setVideoStabilizationMode(mode: VideoStabilizationMode) {
         _state.value = _state.value.copy(
             videoConfig = _state.value.videoConfig.copy(
-                stabilizationEnabled = enabled && _state.value.videoCapabilities.supportsStabilization
+                stabilizationMode = mode
             )
         )
+        refreshVideoCapabilities()
         previewRequestBuilder?.apply {
             applyBaseCameraSettings(this, isCapture = false)
             updatePreview()
@@ -2619,16 +2964,19 @@ class Camera2Controller(private val context: Context) {
      */
     private fun performCapture(device: CameraDevice, reader: ImageReader) {
         try {
+            val isRawCapture = isRawCaptureReader(reader)
             val captureBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 addTarget(reader.surface)
 
-                if (shouldMirrorStillCaptureToPreview()) {
+                if (!isRawCapture && shouldMirrorStillCaptureToPreview()) {
                     previewSurface?.let { addTarget(it) }
+                } else if (isRawCapture) {
+                    PLog.d(TAG, "RAW capture uses RAW target only to avoid unstable RAW+preview still requests")
                 }
 
                 // 应用所有相机参数（曝光、白平衡、闪光灯、变焦、色调映射）
                 // isCapture = true 确保使用完整的曝光时间（不限制长曝光）
-                applyBaseCameraSettings(this, isCapture = true)
+                applyBaseCameraSettings(this, isCapture = true, isRawCapture = isRawCapture)
 
                 // 强制将此请求的触发器设为 IDLE，防止携带预览中的触发状态
                 set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE)
@@ -2637,6 +2985,9 @@ class Camera2Controller(private val context: Context) {
                 previewRequestBuilder?.let { preview ->
                     preview.get(CaptureRequest.CONTROL_AF_MODE)?.let {
                         set(CaptureRequest.CONTROL_AF_MODE, it)
+                    }
+                    preview.get(CaptureRequest.LENS_FOCUS_DISTANCE)?.let {
+                        set(CaptureRequest.LENS_FOCUS_DISTANCE, it)
                     }
                     preview.get(CaptureRequest.CONTROL_AF_REGIONS)?.let {
                         set(CaptureRequest.CONTROL_AF_REGIONS, it)
@@ -2667,6 +3018,9 @@ class Camera2Controller(private val context: Context) {
                         timestamp: Long,
                         frameNumber: Long
                     ) {
+                        if (isRawCapture) {
+                            pendingCaptureStartedTimestamps[frameNumber] = timestamp
+                        }
                         PLog.d(TAG, "Burst capture started at frame $frameNumber")
                     }
 
@@ -2675,8 +3029,8 @@ class Camera2Controller(private val context: Context) {
                         request: CaptureRequest,
                         result: TotalCaptureResult
                     ) {
-                        val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
-                        if (timestamp != null && state.value.useRaw && isRawSupported) {
+                        val timestamp = getCaptureTimestamp(result)
+                        if (timestamp != null && isRawCapture) {
                             val pendingImage = pendingImages.remove(timestamp)
                             if (pendingImage != null) {
                                 processAndTriggerCapture(pendingImage, result)
@@ -2721,6 +3075,9 @@ class Camera2Controller(private val context: Context) {
                         timestamp: Long,
                         frameNumber: Long
                     ) {
+                        if (isRawCapture) {
+                            pendingCaptureStartedTimestamps[frameNumber] = timestamp
+                        }
                         PLog.d(TAG, "Capture started at frame $frameNumber")
                     }
 
@@ -2729,8 +3086,8 @@ class Camera2Controller(private val context: Context) {
                         request: CaptureRequest,
                         result: TotalCaptureResult
                     ) {
-                        val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
-                        if (timestamp != null && state.value.useRaw && isRawSupported) {
+                        val timestamp = getCaptureTimestamp(result)
+                        if (timestamp != null && isRawCapture) {
                             val pendingImage = pendingImages.remove(timestamp)
                             if (pendingImage != null) {
                                 processAndTriggerCapture(pendingImage, result)
@@ -2951,6 +3308,8 @@ class Camera2Controller(private val context: Context) {
             cachedSensorOrientation = 0
             cachedLensFacing = CameraCharacteristics.LENS_FACING_BACK
             cachedHardwareLevel = CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED
+            availableAfModes = intArrayOf()
+            lastAfState = null
 
             _state.value = if (keepVideoRecording) {
                 _state.value.copy(isPreviewActive = false)
@@ -3095,24 +3454,28 @@ class Camera2Controller(private val context: Context) {
 
         try {
             // Apply capture intent
+            val isRawCapture = isRawCaptureReader(imageReader)
             val captureBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 imageReader?.surface?.let { addTarget(it) }
-                if (shouldMirrorStillCaptureToPreview()) {
+                if (!isRawCapture && shouldMirrorStillCaptureToPreview()) {
                     previewSurface?.let { addTarget(it) }
+                } else if (isRawCapture) {
+                    PLog.d(TAG, "RAW burst capture uses RAW target only to avoid unstable RAW+preview still requests")
                 }
 
-                applyBaseCameraSettings(this, isCapture = true)
+                applyBaseCameraSettings(this, isCapture = true, isRawCapture = isRawCapture)
 
                 set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE)
 
                 builder.get(CaptureRequest.CONTROL_AF_MODE)?.let { set(CaptureRequest.CONTROL_AF_MODE, it) }
+                builder.get(CaptureRequest.LENS_FOCUS_DISTANCE)?.let { set(CaptureRequest.LENS_FOCUS_DISTANCE, it) }
                 builder.get(CaptureRequest.CONTROL_AF_REGIONS)?.let { set(CaptureRequest.CONTROL_AF_REGIONS, it) }
                 builder.get(CaptureRequest.CONTROL_AE_REGIONS)?.let { set(CaptureRequest.CONTROL_AE_REGIONS, it) }
             }
 
             val request = captureBuilder.build()
             val requests = mutableListOf<CaptureRequest>()
-            for (i in 0 until 8) {
+            for (i in 0 until BURST_CAPTURE_BATCH_SIZE) {
                 requests.add(request)
             }
             session.captureBurst(requests, object : CameraCaptureSession.CaptureCallback() {
@@ -3144,7 +3507,7 @@ class Camera2Controller(private val context: Context) {
 
     private fun checkBurstCaptureContinue() {
         if (!state.value.burstCapturing) return
-        if (MAX_IMAGES - openImagesCount.get() < 8) {
+        if (imageReaderMaxImages - openImagesCount.get() < BURST_CAPTURE_BATCH_SIZE) {
             cameraHandler?.postDelayed({
                 checkBurstCaptureContinue()
             }, 100)

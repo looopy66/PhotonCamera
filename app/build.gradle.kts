@@ -1,8 +1,20 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
+
+val localProperties = Properties().apply {
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.exists()) {
+        localPropertiesFile.inputStream().use { load(it) }
+    }
+}
+
+fun String.toBuildConfigString(): String =
+    "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
 android {
     namespace = "com.hinnka.mycamera"
@@ -13,8 +25,8 @@ android {
         applicationId = "com.hinnka.mycamera"
         minSdk = 30
         targetSdk = 36
-        versionCode = 63
-        versionName = "1.15.3"
+        versionCode = 72
+        versionName = "1.16.4.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
@@ -67,17 +79,43 @@ android {
     productFlavors {
         create("google") {
             dimension = "channel"
+            buildConfigField(
+                "String",
+                "BUILT_IN_API_URL",
+                "https://camera-api.hinnka.com/v1".toBuildConfigString()
+            )
+            buildConfigField(
+                "String",
+                "BUILT_IN_API_KEY",
+                localProperties.getProperty("BUILT_IN_API_KEY_GOOGLE", "").toBuildConfigString()
+            )
         }
         create("default") {
             dimension = "channel"
-        }
-        create("meitu") {
-            dimension = "channel"
-            applicationId = "com.meitu.meiyancamera"
+            buildConfigField(
+                "String",
+                "BUILT_IN_API_URL",
+                "https://token-plan-cn.xiaomimimo.com/v1".toBuildConfigString()
+            )
+            buildConfigField(
+                "String",
+                "BUILT_IN_API_KEY",
+                localProperties.getProperty("BUILT_IN_API_KEY", "").toBuildConfigString()
+            )
         }
         create("samsung") {
             dimension = "channel"
             applicationId = "com.samsung.android.scan3d"
+            buildConfigField(
+                "String",
+                "BUILT_IN_API_URL",
+                "https://token-plan-cn.xiaomimimo.com/v1".toBuildConfigString()
+            )
+            buildConfigField(
+                "String",
+                "BUILT_IN_API_KEY",
+                localProperties.getProperty("BUILT_IN_API_KEY", "").toBuildConfigString()
+            )
         }
     }
 
@@ -96,12 +134,6 @@ android {
     }
 
     sourceSets {
-        getByName("meitu") {
-            java {
-                srcDir("src/default/java")
-            }
-            manifest.srcFile("src/default/AndroidManifest.xml")
-        }
         getByName("samsung") {
             java {
                 srcDir("src/default/java")
@@ -158,7 +190,6 @@ dependencies {
 
     // Bugly for default flavor
     "defaultImplementation"("com.tencent.bugly:crashreport:latest.release")
-    "meituImplementation"("com.tencent.bugly:crashreport:latest.release")
     "samsungImplementation"("com.tencent.bugly:crashreport:latest.release")
 
     // Billing for google flavor

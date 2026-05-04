@@ -25,16 +25,19 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,6 +51,9 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -66,6 +72,7 @@ import com.hinnka.mycamera.ui.settings.FrameEditorScreen
 import com.hinnka.mycamera.ui.settings.FrameManagementScreen
 import com.hinnka.mycamera.ui.settings.SettingsScreen
 import com.hinnka.mycamera.ui.theme.PhotonCameraTheme
+import com.hinnka.mycamera.update.AppUpdateManager
 import com.hinnka.mycamera.utils.BuglyHelper
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
@@ -119,6 +126,7 @@ class MainActivity : ComponentActivity() {
 
     private var hasPermissions by mutableStateOf(false)
     private var pendingRoute by mutableStateOf<String?>(null)
+    private var pendingZipImportUris by mutableStateOf<List<Uri>>(emptyList())
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -195,7 +203,9 @@ class MainActivity : ComponentActivity() {
                                 cameraViewModel = cameraViewModel,
                                 galleryViewModel = galleryViewModel,
                                 pendingRoute = pendingRoute,
-                                onRouteHandled = { pendingRoute = null }
+                                onRouteHandled = { pendingRoute = null },
+                                pendingZipImportUris = pendingZipImportUris,
+                                onZipImportHandled = { pendingZipImportUris = emptyList() }
                             )
                         } else {
                             PermissionScreen(
@@ -204,6 +214,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             )
                         }
+                        AppUpdateInstallPrompt()
                     }
                 }
             }
@@ -238,7 +249,11 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?) {
         intent ?: return
-        if (intent.action == Intent.ACTION_SEND && intent.type?.startsWith("image/") == true) {
+        val zipUris = getZipImportUris(intent)
+        if (zipUris.isNotEmpty()) {
+            pendingZipImportUris = zipUris
+            pendingRoute = Routes.FILTER_MANAGEMENT
+        } else if (intent.action == Intent.ACTION_SEND && intent.type?.startsWith("image/") == true) {
             val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
             } else {
@@ -270,6 +285,44 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun getZipImportUris(intent: Intent): List<Uri> {
+        val isZipMimeType = intent.type?.let { type ->
+            type == "application/zip" ||
+                    type == "application/x-zip-compressed" ||
+                    type == "application/octet-stream"
+        } ?: false
+
+        val dataUri = intent.data
+        val dataLooksLikeZip = dataUri?.lastPathSegment?.endsWith(".zip", ignoreCase = true) == true
+
+        return when (intent.action) {
+            Intent.ACTION_VIEW -> {
+                if (dataUri != null && (isZipMimeType || dataLooksLikeZip)) listOf(dataUri) else emptyList()
+            }
+            Intent.ACTION_SEND -> {
+                if (!isZipMimeType) return emptyList()
+                val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+                }
+                listOfNotNull(uri)
+            }
+            Intent.ACTION_SEND_MULTIPLE -> {
+                if (!isZipMimeType) return emptyList()
+                val uris = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+                }
+                uris.orEmpty()
+            }
+            else -> emptyList()
+        }
+    }
+
     private fun hideSystemUI() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).let { controller ->
@@ -288,11 +341,77 @@ private fun StartupComposeReadyEffect() {
 }
 
 @Composable
+private fun AppUpdateInstallPrompt() {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var readyApk by remember { mutableStateOf<java.io.File?>(null) }
+
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            AppUpdateManager.readyApk.collect { apkFile ->
+                readyApk = apkFile
+            }
+        }
+    }
+
+    val apkFile = readyApk ?: return
+    AlertDialog(
+        onDismissRequest = {
+            AppUpdateManager.consumeReadyApk(apkFile)
+            readyApk = null
+        },
+        title = {
+            Text(
+                text = stringResource(R.string.update_ready_title),
+                style = MaterialTheme.typography.titleLarge
+            )
+        },
+        text = {
+            Text(
+                text = stringResource(R.string.update_ready_message),
+                style = MaterialTheme.typography.bodyMedium
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val installStarted = AppUpdateManager.startInstall(context, apkFile)
+                    if (installStarted) {
+                        AppUpdateManager.consumeReadyApk(apkFile)
+                        readyApk = null
+                    } else {
+                        android.widget.Toast.makeText(
+                            context,
+                            R.string.update_install_permission_hint,
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            ) {
+                Text(stringResource(R.string.update_install_now))
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = {
+                    AppUpdateManager.consumeReadyApk(apkFile)
+                    readyApk = null
+                }
+            ) {
+                Text(stringResource(R.string.cancel))
+            }
+        }
+    )
+}
+
+@Composable
 fun NavigationHost(
     cameraViewModel: CameraViewModel,
     galleryViewModel: GalleryViewModel,
     pendingRoute: String? = null,
-    onRouteHandled: () -> Unit = {}
+    onRouteHandled: () -> Unit = {},
+    pendingZipImportUris: List<Uri> = emptyList(),
+    onZipImportHandled: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val navController = rememberNavController()
@@ -501,7 +620,9 @@ fun NavigationHost(
                     },
                     onLutCreatorClick = {
                         navController.navigate(Routes.LUT_CREATOR)
-                    }
+                    },
+                    pendingZipImportUris = pendingZipImportUris,
+                    onZipImportHandled = onZipImportHandled
                 )
             }
 

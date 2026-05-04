@@ -57,6 +57,12 @@ enum class ColorSpace(
         0.128f, 0.044f,
         0.32168f, 0.33767f
     ),
+    ProPhoto(
+        0.734699f, 0.265301f,
+        0.159597f, 0.840403f,
+        0.036598f, 0.000105f,
+        0.345704f, 0.358540f
+    ),
 ;
 
     val primaries: FloatArray

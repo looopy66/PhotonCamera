@@ -8,6 +8,7 @@
 #include <cmath>
 #include <chrono>
 #include <cstring>
+#include <exception>
 #include <fstream>
 #include <jni.h>
 #include <map>
@@ -430,6 +431,37 @@ static float sampleDngGainMapBilinear(const DngGainMap &gainMap, float x, float 
   return top + (bottom - top) * ty;
 }
 
+static void computeEffectiveBlackLevels(LibRaw &rawProcessor, float out[4]) {
+  const float base = static_cast<float>(rawProcessor.imgdata.color.black);
+  const unsigned cols = rawProcessor.imgdata.color.cblack[4];
+  const unsigned rows = rawProcessor.imgdata.color.cblack[5];
+  for (int ch = 0; ch < 4; ++ch) {
+    float total = base + static_cast<float>(rawProcessor.imgdata.color.cblack[ch]);
+    // Add the repeat pattern contribution for this CFA channel.
+    if (cols > 0 && rows > 0) {
+      float sum = 0.0f;
+      int count = 0;
+      for (unsigned r = 0; r < rows; ++r) {
+        for (unsigned c = 0; c < cols; ++c) {
+          if (rawProcessor.FC(r, c) == ch) {
+            sum += static_cast<float>(
+                rawProcessor.imgdata.color.cblack[6 + r * cols + c]);
+            ++count;
+          }
+        }
+      }
+      if (count > 0) {
+        total += sum / static_cast<float>(count);
+      }
+    }
+    out[ch] = total;
+  }
+}
+
+
+// Metadata-based black level calculation is now handled by computeEffectiveBlackLevels.
+
+
 static bool applySupportedDngGainMaps(LibRaw &rawProcessor, const float blackLevels[4]) {
   if (!rawProcessor.imgdata.rawdata.raw_image || !rawProcessor.imgdata.idata.filters) {
     return false;
@@ -517,6 +549,101 @@ static bool applySupportedDngGainMaps(LibRaw &rawProcessor, const float blackLev
   return true;
 }
 
+static bool estimateRawAutoWhiteBalance(LibRaw &rawProcessor, const float blackLevels[4],
+                                        float outUserMul[4], int &sampleCount) {
+  sampleCount = 0;
+  if (!rawProcessor.imgdata.rawdata.raw_image || !rawProcessor.imgdata.idata.filters) {
+    return false;
+  }
+
+  const int rawWidth = rawProcessor.imgdata.sizes.raw_width;
+  const int rawHeight = rawProcessor.imgdata.sizes.raw_height;
+  const int rawPitch = rawProcessor.imgdata.sizes.raw_pitch > 0
+                           ? rawProcessor.imgdata.sizes.raw_pitch / static_cast<int>(sizeof(ushort))
+                           : rawWidth;
+  const int left = std::max(0, static_cast<int>(rawProcessor.imgdata.sizes.left_margin));
+  const int top = std::max(0, static_cast<int>(rawProcessor.imgdata.sizes.top_margin));
+  const int right = std::min(rawWidth - 1, left + static_cast<int>(rawProcessor.imgdata.sizes.width) - 1);
+  const int bottom = std::min(rawHeight - 1, top + static_cast<int>(rawProcessor.imgdata.sizes.height) - 1);
+  if (right <= left + 1 || bottom <= top + 1) {
+    return false;
+  }
+
+  float whiteLevel = static_cast<float>(rawProcessor.imgdata.color.dng_levels.dng_whitelevel[0]);
+  if (whiteLevel <= 0.0f) {
+    whiteLevel = static_cast<float>(rawProcessor.imgdata.color.maximum);
+  }
+  if (whiteLevel <= 0.0f) {
+    whiteLevel = 65535.0f;
+  }
+
+  double sums[4] = {0.0, 0.0, 0.0, 0.0};
+  auto *rawImage = rawProcessor.imgdata.rawdata.raw_image;
+  const int step = 4;
+  for (int y = top; y + 1 <= bottom; y += step) {
+    for (int x = left; x + 1 <= right; x += step) {
+      float v[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+      bool seen[4] = {false, false, false, false};
+      for (int dy = 0; dy < 2; ++dy) {
+        for (int dx = 0; dx < 2; ++dx) {
+          const int yy = y + dy;
+          const int xx = x + dx;
+          int c = rawProcessor.FC(yy, xx);
+          if (c < 0 || c > 3) {
+            continue;
+          }
+          const float black = blackLevels[c];
+          const float range = std::max(1.0f, whiteLevel - black);
+          const float raw = static_cast<float>(rawImage[yy * rawPitch + xx]);
+          v[c] = std::clamp((raw - black) / range, 0.0f, 1.0f);
+          seen[c] = true;
+        }
+      }
+
+      if (!seen[0] || !seen[1] || !seen[2]) {
+        continue;
+      }
+      if (!seen[3]) {
+        v[3] = v[1];
+      }
+
+      const float g = 0.5f * (v[1] + v[3]);
+      const float minValue = std::min(std::min(v[0], v[1]), std::min(v[2], v[3]));
+      const float maxValue = std::max(std::max(v[0], v[1]), std::max(v[2], v[3]));
+      const float luma = 0.25f * (v[0] + v[1] + v[2] + v[3]);
+      if (luma < 0.025f || luma > 0.82f || minValue < 0.004f || maxValue > 0.96f) {
+        continue;
+      }
+      if (maxValue / std::max(minValue, 0.004f) > 3.0f || g <= 0.0f) {
+        continue;
+      }
+
+      sums[0] += v[0];
+      sums[1] += v[1];
+      sums[2] += v[2];
+      sums[3] += v[3];
+      ++sampleCount;
+    }
+  }
+
+  if (sampleCount < 512 || sums[0] <= 0.0 || sums[1] <= 0.0 ||
+      sums[2] <= 0.0 || sums[3] <= 0.0) {
+    return false;
+  }
+
+  const float r = static_cast<float>(sums[0] / sampleCount);
+  const float gr = static_cast<float>(sums[1] / sampleCount);
+  const float b = static_cast<float>(sums[2] / sampleCount);
+  const float gb = static_cast<float>(sums[3] / sampleCount);
+  const float g = 0.5f * (gr + gb);
+  outUserMul[0] = std::clamp(g / std::max(r, 1e-4f), 0.5f, 4.0f);
+  outUserMul[1] = 1.0f;
+  outUserMul[2] = std::clamp(g / std::max(b, 1e-4f), 0.5f, 4.0f);
+  outUserMul[3] = std::clamp(g / std::max(gb, 1e-4f), 0.75f, 1.33f);
+  return std::isfinite(outUserMul[0]) && std::isfinite(outUserMul[2]) &&
+         std::isfinite(outUserMul[3]);
+}
+
 static float illuminantToTemp(int illuminant) {
   switch (illuminant) {
   case 1:
@@ -584,16 +711,16 @@ static Matrix3x3 computeXYZD50ToGamut(float xr, float yr, float xg, float yg,
   float sG = invS.m[3] * Xw + invS.m[4] * Yw + invS.m[5] * Zw;
   float sB = invS.m[6] * Xw + invS.m[7] * Yw + invS.m[8] * Zw;
 
-  Matrix3x3 gamutToXYZD65;
-  gamutToXYZD65.m[0] = mS.m[0] * sR;
-  gamutToXYZD65.m[1] = mS.m[1] * sG;
-  gamutToXYZD65.m[2] = mS.m[2] * sB;
-  gamutToXYZD65.m[3] = mS.m[3] * sR;
-  gamutToXYZD65.m[4] = mS.m[4] * sG;
-  gamutToXYZD65.m[5] = mS.m[5] * sB;
-  gamutToXYZD65.m[6] = mS.m[6] * sR;
-  gamutToXYZD65.m[7] = mS.m[7] * sG;
-  gamutToXYZD65.m[8] = mS.m[8] * sB;
+  Matrix3x3 gamutToXYZNative;
+  gamutToXYZNative.m[0] = mS.m[0] * sR;
+  gamutToXYZNative.m[1] = mS.m[1] * sG;
+  gamutToXYZNative.m[2] = mS.m[2] * sB;
+  gamutToXYZNative.m[3] = mS.m[3] * sR;
+  gamutToXYZNative.m[4] = mS.m[4] * sG;
+  gamutToXYZNative.m[5] = mS.m[5] * sB;
+  gamutToXYZNative.m[6] = mS.m[6] * sR;
+  gamutToXYZNative.m[7] = mS.m[7] * sG;
+  gamutToXYZNative.m[8] = mS.m[8] * sB;
 
   float BRADFORD_D65_TO_D50[9] = {1.0478112f,  0.0228866f, -0.0501270f,
                                   0.0295424f,  0.9904844f, -0.0170491f,
@@ -602,7 +729,10 @@ static Matrix3x3 computeXYZD50ToGamut(float xr, float yr, float xg, float yg,
   for (int i = 0; i < 9; i++)
     bMat.m[i] = BRADFORD_D65_TO_D50[i];
 
-  Matrix3x3 gamutToXYZD50 = bMat.multiply(gamutToXYZD65);
+  const bool isD50WhitePoint = std::abs(xw - 0.3457f) < 0.002f &&
+                               std::abs(yw - 0.3585f) < 0.002f;
+  Matrix3x3 gamutToXYZD50 =
+      isD50WhitePoint ? gamutToXYZNative : bMat.multiply(gamutToXYZNative);
   return gamutToXYZD50.invert();
 }
 
@@ -621,31 +751,6 @@ static inline float hlgToLinear(float value) {
   return linear * kHdrReferenceScale;
 }
 
-static void copyJavaFloatArray(JNIEnv *env, jfloatArray src, float *dst,
-                               size_t count, float defaultValue) {
-  for (size_t i = 0; i < count; ++i) {
-    dst[i] = defaultValue;
-  }
-
-  if (!src) {
-    return;
-  }
-
-  const jsize length = std::min<jsize>(env->GetArrayLength(src),
-                                       static_cast<jsize>(count));
-  if (length <= 0) {
-    return;
-  }
-
-  jfloat *elements = env->GetFloatArrayElements(src, nullptr);
-  if (!elements) {
-    return;
-  }
-
-  std::memcpy(dst, elements, static_cast<size_t>(length) * sizeof(float));
-  env->ReleaseFloatArrayElements(src, elements, JNI_ABORT);
-}
-
 static unsigned char mapCfaPatternToLibRaw(int cfaPattern) {
   switch (cfaPattern) {
   case 0:
@@ -659,17 +764,6 @@ static unsigned char mapCfaPatternToLibRaw(int cfaPattern) {
   default:
     return 0;
   }
-}
-
-static void mapProjectRggbToLibRawRgbg(const float src[4], float dst[4]) {
-  dst[0] = src[0];
-  dst[1] = src[1];
-  dst[2] = src[3];
-  dst[3] = src[2];
-}
-
-static int roundNonNegative(float value) {
-  return static_cast<int>(std::lround(std::max(0.0f, value)));
 }
 
 extern "C" {
@@ -800,8 +894,15 @@ JNIEXPORT jlong JNICALL
 Java_com_hinnka_mycamera_processor_MultiFrameStacker_createVulkanStackerNative(
     JNIEnv *env, jobject /* this */, jint width, jint height,
     jboolean enableSuperRes) {
-  auto *stacker = new VulkanImageStacker(width, height, enableSuperRes);
-  return reinterpret_cast<jlong>(stacker);
+  try {
+    auto *stacker = new VulkanImageStacker(width, height, enableSuperRes);
+    return reinterpret_cast<jlong>(stacker);
+  } catch (const std::exception &e) {
+    LOGE("createVulkanStackerNative failed: %s", e.what());
+  } catch (...) {
+    LOGE("createVulkanStackerNative failed with unknown error");
+  }
+  return 0;
 }
 
 JNIEXPORT jboolean JNICALL
@@ -943,144 +1044,6 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_processRawStackWithBufferNa
   }
 }
 
-JNIEXPORT jboolean JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_demosaicStackedRawWithLibRawNative(
-    JNIEnv *env, jobject /* this */, jobject fusedBayerBuffer, jint width,
-    jint height, jint cfaPattern, jfloatArray blackLevelArray, jint whiteLevel,
-    jfloatArray wbGainsArray, jobject outputBuffer) {
-  if (!fusedBayerBuffer || !outputBuffer || width <= 0 || height <= 0) {
-    LOGE("demosaicStackedRawWithLibRawNative: invalid arguments");
-    return JNI_FALSE;
-  }
-
-  auto *fusedBayerData = static_cast<unsigned char *>(
-      env->GetDirectBufferAddress(fusedBayerBuffer));
-  auto *outputData =
-      static_cast<unsigned char *>(env->GetDirectBufferAddress(outputBuffer));
-  if (!fusedBayerData || !outputData) {
-    LOGE("demosaicStackedRawWithLibRawNative: failed to get buffer address");
-    return JNI_FALSE;
-  }
-
-  const size_t inputBytes =
-      static_cast<size_t>(width) * static_cast<size_t>(height) *
-      sizeof(uint16_t);
-  const size_t outputBytes =
-      static_cast<size_t>(width) * static_cast<size_t>(height) * 3 *
-      sizeof(uint16_t);
-  const jlong inputCapacity = env->GetDirectBufferCapacity(fusedBayerBuffer);
-  const jlong outputCapacity = env->GetDirectBufferCapacity(outputBuffer);
-  if (inputCapacity < static_cast<jlong>(inputBytes) ||
-      outputCapacity < static_cast<jlong>(outputBytes)) {
-    LOGE("demosaicStackedRawWithLibRawNative: buffer too small in=%ld/%ld out=%ld/%ld",
-         static_cast<long>(inputCapacity), static_cast<long>(inputBytes),
-         static_cast<long>(outputCapacity), static_cast<long>(outputBytes));
-    return JNI_FALSE;
-  }
-
-  const unsigned char libRawPattern = mapCfaPatternToLibRaw(cfaPattern);
-  if (libRawPattern == 0) {
-    LOGE("demosaicStackedRawWithLibRawNative: unsupported CFA pattern %d",
-         cfaPattern);
-    return JNI_FALSE;
-  }
-
-  float projectBlackLevel[4];
-  float projectWbGains[4];
-  float libRawWbGains[4];
-  int libRawBlackLevels[4];
-  int libRawBlackResiduals[4];
-  copyJavaFloatArray(env, blackLevelArray, projectBlackLevel, 4, 0.0f);
-  copyJavaFloatArray(env, wbGainsArray, projectWbGains, 4, 1.0f);
-  mapProjectRggbToLibRawRgbg(projectWbGains, libRawWbGains);
-  for (int i = 0; i < 4; ++i) {
-    if (libRawWbGains[i] <= 0.0f) {
-      libRawWbGains[i] = 1.0f;
-    }
-  }
-
-  float projectBlackLevelOrdered[4];
-  mapProjectRggbToLibRawRgbg(projectBlackLevel, projectBlackLevelOrdered);
-  for (int i = 0; i < 4; ++i) {
-    libRawBlackLevels[i] = roundNonNegative(projectBlackLevelOrdered[i]);
-  }
-
-  const int commonBlack =
-      *std::min_element(std::begin(libRawBlackLevels), std::end(libRawBlackLevels));
-  for (int i = 0; i < 4; ++i) {
-    libRawBlackResiduals[i] = libRawBlackLevels[i] - commonBlack;
-  }
-
-  const int effectiveWhiteLevel =
-      whiteLevel > commonBlack ? whiteLevel : 65535;
-
-  LibRaw rawProcessor;
-  int ret = rawProcessor.open_bayer(
-      fusedBayerData, static_cast<unsigned>(inputBytes),
-      static_cast<ushort>(width), static_cast<ushort>(height), 0, 0, 0, 0, 0,
-      libRawPattern, 0, 0, static_cast<unsigned>(commonBlack));
-  if (ret != LIBRAW_SUCCESS) {
-    LOGE("demosaicStackedRawWithLibRawNative: open_bayer failed ret=%d err=%s",
-         ret, libraw_strerror(ret));
-    return JNI_FALSE;
-  }
-
-  rawProcessor.imgdata.params.output_bps = 16;
-  rawProcessor.imgdata.params.gamm[0] = 1.0;
-  rawProcessor.imgdata.params.gamm[1] = 1.0;
-  rawProcessor.imgdata.params.no_auto_bright = 1;
-  rawProcessor.imgdata.params.use_camera_wb = 0;
-  rawProcessor.imgdata.params.use_auto_wb = 0;
-  rawProcessor.imgdata.params.output_color = 0;
-  rawProcessor.imgdata.params.user_qual = 14;
-  rawProcessor.imgdata.params.fbdd_noiserd = 0;
-  rawProcessor.imgdata.params.threshold = 0;
-  rawProcessor.imgdata.params.med_passes = 0;
-  rawProcessor.imgdata.params.user_black = commonBlack;
-  rawProcessor.imgdata.params.user_sat = effectiveWhiteLevel;
-  for (int i = 0; i < 4; ++i) {
-    rawProcessor.imgdata.params.user_mul[i] = libRawWbGains[i];
-    rawProcessor.imgdata.params.user_cblack[i] = libRawBlackResiduals[i];
-  }
-
-  ret = rawProcessor.unpack();
-  if (ret != LIBRAW_SUCCESS) {
-    LOGE("demosaicStackedRawWithLibRawNative: unpack failed ret=%d err=%s", ret,
-         libraw_strerror(ret));
-    return JNI_FALSE;
-  }
-
-  ret = rawProcessor.dcraw_process();
-  if (ret != LIBRAW_SUCCESS) {
-    LOGE("demosaicStackedRawWithLibRawNative: dcraw_process failed ret=%d err=%s",
-         ret, libraw_strerror(ret));
-    return JNI_FALSE;
-  }
-
-  libraw_processed_image_t *image = rawProcessor.dcraw_make_mem_image(&ret);
-  if (!image || ret != LIBRAW_SUCCESS) {
-    LOGE("demosaicStackedRawWithLibRawNative: dcraw_make_mem_image failed ret=%d err=%s",
-         ret, libraw_strerror(ret));
-    return JNI_FALSE;
-  }
-
-  const bool validImage = image->type == LIBRAW_IMAGE_BITMAP &&
-                          image->colors == 3 && image->bits == 16 &&
-                          image->width == width && image->height == height &&
-                          image->data_size >= outputBytes;
-  if (!validImage) {
-    LOGE("demosaicStackedRawWithLibRawNative: unexpected image type=%d colors=%d bits=%d size=%u %dx%d",
-         image->type, image->colors, image->bits, image->data_size,
-         image->width, image->height);
-    LibRaw::dcraw_clear_mem(image);
-    return JNI_FALSE;
-  }
-
-  std::memcpy(outputData, image->data, outputBytes);
-  LibRaw::dcraw_clear_mem(image);
-  return JNI_TRUE;
-}
-
 /**
  * Vulkan Raw Stacking JNI Interface
  */
@@ -1118,15 +1081,25 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_createVulkanRawStackerNativ
     lsc = env->GetFloatArrayElements(lensShadingMap, nullptr);
   }
 
-  auto *stacker = new VulkanRawStacker(width, height, enableSuperRes,
-                                       superResScale, bl,
-                                       (float)whiteLevel, wb, noise, lsc,
-                                       (uint32_t)lscWidth, (uint32_t)lscHeight);
+  VulkanRawStacker *stacker = nullptr;
+  try {
+    stacker = new VulkanRawStacker(width, height, enableSuperRes,
+                                   superResScale, bl, (float)whiteLevel, wb,
+                                   noise, lsc, (uint32_t)lscWidth,
+                                   (uint32_t)lscHeight);
+  } catch (const std::exception &e) {
+    LOGE("createVulkanRawStackerNative failed: %s", e.what());
+  } catch (...) {
+    LOGE("createVulkanRawStackerNative failed with unknown error");
+  }
 
   if (lsc) {
     env->ReleaseFloatArrayElements(lensShadingMap, lsc, 0);
   }
 
+  if (!stacker) {
+    return 0;
+  }
   return reinterpret_cast<jlong>(stacker);
 }
 
@@ -1906,7 +1879,8 @@ static void exif_callback(void *datap, int tag, int type, int len,
 JNIEXPORT jobject JNICALL
 Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     JNIEnv *env, jobject /* this */, jstring filePath, jfloat xr, jfloat yr,
-    jfloat xg, jfloat yg, jfloat xb, jfloat yb, jfloat xw, jfloat yw) {
+    jfloat xg, jfloat yg, jfloat xb, jfloat yb, jfloat xw, jfloat yw,
+    jboolean useRawAutoWhiteBalanceEstimate) {
 
   const char *path = env->GetStringUTFChars(filePath, nullptr);
   if (path == nullptr) {
@@ -1933,7 +1907,7 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   }
 
   jobject embeddedPreviewBitmap = nullptr;
-  ret = RawProcessor.unpack_thumb();
+  /*ret = RawProcessor.unpack_thumb();
   if (ret == LIBRAW_SUCCESS) {
     libraw_processed_image_t *thumb = RawProcessor.dcraw_make_mem_thumb(&ret);
     if (thumb && ret == LIBRAW_SUCCESS) {
@@ -1963,12 +1937,13 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   } else {
     LOGI("processDngNative: unpack_thumb failed ret=%d err=%s", ret,
          libraw_strerror(ret));
-  }
+  }*/
 
+  // Read the TOTAL effective black level per channel.
+  // LibRaw stores it as: color.black + cblack[channel] + repeat_pattern[position].
   float dngBlackLevels[4] = {};
-  for (int i = 0; i < 4; ++i) {
-    dngBlackLevels[i] = static_cast<float>(RawProcessor.imgdata.color.dng_levels.dng_cblack[6 + i]);
-  }
+  computeEffectiveBlackLevels(RawProcessor, dngBlackLevels);
+  LOGI("dng black levels (metadata): %f %f %f %f", dngBlackLevels[0], dngBlackLevels[1], dngBlackLevels[2], dngBlackLevels[3]);
   const bool appliedDngGainMap = applySupportedDngGainMaps(RawProcessor, dngBlackLevels);
   LOGI("dng gain map: opcode2_len=%u applied=%d", RawProcessor.imgdata.color.dng_levels.rawopcodes[1].len,
        appliedDngGainMap ? 1 : 0);
@@ -1983,6 +1958,35 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   RawProcessor.imgdata.params.fbdd_noiserd = 0;
   RawProcessor.imgdata.params.threshold = 0;
   RawProcessor.imgdata.params.med_passes = 0;
+
+  float selectedWb[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+  for (int i = 0; i < 4; i++) {
+    const float val = RawProcessor.imgdata.color.cam_mul[i];
+    selectedWb[i] = val > 0.0f && std::isfinite(val) ? val : 1.0f;
+  }
+  float selectedBase = selectedWb[1] > 0.0f ? selectedWb[1] : 1.0f;
+  for (int i = 0; i < 4; i++) {
+    selectedWb[i] /= selectedBase;
+  }
+
+  if (useRawAutoWhiteBalanceEstimate == JNI_TRUE) {
+    float estimatedWb[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    int awbSamples = 0;
+    if (estimateRawAutoWhiteBalance(RawProcessor, dngBlackLevels, estimatedWb, awbSamples)) {
+      RawProcessor.imgdata.params.use_camera_wb = 0;
+      RawProcessor.imgdata.params.use_auto_wb = 0;
+      for (int i = 0; i < 4; ++i) {
+        RawProcessor.imgdata.params.user_mul[i] = estimatedWb[i];
+        selectedWb[i] = estimatedWb[i];
+      }
+      LOGI("raw awb estimate: enabled samples=%d wb=%f,%f,%f,%f", awbSamples,
+           selectedWb[0], selectedWb[1], selectedWb[2], selectedWb[3]);
+    } else {
+      LOGI("raw awb estimate: enabled but insufficient samples, using camera wb");
+    }
+  } else {
+    LOGI("raw awb estimate: disabled, using camera wb");
+  }
 
   ret = RawProcessor.dcraw_process();
   if (ret != LIBRAW_SUCCESS) {
@@ -2030,11 +2034,7 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   float wb[4] = {1.0f, 1.0f, 1.0f, 1.0f};
 
   for (int i = 0; i < 4; i++)
-    wb[i] = RawProcessor.imgdata.color.cam_mul[i];
-  float base = wb[1];
-  for (int i = 0; i < 4; i++) {
-    wb[i] = wb[i] / base;
-  }
+    wb[i] = selectedWb[i];
   LOGI("wb: %f, %f, %f, %f", wb[0], wb[1], wb[2], wb[3]); // RGB0 or RGBG
   LOGI("cam_xyz: %f", RawProcessor.imgdata.color.cam_xyz[0][0]);
   LOGI("ccm: %f", RawProcessor.imgdata.color.ccm[0][0]);
@@ -2356,6 +2356,176 @@ JNIEXPORT void JNICALL Java_com_hinnka_mycamera_raw_DngRawData_freeNativeBuffer(
     LOGI("Freeing DNG RAW data native buffer: %p", nativePtr);
     free(nativePtr);
   }
+}
+
+JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_ml_DnCNNDenoiseEstimator_preprocessNative(
+    JNIEnv *env, jobject, jobject bitmap, jint x, jint y, jint w, jint h,
+    jobject outBuffer, jboolean isRgb, jboolean channelsFirst) {
+
+  AndroidBitmapInfo info;
+  void *pixels = nullptr;
+  if (AndroidBitmap_getInfo(env, bitmap, &info) < 0 ||
+      AndroidBitmap_lockPixels(env, bitmap, &pixels) < 0) {
+    LOGE("DnCNN preprocess: failed to lock bitmap");
+    return;
+  }
+
+  auto *out = static_cast<float *>(env->GetDirectBufferAddress(outBuffer));
+  if (!out || w <= 0 || h <= 0 || info.width <= 0 || info.height <= 0) {
+    AndroidBitmap_unlockPixels(env, bitmap);
+    return;
+  }
+
+  const int stride = static_cast<int>(info.stride / 4);
+  const auto *src = static_cast<const uint32_t *>(pixels);
+  const bool rgb = isRgb == JNI_TRUE;
+  const bool nchw = channelsFirst == JNI_TRUE;
+  const int pixelCount = w * h;
+
+#pragma omp parallel for num_threads(8)
+  for (int py = 0; py < h; ++py) {
+    for (int px = 0; px < w; ++px) {
+      const int sx = std::clamp(static_cast<int>(x + px), 0,
+                                static_cast<int>(info.width) - 1);
+      const int sy = std::clamp(static_cast<int>(y + py), 0,
+                                static_cast<int>(info.height) - 1);
+      const uint32_t pixel = src[sy * stride + sx];
+      const float r = static_cast<float>((pixel >> 0) & 0xFF) / 255.0f;
+      const float g = static_cast<float>((pixel >> 8) & 0xFF) / 255.0f;
+      const float b = static_cast<float>((pixel >> 16) & 0xFF) / 255.0f;
+      const int base = py * w + px;
+
+      if (rgb) {
+        if (nchw) {
+          out[base] = r;
+          out[pixelCount + base] = g;
+          out[pixelCount * 2 + base] = b;
+        } else {
+          const int outIdx = base * 3;
+          out[outIdx] = r;
+          out[outIdx + 1] = g;
+          out[outIdx + 2] = b;
+        }
+      } else {
+        out[base] = 0.299f * r + 0.587f * g + 0.114f * b;
+      }
+    }
+  }
+
+  AndroidBitmap_unlockPixels(env, bitmap);
+}
+
+JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_ml_DnCNNDenoiseEstimator_postprocessNative(
+    JNIEnv *env, jobject, jobject inBuffer, jobject srcBitmap, jobject dstBitmap,
+    jint patchX, jint patchY, jint srcX, jint srcY, jint dstX, jint dstY,
+    jint w, jint h, jint patchW, jint patchH, jfloat strength, jboolean isRgb,
+    jboolean channelsFirst) {
+
+  AndroidBitmapInfo srcInfo, dstInfo;
+  void *srcPixels = nullptr;
+  void *dstPixels = nullptr;
+  if (AndroidBitmap_getInfo(env, srcBitmap, &srcInfo) < 0 ||
+      AndroidBitmap_lockPixels(env, srcBitmap, &srcPixels) < 0) {
+    LOGE("DnCNN postprocess: failed to lock source bitmap");
+    return;
+  }
+  if (AndroidBitmap_getInfo(env, dstBitmap, &dstInfo) < 0 ||
+      AndroidBitmap_lockPixels(env, dstBitmap, &dstPixels) < 0) {
+    AndroidBitmap_unlockPixels(env, srcBitmap);
+    LOGE("DnCNN postprocess: failed to lock destination bitmap");
+    return;
+  }
+
+  auto *in = static_cast<float *>(env->GetDirectBufferAddress(inBuffer));
+  if (!in || w <= 0 || h <= 0 || patchW <= 0 || patchH <= 0 ||
+      srcInfo.width <= 0 || srcInfo.height <= 0 || dstInfo.width <= 0 ||
+      dstInfo.height <= 0) {
+    AndroidBitmap_unlockPixels(env, srcBitmap);
+    AndroidBitmap_unlockPixels(env, dstBitmap);
+    return;
+  }
+
+  const int srcStride = static_cast<int>(srcInfo.stride / 4);
+  const int dstStride = static_cast<int>(dstInfo.stride / 4);
+  const auto *src = static_cast<const uint32_t *>(srcPixels);
+  auto *dst = static_cast<uint32_t *>(dstPixels);
+  const bool rgb = isRgb == JNI_TRUE;
+  const bool nchw = channelsFirst == JNI_TRUE;
+  const float blend = std::clamp(static_cast<float>(strength), 0.0f, 1.0f);
+  const float invBlend = 1.0f - blend;
+  const int patchPixelCount = patchW * patchH;
+
+#pragma omp parallel for num_threads(8)
+  for (int py = 0; py < h; ++py) {
+    for (int px = 0; px < w; ++px) {
+      const int srcPx = std::clamp(static_cast<int>(srcX + px), 0,
+                                   static_cast<int>(srcInfo.width) - 1);
+      const int srcPy = std::clamp(static_cast<int>(srcY + py), 0,
+                                   static_cast<int>(srcInfo.height) - 1);
+      const int dstPx = static_cast<int>(dstX + px);
+      const int dstPy = static_cast<int>(dstY + py);
+      if (dstPx < 0 || dstPy < 0 || dstPx >= static_cast<int>(dstInfo.width) ||
+          dstPy >= static_cast<int>(dstInfo.height)) {
+        continue;
+      }
+
+      const int patchPx = std::clamp(static_cast<int>(patchX + px), 0,
+                                     static_cast<int>(patchW) - 1);
+      const int patchPy = std::clamp(static_cast<int>(patchY + py), 0,
+                                     static_cast<int>(patchH) - 1);
+      const int patchBase = patchPy * patchW + patchPx;
+      const uint32_t pixel = src[srcPy * srcStride + srcPx];
+      const float origR = static_cast<float>((pixel >> 0) & 0xFF);
+      const float origG = static_cast<float>((pixel >> 8) & 0xFF);
+      const float origB = static_cast<float>((pixel >> 16) & 0xFF);
+
+      float r;
+      float g;
+      float b;
+      if (rgb) {
+        float denR;
+        float denG;
+        float denB;
+        if (nchw) {
+          denR = in[patchBase] * 255.0f;
+          denG = in[patchPixelCount + patchBase] * 255.0f;
+          denB = in[patchPixelCount * 2 + patchBase] * 255.0f;
+        } else {
+          const int inIdx = patchBase * 3;
+          denR = in[inIdx] * 255.0f;
+          denG = in[inIdx + 1] * 255.0f;
+          denB = in[inIdx + 2] * 255.0f;
+        }
+
+        r = origR * invBlend + denR * blend;
+        g = origG * invBlend + denG * blend;
+        b = origB * invBlend + denB * blend;
+      } else {
+        const float cb =
+            -0.1687f * origR - 0.3313f * origG + 0.5f * origB + 128.0f;
+        const float cr =
+            0.5f * origR - 0.4187f * origG - 0.0813f * origB + 128.0f;
+        const float originalY = 0.299f * origR + 0.587f * origG + 0.114f * origB;
+        const float denoisedY = in[patchBase] * 255.0f;
+        const float newY = originalY * invBlend + denoisedY * blend;
+
+        r = newY + 1.402f * (cr - 128.0f);
+        g = newY - 0.344136f * (cb - 128.0f) - 0.714136f * (cr - 128.0f);
+        b = newY + 1.772f * (cb - 128.0f);
+      }
+
+      const auto resR = static_cast<uint32_t>(std::clamp(r, 0.0f, 255.0f));
+      const auto resG = static_cast<uint32_t>(std::clamp(g, 0.0f, 255.0f));
+      const auto resB = static_cast<uint32_t>(std::clamp(b, 0.0f, 255.0f));
+      dst[dstPy * dstStride + dstPx] =
+          0xFF000000u | (resB << 16) | (resG << 8) | resR;
+    }
+  }
+
+  AndroidBitmap_unlockPixels(env, srcBitmap);
+  AndroidBitmap_unlockPixels(env, dstBitmap);
 }
 
 } // extern "C"

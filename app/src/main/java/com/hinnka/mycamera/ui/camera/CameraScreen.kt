@@ -7,6 +7,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Environment
 import android.provider.Settings
+import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
@@ -25,6 +26,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -55,9 +57,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -68,7 +72,6 @@ import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.ui.components.*
 import com.hinnka.mycamera.utils.OrientationObserver
-import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import com.hinnka.mycamera.video.CaptureMode
@@ -88,6 +91,7 @@ enum class ActivePanel {
     NONE,
     SETTINGS,
     FILTERS,
+    LUT_EDIT
 }
 
 private const val InitialPreviewTransitionDelayMillis = 500L
@@ -143,12 +147,14 @@ fun CameraScreen(
     // UI State
     var activePanel by remember { mutableStateOf(ActivePanel.NONE) }
     var selectedParameter by remember { mutableStateOf(CameraParameter.EXPOSURE_COMPENSATION) }
+    var showVideoParameterRuler by remember { mutableStateOf(false) }
     val isXpan = state.aspectRatio == AspectRatio.XPAN
 
 
     val burstCapturingCount = viewModel.burstImageCount
 
     var isGhostPermissionFlowActive by remember { mutableStateOf(false) }
+    val activity = remember(context) { context.findActivity() }
 
     val ghostLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult(),
@@ -218,10 +224,7 @@ fun CameraScreen(
                     return
                 }
                 scope.launch {
-                    var bitmap = viewModel.applyLut(bitmap)
-                    if (OrientationObserver.isLandscape) {
-                        bitmap = BitmapUtils.rotate(bitmap, -OrientationObserver.rotationDegrees)
-                    }
+                    val bitmap = viewModel.applyLut(bitmap)
                     captureAnimationSnapshot = CaptureAnimationSnapshot(
                         bitmap = bitmap.asImageBitmap(),
                         sourceBounds = sourceBounds,
@@ -302,6 +305,18 @@ fun CameraScreen(
         }
     }
 
+    DisposableEffect(activity, state.videoRecordingState.isRecording) {
+        if (state.videoRecordingState.isRecording) {
+            activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+
+        onDispose {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
     LaunchedEffect(previewTransitionToken) {
         if (previewTransitionToken == 0) return@LaunchedEffect
         delay(700)
@@ -326,6 +341,12 @@ fun CameraScreen(
 
     var showGhostPermissionDialog by remember { mutableStateOf(false) }
 
+    LaunchedEffect(state.captureMode) {
+        if (state.captureMode == CaptureMode.VIDEO) {
+            showVideoParameterRuler = false
+        }
+    }
+
     LaunchedEffect(viewModel.showGhostPermissions) {
         if (viewModel.showGhostPermissions) {
             showGhostPermissionDialog = true
@@ -334,7 +355,6 @@ fun CameraScreen(
     }
 
     if (viewModel.showPaymentDialog) {
-        val activity = context.findActivity()
         PaymentDialog(
             onDismiss = { viewModel.showPaymentDialog = false },
             onPurchase = {
@@ -458,7 +478,7 @@ fun CameraScreen(
                 videoCapabilities = state.videoCapabilities,
                 onVideoTorchToggle = { viewModel.setVideoTorchEnabled(!state.videoConfig.torchEnabled) },
                 onVideoStabilizationToggle = {
-                    viewModel.setVideoStabilizationEnabled(!state.videoConfig.stabilizationEnabled)
+                    viewModel.cycleVideoStabilizationMode()
                 },
                 onVideoResolutionClick = {
                     cycleVideoResolution(state)?.let(viewModel::setVideoResolution)
@@ -495,6 +515,77 @@ fun CameraScreen(
                     zoomBarBounds = null
                 }
             }
+        }
+
+        val parameterRuler = @Composable {
+            ParameterRuler(
+                parameter = selectedParameter,
+                currentValue = when (selectedParameter) {
+                    CameraParameter.EXPOSURE_COMPENSATION -> state.exposureCompensation * state.getExposureCompensationStep()
+                    CameraParameter.SHUTTER_SPEED -> state.shutterSpeed.toFloat()
+                    CameraParameter.ISO -> state.iso.toFloat()
+                    CameraParameter.FOCUS -> state.focusDistance
+                    CameraParameter.WHITE_BALANCE -> state.awbTemperature.toFloat()
+                },
+                minValue = when (selectedParameter) {
+                    CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().lower * state.getExposureCompensationStep()
+                    CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().lower.toFloat()
+                    CameraParameter.ISO -> state.getIsoRange().lower.toFloat()
+                    CameraParameter.FOCUS -> 0f
+                    CameraParameter.WHITE_BALANCE -> 2000f
+                },
+                maxValue = when (selectedParameter) {
+                    CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().upper * state.getExposureCompensationStep()
+                    CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().upper.toFloat()
+                    CameraParameter.ISO -> state.getIsoRange().upper.toFloat()
+                    CameraParameter.FOCUS -> state.minimumFocusDistance
+                    CameraParameter.WHITE_BALANCE -> 10000f
+                },
+                isAdjustable = when (selectedParameter) {
+                    CameraParameter.EXPOSURE_COMPENSATION -> state.isAutoExposure
+                    CameraParameter.SHUTTER_SPEED -> !state.isShutterSpeedAuto
+                    CameraParameter.ISO -> !state.isIsoAuto
+                    CameraParameter.FOCUS -> !state.isAutoFocus
+                    CameraParameter.WHITE_BALANCE -> state.awbMode != android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
+                },
+                showAutoButton = when (selectedParameter) {
+                    CameraParameter.SHUTTER_SPEED, CameraParameter.ISO, CameraParameter.WHITE_BALANCE, CameraParameter.FOCUS -> true
+                    else -> false
+                },
+                onValueChange = { value ->
+                    when (selectedParameter) {
+                        CameraParameter.EXPOSURE_COMPENSATION -> viewModel.setExposureCompensation((value / state.getExposureCompensationStep()).roundToInt())
+                        CameraParameter.SHUTTER_SPEED -> viewModel.setShutterSpeed(value.toLong())
+                        CameraParameter.ISO -> viewModel.setIso(value.toInt())
+                        CameraParameter.FOCUS -> viewModel.setFocusDistance(value)
+                        CameraParameter.WHITE_BALANCE -> viewModel.setAwbTemperature(value.toInt())
+                    }
+                },
+                onAutoModeToggle = {
+                    when (selectedParameter) {
+                        CameraParameter.SHUTTER_SPEED -> viewModel.setShutterSpeedAuto(!state.isShutterSpeedAuto)
+                        CameraParameter.ISO -> viewModel.setIsoAuto(!state.isIsoAuto)
+                        CameraParameter.WHITE_BALANCE -> {
+                            if (state.awbMode == android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO) {
+                                viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_OFF)
+                            } else {
+                                viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO)
+                            }
+                        }
+
+                        CameraParameter.FOCUS -> viewModel.setAutoFocus(!state.isAutoFocus)
+                        else -> {}
+                    }
+                },
+            )
+        }
+
+        val parameterBar = @Composable { onParameterClick: (CameraParameter) -> Unit ->
+            CameraParameterBar(
+                state = state,
+                selectedParameter = selectedParameter,
+                onParameterClick = onParameterClick
+            )
         }
 
         val viewfinder = @Composable {
@@ -615,6 +706,7 @@ fun CameraScreen(
                         focusPoint = state.focusPoint,
                         isFocusing = state.isFocusing,
                         focusSuccess = state.focusSuccess,
+                        meteringMode = state.meteringMode,
                         onSurfaceTextureReady = { surfaceTexture ->
                             viewModel.openCamera(surfaceTexture)
                             cameraOpened = true
@@ -634,6 +726,7 @@ fun CameraScreen(
                         },
                         onHistogramUpdated = { viewModel.handleHistogramUpdate(it) },
                         onMeteringUpdated = { w, l -> viewModel.handleMeteringUpdate(w, l) },
+                        onHighlightPointUpdated = { hx, hy -> viewModel.handleHighlightPointUpdate(hx, hy) },
                         onDepthInputAvailable = { viewModel.handleDepthMapUpdate(it) },
                         onGLSurfaceViewReady = {
                             viewModel.glSurfaceView = it
@@ -643,6 +736,7 @@ fun CameraScreen(
                         videoLogProfile = state.videoConfig.logProfile,
                         isHlgInput = if (hlgHardwareCompatibilityEnabled) state.isHLG else false,
                         aperture = if (state.isVirtualApertureEnabled) state.virtualAperture else 0f,
+                        isAutoFocus = state.isAutoFocus,
                         modifier = Modifier.fillMaxSize()
                     )
 
@@ -776,66 +870,7 @@ fun CameraScreen(
                     )
                 }
                 if (state.captureMode == CaptureMode.PHOTO) {
-                    ParameterRuler(
-                        parameter = selectedParameter,
-                        currentValue = when (selectedParameter) {
-                            CameraParameter.EXPOSURE_COMPENSATION -> state.exposureCompensation * state.getExposureCompensationStep()
-                            CameraParameter.SHUTTER_SPEED -> state.shutterSpeed.toFloat()
-                            CameraParameter.ISO -> state.iso.toFloat()
-                            CameraParameter.APERTURE -> if (state.isVirtualApertureEnabled) state.virtualAperture else state.physicalAperture
-                            CameraParameter.WHITE_BALANCE -> state.awbTemperature.toFloat()
-                        },
-                        minValue = when (selectedParameter) {
-                            CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().lower * state.getExposureCompensationStep()
-                            CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().lower.toFloat()
-                            CameraParameter.ISO -> state.getIsoRange().lower.toFloat()
-                            CameraParameter.APERTURE -> 1f
-                            CameraParameter.WHITE_BALANCE -> 2000f
-                        },
-                        maxValue = when (selectedParameter) {
-                            CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().upper * state.getExposureCompensationStep()
-                            CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().upper.toFloat()
-                            CameraParameter.ISO -> state.getIsoRange().upper.toFloat()
-                            CameraParameter.APERTURE -> 16.0f
-                            CameraParameter.WHITE_BALANCE -> 10000f
-                        },
-                        isAdjustable = when (selectedParameter) {
-                            CameraParameter.EXPOSURE_COMPENSATION -> state.isAutoExposure
-                            CameraParameter.SHUTTER_SPEED -> !state.isShutterSpeedAuto
-                            CameraParameter.ISO -> !state.isIsoAuto
-                            CameraParameter.APERTURE -> state.isVirtualApertureEnabled
-                            CameraParameter.WHITE_BALANCE -> state.awbMode != android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
-                        },
-                        showAutoButton = when (selectedParameter) {
-                            CameraParameter.SHUTTER_SPEED, CameraParameter.ISO, CameraParameter.WHITE_BALANCE, CameraParameter.APERTURE -> true
-                            else -> false
-                        },
-                        onValueChange = { value ->
-                            when (selectedParameter) {
-                                CameraParameter.EXPOSURE_COMPENSATION -> viewModel.setExposureCompensation((value / state.getExposureCompensationStep()).roundToInt())
-                                CameraParameter.SHUTTER_SPEED -> viewModel.setShutterSpeed(value.toLong())
-                                CameraParameter.ISO -> viewModel.setIso(value.toInt())
-                                CameraParameter.APERTURE -> viewModel.setAperture(value)
-                                CameraParameter.WHITE_BALANCE -> viewModel.setAwbTemperature(value.toInt())
-                            }
-                        },
-                        onAutoModeToggle = {
-                            when (selectedParameter) {
-                                CameraParameter.SHUTTER_SPEED -> viewModel.setShutterSpeedAuto(!state.isShutterSpeedAuto)
-                                CameraParameter.ISO -> viewModel.setIsoAuto(!state.isIsoAuto)
-                                CameraParameter.WHITE_BALANCE -> {
-                                    if (state.awbMode == android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO) {
-                                        viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_OFF)
-                                    } else {
-                                        viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO)
-                                    }
-                                }
-
-                                CameraParameter.APERTURE -> viewModel.setVirtualApertureAuto(!state.isVirtualApertureEnabled)
-                                else -> {}
-                            }
-                        },
-                    )
+                    parameterRuler()
                 }
             }
 
@@ -937,6 +972,18 @@ fun CameraScreen(
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         zoomBar()
+                        AnimatedVisibility(visible = showVideoParameterRuler) {
+                            parameterRuler()
+                        }
+                        parameterBar { param ->
+                            val wasSelected = selectedParameter == param
+                            selectedParameter = param
+                            showVideoParameterRuler = if (wasSelected) {
+                                !showVideoParameterRuler
+                            } else {
+                                true
+                            }
+                        }
                         Spacer(modifier = Modifier.height(8.dp))
                         controls(Modifier
                             .fillMaxWidth()
@@ -974,13 +1021,9 @@ fun CameraScreen(
                     AnimatedVisibility(
                         visible = !isXpan && state.captureMode == CaptureMode.PHOTO,
                     ) {
-                        CameraParameterBar(
-                            state = state,
-                            selectedParameter = selectedParameter,
-                            onParameterClick = { param ->
-                                selectedParameter = param
-                            }
-                        )
+                        parameterBar { param ->
+                            selectedParameter = param
+                        }
                     }
 
                     Box(
@@ -1047,9 +1090,8 @@ fun CameraScreen(
             useRaw = useRaw && state.isRawSupported,
             onRawToggle = { viewModel.toggleRaw() },
             isRawSupported = state.isRawSupported,
-            nrLevel = state.nrLevel,
-            availableNrLevels = state.availableNrModes,
-            onNRLevelChange = { viewModel.setNRLevel(it) },
+            meteringMode = state.meteringMode,
+            onMeteringModeChange = { viewModel.setMeteringMode(it) },
             onFilterManageClick = {
                 activePanel = ActivePanel.NONE
                 onFilterManagementClick()
@@ -1104,13 +1146,7 @@ fun CameraScreen(
                     ),
                 contentAlignment = Alignment.BottomCenter
             ) {
-                LutControlPanel(
-                    availableLuts = viewModel.availableLutList,
-                    currentLutId = currentLutId,
-                    thumbnail = viewModel.previewThumbnail,
-                    onLutSelected = { viewModel.setLut(it) },
-                    onParamsPreviewChange = { previewRecipeParamsOverride = it },
-                    categoryOrder = categoryOrder,
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .then(
@@ -1121,10 +1157,76 @@ fun CameraScreen(
                             } else Modifier
                         )
                         .padding(horizontal = 8.dp)
-                )
+                        .padding(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    val currentLut = viewModel.availableLutList.find { it.id == currentLutId }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = currentLut?.getName() ?: "",
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f).basicMarquee()
+                        )
+
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(Color.White.copy(alpha = 0.15f))
+                                .clickable {
+                                    activePanel = ActivePanel.LUT_EDIT
+                                }
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Tune,
+                                contentDescription = stringResource(R.string.color_recipe),
+                                tint = Color(0xFFFFD700), // Gold color to match VIP/Premium feel
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = stringResource(R.string.color_recipe),
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+
+                    // LUT 选择器
+                    LutSelector(
+                        availableLuts = viewModel.availableLutList,
+                        currentLutId = currentLutId,
+                        thumbnail = viewModel.previewThumbnail,
+                        onLutSelected = { viewModel.setLut(it) },
+                        onEditClick = {
+                            activePanel = ActivePanel.LUT_EDIT
+                        },
+                        categoryOrder = categoryOrder
+                    )
+                }
             }
         }
 
+        if (activePanel == ActivePanel.LUT_EDIT) {
+            LutEditBottomSheet(
+                lutId = currentLutId,
+                onParamsPreviewChange = { previewRecipeParamsOverride = it },
+                onDismiss = {
+                    previewRecipeParamsOverride = null
+                    activePanel = ActivePanel.FILTERS
+                }
+            )
+        }
 
     }
 }

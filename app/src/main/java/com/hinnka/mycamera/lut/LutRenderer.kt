@@ -8,6 +8,7 @@ import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
+import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.video.VideoRecorder
@@ -265,6 +266,19 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var bokehFboHeight: Int = 0
     private var bokehRenderScale: Float = 0.5f // 降采样比例，0.5 代表 1/4 像素量
 
+    // Focus Peaking 实时预览资源
+    private var focusPeakingProgramId: Int = 0
+    private var uPeakInputTexLoc: Int = 0
+    private var uPeakTexelSizeLoc: Int = 0
+    private var uPeakThresholdLoc: Int = 0
+    private var uPeakColorLoc: Int = 0
+    private var aPeakPositionLoc: Int = 0
+    private var aPeakTexCoordLoc: Int = 0
+    private var focusPeakingFboId: Int = 0
+    private var focusPeakingTextureId: Int = 0
+    private var focusPeakingFboWidth: Int = 0
+    private var focusPeakingFboHeight: Int = 0
+
     // Attribute 位置
     private var aPositionLocation: Int = 0
     private var aTexCoordLocation: Int = 0
@@ -302,6 +316,9 @@ class LutRenderer : GLSurfaceView.Renderer {
     var lutEnabled: Boolean = false
 
     @Volatile
+    var isAutoFocus: Boolean = true
+
+    @Volatile
     var baselineLutEnabled: Boolean = false
 
     // 色彩配方参数
@@ -313,6 +330,9 @@ class LutRenderer : GLSurfaceView.Renderer {
 
     @Volatile
     var focusPoint: PointF? = null
+
+    @Volatile
+    var meteringMode: MeteringMode = MeteringMode.CENTER_WEIGHTED
 
     @Volatile
     var aperture: Float = 0f
@@ -410,6 +430,7 @@ class LutRenderer : GLSurfaceView.Renderer {
     var onPreviewFrameCaptured: ((Bitmap) -> Unit)? = null
     var onHistogramUpdated: ((IntArray) -> Unit)? = null
     var onMeteringUpdated: ((Double, Double) -> Unit)? = null
+    var onHighlightPointUpdated: ((Float, Float) -> Unit)? = null
 
     // Live Photo 录制器
     var livePhotoRecorder: LivePhotoRecorder? = null
@@ -488,7 +509,22 @@ class LutRenderer : GLSurfaceView.Renderer {
         // 通知调用者 SurfaceTexture 已准备好
         surfaceTexture?.let { onSurfaceTextureAvailable?.invoke(it) }
 
-        GlUtils.checkGlError("onSurfaceCreated")
+        // Focus Peaking Shader
+        val vs = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, Shaders.SIMPLE_VERTEX_SHADER)
+        val peakFrag = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.FRAGMENT_SHADER_FOCUS_PEAKING)
+        focusPeakingProgramId = GlUtils.linkProgram(vs, peakFrag)
+        GLES30.glDeleteShader(vs)
+        GLES30.glDeleteShader(peakFrag)
+        if (focusPeakingProgramId != 0) {
+            uPeakInputTexLoc = GLES30.glGetUniformLocation(focusPeakingProgramId, "uInputTexture")
+            uPeakTexelSizeLoc = GLES30.glGetUniformLocation(focusPeakingProgramId, "uTexelSize")
+            uPeakThresholdLoc = GLES30.glGetUniformLocation(focusPeakingProgramId, "uThreshold")
+            uPeakColorLoc = GLES30.glGetUniformLocation(focusPeakingProgramId, "uPeakColor")
+            aPeakPositionLoc = GLES30.glGetAttribLocation(focusPeakingProgramId, "aPosition")
+            aPeakTexCoordLoc = GLES30.glGetAttribLocation(focusPeakingProgramId, "aTexCoord")
+        }
+
+        GlUtils.checkGlError("initShaderProgram")
     }
 
     /**
@@ -540,6 +576,11 @@ class LutRenderer : GLSurfaceView.Renderer {
         bokehTextureId = 0
         bokehFboWidth = 0
         bokehFboHeight = 0
+        focusPeakingProgramId = 0
+        focusPeakingFboId = 0
+        focusPeakingTextureId = 0
+        focusPeakingFboWidth = 0
+        focusPeakingFboHeight = 0
         lastCaptureWidth = 0
         lastCaptureHeight = 0
         viewportWidth = 0
@@ -861,18 +902,7 @@ class LutRenderer : GLSurfaceView.Renderer {
 
         val liveRecorder = livePhotoRecorder
         val activeVideoRecorder = videoRecorder?.takeIf { it.isRecording() }
-        if (activeVideoRecorder != null) {
-            val nowMs = android.os.SystemClock.elapsedRealtime()
-            if (videoRenderStatsWindowStartMs == 0L) {
-                videoRenderStatsWindowStartMs = nowMs
-            }
-            videoRenderStatsFrames += 1
-            val elapsedMs = nowMs - videoRenderStatsWindowStartMs
-            if (elapsedMs >= 1000L) {
-                videoRenderStatsWindowStartMs = nowMs
-                videoRenderStatsFrames = 0
-            }
-        } else {
+        if (activeVideoRecorder == null) {
             videoRenderStatsWindowStartMs = 0L
             videoRenderStatsFrames = 0
         }
@@ -883,18 +913,21 @@ class LutRenderer : GLSurfaceView.Renderer {
         val hasCreativeLayer = hasCreativeLayer()
         val hasDualLayer = hasBaselineLayer && hasCreativeLayer
         uploadPendingCurveTextures()
-        val needsFbo = (liveRecorder != null || activeVideoRecorder != null || hdfEnabled || bokehNeeded || hasDualLayer) &&
+        val needsFbo = (liveRecorder != null || activeVideoRecorder != null || hdfEnabled || bokehNeeded || hasDualLayer || !isAutoFocus) &&
             fboId != 0 && fboTextureId != 0
 
         if (needsFbo) {
             val identityMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
             val fullCropRect = floatArrayOf(0f, 0f, 1f, 1f)
 
+            var currentWidth = viewportWidth
+            var currentHeight = viewportHeight
+
             // 1. 渲染色彩链路到 FBO
             drawInternal(
                 fboId = fboId,
-                width = viewportWidth,
-                height = viewportHeight,
+                width = currentWidth,
+                height = currentHeight,
                 preferBaselineLayer = hasDualLayer,
                 suppressBaselineLayer = suppressBaselineLayerForVideoLog
             )
@@ -924,6 +957,8 @@ class LutRenderer : GLSurfaceView.Renderer {
                     focusPointOverride = null
                 )
                 currentTexId = stackTextureId
+                currentWidth = viewportWidth
+                currentHeight = viewportHeight
             }
 
             // 深度采集（按需，从刚刚渲染好的 FBO 纹理读取）
@@ -934,13 +969,16 @@ class LutRenderer : GLSurfaceView.Renderer {
             // 2. Bokeh 处理
             if (bokehNeeded) {
                 currentTexId = renderBokehPreview(currentTexId, viewportWidth, viewportHeight)
+                currentWidth = viewportWidth
+                currentHeight = viewportHeight
             }
 
             // 3. HDF 多 Pass 处理
             var outputTexId = currentTexId
             if (hdfEnabled) {
-                renderHdfPreviewBlur(currentTexId, viewportWidth, viewportHeight)
+                renderHdfPreviewBlur(currentTexId, currentWidth, currentHeight)
             }
+
 
             // 确保 FBO 内容已刷入显存
             GLES30.glFlush()
@@ -971,37 +1009,30 @@ class LutRenderer : GLSurfaceView.Renderer {
                 )
             }
 
-            var sharedVideoTextureId = 0
-            var sharedVideoWidth = 0
-            var sharedVideoHeight = 0
-
             // 5. 视频录制输出
-            activeVideoRecorder?.targetSize?.let { targetSize ->
-                ensureRecordFbo(targetSize.width, targetSize.height)
-                if (recordFboId != 0 && recordTextureId != 0) {
-                    if (hdfEnabled) {
-                        drawHdfComposite(recordFboId, targetSize.width, targetSize.height, currentTexId)
-                    } else if (bokehNeeded) {
-                        drawFboToScreen(recordFboId, targetSize.width, targetSize.height, currentTexId)
-                    } else {
-                        drawFboToScreen(
-                            fboId = recordFboId,
-                            width = targetSize.width,
-                            height = targetSize.height,
-                            sourceTextureId = currentTexId,
-                            targetMvpMatrix = buildTextureMvpMatrix(
-                                sourceWidth = viewportWidth,
-                                sourceHeight = viewportHeight,
-                                targetWidth = targetSize.width,
-                                targetHeight = targetSize.height
+            if (hasFreshCameraFrame) {
+                activeVideoRecorder?.targetSize?.let { targetSize ->
+                    ensureRecordFbo(targetSize.width, targetSize.height)
+                    if (recordFboId != 0 && recordTextureId != 0) {
+                        if (hdfEnabled) {
+                            drawHdfComposite(recordFboId, targetSize.width, targetSize.height, currentTexId)
+                        } else if (bokehNeeded) {
+                            drawFboToScreen(recordFboId, targetSize.width, targetSize.height, currentTexId)
+                        } else {
+                            drawFboToScreen(
+                                fboId = recordFboId,
+                                width = targetSize.width,
+                                height = targetSize.height,
+                                sourceTextureId = currentTexId,
+                                targetMvpMatrix = buildTextureMvpMatrix(
+                                    sourceWidth = viewportWidth,
+                                    sourceHeight = viewportHeight,
+                                    targetWidth = targetSize.width,
+                                    targetHeight = targetSize.height
+                                )
                             )
-                        )
-                    }
-                    GLES30.glFlush()
-                    sharedVideoTextureId = recordTextureId
-                    sharedVideoWidth = targetSize.width
-                    sharedVideoHeight = targetSize.height
-                    if (hasFreshCameraFrame) {
+                        }
+                        GLES30.glFlush()
                         activeVideoRecorder.onPreviewFrame(
                             textureId = recordTextureId,
                             transformMatrix = identityMatrix,
@@ -1013,29 +1044,21 @@ class LutRenderer : GLSurfaceView.Renderer {
                 }
             }
 
+            // 3.5. Focus Peaking (Only for preview, not for recording)
+            if (!isAutoFocus) {
+                currentTexId = renderFocusPeaking(currentTexId, currentWidth, currentHeight)
+            }
+
             // 6. 显示到屏幕
-            if (sharedVideoTextureId != 0 && sharedVideoWidth > 0 && sharedVideoHeight > 0) {
-                drawFboToScreen(
-                    fboId = 0,
-                    width = viewportWidth,
-                    height = viewportHeight,
-                    sourceTextureId = sharedVideoTextureId,
-                    targetMvpMatrix = buildTextureMvpMatrix(
-                        sourceWidth = sharedVideoWidth,
-                        sourceHeight = sharedVideoHeight,
-                        targetWidth = viewportWidth,
-                        targetHeight = viewportHeight
-                    )
-                )
-            } else if (hdfEnabled) {
+            if (hdfEnabled) {
                 drawHdfComposite(0, viewportWidth, viewportHeight, currentTexId)
             } else {
                 drawFboToScreen(0, viewportWidth, viewportHeight, currentTexId)
             }
-            val finalDisplayTextureId = if (sharedVideoTextureId != 0) sharedVideoTextureId else currentTexId
-            val finalDisplayWidth = if (sharedVideoTextureId != 0) sharedVideoWidth else viewportWidth
-            val finalDisplayHeight = if (sharedVideoTextureId != 0) sharedVideoHeight else viewportHeight
-            val needsHdfCompositeForSampling = hdfEnabled && sharedVideoTextureId == 0
+            val finalDisplayTextureId = currentTexId
+            val finalDisplayWidth = viewportWidth
+            val finalDisplayHeight = viewportHeight
+            val needsHdfCompositeForSampling = hdfEnabled
             if (shouldCapturePreview) {
                 shouldCapturePreview = false
                 capturePreviewFrameInternal(
@@ -1045,7 +1068,7 @@ class LutRenderer : GLSurfaceView.Renderer {
                     compositeWithHdf = needsHdfCompositeForSampling
                 )
             }
-            if (meteringEnabled) {
+            if (meteringEnabled && activeVideoRecorder == null) {
                 runMeteringInternal(
                     sourceTextureId = finalDisplayTextureId,
                     sourceWidth = finalDisplayWidth,
@@ -1187,7 +1210,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         }
 
         // 测光和直方图（按需）
-        if (meteringEnabled) {
+        if (meteringEnabled && videoRecorder?.isRecording() != true) {
             runMeteringInternal()
         }
 
@@ -2265,8 +2288,15 @@ class LutRenderer : GLSurfaceView.Renderer {
         var totalWeight = 0.0
 
         val focus = focusPoint
-        val weightCenter = 4.0
-        val weightEdge = 1.0
+        val mode = meteringMode
+
+        // 根据测光模式设置权重参数
+        val (weightCenter, weightEdge, radiusSq) = when (mode) {
+            MeteringMode.SPOT -> Triple(8.0, 0.0, (METERING_SIZE * METERING_SIZE) / 64.0)   // 半径 METERING_SIZE/8
+            MeteringMode.CENTER_WEIGHTED -> Triple(4.0, 1.0, (METERING_SIZE * METERING_SIZE) / 16.0) // 半径 METERING_SIZE/4
+            MeteringMode.AVERAGE -> Triple(1.0, 1.0, 0.0)  // 所有像素等权
+            MeteringMode.HIGHLIGHT_PRIORITY -> Triple(2.0, 1.0, (METERING_SIZE * METERING_SIZE) / 8.0) // 大区域，亮部加权在下方处理
+        }
 
         for (y in 0 until METERING_SIZE) {
             for (x in 0 until METERING_SIZE) {
@@ -2280,16 +2310,28 @@ class LutRenderer : GLSurfaceView.Renderer {
                 histogram[luma]++
 
                 // 权重计算
-                var weight = weightEdge
-                if (focus != null) {
+                val spatialWeight = if (mode == MeteringMode.AVERAGE) {
+                    weightEdge
+                } else if (focus != null) {
                     val fx = focus.x * METERING_SIZE
                     val fy = (1.0f - focus.y) * METERING_SIZE
-
                     val dx = x.toDouble() - fx.toDouble()
                     val dy = y.toDouble() - fy.toDouble()
-                    if (dx * dx + dy * dy < (METERING_SIZE * METERING_SIZE) / 16.0) {
-                        weight = weightCenter
-                    }
+                    if (dx * dx + dy * dy < radiusSq) weightCenter else weightEdge
+                } else {
+                    // 无对焦点时，点测光回退到中心
+                    val cx = METERING_SIZE / 2.0
+                    val cy = METERING_SIZE / 2.0
+                    val dx = x.toDouble() - cx
+                    val dy = y.toDouble() - cy
+                    if (dx * dx + dy * dy < radiusSq) weightCenter else weightEdge
+                }
+                // 高光优先：用亮度^2 加权，亮部像素对测光影响更大
+                val weight = if (mode == MeteringMode.HIGHLIGHT_PRIORITY) {
+                    val lumaNorm = luma / 255.0
+                    spatialWeight * (0.1 + 0.9 * lumaNorm * lumaNorm)
+                } else {
+                    spatialWeight
                 }
 
                 weightedSumLuminance += luma * weight
@@ -2299,6 +2341,34 @@ class LutRenderer : GLSurfaceView.Renderer {
 
         onHistogramUpdated?.invoke(histogram)
         onMeteringUpdated?.invoke(totalWeight, weightedSumLuminance)
+
+        // 高光优先模式：找到最亮区域坐标，供 AE 区域定位使用
+        if (mode == MeteringMode.HIGHLIGHT_PRIORITY) {
+            val highlightThreshold = 200
+            var sumX = 0.0
+            var sumY = 0.0
+            var count = 0
+            for (y in 0 until METERING_SIZE) {
+                for (x in 0 until METERING_SIZE) {
+                    val idx = (y * METERING_SIZE + x) * 4
+                    val r = meteringBytes[idx].toInt() and 0xFF
+                    val g = meteringBytes[idx + 1].toInt() and 0xFF
+                    val b = meteringBytes[idx + 2].toInt() and 0xFF
+                    val luma = (0.2126 * r + 0.7152 * g + 0.0722 * b).toInt()
+                    if (luma >= highlightThreshold) {
+                        sumX += x
+                        sumY += y
+                        count++
+                    }
+                }
+            }
+            if (count >= 3) {
+                // 归一化到 0-1，注意 GL 坐标 Y 轴翻转
+                val hx = (sumX / count / METERING_SIZE).toFloat()
+                val hy = (1.0f - (sumY / count / METERING_SIZE).toFloat())
+                onHighlightPointUpdated?.invoke(hx, hy)
+            }
+        }
     }
 
     /**
@@ -2516,6 +2586,7 @@ class LutRenderer : GLSurfaceView.Renderer {
             ColorSpace.BT2020 -> 2
             ColorSpace.ARRI4 -> 3
             ColorSpace.AppleLog2 -> 4
+            ColorSpace.ProPhoto -> 0
             ColorSpace.S_GAMUT3_CINE -> 5
             ColorSpace.ACES_AP1 -> 6
             ColorSpace.VGamut -> 7
@@ -2792,5 +2863,82 @@ class LutRenderer : GLSurfaceView.Renderer {
 
         GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, indexBufferId)
         GLES30.glDrawElements(GLES30.GL_TRIANGLES, 6, GLES30.GL_UNSIGNED_SHORT, 0)
+    }
+
+    private fun renderFocusPeaking(inputTextureId: Int, width: Int, height: Int): Int {
+        if (focusPeakingProgramId == 0) return inputTextureId
+
+        ensureFocusPeakingFbo(width, height)
+        if (focusPeakingFboId == 0) return inputTextureId
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, focusPeakingFboId)
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+
+        GLES30.glUseProgram(focusPeakingProgramId)
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
+        GLES30.glUniform1i(uPeakInputTexLoc, 0)
+
+        GLES30.glUniform2f(uPeakTexelSizeLoc, 1.0f / width, 1.0f / height)
+        GLES30.glUniform1f(uPeakThresholdLoc, 0.8f)
+        GLES30.glUniform3f(uPeakColorLoc, 1.0f, 0.1f, 0.1f)
+
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)
+        GLES30.glEnableVertexAttribArray(aPeakPositionLoc)
+        GLES30.glVertexAttribPointer(aPeakPositionLoc, POSITION_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
+
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, texCoordBufferId)
+        GLES30.glEnableVertexAttribArray(aPeakTexCoordLoc)
+        GLES30.glVertexAttribPointer(aPeakTexCoordLoc, TEXTURE_COORD_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
+
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, indexBufferId)
+        GLES30.glDrawElements(GLES30.GL_TRIANGLES, 6, GLES30.GL_UNSIGNED_SHORT, 0)
+
+        GLES30.glDisableVertexAttribArray(aPeakPositionLoc)
+        GLES30.glDisableVertexAttribArray(aPeakTexCoordLoc)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+
+        return focusPeakingTextureId
+    }
+
+    private fun ensureFocusPeakingFbo(width: Int, height: Int) {
+        if (focusPeakingFboWidth == width && focusPeakingFboHeight == height && focusPeakingFboId != 0) return
+
+        if (focusPeakingFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(focusPeakingFboId), 0)
+        }
+        if (focusPeakingTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(focusPeakingTextureId), 0)
+        }
+
+        val ids = IntArray(1)
+        GLES30.glGenFramebuffers(1, ids, 0)
+        focusPeakingFboId = ids[0]
+
+        GLES30.glGenTextures(1, ids, 0)
+        focusPeakingTextureId = ids[0]
+
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, focusPeakingTextureId)
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA, width, height,
+            0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null
+        )
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, focusPeakingFboId)
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D, focusPeakingTextureId, 0
+        )
+
+        focusPeakingFboWidth = width
+        focusPeakingFboHeight = height
     }
 }

@@ -2,9 +2,9 @@ package com.hinnka.mycamera.ui.gallery
 
 import android.app.Activity
 import android.graphics.Bitmap
+import android.text.format.DateUtils
 import android.widget.Toast
 import android.os.Build
-import android.util.Size
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -16,14 +16,19 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
 import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoFixHigh
@@ -47,17 +52,19 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.gallery.MediaData
 import com.hinnka.mycamera.ui.camera.autoRotate
@@ -65,8 +72,12 @@ import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.GalleryTab
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.time.LocalDate
+import java.time.ZoneId
+import kotlin.math.roundToInt
 
 /**
  * 相册浏览界面
@@ -90,6 +101,7 @@ fun GalleryScreen(
     val selectedTab = viewModel.selectedTab
     val hasPermission = viewModel.hasGalleryPermission
     val scope = rememberCoroutineScope()
+    val isFastScrolling = remember { mutableStateOf(false) }
     val photonGridState = rememberLazyStaggeredGridState()
     val systemGridState = rememberLazyStaggeredGridState()
     val currentGridState = when (selectedTab) {
@@ -452,93 +464,108 @@ fun GalleryScreen(
                         photos = currentPhotos
                     )
                 }
-                // 照片网格
-                LazyVerticalStaggeredGrid(
-                    columns = StaggeredGridCells.Fixed(3),
-                    state = currentGridState,
-                    contentPadding = PaddingValues(4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalItemSpacing = 4.dp,
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    items(
-                        items = gridEntries,
-                        key = { entry ->
-                            when (entry) {
-                                is GalleryGridEntry.Header -> "${selectedTab.name}_${entry.key}"
-                                is GalleryGridEntry.Photo -> "${selectedTab.name}_${entry.photo.id}"
+                Box(modifier = Modifier.fillMaxSize()) {
+                    // 照片网格
+                    LazyVerticalStaggeredGrid(
+                        columns = StaggeredGridCells.Fixed(3),
+                        state = currentGridState,
+                        contentPadding = PaddingValues(4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalItemSpacing = 4.dp,
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        items(
+                            items = gridEntries,
+                            key = { entry ->
+                                when (entry) {
+                                    is GalleryGridEntry.Header -> "${selectedTab.name}_${entry.key}"
+                                    is GalleryGridEntry.Photo -> "${selectedTab.name}_${entry.photo.id}"
+                                }
+                            },
+                            contentType = { entry ->
+                                when (entry) {
+                                    is GalleryGridEntry.Header -> "header"
+                                    is GalleryGridEntry.Photo -> "photo"
+                                }
+                            },
+                            span = { entry ->
+                                if (
+                                    entry is GalleryGridEntry.Header ||
+                                    (entry is GalleryGridEntry.Photo && entry.photo.shouldUseFullLineSpan())
+                                ) {
+                                    StaggeredGridItemSpan.FullLine
+                                } else {
+                                    StaggeredGridItemSpan.SingleLane
+                                }
                             }
-                        },
-                        contentType = { entry ->
+                        ) { entry ->
                             when (entry) {
-                                is GalleryGridEntry.Header -> "header"
-                                is GalleryGridEntry.Photo -> "photo"
-                            }
-                        },
-                        span = { entry ->
-                            if (entry is GalleryGridEntry.Header) {
-                                StaggeredGridItemSpan.FullLine
-                            } else {
-                                StaggeredGridItemSpan.SingleLane
+                                is GalleryGridEntry.Header -> {
+                                    GalleryDateHeader(title = entry.title)
+                                }
+
+                                is GalleryGridEntry.Photo -> {
+                                    val photo = entry.photo
+                                    PhotoGridItem(
+                                        photo = photo,
+                                        viewModel = viewModel,
+                                        isSelected = selectedPhotos.contains(photo),
+                                        isSelectionMode = isSelectionMode,
+                                        onClick = {
+                                            if (isSelectionMode) {
+                                                viewModel.togglePhotoSelection(photo)
+                                            } else {
+                                                viewModel.setCurrentPhoto(entry.index)
+                                                onPhotoClick(selectedTab, entry.index)
+                                            }
+                                        },
+                                        onLongClick = {
+                                            if (!isSelectionMode) {
+                                                viewModel.enterSelectionMode()
+                                            }
+                                            viewModel.togglePhotoSelection(photo)
+                                        }
+                                    )
+
+                                    // 触底加载更多 (仅限系统相册)
+                                    if (photo == currentPhotos.lastOrNull()) {
+                                        LaunchedEffect(photo.id) {
+                                            viewModel.loadCurrentTabMore()
+                                        }
+                                    }
+                                }
                             }
                         }
-                    ) { entry ->
-                        when (entry) {
-                            is GalleryGridEntry.Header -> {
-                                GalleryDateHeader(title = entry.title)
-                            }
 
-                            is GalleryGridEntry.Photo -> {
-                                val photo = entry.photo
-                                PhotoGridItem(
-                                    photo = photo,
-                                    viewModel = viewModel,
-                                    isSelected = selectedPhotos.contains(photo),
-                                    isSelectionMode = isSelectionMode,
-                                    onClick = {
-                                        if (isSelectionMode) {
-                                            viewModel.togglePhotoSelection(photo)
-                                        } else {
-                                            viewModel.setCurrentPhoto(entry.index)
-                                            onPhotoClick(selectedTab, entry.index)
-                                        }
-                                    },
-                                    onLongClick = {
-                                        if (!isSelectionMode) {
-                                            viewModel.enterSelectionMode()
-                                        }
-                                        viewModel.togglePhotoSelection(photo)
-                                    }
-                                )
-
-                                // 触底加载更多 (仅限系统相册)
-                                if (photo == currentPhotos.lastOrNull()) {
-                                    LaunchedEffect(photo.id) {
-                                        viewModel.loadCurrentTabMore()
-                                    }
+                        if ((selectedTab == GalleryTab.SYSTEM && isSystemLoadingMore) ||
+                            (selectedTab == GalleryTab.PHOTON && isPhotonLoadingMore)
+                        ) {
+                            item(span = StaggeredGridItemSpan.FullLine) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator(
+                                        color = AccentOrange,
+                                        modifier = Modifier.size(24.dp),
+                                        strokeWidth = 2.dp
+                                    )
                                 }
                             }
                         }
                     }
 
-                    if ((selectedTab == GalleryTab.SYSTEM && isSystemLoadingMore) ||
-                        (selectedTab == GalleryTab.PHOTON && isPhotonLoadingMore)
-                    ) {
-                        item(span = StaggeredGridItemSpan.FullLine) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                CircularProgressIndicator(
-                                    color = AccentOrange,
-                                    modifier = Modifier.size(24.dp),
-                                    strokeWidth = 2.dp
-                                )
-                            }
-                        }
-                    }
+                    GalleryFastScrollbar(
+                        gridState = currentGridState,
+                        entries = gridEntries,
+                        isDragging = isFastScrolling.value,
+                        onDragStateChange = { isFastScrolling.value = it },
+                        modifier = Modifier
+                            .matchParentSize()
+                            .padding(vertical = 8.dp)
+                    )
                 }
             }
         }
@@ -546,7 +573,7 @@ fun GalleryScreen(
 
     // 删除确认对话框
     if (showDeleteDialog) {
-        var deleteExported by remember { mutableStateOf(false) }
+        var deleteExported by remember { mutableStateOf(true) }
 
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
@@ -602,6 +629,201 @@ fun GalleryScreen(
     }
 }
 
+@Composable
+private fun GalleryFastScrollbar(
+    gridState: LazyStaggeredGridState,
+    entries: List<GalleryGridEntry>,
+    isDragging: Boolean,
+    onDragStateChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val layoutInfo = gridState.layoutInfo
+    val totalItems = layoutInfo.totalItemsCount
+    val visibleItems = layoutInfo.visibleItemsInfo
+    val scrollIndicatorState = gridState.scrollIndicatorState
+    var scrollJob by remember { mutableStateOf<Job?>(null) }
+    var dragLabel by remember { mutableStateOf<String?>(null) }
+
+    if (
+        totalItems <= 0 ||
+        visibleItems.isEmpty() ||
+        scrollIndicatorState == null ||
+        totalItems <= visibleItems.size
+    ) {
+        return
+    }
+
+    val currentScrollPx = scrollIndicatorState.scrollOffset
+        .takeIfKnown()
+        ?.toFloat()
+        ?: return
+    val contentSizePx = scrollIndicatorState.contentSize
+        .takeIfKnown()
+        ?.toFloat()
+        ?: return
+    val viewportSizePx = scrollIndicatorState.viewportSize
+        .takeIfKnown()
+        ?.toFloat()
+        ?: return
+    val maxScrollPx = (contentSizePx - viewportSizePx).coerceAtLeast(1f)
+
+    var isVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(gridState.isScrollInProgress, isDragging, currentScrollPx) {
+        if (gridState.isScrollInProgress || isDragging) {
+            isVisible = true
+        } else {
+            delay(900L)
+            isVisible = false
+        }
+    }
+    val alpha by animateFloatAsState(
+        targetValue = if (isVisible || isDragging) 1f else 0f,
+        animationSpec = tween(durationMillis = 180),
+        label = "galleryFastScrollbarAlpha"
+    )
+
+    BoxWithConstraints(
+        modifier = modifier
+            .graphicsLayer { this.alpha = alpha },
+        contentAlignment = Alignment.TopEnd
+    ) {
+        val trackHeightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
+        val thumbHeightPx = with(density) { 56.dp.toPx() }.coerceAtMost(trackHeightPx)
+        val availableTravelPx = (trackHeightPx - thumbHeightPx).coerceAtLeast(1f)
+        val progress = currentScrollPx / maxScrollPx
+        val thumbOffsetPx = (availableTravelPx * progress).coerceIn(0f, availableTravelPx)
+        val animatedThumbOffsetPx by animateFloatAsState(
+            targetValue = thumbOffsetPx,
+            animationSpec = tween(durationMillis = 90),
+            label = "galleryFastScrollbarOffset"
+        )
+        val displayedThumbOffsetPx = if (isDragging) thumbOffsetPx else animatedThumbOffsetPx
+
+        fun scrollToTrackPosition(yPx: Float) {
+            val targetProgress = ((yPx - thumbHeightPx / 2f) / availableTravelPx).coerceIn(0f, 1f)
+            val targetIndex = (targetProgress * (totalItems - visibleItems.size))
+                .roundToInt()
+                .coerceIn(0, totalItems - 1)
+            dragLabel = entries.getOrNull(targetIndex)?.toFastScrollDateLabel(context)
+            scrollJob?.cancel()
+            scrollJob = scope.launch {
+                gridState.scrollToItem(targetIndex)
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .width(40.dp)
+                .pointerInput(totalItems) {
+                    detectDragGestures(
+                        onDragStart = { offset ->
+                            onDragStateChange(true)
+                            scrollToTrackPosition(offset.y)
+                        },
+                        onDragEnd = {
+                            onDragStateChange(false)
+                            dragLabel = null
+                            scrollJob = null
+                        },
+                        onDragCancel = {
+                            onDragStateChange(false)
+                            dragLabel = null
+                            scrollJob?.cancel()
+                            scrollJob = null
+                        },
+                        onDrag = { change, _ ->
+                            change.consume()
+                            scrollToTrackPosition(change.position.y)
+                        }
+                    )
+                }
+        ) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .fillMaxHeight()
+                    .width(6.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(Color.White.copy(alpha = 0.16f))
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(end = 1.dp)
+                    .offset(y = with(density) { displayedThumbOffsetPx.toDp() })
+                    .width(4.dp)
+                    .height(with(density) { thumbHeightPx.toDp() })
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(AccentOrange.copy(alpha = 0.9f))
+            )
+        }
+
+        if (isDragging && dragLabel != null) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(
+                        x = (-48).dp,
+                        y = with(density) {
+                            val labelHeightPx = 48.dp.toPx()
+                            (displayedThumbOffsetPx + thumbHeightPx / 2f - labelHeightPx / 2f)
+                                .coerceIn(0f, trackHeightPx - labelHeightPx)
+                                .toDp()
+                        }
+                    ),
+                color = Color.White,
+                contentColor = Color.Black,
+                shape = RoundedCornerShape(999.dp),
+                shadowElevation = 8.dp
+            ) {
+                Text(
+                    text = dragLabel.orEmpty(),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+private fun Int.takeIfKnown(): Int? =
+    takeIf { it != Int.MAX_VALUE && it >= 0 }
+
+private fun GalleryGridEntry.toFastScrollDateLabel(context: android.content.Context): String {
+    val timestamp = when (this) {
+        is GalleryGridEntry.Header -> key.removePrefix("header_")
+            .let { runCatching { LocalDate.parse(it) }.getOrNull() }
+            ?.atStartOfDay(ZoneId.systemDefault())
+            ?.toInstant()
+            ?.toEpochMilli()
+        is GalleryGridEntry.Photo -> photo.dateAdded
+    } ?: return when (this) {
+        is GalleryGridEntry.Header -> title
+        is GalleryGridEntry.Photo -> photo.getFormattedDate()
+    }
+
+    return DateUtils.formatDateTime(
+        context,
+        timestamp,
+        DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_YEAR
+    )
+}
+
+private fun MediaData.shouldUseFullLineSpan(): Boolean {
+    if (!isImage) return false
+    val width = (metadata?.width ?: width).takeIf { it > 0 } ?: return false
+    val height = (metadata?.height ?: height).takeIf { it > 0 } ?: return false
+    return width.toFloat() / height.toFloat() >= 2.2f
+}
+
 /**
  * 日期分组标题
  */
@@ -633,15 +855,14 @@ private fun PhotoGridItem(
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
-    val context = LocalContext.current
-    val videoThumbnail by produceState<Bitmap?>(initialValue = null, key1 = photo.id, key2 = photo.thumbnailUri) {
-        value = if (photo.isVideo && photo.thumbnailUri.scheme == "content") {
-            runCatching {
-                context.contentResolver.loadThumbnail(photo.thumbnailUri, Size(512, 512), null)
-            }.getOrNull()
-        } else {
-            null
-        }
+    val refreshKey = viewModel.photoRefreshKeys[photo.id] ?: 0L
+    val thumbnail by produceState<Bitmap?>(
+        initialValue = null,
+        key1 = photo.id,
+        key2 = photo.thumbnailUri,
+        key3 = refreshKey
+    ) {
+        value = viewModel.getGridThumbnailBitmap(photo)
     }
 
     val aspectRatio = remember(photo.width, photo.height, photo.metadata, OrientationObserver.isLandscape) {
@@ -683,27 +904,14 @@ private fun PhotoGridItem(
             .autoRotate(matchParentSize = true)
     ) {
         // 照片缩略图
-        val transformation = remember(photo, viewModel.selectedTab) {
-            viewModel.getPhotoTransformation(photo)
+        thumbnail?.takeIf { !it.isRecycled }?.let { bitmap ->
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = photo.displayName,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
         }
-        val imageRequest = remember(photo.thumbnailUri, transformation) {
-            ImageRequest.Builder(context)
-                .data(photo.thumbnailUri)
-                .crossfade(true)
-                .apply {
-                    if (transformation != null) {
-                        transformations(transformation)
-                    }
-                }
-                .build()
-        }
-
-        AsyncImage(
-            model = videoThumbnail ?: imageRequest,
-            contentDescription = photo.displayName,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize()
-        )
 
         // 选择指示器
         if (isSelectionMode) {
@@ -791,7 +999,7 @@ private fun PhotoGridItem(
                 .align(Alignment.BottomStart)
         ) {
             // RAW 标记
-            val isRaw = remember(photo.id) { photo.isImage && viewModel.isRaw(photo.id) }
+            val isRaw = photo.isImage && viewModel.isRawInGallery(photo.id)
             if (isRaw) {
                 Box(
                     modifier = Modifier

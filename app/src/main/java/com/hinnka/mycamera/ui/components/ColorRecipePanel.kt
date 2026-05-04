@@ -5,6 +5,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -16,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -30,7 +32,6 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.model.ColorPaletteState
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.RecipeParam
-import com.hinnka.mycamera.ui.camera.LutIntensitySlider
 
 /**
  * 色彩配方控制面板
@@ -43,6 +44,7 @@ fun ColorRecipePanel(
     paletteState: ColorPaletteState,
     onPaletteStateChange: (ColorPaletteState) -> Unit,
     onParamChange: (RecipeParam, Float) -> Unit,
+    onParamsChange: (ColorRecipeParams) -> Unit,
     onRemarksChange: (String) -> Unit,
     onCurveChange: (CurveChannel, FloatArray?) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
@@ -158,6 +160,38 @@ fun ColorRecipePanel(
         ),
     )
 
+    fun resetTab(tabIndex: Int) {
+        when (tabIndex) {
+            0 -> {
+                val defaultPaletteState = ColorPaletteState.DEFAULT
+                onParamsChange(
+                    currentParams.copy(
+                        paletteX = defaultPaletteState.x,
+                        paletteY = defaultPaletteState.y,
+                        paletteDensity = defaultPaletteState.density
+                    )
+                )
+            }
+            2 -> onParamsChange(
+                currentParams.copy(
+                    masterCurvePoints = null,
+                    redCurvePoints = null,
+                    greenCurvePoints = null,
+                    blueCurvePoints = null
+                )
+            )
+            4 -> onParamsChange(resetParams(currentParams, calibrationGroups.flatMap { it.second }))
+            5 -> onParamsChange(resetParams(currentParams, lchGroups.flatMap { it.second }))
+            8 -> Unit
+            else -> {
+                val params = parameterGroups.getOrNull(tabIndex).orEmpty()
+                if (params.isNotEmpty()) {
+                    onParamsChange(resetParams(currentParams, params))
+                }
+            }
+        }
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -168,10 +202,6 @@ fun ColorRecipePanel(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(
-                        Color.Black.copy(alpha = 0.3f),
-                        RoundedCornerShape(8.dp)
-                    )
                     .padding(8.dp),
                 contentAlignment = Alignment.TopCenter
             ) {
@@ -309,13 +339,18 @@ fun ColorRecipePanel(
                             .fillMaxHeight()
                             .clip(RoundedCornerShape(4.dp))
                             .background(backgroundColor)
-                            .clickable {
-                                if (selectedTabIndex == index) {
-                                    isExpanded = !isExpanded
-                                } else {
-                                    selectedTabIndex = index
-                                    isExpanded = true
-                                }
+                            .pointerInput(index, currentParams) {
+                                detectTapGestures(
+                                    onTap = {
+                                        selectedTabIndex = index
+                                        isExpanded = true
+                                    },
+                                    onDoubleTap = {
+                                        selectedTabIndex = index
+                                        isExpanded = true
+                                        resetTab(index)
+                                    }
+                                )
                             },
                         contentAlignment = Alignment.Center
                     ) {
@@ -332,6 +367,15 @@ fun ColorRecipePanel(
         }
 
         Spacer(modifier = Modifier.height(8.dp).background(Color.Black))
+    }
+}
+
+private fun resetParams(
+    currentParams: ColorRecipeParams,
+    params: List<RecipeParam>
+): ColorRecipeParams {
+    return params.fold(currentParams) { updatedParams, param ->
+        param.setValue(updatedParams, param.defaultValue)
     }
 }
 

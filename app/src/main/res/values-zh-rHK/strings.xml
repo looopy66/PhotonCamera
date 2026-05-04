@@ -315,9 +315,9 @@
     <string name="settings_filter_management_description">管理濾鏡、設定預設、排序</string>
     <string name="settings_frame_management">邊框管理</string>
     <string name="settings_frame_management_description">管理邊框、設定預設、排序</string>
-    <string name="settings_openai_api_key">Gemini API Key</string>
-    <string name="settings_openai_api_key_desc">用於 AI 分析提取 LUT 配方的 API 金鑰</string>
-    <string name="settings_openai_base_url">Gemini API 網域</string>
+    <string name="settings_openai_api_key">OpenAI API Key</string>
+    <string name="settings_openai_api_key_desc">用於 AI 分析的 API 金鑰</string>
+    <string name="settings_openai_base_url">OpenAI API 網域</string>
     <string name="settings_openai_base_url_desc">允許設定相容大語言模型的自訂介面位址</string>
     <string name="settings_use_built_in_ai">使用內建體驗服務</string>
     <string name="settings_use_built_in_ai_desc">開啟後使用內建 AI 提取服務，無需設定 API Key。</string>
@@ -341,6 +341,7 @@
     <string name="import_frame_image">匯入圖片邊框</string>
     <string name="delete_filter_confirm_message">要刪除濾鏡 "%s"？</string>
     <string name="delete_frame_confirm_message">要刪除邊框 "%s"？</string>
+    <string name="delete_dcp_confirm_message">要刪除 DCP "%s"？</string>
     <string name="rename_dialog_title">重新命名</string>
     <string name="export_lut_cube">匯出LUT</string>
     <string name="copy">複製</string>
@@ -384,8 +385,22 @@
 
     <!-- 关于与捐赠 -->
     <string name="settings_section_about">關於</string>
+    <string name="settings_community_group">交流群組</string>
+    <string name="settings_community_group_telegram_description">Telegram 群組：https://t.me/photoncameraapp</string>
+    <string name="settings_community_group_qq_description">QQ 群：569605452</string>
     <string name="settings_donation">捐贈</string>
     <string name="settings_donation_description">支持 Photon Camera 的持續開發</string>
+    <string name="settings_check_update">檢查更新</string>
+    <string name="settings_check_update_description">目前版本：%1$s</string>
+    <string name="settings_check_update_running">正在檢查並下載更新...</string>
+    <string name="update_checking">正在檢查更新...</string>
+    <string name="update_no_update">已是最新版本</string>
+    <string name="update_downloading">發現新版本，正在下載 APK...</string>
+    <string name="update_failed">更新失敗，請稍後再試</string>
+    <string name="update_ready_title">更新已就緒</string>
+    <string name="update_ready_message">更新 APK 已下載完成，現在安裝嗎？</string>
+    <string name="update_install_now">安裝</string>
+    <string name="update_install_permission_hint">請允許本應用安裝未知應用，然後再次點擊安裝。</string>
     <string name="settings_background_description">更改應用背景圖</string>
     <string name="settings_custom_background">自訂...</string>
     <string name="settings_default_focal_length_description">設定啟動 App 時自動切換到的焦段</string>
@@ -398,6 +413,10 @@
     <string name="settings_raw_restore_lut_description">選擇用於 RAW 色彩還原的 LUT。選擇「無」以獲得 Log 風格輸出。</string>
     <string name="settings_raw_profile">RAW 風格方案</string>
     <string name="settings_raw_profile_description">統一設定 RAW 的色彩空間、Log 曲線與還原 LUT。</string>
+    <string name="raw_dcp_import_success_count">已匯入 %1$d 個 DCP 設定檔</string>
+    <string name="raw_dcp_import_partial">已匯入 %1$d 個 DCP 設定檔，%2$d 個失敗</string>
+    <string name="raw_dcp_delete_success">已刪除 DCP</string>
+    <string name="raw_dcp_delete_failed">刪除 DCP 失敗</string>
     <string name="settings_dro_mode">RAW 動態範圍最佳化 (DRO)</string>
     <string name="settings_dro_mode_description">透過利用 Log 曲線高光冗餘，在不犧牲高光的前提下提升陰影細節。</string>
     <string name="settings_dro_off">關閉</string>
@@ -478,6 +497,8 @@
     <!-- LUT Creator & UI -->
     <string name="lut_creator_title">AI 仿色</string>
     <string name="lut_creator_desc">選擇圖片分析色彩風格，並生成專屬 LUT。</string>
+    <string name="lut_creator_premium_required_title">需要會員</string>
+    <string name="lut_creator_premium_required_desc">未在設定中配置自己的 OpenAI API Key 時，LUT 建立功能需要購買會員後才能使用。</string>
     <string name="lut_creator_tab_ai">AI 分析</string>
     <string name="lut_creator_tab_local">本地分析</string>
     <string name="lut_creator_use_ai">使用 AI 提取風格（需要在設定中配置 Key）</string>
@@ -511,9 +532,31 @@
     <string name="lut_creator_finish">完成</string>
     <string name="lut_creator_error">錯誤：%s</string>
     <string name="lut_creator_try_again">再試一次</string>
+    <string name="gallery_ai_analysis">AI 分析</string>
+    <string name="gallery_ai_quality_title">AI 攝影分析</string>
+    <string name="gallery_ai_premium_required">AI 相片分析是 Pro 功能，升級後可解鎖 AI 評分與點評。</string>
+    <string name="gallery_ai_analyzing">正在分析相片…</string>
+    <string name="gallery_ai_analysis_failed">分析失敗，請檢查 AI 設定後重試。</string>
+    <string name="gallery_ai_rank_excellent_plus">非常優秀</string>
+    <string name="gallery_ai_rank_excellent">優秀</string>
+    <string name="gallery_ai_rank_good">良好</string>
+    <string name="gallery_ai_rank_pass">及格</string>
+    <string name="gallery_ai_rank_needs_work">待改進</string>
+    <string name="gallery_ai_element_impact">視覺衝擊力</string>
+    <string name="gallery_ai_element_technical_excellence">技術卓越性</string>
+    <string name="gallery_ai_element_creativity">創造力</string>
+    <string name="gallery_ai_element_style">風格</string>
+    <string name="gallery_ai_element_composition">構圖</string>
+    <string name="gallery_ai_element_presentation">呈現方式</string>
+    <string name="gallery_ai_element_color_balance">色彩平衡</string>
+    <string name="gallery_ai_element_center_of_interest">視覺中心</string>
+    <string name="gallery_ai_element_lighting">光影</string>
+    <string name="gallery_ai_element_subject_matter">主題</string>
+    <string name="gallery_ai_element_technique">技法</string>
+    <string name="gallery_ai_element_storytelling">故事性</string>
 
     <string name="settings_ai_model">AI 提取模型</string>
-    <string name="settings_ai_model_desc">選擇用於抽取色彩風格的 AI 模型。</string>
+    <string name="settings_ai_model_desc">選擇 AI 模型</string>
     <string name="settings_ai_model_loading">載入模型中…</string>
     <string name="settings_ai_model_select">點此選擇模型…</string>
     <string name="settings_ai_model_fetching">正在請求列表…</string>
@@ -542,6 +585,16 @@
         效果。
     </string>
     <string name="hdr_label">HDR</string>
+    <string name="hdr_strength_label">HDR 強度</string>
+    <string name="hdr_strength_update_failed">HDR 強度更新失敗</string>
     <string name="settings_raw_nlm_base_h">RAW NLM 基础强度</string>
     <string name="settings_raw_nlm_gain_factor">RAW NLM 增益响应</string>
+    <string name="ai_service">AI服务</string>
+
+    <!-- 測光模式 -->
+    <string name="metering_mode">測光</string>
+    <string name="metering_spot">點測光</string>
+    <string name="metering_center_weighted">中央重點</string>
+    <string name="metering_average">平均測光</string>
+    <string name="metering_highlight_priority">高光優先</string>
 </resources>

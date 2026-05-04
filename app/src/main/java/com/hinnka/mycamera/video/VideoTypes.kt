@@ -8,6 +8,12 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
+enum class VideoStabilizationMode(val displayName: String) {
+    OIS("OIS"),
+    EIS("EIS"),
+    OFF("OFF")
+}
+
 enum class CaptureMode {
     PHOTO,
     VIDEO
@@ -99,7 +105,7 @@ data class VideoConfig(
     val bitrate: VideoBitratePreset = VideoBitratePreset.P1,
     val codec: VideoCodec = VideoCodec.H264,
     val audioInputId: String = VIDEO_AUDIO_INPUT_AUTO,
-    val stabilizationEnabled: Boolean = true,
+    val stabilizationMode: VideoStabilizationMode = VideoStabilizationMode.OIS,
     val torchEnabled: Boolean = false
 ) {
     fun resolveOutputSize(openGatePortraitAspectRatio: Float): Size {
@@ -118,7 +124,7 @@ data class VideoCapabilities(
     val availableCodecs: List<VideoCodec> = VideoCodec.entries.toList(),
     val previewSizesByResolution: Map<VideoResolutionPreset, Size> = emptyMap(),
     val openGatePortraitAspectRatio: Float = 3f / 4f,
-    val supportsStabilization: Boolean = false,
+    val availableStabilizationModes: List<VideoStabilizationMode> = emptyList(),
     val supportsTorch: Boolean = false,
     val linearTonemapSupported: Boolean = false
 )

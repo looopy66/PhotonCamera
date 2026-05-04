@@ -12,7 +12,7 @@ import com.hinnka.mycamera.video.VideoRecordingState
  * 画面比例枚举
  */
 enum class AspectRatio(val widthRatio: Int, val heightRatio: Int) {
-    //    RATIO_3_2(3, 2),
+        RATIO_3_2(3, 2),
     RATIO_4_3(4, 3),
     RATIO_16_9(16, 9),
     RATIO_1_1(1, 1),
@@ -52,6 +52,16 @@ enum class LensType {
 }
 
 /**
+ * 测光模式
+ */
+enum class MeteringMode {
+    SPOT,              // 点测光 - 对焦点附近小区域
+    CENTER_WEIGHTED,   // 中央重点 - 中等区域，中心加权
+    AVERAGE,           // 平均测光 - 全画面均匀
+    HIGHLIGHT_PRIORITY // 高光优先 - 亮部加权，防止过曝
+}
+
+/**
  * 相机信息数据类
  */
 data class CameraInfo(
@@ -74,7 +84,8 @@ data class CameraInfo(
     val hardwareLevel: Int = -1,  // 硬件支持级别
     val supportsManualProcessing: Boolean = false, // 是否支持手动处理（关闭系统锐化/降噪）
     val supportsRaw: Boolean = false, // 是否支持 RAW 格式
-    val isCustomLensId: Boolean = false // 是否来自用户手动添加的镜头 ID
+    val isCustomLensId: Boolean = false, // 是否来自用户手动添加的镜头 ID
+    val minimumFocusDistance: Float = 0f // 最小对焦距离 (diopters, 0 = infinity only)
 ) {
     /**
      * 获取镜头类型显示名称
@@ -136,11 +147,16 @@ data class CameraState(
     val awbMode: Int = 1, // 自动白平衡模式
     val awbTemperature: Int = 5000, // 色温 (K)
 
+    // 测光模式
+    val meteringMode: MeteringMode = MeteringMode.CENTER_WEIGHTED,
+
     val isVirtualApertureEnabled: Boolean = false,
     val physicalAperture: Float = 2.0f, // 物理光圈值
     val virtualAperture: Float = 2.0f,  // 虚拟光圈值 (f-number)
     // 对焦
     val isAutoFocus: Boolean = true,
+    val focusDistance: Float = 0f, // 当前对焦距离 (0.0 - minimumFocusDistance)
+    val minimumFocusDistance: Float = 0f, // 最小对焦距离
     val focusPoint: Pair<Float, Float>? = null, // normalized coordinates (0-1)
     val isFocusing: Boolean = false,
     val focusSuccess: Boolean? = null,

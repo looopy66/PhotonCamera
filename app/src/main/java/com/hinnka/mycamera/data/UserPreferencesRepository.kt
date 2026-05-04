@@ -55,6 +55,17 @@ data class UserPreferences(
     val jpgBaselineLutId: String? = null,
     val rawBaselineLutId: String? = null,
     val phantomBaselineLutId: String? = null,
+    val rawDcpId: String? = null,
+    val rawNlmNoiseFactor: Float = 0f,
+    val rawExposureCompensation: Float = 0f,
+    val rawAutoExposure: Boolean = true,
+    val rawMeteringCenterWeight: Float = 0f,
+    val rawBlackPointCorrection: Float = 0f,
+    val rawWhitePointCorrection: Float = 0f,
+    val rawAutoWhiteBalanceEstimate: Boolean = false,
+    val rawBlackLevelModes: Map<String, String> = emptyMap(),
+    val rawCustomBlackLevels: Map<String, Float> = emptyMap(),
+    val exportDngWithRawExport: Boolean = false,
     val frameId: String? = null,
     val showHistogram: Boolean = true,
     val showGrid: Boolean = false,  // 网格线显示
@@ -102,7 +113,7 @@ data class UserPreferences(
     val videoLogProfile: VideoLogProfile = VideoLogProfile.OFF,
     val videoBitrate: VideoBitratePreset = VideoBitratePreset.P1,
     val videoAudioInputId: String = VIDEO_AUDIO_INPUT_AUTO,
-    val videoStabilizationEnabled: Boolean = true,
+    val videoStabilizationMode: com.hinnka.mycamera.video.VideoStabilizationMode = com.hinnka.mycamera.video.VideoStabilizationMode.OIS,
     val videoTorchEnabled: Boolean = false,
     val videoCodec: com.hinnka.mycamera.video.VideoCodec = com.hinnka.mycamera.video.VideoCodec.H264,
     val autoEnableHdr: Boolean = false,
@@ -138,6 +149,17 @@ class UserPreferencesRepository(private val context: Context) {
         private val PHANTOM_LUT_ID_KEY = stringPreferencesKey("phantom_lut_id")
         private val JPG_BASELINE_LUT_ID_KEY = stringPreferencesKey("jpg_baseline_lut_id")
         private val RAW_BASELINE_LUT_ID_KEY = stringPreferencesKey("raw_baseline_lut_id")
+        private val RAW_DCP_ID_KEY = stringPreferencesKey("raw_dcp_id")
+        private val RAW_NLM_NOISE_FACTOR_KEY = floatPreferencesKey("raw_nlm_noise_factor")
+        private val RAW_EXPOSURE_COMPENSATION_KEY = floatPreferencesKey("raw_exposure_compensation")
+        private val RAW_AUTO_EXPOSURE_KEY = booleanPreferencesKey("raw_auto_exposure")
+        private val RAW_METERING_CENTER_WEIGHT_KEY = floatPreferencesKey("raw_metering_center_weight")
+        private val RAW_BLACK_POINT_CORRECTION_KEY = floatPreferencesKey("raw_black_point_correction")
+        private val RAW_WHITE_POINT_CORRECTION_KEY = floatPreferencesKey("raw_white_point_correction")
+        private val RAW_AUTO_WHITE_BALANCE_ESTIMATE_KEY = booleanPreferencesKey("raw_auto_white_balance_estimate")
+        private val RAW_BLACK_LEVEL_MODES_KEY = stringPreferencesKey("raw_black_level_modes")
+        private val RAW_CUSTOM_BLACK_LEVELS_KEY = stringPreferencesKey("raw_custom_black_levels")
+        private val EXPORT_DNG_WITH_RAW_EXPORT_KEY = booleanPreferencesKey("export_dng_with_raw_export")
         private val PHANTOM_BASELINE_LUT_ID_KEY = stringPreferencesKey("phantom_baseline_lut_id")
         private val FRAME_ID_KEY = stringPreferencesKey("frame_id")
         private val SHOW_HISTOGRAM = booleanPreferencesKey("show_histogram")
@@ -193,7 +215,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val VIDEO_LOG_PROFILE = stringPreferencesKey("video_log_profile")
         private val VIDEO_BITRATE = stringPreferencesKey("video_bitrate")
         private val VIDEO_AUDIO_INPUT_ID = stringPreferencesKey("video_audio_input_id")
-        private val VIDEO_STABILIZATION_ENABLED = booleanPreferencesKey("video_stabilization_enabled")
+        private val VIDEO_STABILIZATION_MODE = stringPreferencesKey("video_stabilization_mode")
         private val VIDEO_TORCH_ENABLED = booleanPreferencesKey("video_torch_enabled")
         private val VIDEO_CODEC = stringPreferencesKey("video_codec")
         private val AUTO_ENABLE_HDR_FOR_HDR_CAPTURE = booleanPreferencesKey("auto_enable_hdr_for_hdr_capture")
@@ -230,6 +252,17 @@ class UserPreferencesRepository(private val context: Context) {
                 phantomLutId = preferences[PHANTOM_LUT_ID_KEY],
                 jpgBaselineLutId = preferences[JPG_BASELINE_LUT_ID_KEY],
                 rawBaselineLutId = preferences[RAW_BASELINE_LUT_ID_KEY],
+                rawDcpId = preferences[RAW_DCP_ID_KEY],
+                rawNlmNoiseFactor = preferences[RAW_NLM_NOISE_FACTOR_KEY] ?: 0f,
+                rawExposureCompensation = preferences[RAW_EXPOSURE_COMPENSATION_KEY] ?: 0f,
+                rawAutoExposure = preferences[RAW_AUTO_EXPOSURE_KEY] ?: true,
+                rawMeteringCenterWeight = preferences[RAW_METERING_CENTER_WEIGHT_KEY]?.coerceIn(0f, 1f) ?: 0f,
+                rawBlackPointCorrection = preferences[RAW_BLACK_POINT_CORRECTION_KEY] ?: 0f,
+                rawWhitePointCorrection = preferences[RAW_WHITE_POINT_CORRECTION_KEY] ?: 0f,
+                rawAutoWhiteBalanceEstimate = preferences[RAW_AUTO_WHITE_BALANCE_ESTIMATE_KEY] ?: false,
+                rawBlackLevelModes = parseMapString(preferences[RAW_BLACK_LEVEL_MODES_KEY]),
+                rawCustomBlackLevels = parseMapFloat(preferences[RAW_CUSTOM_BLACK_LEVELS_KEY]),
+                exportDngWithRawExport = preferences[EXPORT_DNG_WITH_RAW_EXPORT_KEY] ?: false,
                 phantomBaselineLutId = preferences[PHANTOM_BASELINE_LUT_ID_KEY],
                 frameId = preferences[FRAME_ID_KEY],
                 showHistogram = preferences[SHOW_HISTOGRAM] ?: true,
@@ -293,7 +326,9 @@ class UserPreferencesRepository(private val context: Context) {
                     preferences[VIDEO_BITRATE] ?: VideoBitratePreset.P1.name
                 ),
                 videoAudioInputId = preferences[VIDEO_AUDIO_INPUT_ID] ?: VIDEO_AUDIO_INPUT_AUTO,
-                videoStabilizationEnabled = preferences[VIDEO_STABILIZATION_ENABLED] ?: true,
+                videoStabilizationMode = com.hinnka.mycamera.video.VideoStabilizationMode.valueOf(
+                    preferences[VIDEO_STABILIZATION_MODE] ?: com.hinnka.mycamera.video.VideoStabilizationMode.OIS.name
+                ),
                 videoTorchEnabled = preferences[VIDEO_TORCH_ENABLED] ?: false,
                 videoCodec = com.hinnka.mycamera.video.VideoCodec.valueOf(
                     preferences[VIDEO_CODEC] ?: com.hinnka.mycamera.video.VideoCodec.H264.name
@@ -353,6 +388,41 @@ class UserPreferencesRepository(private val context: Context) {
         return offsets.entries
             .filter { it.value in listOf(0, 90, 180, 270) }
             .joinToString(",") { "${it.key}:${it.value}" }
+    }
+
+    private fun parseMapString(value: String?): Map<String, String> {
+        if (value.isNullOrEmpty()) return emptyMap()
+        return value.split(",")
+            .mapNotNull { entry ->
+                val parts = entry.split(":")
+                if (parts.size == 2) {
+                    parts[0] to parts[1]
+                } else null
+            }
+            .toMap()
+    }
+
+    private fun serializeMapString(map: Map<String, String>): String {
+        return map.entries.joinToString(",") { "${it.key}:${it.value}" }
+    }
+
+    private fun parseMapFloat(value: String?): Map<String, Float> {
+        if (value.isNullOrEmpty()) return emptyMap()
+        return value.split(",")
+            .mapNotNull { entry ->
+                val parts = entry.split(":")
+                if (parts.size == 2) {
+                    val floatValue = parts[1].toFloatOrNull()
+                    if (floatValue != null) {
+                        parts[0] to floatValue
+                    } else null
+                } else null
+            }
+            .toMap()
+    }
+
+    private fun serializeMapFloat(map: Map<String, Float>): String {
+        return map.entries.joinToString(",") { "${it.key}:${it.value}" }
     }
 
     private fun parseCustomLensIds(value: String?): List<String> {
@@ -437,6 +507,76 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun saveRawDcpId(dcpId: String?) {
+        context.dataStore.edit { preferences ->
+            if (dcpId != null) {
+                preferences[RAW_DCP_ID_KEY] = dcpId
+            } else {
+                preferences.remove(RAW_DCP_ID_KEY)
+            }
+        }
+    }
+
+    suspend fun saveRawNlmNoiseFactor(value: Float) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_NLM_NOISE_FACTOR_KEY] = value
+        }
+    }
+
+    suspend fun saveRawExposureCompensation(value: Float) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_EXPOSURE_COMPENSATION_KEY] = value
+        }
+    }
+
+    suspend fun saveRawAutoExposure(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_AUTO_EXPOSURE_KEY] = enabled
+        }
+    }
+
+    suspend fun saveRawMeteringCenterWeight(value: Float) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_METERING_CENTER_WEIGHT_KEY] = value.coerceIn(0f, 1f)
+        }
+    }
+
+    suspend fun saveRawBlackPointCorrection(value: Float) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_BLACK_POINT_CORRECTION_KEY] = value
+        }
+    }
+
+    suspend fun saveRawWhitePointCorrection(value: Float) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_WHITE_POINT_CORRECTION_KEY] = value
+        }
+    }
+
+    suspend fun saveRawAutoWhiteBalanceEstimate(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_AUTO_WHITE_BALANCE_ESTIMATE_KEY] = enabled
+        }
+    }
+
+    suspend fun saveRawBlackLevelMode(cameraId: String, mode: String) {
+        context.dataStore.edit { preferences ->
+            val current = parseMapString(preferences[RAW_BLACK_LEVEL_MODES_KEY])
+            val updated = current.toMutableMap()
+            updated[cameraId] = mode
+            preferences[RAW_BLACK_LEVEL_MODES_KEY] = serializeMapString(updated)
+        }
+    }
+
+    suspend fun saveRawCustomBlackLevel(cameraId: String, value: Float) {
+        context.dataStore.edit { preferences ->
+            val current = parseMapFloat(preferences[RAW_CUSTOM_BLACK_LEVELS_KEY])
+            val updated = current.toMutableMap()
+            updated[cameraId] = value
+            preferences[RAW_CUSTOM_BLACK_LEVELS_KEY] = serializeMapFloat(updated)
+        }
+    }
+
     /**
      * 保存边框配置
      */
@@ -496,6 +636,15 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     /**
+     * 保存视频防抖模式
+     */
+    suspend fun saveVideoStabilizationMode(mode: com.hinnka.mycamera.video.VideoStabilizationMode) {
+        context.dataStore.edit { preferences ->
+            preferences[VIDEO_STABILIZATION_MODE] = mode.name
+        }
+    }
+
+    /**
      * 保存音量键操作
      */
     suspend fun saveVolumeKeyAction(action: VolumeKeyAction) {
@@ -538,6 +687,12 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveUseRaw(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[USE_RAW] = enabled
+        }
+    }
+
+    suspend fun saveExportDngWithRawExport(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[EXPORT_DNG_WITH_RAW_EXPORT_KEY] = enabled
         }
     }
 
@@ -870,11 +1025,7 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
-    suspend fun saveVideoStabilizationEnabled(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[VIDEO_STABILIZATION_ENABLED] = enabled
-        }
-    }
+
 
     suspend fun saveVideoTorchEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->

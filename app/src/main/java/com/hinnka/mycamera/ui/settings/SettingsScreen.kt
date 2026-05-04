@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.ui.settings
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -92,13 +93,14 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.media3.common.DeviceInfo
+import com.hinnka.mycamera.BuildConfig
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.lut.LutInfo
-import com.hinnka.mycamera.raw.RawProfile
+import com.hinnka.mycamera.lut.creator.OpenAIApiClient
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.camera.LutEditorTarget
 import com.hinnka.mycamera.ui.camera.autoRotate
@@ -106,13 +108,26 @@ import com.hinnka.mycamera.ui.components.LogViewerDialog
 import com.hinnka.mycamera.ui.components.PaymentDialog
 import com.hinnka.mycamera.ui.components.SliderSettingItem
 import com.hinnka.mycamera.ui.components.LutSelector
+import com.hinnka.mycamera.ui.components.RawEditPanel
 import com.hinnka.mycamera.ui.components.rememberBackgroundPainter
+import com.hinnka.mycamera.update.AppUpdateManager
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.viewmodel.CameraViewModel
+import java.io.File
 import kotlin.math.roundToInt
 
 enum class SettingsTab {
-    GENERAL, IMAGING, PHANTOM, ABOUT
+    GENERAL, IMAGING, RAW, PHANTOM, ABOUT
+}
+
+private const val TELEGRAM_GROUP_URL = "https://t.me/photoncameraapp"
+private const val QQ_GROUP_URL = "https://qun.qq.com/universal-share/share?ac=1&authKey=SFezWP1Ub5Egb5yMc7dbc1W4BVKGzzs1Ld9RD%2BKYn%2FlXiuqD4XZCGse48v%2FNcvrq&busi_data=eyJncm91cENvZGUiOiI1Njk2MDU0NTIiLCJ0b2tlbiI6IjNTM0Z4MkN1NUpDQVU1OXJDZ0xFVlJOb0xHZHFCQ0xWc1pKQWpSVzNVT0FwaHFRcEFYR0lFTU9mNUxuNFl5TDEiLCJ1aW4iOiI0MTk3NzQ2OTYifQ%3D%3D&data=WwMa6V5hKvkhzfvOaOKz8MKqNOvSSjTxTRj6Dn-1bHP68fZuRJ66cyD5xOhydrUkF8yIA70R_yXqlFRwJGoaCQ&svctype=4&tempid=h5_group_info"
+
+private fun openExternalUrl(context: Context, url: String) {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    runCatching { context.startActivity(intent) }
 }
 
 /**
@@ -138,6 +153,7 @@ fun SettingsScreen(
     val nrLevel by viewModel.nrLevel.collectAsState(initial = 5)
     val edgeLevel by viewModel.edgeLevel.collectAsState(initial = 1)
     val useRaw by viewModel.useRaw.collectAsState(initial = false)
+    val exportDngWithRawExport by viewModel.exportDngWithRawExport.collectAsState(initial = true)
     val useSuperResolution by viewModel.useMFSR.collectAsState(initial = false)
     // 软件处理参数
     val sharpening by viewModel.sharpening.collectAsState(initial = 0f)
@@ -152,7 +168,6 @@ fun SettingsScreen(
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
     val photoQuality by viewModel.photoQuality.collectAsState(initial = 95)
     val useGpuAcceleration by viewModel.useGpuAcceleration.collectAsState()
-    val rawProfile by viewModel.rawProfile.collectAsState()
     val useP010 by viewModel.useP010.collectAsState()
     val useHlg10 by viewModel.useHlg10.collectAsState()
     val hlgHardwareCompatibilityEnabled by viewModel.hlgHardwareCompatibilityEnabled.collectAsState()
@@ -166,8 +181,9 @@ fun SettingsScreen(
     val mirrorFrontCamera by viewModel.mirrorFrontCamera.collectAsState(initial = true)
     val widgetTheme by viewModel.widgetTheme.collectAsState()
     val saveLocation by viewModel.saveLocationEnabled.collectAsState(initial = false)
-    val useBuiltInAiService by viewModel.useBuiltInAiService.collectAsState()
     val openAIApiKey by viewModel.openAIApiKey.collectAsState()
+    val openAIUrl by viewModel.openAIUrl.collectAsState()
+    val openAIModel by viewModel.openAIModel.collectAsState()
     val availableOpenAIModels by viewModel.availableOpenAIModels.collectAsState()
     val isFetchingAIModels by viewModel.isFetchingAIModels.collectAsState()
     val phantomSaveAsNew by viewModel.phantomSaveAsNew.collectAsState()
@@ -175,6 +191,17 @@ fun SettingsScreen(
     val jpgBaselineLutId by viewModel.jpgBaselineLutId.collectAsState()
     val rawBaselineLutId by viewModel.rawBaselineLutId.collectAsState()
     val phantomBaselineLutId by viewModel.phantomBaselineLutId.collectAsState()
+    val rawDcpId by viewModel.rawDcpId.collectAsState()
+    val rawNlmNoiseFactor by viewModel.rawNlmNoiseFactor.collectAsState()
+    val rawExposureCompensation by viewModel.rawExposureCompensation.collectAsState()
+    val rawAutoExposure by viewModel.rawAutoExposure.collectAsState()
+    val rawMeteringCenterWeight by viewModel.rawMeteringCenterWeight.collectAsState()
+    val rawBlackPointCorrection by viewModel.rawBlackPointCorrection.collectAsState()
+    val rawWhitePointCorrection by viewModel.rawWhitePointCorrection.collectAsState()
+    val rawAutoWhiteBalanceEstimate by viewModel.rawAutoWhiteBalanceEstimate.collectAsState()
+    val rawBlackLevelMode by viewModel.rawBlackLevelMode.collectAsState()
+    val rawCustomBlackLevel by viewModel.rawCustomBlackLevel.collectAsState()
+    val availableDcps = viewModel.availableDcps
     val availableLuts = viewModel.availableLutList
     val previewThumbnail = viewModel.previewThumbnail
 
@@ -214,6 +241,45 @@ fun SettingsScreen(
         }
     }
 
+    val importDcpLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            viewModel.importRawDcps(uris) { importedDcps, failedCount ->
+                when {
+                    importedDcps.size == 1 && failedCount == 0 -> {
+                        android.widget.Toast.makeText(
+                            context,
+                            context.getString(R.string.raw_dcp_import_success, importedDcps.first().getName()),
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    importedDcps.isNotEmpty() && failedCount == 0 -> {
+                        android.widget.Toast.makeText(
+                            context,
+                            context.getString(R.string.raw_dcp_import_success_count, importedDcps.size),
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    importedDcps.isNotEmpty() -> {
+                        android.widget.Toast.makeText(
+                            context,
+                            context.getString(R.string.raw_dcp_import_partial, importedDcps.size, failedCount),
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    else -> {
+                        android.widget.Toast.makeText(
+                            context,
+                            R.string.raw_dcp_import_failed,
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            }
+        }
+    }
+
     val locationPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
@@ -229,6 +295,9 @@ fun SettingsScreen(
     var calibrationExpanded by remember { mutableStateOf(false) }
     var showGhostPermissionDialog by remember { mutableStateOf(false) }
     var isGhostPermissionFlowActive by remember { mutableStateOf(false) }
+    var isCheckingUpdate by remember { mutableStateOf(false) }
+    var downloadedUpdateApk by remember { mutableStateOf<File?>(null) }
+    var showInstallUpdateDialog by remember { mutableStateOf(false) }
     var baselinePickerTarget by remember { mutableStateOf<BaselineColorCorrectionTarget?>(null) }
     var baselineRecipeEditorTarget by remember { mutableStateOf<BaselineColorCorrectionTarget?>(null) }
     var multiFrameCountSliderValue by remember(multiFrameCount) {
@@ -357,6 +426,50 @@ fun SettingsScreen(
         )
     }
 
+    if (showInstallUpdateDialog) {
+        val apkFile = downloadedUpdateApk
+        if (apkFile != null) {
+            AlertDialog(
+                onDismissRequest = { showInstallUpdateDialog = false },
+                title = {
+                    Text(
+                        text = stringResource(R.string.update_ready_title),
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                },
+                text = {
+                    Text(
+                        text = stringResource(R.string.update_ready_message),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            val installStarted = AppUpdateManager.startInstall(context, apkFile)
+                            if (installStarted) {
+                                showInstallUpdateDialog = false
+                            } else {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    R.string.update_install_permission_hint,
+                                    android.widget.Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    ) {
+                        Text(stringResource(R.string.update_install_now))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showInstallUpdateDialog = false }) {
+                        Text(stringResource(R.string.cancel))
+                    }
+                }
+            )
+        }
+    }
+
     val backgroundPainter = rememberBackgroundPainter(viewModel)
     Column(
         modifier = modifier
@@ -401,6 +514,7 @@ fun SettingsScreen(
             mutableStateListOf<Pair<SettingsTab, String>>().apply {
                 add(SettingsTab.GENERAL to general)
                 add(SettingsTab.IMAGING to imaging)
+                add(SettingsTab.RAW to "RAW")
                 if (DeviceUtil.canShowPhantom) {
                     add(SettingsTab.PHANTOM to phantom)
                 }
@@ -673,12 +787,40 @@ fun SettingsScreen(
 
                 SettingsTab.IMAGING -> {
                     // AI 服务设置
-                    SettingsSection(title = stringResource(R.string.lut_creator_title)) {
+                    SettingsSection(title = stringResource(R.string.ai_service)) {
                         TextInputSettingItem(
                             title = stringResource(R.string.settings_openai_api_key),
                             description = stringResource(R.string.settings_openai_api_key_desc),
                             value = openAIApiKey ?: "",
                             onValueChange = { viewModel.setOpenAIApiKey(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        TextInputSettingItem(
+                            title = stringResource(R.string.settings_openai_base_url),
+                            description = stringResource(R.string.settings_openai_base_url_desc),
+                            value = openAIUrl ?: OpenAIApiClient.DEFAULT_API_URL,
+                            onValueChange = { viewModel.setOpenAIUrl(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        DropdownSettingItem(
+                            title = stringResource(R.string.settings_ai_model),
+                            description = stringResource(R.string.settings_ai_model_desc),
+                            value = openAIModel ?: OpenAIApiClient.DEFAULT_MODEL,
+                            options = availableOpenAIModels,
+                            isLoading = isFetchingAIModels,
+                            enabled = !openAIApiKey.isNullOrBlank(),
+                            onExpanded = { viewModel.fetchAvailableAIModels() },
+                            onOptionSelected = { viewModel.setOpenAIModel(it) }
                         )
                     }
 
@@ -692,17 +834,7 @@ fun SettingsScreen(
                             onClick = { baselinePickerTarget = BaselineColorCorrectionTarget.JPG }
                         )
 
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
 
-                        BaselineColorCorrectionSettingItem(
-                            title = stringResource(R.string.settings_baseline_raw_title),
-                            description = stringResource(R.string.settings_baseline_raw_description),
-                            selectedLut = availableLuts.find { it.id == rawBaselineLutId },
-                            onClick = { baselinePickerTarget = BaselineColorCorrectionTarget.RAW }
-                        )
 
                         if (DeviceUtil.canShowPhantom) {
                             HorizontalDivider(
@@ -784,6 +916,7 @@ fun SettingsScreen(
                             value = multiFrameCountSliderValue,
                             valueRange = MultiFrameConfig.MIN_FRAME_COUNT.toFloat()..MultiFrameConfig.MAX_FRAME_COUNT.toFloat(),
                             onValueChange = { multiFrameCountSliderValue = it.roundToInt().toFloat() },
+                            resetValue = MultiFrameConfig.DEFAULT_FRAME_COUNT.toFloat(),
                             onValueChangeFinished = {
                                 viewModel.setMultiFrameCount(multiFrameCountSliderValue.roundToInt())
                             },
@@ -855,19 +988,6 @@ fun SettingsScreen(
                             description = stringResource(R.string.settings_develop_animation_description),
                             checked = enableDevelopAnimation,
                             onCheckedChange = { viewModel.setEnableDevelopAnimation(it) }
-                        )
-
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
-
-                        QualityLevelSetting(
-                            title = stringResource(R.string.settings_raw_profile),
-                            description = stringResource(R.string.settings_raw_profile_description),
-                            levels = RawProfile.entries.map { it to rawProfileLabel(it) },
-                            currentLevel = rawProfile,
-                            onLevelSelected = { viewModel.setRawProfile(it) }
                         )
 
                         /*HorizontalDivider(
@@ -971,6 +1091,7 @@ fun SettingsScreen(
                             description = stringResource(R.string.settings_sharpening_description),
                             value = sharpening,
                             valueRange = 0f..1f,
+                            resetValue = 0f,
                             onValueChange = { viewModel.setSharpening(it) }
                         )
 
@@ -981,6 +1102,7 @@ fun SettingsScreen(
                             description = stringResource(R.string.settings_noise_reduction_description),
                             value = noiseReduction,
                             valueRange = 0f..1f,
+                            resetValue = 0f,
                             onValueChange = { viewModel.setNoiseReduction(it) }
                         )
 
@@ -991,6 +1113,7 @@ fun SettingsScreen(
                             description = stringResource(R.string.settings_chroma_noise_reduction_description),
                             value = chromaNoiseReduction,
                             valueRange = 0f..1f,
+                            resetValue = 0f,
                             onValueChange = { viewModel.setChromaNoiseReduction(it) }
                         )
                     }
@@ -1029,6 +1152,119 @@ fun SettingsScreen(
                             onLevelSelected = { viewModel.setCameraOrientationOffset(currentCameraId, it) }
                         )
                     }
+                }
+
+                SettingsTab.RAW -> {
+                    BaselineColorCorrectionSettingItem(
+                        title = stringResource(R.string.settings_baseline_raw_title),
+                        description = stringResource(R.string.settings_baseline_raw_description),
+                        selectedLut = availableLuts.find { it.id == rawBaselineLutId },
+                        onClick = { baselinePickerTarget = BaselineColorCorrectionTarget.RAW }
+                    )
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        color = Color.White.copy(alpha = 0.1f)
+                    )
+
+                    SwitchSettingItem(
+                        title = stringResource(R.string.settings_export_dng_with_raw_export),
+                        description = stringResource(R.string.settings_export_dng_with_raw_export_description),
+                        checked = exportDngWithRawExport,
+                        onCheckedChange = { viewModel.setExportDngWithRawExport(it) }
+                    )
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        color = Color.White.copy(alpha = 0.1f)
+                    )
+
+                    SwitchSettingItem(
+                        title = stringResource(R.string.settings_raw_auto_white_balance_estimate),
+                        description = stringResource(R.string.settings_raw_auto_white_balance_estimate_description),
+                        checked = rawAutoWhiteBalanceEstimate,
+                        onCheckedChange = { viewModel.setRawAutoWhiteBalanceEstimate(it) }
+                    )
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        color = Color.White.copy(alpha = 0.1f)
+                    )
+
+                    val rawBlackLevelCorrectionTitle = state.getCurrentCameraInfo()?.let { info ->
+                        stringResource(
+                            R.string.settings_raw_black_level_correction_with_lens,
+                            info.cameraId,
+                            info.focalLength35mmEquivalent.roundToInt()
+                        )
+                    } ?: stringResource(R.string.settings_raw_black_level_correction)
+
+                    QualityLevelSetting(
+                        title = rawBlackLevelCorrectionTitle,
+                        description = stringResource(R.string.settings_raw_black_level_correction_description),
+                        levels = listOf(
+                            "Default" to stringResource(R.string.settings_black_level_default),
+                            "0" to "0",
+                            "16" to "16",
+                            "64" to "64",
+                            "256" to "256",
+                            "512" to "512",
+                            "Custom" to stringResource(R.string.settings_black_level_custom)
+                        ),
+                        currentLevel = rawBlackLevelMode,
+                        onLevelSelected = { viewModel.setRawBlackLevelMode(it) }
+                    )
+
+                    if (rawBlackLevelMode == "Custom") {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextInputSettingItem(
+                            title = stringResource(R.string.settings_black_level_custom),
+                            description = null,
+                            value = if (rawCustomBlackLevel == 0f) "" else rawCustomBlackLevel.toString(),
+                            onValueChange = {
+                                it.toFloatOrNull()?.let { value -> viewModel.setRawCustomBlackLevel(value) }
+                            }
+                        )
+                    }
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        color = Color.White.copy(alpha = 0.1f)
+                    )
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        color = Color.White.copy(alpha = 0.1f)
+                    )
+
+                    RawEditPanel(
+                        selectedDcpId = rawDcpId,
+                        availableDcps = availableDcps,
+                        rawNlmNoiseFactor = rawNlmNoiseFactor,
+                        rawExposureCompensation = rawExposureCompensation,
+                        rawAutoExposure = rawAutoExposure,
+                        rawMeteringCenterWeight = rawMeteringCenterWeight,
+                        rawBlackPointCorrection = rawBlackPointCorrection,
+                        rawWhitePointCorrection = rawWhitePointCorrection,
+                        onSelectDcp = { viewModel.setRawDcpId(it) },
+                        onImportDcp = { importDcpLauncher.launch(arrayOf("*/*")) },
+                        onDeleteDcp = { dcp ->
+                            viewModel.deleteRawDcp(dcp.id) { success ->
+                                android.widget.Toast.makeText(
+                                    context,
+                                    if (success) R.string.raw_dcp_delete_success else R.string.raw_dcp_delete_failed,
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        },
+                        onRawNlmNoiseFactorChange = { viewModel.setRawNlmNoiseFactor(it) },
+                        onRawExposureCompensationChange = { viewModel.setRawExposureCompensation(it) },
+                        onRawAutoExposureChange = { viewModel.setRawAutoExposure(it) },
+                        onRawMeteringCenterWeightChange = { viewModel.setRawMeteringCenterWeight(it) },
+                        onRawBlackPointCorrectionChange = { viewModel.setRawBlackPointCorrection(it) },
+                        onRawWhitePointCorrectionChange = { viewModel.setRawWhitePointCorrection(it) },
+                        onAdjustmentStart = { },
+                        onAdjustmentEnd = { }
+                    )
                 }
 
                 SettingsTab.PHANTOM -> {
@@ -1111,6 +1347,16 @@ fun SettingsScreen(
                 }
 
                 SettingsTab.ABOUT -> {
+                    val isGoogleFlavor = BuildConfig.FLAVOR == "google"
+                    val communityGroupUrl = if (isGoogleFlavor) TELEGRAM_GROUP_URL else QQ_GROUP_URL
+                    val communityGroupDescription = stringResource(
+                        if (isGoogleFlavor) {
+                            R.string.settings_community_group_telegram_description
+                        } else {
+                            R.string.settings_community_group_qq_description
+                        }
+                    )
+
                     // Widget 设置
                     SettingsSection(title = stringResource(R.string.settings_widget_theme)) {
                         QualityLevelSetting(
@@ -1169,6 +1415,70 @@ fun SettingsScreen(
 
                     // 关于
                     SettingsSection(title = stringResource(R.string.settings_section_about)) {
+                        if (!isGoogleFlavor) {
+                            NavigationSettingItem(
+                                title = stringResource(R.string.settings_check_update),
+                                description = if (isCheckingUpdate) {
+                                    stringResource(R.string.settings_check_update_running)
+                                } else {
+                                    stringResource(
+                                        R.string.settings_check_update_description,
+                                        BuildConfig.VERSION_NAME
+                                    )
+                                },
+                                onClick = {
+                                    if (!isCheckingUpdate) {
+                                        coroutineScope.launch {
+                                            isCheckingUpdate = true
+                                            try {
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    R.string.update_checking,
+                                                    android.widget.Toast.LENGTH_SHORT
+                                                ).show()
+                                                val release = AppUpdateManager.checkForUpdate()
+                                                if (release == null) {
+                                                    android.widget.Toast.makeText(
+                                                        context,
+                                                        R.string.update_no_update,
+                                                        android.widget.Toast.LENGTH_SHORT
+                                                    ).show()
+                                                    return@launch
+                                                }
+
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    R.string.update_downloading,
+                                                    android.widget.Toast.LENGTH_SHORT
+                                                ).show()
+                                                downloadedUpdateApk = AppUpdateManager.downloadApk(context, release)
+                                                showInstallUpdateDialog = true
+                                            } catch (error: Exception) {
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    R.string.update_failed,
+                                                    android.widget.Toast.LENGTH_LONG
+                                                ).show()
+                                            } finally {
+                                                isCheckingUpdate = false
+                                            }
+                                        }
+                                    }
+                                }
+                            )
+
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        }
+
+                        NavigationSettingItem(
+                            title = stringResource(R.string.settings_community_group),
+                            description = communityGroupDescription,
+                            onClick = { openExternalUrl(context, communityGroupUrl) }
+                        )
+
                         NavigationSettingItem(
                             title = stringResource(R.string.settings_donation),
                             description = stringResource(R.string.settings_donation_description),
@@ -2036,15 +2346,6 @@ fun <T> QualityLevelSetting(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun rawProfileLabel(rawProfile: RawProfile): String {
-    return when (rawProfile) {
-        RawProfile.ACES_CINE -> stringResource(R.string.raw_profile_aces_cine)
-        RawProfile.FUJI_PROVIA -> stringResource(R.string.raw_profile_fuji_provia)
-        RawProfile.STANDARD_SRGB -> stringResource(R.string.raw_profile_standard_srgb)
     }
 }
 

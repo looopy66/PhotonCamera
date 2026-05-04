@@ -9,6 +9,7 @@ import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.hdr.HdrGainmapStrength
 import com.hinnka.mycamera.utils.PLog
 import org.json.JSONObject
 import com.hinnka.mycamera.raw.RawMetadata
@@ -22,7 +23,7 @@ import kotlin.math.log2
  * 保存 LUT、边框水印、编辑信息和拍摄参数，用于非破坏性编辑和边框水印渲染
  */
 data class MediaMetadata(
-    val version: Int = 13,  // Added baseline color correction metadata
+    val version: Int = 16,
     val mediaType: MediaType = MediaType.IMAGE,
     // 编辑配置
     val lutId: String? = null,
@@ -36,6 +37,13 @@ data class MediaMetadata(
     val noiseReduction: Float? = null,
     val chromaNoiseReduction: Float? = null,
     val rawDenoiseValue: Float? = null,
+    val rawExposureCompensation: Float? = null,
+    val rawAutoExposure: Boolean? = null,
+    val rawMeteringCenterWeight: Float? = null,
+    val rawBlackPointCorrection: Float? = null,
+    val rawWhitePointCorrection: Float? = null,
+    val rawAutoWhiteBalanceEstimate: Boolean? = null,
+    val rawDcpId: String? = null,
     // 边框水印配置
     val frameId: String? = null,
     // 图片尺寸
@@ -86,10 +94,16 @@ data class MediaMetadata(
     val isMirrored: Boolean = false,
     val colorSpace: ColorSpace.Named = ColorSpace.Named.SRGB,
     val manualHdrEffectEnabled: Boolean = false,
+    val hdrEffectStrength: Float = HdrGainmapStrength.DEFAULT,
     val hasEmbeddedGainmap: Boolean = false,
     val dynamicRangeProfile: String? = null,
     val captureMode: String? = null,
-    val multipleExposureFrameCount: Int? = null
+    val multipleExposureFrameCount: Int? = null,
+    val hasAiDenoisedBase: Boolean = false,
+    val aiDenoiseStrength: Float? = null,
+    val rawBlackLevelMode: String? = null,
+    val rawCustomBlackLevel: Float? = null,
+    val cameraId: String? = null,
 ) {
     /**
      * 将元数据转换为 CaptureInfo，用于写入 EXIF
@@ -169,6 +183,16 @@ data class MediaMetadata(
             put("noiseReduction", noiseReduction?.toDouble() ?: JSONObject.NULL)
             put("chromaNoiseReduction", chromaNoiseReduction?.toDouble() ?: JSONObject.NULL)
             put("denoiseValue", rawDenoiseValue?.toDouble() ?: JSONObject.NULL)
+            put("rawExposureCompensation", rawExposureCompensation?.toDouble() ?: JSONObject.NULL)
+            put("rawAutoExposure", rawAutoExposure ?: JSONObject.NULL)
+            put("rawMeteringCenterWeight", rawMeteringCenterWeight?.toDouble() ?: JSONObject.NULL)
+            put("rawBlackPointCorrection", rawBlackPointCorrection?.toDouble() ?: JSONObject.NULL)
+            put("rawWhitePointCorrection", rawWhitePointCorrection?.toDouble() ?: JSONObject.NULL)
+            put("rawAutoWhiteBalanceEstimate", rawAutoWhiteBalanceEstimate ?: JSONObject.NULL)
+            put("rawDcpId", rawDcpId ?: JSONObject.NULL)
+            put("rawBlackLevelMode", rawBlackLevelMode ?: JSONObject.NULL)
+            put("rawCustomBlackLevel", rawCustomBlackLevel?.toDouble() ?: JSONObject.NULL)
+            put("cameraId", cameraId ?: JSONObject.NULL)
 
             put("frameId", frameId ?: JSONObject.NULL)
             put("width", width)
@@ -241,10 +265,13 @@ data class MediaMetadata(
             put("isMirrored", isMirrored)
             put("colorSpace", colorSpace.name)
             put("manualHdrEffectEnabled", manualHdrEffectEnabled)
+            put("hdrEffectStrength", hdrEffectStrength.toDouble())
             put("hasEmbeddedGainmap", hasEmbeddedGainmap)
             put("dynamicRangeProfile", dynamicRangeProfile ?: JSONObject.NULL)
             put("captureMode", captureMode ?: JSONObject.NULL)
             put("multipleExposureFrameCount", multipleExposureFrameCount ?: JSONObject.NULL)
+            put("hasAiDenoisedBase", hasAiDenoisedBase)
+            put("aiDenoiseStrength", aiDenoiseStrength?.toDouble() ?: JSONObject.NULL)
         }.toString(2)
     }
 
@@ -333,6 +360,16 @@ data class MediaMetadata(
                     chromaNoiseReduction = if (obj.isNull("chromaNoiseReduction")) null else obj.optDouble("chromaNoiseReduction")
                         .toFloat(),
                     rawDenoiseValue = if (obj.isNull("denoiseValue")) null else obj.optDouble("denoiseValue").toFloat(),
+                    rawExposureCompensation = if (obj.isNull("rawExposureCompensation")) null else obj.optDouble("rawExposureCompensation").toFloat(),
+                    rawAutoExposure = if (obj.isNull("rawAutoExposure")) null else obj.optBoolean("rawAutoExposure"),
+                    rawMeteringCenterWeight = if (obj.isNull("rawMeteringCenterWeight")) null else obj.optDouble("rawMeteringCenterWeight").toFloat(),
+                    rawBlackPointCorrection = if (obj.isNull("rawBlackPointCorrection")) null else obj.optDouble("rawBlackPointCorrection").toFloat(),
+                    rawWhitePointCorrection = if (obj.isNull("rawWhitePointCorrection")) null else obj.optDouble("rawWhitePointCorrection").toFloat(),
+                    rawAutoWhiteBalanceEstimate = if (obj.isNull("rawAutoWhiteBalanceEstimate")) null else obj.optBoolean("rawAutoWhiteBalanceEstimate"),
+                    rawDcpId = if (obj.isNull("rawDcpId")) null else obj.optString("rawDcpId"),
+                    rawBlackLevelMode = if (obj.isNull("rawBlackLevelMode")) null else obj.optString("rawBlackLevelMode"),
+                    rawCustomBlackLevel = if (obj.isNull("rawCustomBlackLevel")) null else obj.optDouble("rawCustomBlackLevel").toFloat(),
+                    cameraId = if (obj.isNull("cameraId")) null else obj.optString("cameraId"),
                     frameId = if (obj.isNull("frameId")) null else obj.optString("frameId"),
                     width = obj.optInt("width", 0),
                     height = obj.optInt("height", 0),
@@ -401,10 +438,15 @@ data class MediaMetadata(
                         )
                     } ?: ColorSpace.Named.SRGB,
                     manualHdrEffectEnabled = obj.optBoolean("manualHdrEffectEnabled", false),
+                    hdrEffectStrength = HdrGainmapStrength.coerce(
+                        if (obj.isNull("hdrEffectStrength")) null else obj.optDouble("hdrEffectStrength").toFloat()
+                    ),
                     hasEmbeddedGainmap = obj.optBoolean("hasEmbeddedGainmap", false),
                     dynamicRangeProfile = if (obj.isNull("dynamicRangeProfile")) null else obj.optString("dynamicRangeProfile"),
                     captureMode = if (obj.isNull("captureMode")) null else obj.optString("captureMode"),
                     multipleExposureFrameCount = if (obj.isNull("multipleExposureFrameCount")) null else obj.optInt("multipleExposureFrameCount"),
+                    hasAiDenoisedBase = obj.optBoolean("hasAiDenoisedBase", false),
+                    aiDenoiseStrength = if (obj.isNull("aiDenoiseStrength")) null else obj.optDouble("aiDenoiseStrength").toFloat(),
                 )
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to parse JSON", e)

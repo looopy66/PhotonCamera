@@ -1,6 +1,5 @@
 package com.hinnka.mycamera.ui.camera
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -62,11 +61,11 @@ fun LutEditBottomSheet(
     onPhotoParamsChange: ((ColorRecipeParams?) -> Unit)? = null,
     defaultScope: RecipeScope = RecipeScope.LUT_GLOBAL,
     editorTarget: LutEditorTarget = LutEditorTarget.CREATIVE_GLOBAL,
+    containerColor: Color = Color.Black.copy(alpha = 0.8f),
     modifier: Modifier = Modifier
 ) {
     val lutEditViewModel: LutEditViewModel = viewModel()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val backgroundColor = Color(0xFF151515)
     val coroutineScope = rememberCoroutineScope()
 
     val showScopeToggle = onPhotoParamsChange != null
@@ -125,7 +124,7 @@ fun LutEditBottomSheet(
             onDismiss()
         },
         sheetState = sheetState,
-        containerColor = backgroundColor,
+        containerColor = containerColor,
         modifier = modifier,
         scrimColor = Color.Transparent
     ) {
@@ -149,6 +148,9 @@ fun LutEditBottomSheet(
                                     // 切换前先把当前 scope 的未提交 LUT 改动 flush 掉
                                     if (currentScope == RecipeScope.LUT_GLOBAL) flushLutSave()
                                     currentScope = scope
+                                    if (scope == RecipeScope.LUT_GLOBAL) {
+                                        onPhotoParamsChange.invoke(null)
+                                    }
                                     coroutineScope.launch {
                                         val lutParams = lutEditViewModel.getColorRecipe(lutId, editorTarget.baselineTarget)
                                         loadParamsForScope(scope, lutParams)
@@ -162,7 +164,7 @@ fun LutEditBottomSheet(
                                 count = RecipeScope.entries.size
                             ),
                             colors = SegmentedButtonDefaults.colors(
-                                activeContainerColor = Color(0xFF2A2A2A),
+                                activeContainerColor = Color(0x882A2A2A),
                                 activeContentColor = Color.White,
                                 inactiveContainerColor = Color.Transparent,
                                 inactiveContentColor = Color.White.copy(alpha = 0.5f),
@@ -236,6 +238,14 @@ fun LutEditBottomSheet(
                 },
                 onParamChange = { param, value ->
                     onParamsUpdated(param.setValue(editingParams, value))
+                },
+                onParamsChange = { newParams ->
+                    paletteState = ColorPaletteState(
+                        x = newParams.paletteX,
+                        y = newParams.paletteY,
+                        density = newParams.paletteDensity
+                    ).normalized()
+                    onParamsUpdated(newParams)
                 },
                 onRemarksChange = {
                     onParamsUpdated(editingParams.copy(remarks = it))

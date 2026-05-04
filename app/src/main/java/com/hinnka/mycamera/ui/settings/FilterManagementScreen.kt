@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -34,7 +35,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.color.TransferCurve
+import com.hinnka.mycamera.data.ZipCubeImportManager
 import com.hinnka.mycamera.lut.LutInfo
+import com.hinnka.mycamera.lut.orderedLutCategoryTitles
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
@@ -64,6 +67,10 @@ private fun sanitizeCustomLutCategoryInput(
     }
 }
 
+private fun isZipImportUri(uri: Uri): Boolean {
+    return uri.lastPathSegment?.endsWith(".zip", ignoreCase = true) == true
+}
+
 /**
  * 滤镜管理页面
  * 
@@ -76,6 +83,8 @@ fun FilterManagementScreen(
     viewModel: CameraViewModel,
     onBack: () -> Unit,
     onLutCreatorClick: () -> Unit = {},
+    pendingZipImportUris: List<Uri> = emptyList(),
+    onZipImportHandled: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val currentLutId by viewModel.currentLutId.collectAsState()
@@ -150,6 +159,17 @@ fun FilterManagementScreen(
     var categoryToDelete by remember { mutableStateOf<String?>(null) }
     var showImportCategoryDialog by remember { mutableStateOf(false) }
     var pendingImportUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var pendingZipUris by remember { mutableStateOf<Set<Uri>>(emptySet()) }
+
+    LaunchedEffect(pendingZipImportUris) {
+        if (pendingZipImportUris.isNotEmpty()) {
+            pendingImportUris = pendingZipImportUris
+            pendingZipUris = pendingZipImportUris.toSet()
+            categoryText = ""
+            showImportCategoryDialog = true
+            onZipImportHandled()
+        }
+    }
 
     // 多选状态
     var selectedIds by remember { mutableStateOf(setOf<String>()) }
@@ -167,27 +187,12 @@ fun FilterManagementScreen(
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     val categories = remember(localLutList, categoryOrder, builtInText, uncategorizedText, reservedCategoryNames) {
-        val dynamicCategories = localLutList.map { it.category }
-            .distinct()
-            .filter { it.isNotEmpty() && it !in reservedCategoryNames }
-        val hasUncategorizedLuts = localLutList.any { !it.isBuiltIn && it.category.isEmpty() }
-        val orderedKnownCategories = categoryOrder.filter { it == builtInText || dynamicCategories.contains(it) }
-        val remainingDynamic = dynamicCategories.filterNot { it in orderedKnownCategories }.sorted()
-
-        buildList {
-            if (orderedKnownCategories.isEmpty()) {
-                add(builtInText)
-                addAll(remainingDynamic)
-            } else {
-                addAll(orderedKnownCategories)
-                if (builtInText !in orderedKnownCategories) add(builtInText)
-                addAll(remainingDynamic)
-            }
-
-            if (hasUncategorizedLuts) {
-                add(uncategorizedText)
-            }
-        }
+        orderedLutCategoryTitles(
+            luts = localLutList,
+            categoryOrder = categoryOrder,
+            builtInText = builtInText,
+            uncategorizedText = uncategorizedText
+        )
     }
     val filteredLutList = remember(selectedTabIndex, localLutList, categories) {
         if (selectedTabIndex >= categories.size) return@remember localLutList
@@ -205,6 +210,7 @@ fun FilterManagementScreen(
     ) { uris: List<Uri> ->
         if (uris.isNotEmpty()) {
             pendingImportUris = uris
+            pendingZipUris = uris.filter(::isZipImportUri).toSet()
             categoryText = ""
             showImportCategoryDialog = true
         }
@@ -1087,31 +1093,47 @@ fun FilterManagementScreen(
                             val urisToImport = pendingImportUris
                             val curveToUse = selectedCurve
                             val colorSpace = selectedColorSpace
+                            val zipUrisToImport = pendingZipUris
                             showImportCategoryDialog = false
                             pendingImportUris = emptyList()
+                            pendingZipUris = emptySet()
 
                             isImporting = true
                             importProgress = Pair(0, urisToImport.size)
                             scope.launch {
                                 var successCount = 0
                                 var failCount = 0
+                                val zipCubeImportManager = ZipCubeImportManager(context.applicationContext)
 
                                 urisToImport.forEachIndexed { index, uri ->
                                     importProgress = Pair(index + 1, urisToImport.size)
-                                    val lutId = withContext(Dispatchers.IO) {
-                                        customImportManager.importLut(
-                                            uri,
-                                            category = targetCategory,
-                                            colorSpace = colorSpace,
-                                            curve = curveToUse
-                                        )
-                                    }
-                                    if (lutId != null) {
-                                        successCount++
-                                        // 若为 .plut v4 文件，提取嵌入的色彩配方并保存
-                                        viewModel.extractAndSaveColorRecipeFromPlut(lutId, uri)
+                                    if (uri in zipUrisToImport || isZipImportUri(uri)) {
+                                        val result = withContext(Dispatchers.IO) {
+                                            zipCubeImportManager.importCubeFilesFromZip(
+                                                uri = uri,
+                                                category = targetCategory,
+                                                colorSpace = colorSpace,
+                                                curve = curveToUse
+                                            )
+                                        }
+                                        successCount += result.successCount
+                                        failCount += result.failCount
                                     } else {
-                                        failCount++
+                                        val lutId = withContext(Dispatchers.IO) {
+                                            customImportManager.importLut(
+                                                uri,
+                                                category = targetCategory,
+                                                colorSpace = colorSpace,
+                                                curve = curveToUse
+                                            )
+                                        }
+                                        if (lutId != null) {
+                                            successCount++
+                                            // 若为 .plut v4 文件，提取嵌入的色彩配方并保存
+                                            viewModel.extractAndSaveColorRecipeFromPlut(lutId, uri)
+                                        } else {
+                                            failCount++
+                                        }
                                     }
                                 }
 
@@ -1138,6 +1160,7 @@ fun FilterManagementScreen(
                     TextButton(onClick = {
                         showImportCategoryDialog = false
                         pendingImportUris = emptyList()
+                        pendingZipUris = emptySet()
                     }) {
                         Text(stringResource(R.string.cancel))
                     }
@@ -1597,26 +1620,12 @@ private fun FilterManagementItem(
                 Text(
                     text = lutInfo.getName(),
                     color = Color.White,
-                    fontSize = 16.sp,
+                    fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
+                    modifier = Modifier.weight(1f, fill = false).basicMarquee()
                 )
-
-                if (lutInfo.isBuiltIn) {
-                    Spacer(modifier = Modifier.width(6.dp))
-
-                    Text(
-                        text = stringResource(R.string.built_in),
-                        color = Color.White.copy(alpha = 0.5f),
-                        fontSize = 10.sp,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(Color.White.copy(alpha = 0.1f))
-                            .padding(horizontal = 4.dp, vertical = 1.dp)
-                    )
-                }
 
                 // VIP 标签
                 if (lutInfo.isVip) {
@@ -1624,7 +1633,8 @@ private fun FilterManagementItem(
                     Text(
                         text = stringResource(R.string.billing_vip_tag),
                         color = Color(0xFFFFD700),
-                        fontSize = 10.sp,
+                        fontSize = 8.sp,
+                        lineHeight = 15.sp,
                         modifier = Modifier
                             .clip(RoundedCornerShape(4.dp))
                             .background(Color(0xFFFFD700).copy(alpha = 0.2f))

@@ -1,10 +1,13 @@
 package com.hinnka.mycamera.ui.gallery
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -12,6 +15,7 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -22,6 +26,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -45,16 +50,19 @@ import me.saket.telephoto.zoomable.coil.ZoomableAsyncImage
 import me.saket.telephoto.zoomable.rememberZoomableImageState
 import me.saket.telephoto.zoomable.rememberZoomableState
 import com.hinnka.mycamera.frame.TextType
+import com.hinnka.mycamera.gallery.MediaData
 import com.hinnka.mycamera.model.ColorRecipeParams
-import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.camera.RecipeScope
 import com.hinnka.mycamera.ui.components.*
+import com.hinnka.mycamera.ui.components.RawEditPanel
 import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.debounce
@@ -68,24 +76,34 @@ private data class PreviewRenderSignature(
     val photoId: String,
     val refreshKey: Long,
     val editLutId: String?,
-    val recipeParams: ColorRecipeParams?,
+    val previewRecipeParamsOverride: ColorRecipeParams?,
+    val editPhotoRecipeParams: ColorRecipeParams?,
+    val editLutRecipeParams: ColorRecipeParams?,
     val editLutConfig: Any?,
     val editFrameId: String?,
     val editFrameCustomProperties: Map<String, String>,
     val editSharpening: Float,
     val editNoiseReduction: Float,
     val editChromaNoiseReduction: Float,
+    val editRawDenoise: Float,
+    val editRawExposureCompensation: Float,
+    val editRawAutoExposure: Boolean,
+    val editRawMeteringCenterWeight: Float,
+    val editRawBlackPointCorrection: Float,
+    val editRawWhitePointCorrection: Float,
+    val editRawDcpId: String?,
     val editComputationalAperture: Float?,
     val editFocusX: Float?,
     val editFocusY: Float?,
     val showOrigin: Boolean,
-    val editTab: Int
+    val editTab: Int,
 )
 
 /**
  * 照片编辑界面
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@SuppressLint("LocalContextGetResourceValueCall")
+@OptIn(ExperimentalMaterial3Api::class, FlowPreview::class)
 @Composable
 fun PhotoEditScreen(
     viewModel: GalleryViewModel,
@@ -107,7 +125,6 @@ fun PhotoEditScreen(
 
     var isSaving by remember { mutableStateOf(false) }
     var isLoadingPreview by remember { mutableStateOf(false) }
-    var isAdjusting by remember { mutableStateOf(false) }
     val lutScrollState = rememberLazyListState()
     val frameScrollState = rememberLazyListState()
     var showLutEditDialog by remember { mutableStateOf(false) }
@@ -131,6 +148,13 @@ fun PhotoEditScreen(
     val editNoiseReduction by viewModel.editNoiseReduction.collectAsState()
     val editChromaNoiseReduction by viewModel.editChromaNoiseReduction.collectAsState()
     val editRawNlmNoiseFactor by viewModel.editRawDenoise.collectAsState()
+    val editRawExposureCompensation by viewModel.editRawExposureCompensation.collectAsState()
+    val editRawAutoExposure by viewModel.editRawAutoExposure.collectAsState()
+    val editRawMeteringCenterWeight by viewModel.editRawMeteringCenterWeight.collectAsState()
+    val editRawBlackPointCorrection by viewModel.editRawBlackPointCorrection.collectAsState()
+    val editRawWhitePointCorrection by viewModel.editRawWhitePointCorrection.collectAsState()
+    val editRawDcpId by viewModel.editRawDcpId.collectAsState()
+    val availableDcps = viewModel.availableDcps
     
     val editComputationalAperture by viewModel.editComputationalAperture.collectAsState()
     val editFocusX by viewModel.editFocusPointX.collectAsState()
@@ -139,7 +163,7 @@ fun PhotoEditScreen(
     val editCropRect by viewModel.editCropRect.collectAsState()
     val editCropAspectOption by viewModel.editCropAspectOption.collectAsState()
 
-    val rawProfile by cameraViewModel.rawProfile.collectAsState()
+    val editAiDenoiseStrength by viewModel.editAiDenoiseStrength.collectAsState()
 
     val isRaw = currentPhoto?.let { viewModel.isRaw(it.id) } ?: false
 
@@ -149,9 +173,13 @@ fun PhotoEditScreen(
     var editTab by remember { mutableIntStateOf(0) } // 0: 滤镜/边框, 1: 细节处理, 2: RAW, 3: 裁剪
     var showControls by remember { mutableStateOf(true) }
     var isZoomed by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     val refreshKey = currentPhoto?.id?.let { viewModel.photoRefreshKeys[it] } ?: 0L
-    var appliedPreviewSignature by remember(currentPhoto?.id) { mutableStateOf<PreviewRenderSignature?>(null) }
-    var appliedPreviewMaxEdge by remember(currentPhoto?.id) { mutableIntStateOf(0) }
+
+    val animatePaddingBottom by animateDpAsState(
+        if (showControls) 160.dp else 0.dp
+    )
+    var previewRenderRequestId by remember { mutableLongStateOf(0L) }
 
     fun currentPreviewSignature(): PreviewRenderSignature? {
         val photo = currentPhoto ?: return null
@@ -159,13 +187,22 @@ fun PhotoEditScreen(
             photoId = photo.id,
             refreshKey = refreshKey,
             editLutId = editLutId,
-            recipeParams = previewRecipeParamsOverride ?: editPhotoRecipeParams ?: editLutRecipeParams,
+            previewRecipeParamsOverride = previewRecipeParamsOverride,
+            editPhotoRecipeParams = editPhotoRecipeParams,
+            editLutRecipeParams = editLutRecipeParams,
             editLutConfig = editLutConfig,
             editFrameId = editFrameId,
             editFrameCustomProperties = editFrameCustomProperties.toMap(),
             editSharpening = editSharpening,
             editNoiseReduction = editNoiseReduction,
             editChromaNoiseReduction = editChromaNoiseReduction,
+            editRawDenoise = editRawNlmNoiseFactor,
+            editRawExposureCompensation = editRawExposureCompensation,
+            editRawAutoExposure = editRawAutoExposure,
+            editRawMeteringCenterWeight = editRawMeteringCenterWeight,
+            editRawBlackPointCorrection = editRawBlackPointCorrection,
+            editRawWhitePointCorrection = editRawWhitePointCorrection,
+            editRawDcpId = editRawDcpId,
             editComputationalAperture = editComputationalAperture,
             editFocusX = editFocusX,
             editFocusY = editFocusY,
@@ -174,17 +211,27 @@ fun PhotoEditScreen(
         )
     }
 
-    fun applyPreviewBitmapIfNewer(signature: PreviewRenderSignature, maxEdge: Int, bitmap: Bitmap) {
-        val sameRequest = appliedPreviewSignature == signature
-        val shouldApply = !sameRequest || maxEdge >= appliedPreviewMaxEdge
-        if (!shouldApply) {
-            PLog.d("PhotoEditScreen", "Skip stale preview overwrite: photo=${signature.photoId}, maxEdge=$maxEdge, appliedMaxEdge=$appliedPreviewMaxEdge")
-            return
+    suspend fun renderPreview(
+        photo: MediaData,
+        maxEdge: Int
+    ) {
+        val requestId = ++previewRenderRequestId
+        val bitmap = withContext(Dispatchers.IO) {
+            viewModel.getPreviewBitmap(
+                photo,
+                useGlobalEdit = true,
+                showOrigin = showOrigin,
+                ignoreCrop = editTab == 3,
+                recipeParamsOverride = previewRecipeParamsOverride,
+                maxEdge = maxEdge
+            )
         }
-        previewBitmap = bitmap
-        appliedPreviewSignature = signature
-        appliedPreviewMaxEdge = maxEdge
+        if (requestId == previewRenderRequestId && bitmap != null) {
+            previewBitmap = bitmap
+            isLoadingPreview = false
+        }
     }
+
 
 
     LaunchedEffect(currentPhoto) {
@@ -193,60 +240,55 @@ fun PhotoEditScreen(
             ?: viewModel.getEditCustomProperties(currentPhoto.id)
     }
 
-    // 快速预览：conflate 保证渲染不被中断，参数变化只跳过中间帧，始终处理最新值
-    LaunchedEffect(currentPhoto, refreshKey) {
-        if (currentPhoto == null) return@LaunchedEffect
-        snapshotFlow {
-            currentPreviewSignature()
-        }
-        .filter { it != null }
-        .conflate()
-        .collectLatest { signature ->
-            isLoadingPreview = previewBitmap == null
-            val fast = withContext(Dispatchers.IO) {
-                viewModel.getPreviewBitmap(
-                    currentPhoto,
-                    useGlobalEdit = true,
-                    showOrigin = showOrigin,
-                    ignoreCrop = editTab == 3,
-                    recipeParamsOverride = previewRecipeParamsOverride,
-                    maxEdge = 800
-                )
-            }
-            if (fast != null) {
-                applyPreviewBitmapIfNewer(signature!!, 800, fast)
-                isLoadingPreview = false
+    val rawDcpLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        val photo = currentPhoto ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            val importedDcps = viewModel.importRawDcps(uris)
+            val failedCount = uris.size - importedDcps.size
+            importedDcps.lastOrNull()?.let { viewModel.saveRawDcpSelection(photo, it.id) }
+            when {
+                importedDcps.size == 1 && failedCount == 0 -> {
+                    Toast.makeText(context, context.getString(R.string.raw_dcp_import_success, importedDcps.first().getName()), Toast.LENGTH_SHORT).show()
+                }
+                importedDcps.isNotEmpty() && failedCount == 0 -> {
+                    Toast.makeText(context, context.getString(R.string.raw_dcp_import_success_count, importedDcps.size), Toast.LENGTH_SHORT).show()
+                }
+                importedDcps.isNotEmpty() -> {
+                    Toast.makeText(context, context.getString(R.string.raw_dcp_import_partial, importedDcps.size, failedCount), Toast.LENGTH_SHORT).show()
+                }
+                else -> {
+                    Toast.makeText(context, context.getString(R.string.raw_dcp_import_failed), Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
 
-    // 高分辨率预览：手指抬起时触发；非 slider 的离散变化（切 LUT、切 Tab 等）100ms 防抖后触发
     LaunchedEffect(currentPhoto, refreshKey) {
-        if (currentPhoto == null) return@LaunchedEffect
+        val photo = currentPhoto ?: return@LaunchedEffect
         snapshotFlow {
-            Pair(
-                isAdjusting,
-                currentPreviewSignature()
-            )
+            currentPreviewSignature()
         }
-        .filter { (_, signature) -> signature != null }
-        .filter { (adjusting, _) -> !adjusting }  // 手指拖动时跳过，抬起后放行
-        .debounce(100)                             // 离散操作的小防抖
-        .collectLatest { (_, signature) ->
-            val hires = withContext(Dispatchers.IO) {
-                viewModel.getPreviewBitmap(
-                    currentPhoto,
-                    useGlobalEdit = true,
-                    showOrigin = showOrigin,
-                    ignoreCrop = editTab == 3,
-                    recipeParamsOverride = previewRecipeParamsOverride
-                )
+            .filter { it != null }
+            .conflate()
+            .collectLatest {
+                renderPreview(photo, maxEdge = 1440)
             }
-            if (hires != null) {
-                applyPreviewBitmapIfNewer(signature!!, 4096, hires)
-            }
-            isLoadingPreview = false
+    }
+
+    LaunchedEffect(currentPhoto, refreshKey) {
+        val photo = currentPhoto ?: return@LaunchedEffect
+        snapshotFlow {
+            currentPreviewSignature()
         }
+            .filter { it != null }
+            .conflate()
+            .debounce(250)
+            .collectLatest {
+                renderPreview(photo, maxEdge = 4096)
+            }
     }
 
     LaunchedEffect(currentPhoto) {
@@ -285,119 +327,17 @@ fun PhotoEditScreen(
         containerColor = Color.Black,
         modifier = modifier
     ) { paddingValues ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
                 .animateContentSize()
         ) {
-            AnimatedVisibility(
-                visible = showControls,
-                enter = slideInVertically(initialOffsetY = { -it }) + expandVertically(expandFrom = Alignment.Top) + fadeIn(),
-                exit = slideOutVertically(targetOffsetY = { -it }) + shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut()
-            ) {
-                TopAppBar(
-                    modifier = Modifier,
-                    title = {
-                        Text(
-                            text = stringResource(R.string.edit),
-                            color = Color.White
-                        )
-                    },
-                    navigationIcon = {
-                        IconButton(onClick = {
-                            viewModel.exitEditMode()
-                            onBack()
-                        }) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = stringResource(R.string.back),
-                                tint = Color.White
-                            )
-                        }
-                    },
-                    actions = {
-                        if (isRaw) {
-                            val isRefreshing = viewModel.refreshingPhotos.contains(currentPhoto.id)
-                            val infiniteTransition = rememberInfiniteTransition(label = "refresh")
-                            val rotation by infiniteTransition.animateFloat(
-                                initialValue = 0f,
-                                targetValue = 360f,
-                                animationSpec = infiniteRepeatable(
-                                    animation = tween(1000, easing = LinearEasing),
-                                    repeatMode = RepeatMode.Restart
-                                ),
-                                label = "rotation"
-                            )
-
-                            IconButton(
-                                onClick = {
-                                    viewModel.refreshRawPreview(currentPhoto) { success ->
-                                        if (success) {
-                                            Toast.makeText(context, R.string.refresh_success, Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            Toast.makeText(context, R.string.refresh_failed, Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                },
-                                enabled = !isRefreshing
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Refresh,
-                                    contentDescription = stringResource(R.string.refresh),
-                                    tint = if (isRefreshing) Color.White.copy(alpha = 0.5f) else Color.White,
-                                    modifier = Modifier.graphicsLayer {
-                                        if (isRefreshing) {
-                                            rotationZ = rotation
-                                        }
-                                    }
-                                )
-                            }
-                        }
-                        // 保存元数据按钮
-                        IconButton(
-                            onClick = {
-                                val currentLut = availableLuts.find { it.id == editLutId }
-                                if (currentLut?.isVip == true && !isPurchased) {
-                                    viewModel.showPaymentDialog = true
-                                    return@IconButton
-                                }
-                                isSaving = true
-                                viewModel.saveEditMetadata(currentPhoto) { success ->
-                                    isSaving = false
-                                    if (success) {
-                                        onBack()
-                                    }
-                                }
-                            },
-                            enabled = !isSaving
-                        ) {
-                            if (isSaving) {
-                                CircularProgressIndicator(
-                                    color = Color.White,
-                                    modifier = Modifier.size(24.dp),
-                                    strokeWidth = 2.dp
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Default.Check,
-                                    contentDescription = stringResource(R.string.save),
-                                    tint = AccentOrange
-                                )
-                            }
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = Color.Black
-                    ),
-                    windowInsets = WindowInsets(0, 0, 0, 0)
-                )
-            }
             // 预览区域
             Box(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
+                    .fillMaxSize()
+                    .padding(bottom = animatePaddingBottom)
                     .pointerInput(isZoomed) {
                         if (!isZoomed) {
                             var totalDrag = 0f
@@ -508,6 +448,7 @@ fun PhotoEditScreen(
                 // 显示预览
                 ZoomableEditImage(
                     previewBitmap = previewBitmap,
+                    isLutEditing = showLutEditDialog,
                     contentDescription = stringResource(R.string.edit),
                     onZoomChange = {
                         isZoomed = it
@@ -535,14 +476,114 @@ fun PhotoEditScreen(
                 }
             }
 
-            // 编辑控制区域
             AnimatedVisibility(
                 visible = showControls,
+                enter = slideInVertically(initialOffsetY = { -it }) + expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { -it }) + shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
+                modifier = Modifier.align(Alignment.TopCenter),
+            ) {
+                TopAppBar(
+                    modifier = Modifier,
+                    title = {},
+                    navigationIcon = {
+                        IconButton(onClick = {
+                            viewModel.exitEditMode()
+                            onBack()
+                        }) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = stringResource(R.string.back),
+                                tint = Color.White
+                            )
+                        }
+                    },
+                    actions = {
+                        if (isRaw) {
+                            val isRefreshing = viewModel.refreshingPhotos.contains(currentPhoto.id)
+                            val infiniteTransition = rememberInfiniteTransition(label = "refresh")
+                            val rotation by infiniteTransition.animateFloat(
+                                initialValue = 0f,
+                                targetValue = 360f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(1000, easing = LinearEasing),
+                                    repeatMode = RepeatMode.Restart
+                                ),
+                                label = "rotation"
+                            )
+
+                            IconButton(
+                                onClick = {
+                                    viewModel.refreshRawPreview(currentPhoto) { success ->
+                                        if (success) {
+                                            Toast.makeText(context, R.string.refresh_success, Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, R.string.refresh_failed, Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                },
+                                enabled = !isRefreshing
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Refresh,
+                                    contentDescription = stringResource(R.string.refresh),
+                                    tint = if (isRefreshing) Color.White.copy(alpha = 0.5f) else Color.White,
+                                    modifier = Modifier.graphicsLayer {
+                                        if (isRefreshing) {
+                                            rotationZ = rotation
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                        // 保存元数据按钮
+                        IconButton(
+                            onClick = {
+                                val currentLut = availableLuts.find { it.id == editLutId }
+                                if (currentLut?.isVip == true && !isPurchased) {
+                                    viewModel.showPaymentDialog = true
+                                    return@IconButton
+                                }
+                                isSaving = true
+                                viewModel.saveEditMetadata(currentPhoto) { success ->
+                                    isSaving = false
+                                    if (success) {
+                                        onBack()
+                                    }
+                                }
+                            },
+                            enabled = !isSaving
+                        ) {
+                            if (isSaving) {
+                                CircularProgressIndicator(
+                                    color = Color.White,
+                                    modifier = Modifier.size(24.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = stringResource(R.string.save),
+                                    tint = AccentOrange
+                                )
+                            }
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color.Transparent
+                    ),
+                    windowInsets = WindowInsets(0, 0, 0, 0)
+                )
+            }
+
+            // 编辑控制区域
+            AnimatedVisibility(
+                visible = showControls && !showLutEditDialog,
                 enter = slideInVertically(initialOffsetY = { it }) + expandVertically(expandFrom = Alignment.Bottom) + fadeIn(),
-                exit = slideOutVertically(targetOffsetY = { it }) + shrinkVertically(shrinkTowards = Alignment.Bottom) + fadeOut()
+                exit = slideOutVertically(targetOffsetY = { it }) + shrinkVertically(shrinkTowards = Alignment.Bottom) + fadeOut(),
+                modifier = Modifier.align(Alignment.BottomCenter)
             ) {
                 Surface(
-                    color = Color(0xFF1A1A1A),
+                    color = Color(0x331A1A1A),
                     shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -577,208 +618,301 @@ fun PhotoEditScreen(
                                 onClick = { editTab = 3 }
                             )
                         }
-                        if (editTab == 0) {
-                            val currentLut = availableLuts.find { it.id == editLutId }
-                            val lutTitle = currentLut?.getName() ?: ""
+                        Column(modifier = Modifier.heightIn(max = 550.dp).verticalScroll(rememberScrollState())) {
+                            when (editTab) {
+                                0 -> {
+                                    val currentLut = availableLuts.find { it.id == editLutId }
+                                    val lutTitle = currentLut?.getName() ?: ""
 
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    Text(
-                                        text = stringResource(R.string.filter).uppercase(),
-                                        color = Color.White.copy(alpha = 0.4f),
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        letterSpacing = 1.sp
-                                    )
-                                    Text(
-                                        text = if (lutTitle.isEmpty()) stringResource(R.string.none) else lutTitle,
-                                        color = Color.White,
-                                        fontSize = 16.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-
-                                if (editLutId != null) {
-                                    val hasPhotoOverride = editPhotoRecipeParams != null
+                                    Spacer(modifier = Modifier.height(16.dp))
                                     Row(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(16.dp))
-                                            .background(
-                                                if (hasPhotoOverride) Color(0xFFFF9800).copy(alpha = 0.15f)
-                                                else Color.White.copy(alpha = 0.1f)
-                                            )
-                                            .clickable { showLutEditDialog = true }
-                                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Tune,
-                                            contentDescription = null,
-                                            tint = if (hasPhotoOverride) Color(0xFFFF9800) else Color(0xFFFFD700),
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                        Text(
-                                            text = stringResource(R.string.color_recipe),
-                                            color = Color.White,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Medium
-                                        )
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            LutSelector(
-                                availableLuts = viewModel.availableLuts,
-                                currentLutId = editLutId,
-                                thumbnail = thumbnailBitmap,
-                                onLutSelected = { viewModel.setEditLut(it) },
-                                onEditClick = { showLutEditDialog = true },
-                                categoryOrder = categoryOrder
-                            )
-
-                            Spacer(modifier = Modifier.height(16.dp))
-
-                            // 边框水印选择器
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.frame),
-                                    color = Color.White,
-                                    fontSize = 16.sp
-                                )
-
-                                if (editFrameId != null) {
-                                    val currentFrame = availableFrames.find { it.id == editFrameId }
-                                    if (currentFrame?.isEditable == true) {
-                                        Row(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(16.dp))
-                                                .background(Color.White.copy(alpha = 0.1f))
-                                                .clickable { onOpenFrameEditor(currentFrame.id) }
-                                                .padding(horizontal = 10.dp, vertical = 4.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Tune,
-                                                contentDescription = null,
-                                                tint = Color(0xFFFFD700),
-                                                modifier = Modifier.size(14.dp)
+                                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                            Text(
+                                                text = stringResource(R.string.filter).uppercase(),
+                                                color = Color.White.copy(alpha = 0.4f),
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                letterSpacing = 1.sp
                                             )
                                             Text(
-                                                text = stringResource(R.string.edit),
+                                                text = if (lutTitle.isEmpty()) stringResource(R.string.none) else lutTitle,
                                                 color = Color.White,
-                                                fontSize = 11.sp
+                                                fontSize = 16.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+
+                                        if (editLutId != null) {
+                                            val hasPhotoOverride = editPhotoRecipeParams != null
+                                            Row(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(16.dp))
+                                                    .background(
+                                                        if (hasPhotoOverride) Color(0xFFFF9800).copy(alpha = 0.15f)
+                                                        else Color.White.copy(alpha = 0.1f)
+                                                    )
+                                                    .clickable { showLutEditDialog = true }
+                                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Tune,
+                                                    contentDescription = null,
+                                                    tint = if (hasPhotoOverride) Color(0xFFFF9800) else Color(0xFFFFD700),
+                                                    modifier = Modifier.size(14.dp)
+                                                )
+                                                Text(
+                                                    text = stringResource(R.string.color_recipe),
+                                                    color = Color.White,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Medium
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(8.dp))
+
+                                    LutSelector(
+                                        availableLuts = viewModel.availableLuts,
+                                        currentLutId = editLutId,
+                                        thumbnail = thumbnailBitmap,
+                                        onLutSelected = { viewModel.setEditLut(it) },
+                                        onEditClick = { showLutEditDialog = true },
+                                        categoryOrder = categoryOrder
+                                    )
+
+                                    Spacer(modifier = Modifier.height(16.dp))
+
+                                    // 边框水印选择器
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = stringResource(R.string.frame),
+                                            color = Color.White,
+                                            fontSize = 16.sp
+                                        )
+
+                                        if (editFrameId != null) {
+                                            val currentFrame = availableFrames.find { it.id == editFrameId }
+                                            if (currentFrame?.isEditable == true) {
+                                                Row(
+                                                    modifier = Modifier
+                                                        .clip(RoundedCornerShape(16.dp))
+                                                        .background(Color.White.copy(alpha = 0.1f))
+                                                        .clickable { onOpenFrameEditor(currentFrame.id) }
+                                                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Tune,
+                                                        contentDescription = null,
+                                                        tint = Color(0xFFFFD700),
+                                                        modifier = Modifier.size(14.dp)
+                                                    )
+                                                    Text(
+                                                        text = stringResource(R.string.edit),
+                                                        color = Color.White,
+                                                        fontSize = 11.sp
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(8.dp))
+
+
+                                    LazyRow(
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                        state = frameScrollState
+                                    ) {
+                                        // 无边框选项
+                                        item {
+                                            FrameOption(
+                                                name = stringResource(R.string.none),
+                                                isSelected = editFrameId == null,
+                                                isCustom = false,  // 无边框不是自定义
+                                                onClick = { viewModel.setEditFrame(null) }
+                                            )
+                                        }
+
+                                        // 边框选项
+                                        items(availableFrames) { frame ->
+                                            FrameOption(
+                                                name = frame.name,
+                                                isSelected = editFrameId == frame.id,
+                                                isCustom = !frame.isBuiltIn,  // 添加自定义标识
+                                                isEditable = frame.isEditable,
+                                                onClick = {
+                                                    if (editFrameId == frame.id) {
+                                                        if (frame.isEditable) {
+                                                            onOpenFrameEditor(frame.id)
+                                                        }
+                                                    } else {
+                                                        viewModel.setEditFrame(frame.id)
+                                                    }
+                                                }
                                             )
                                         }
                                     }
                                 }
-                            }
+                                1 -> {
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                    val isDnCNNDenoising by viewModel.isAiDenoising.collectAsState()
+                                    val dnCNNProgress by viewModel.aiDenoiseProgress.collectAsState()
 
-                            Spacer(modifier = Modifier.height(8.dp))
-
-
-                            LazyRow(
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                state = frameScrollState
-                            ) {
-                                // 无边框选项
-                                item {
-                                    FrameOption(
-                                        name = stringResource(R.string.none),
-                                        isSelected = editFrameId == null,
-                                        isCustom = false,  // 无边框不是自定义
-                                        onClick = { viewModel.setEditFrame(null) }
-                                    )
-                                }
-
-                                // 边框选项
-                                items(availableFrames) { frame ->
-                                    FrameOption(
-                                        name = frame.name,
-                                        isSelected = editFrameId == frame.id,
-                                        isCustom = !frame.isBuiltIn,  // 添加自定义标识
-                                        isEditable = frame.isEditable,
-                                        onClick = {
-                                            if (editFrameId == frame.id) {
-                                                if (frame.isEditable) {
-                                                    onOpenFrameEditor(frame.id)
-                                                }
+                                    SliderSettingItem(
+                                        title = stringResource(R.string.ai_denoise_title),
+                                        description = if (isDnCNNDenoising) stringResource(
+                                            R.string.ai_denoise_processing,
+                                            dnCNNProgress * 100
+                                        ) else stringResource(R.string.ai_denoise_description),
+                                        value = editAiDenoiseStrength,
+                                        valueRange = 0f..1f,
+                                        onValueChange = { viewModel.setAiDenoiseStrength(it) },
+                                        onValueChangeFinished = {
+                                            if (isDnCNNDenoising) return@SliderSettingItem
+                                            if (editAiDenoiseStrength > 0.01f) {
+                                                viewModel.applyDnCNNDenoise(
+                                                    photo = currentPhoto,
+                                                    strength = editAiDenoiseStrength,
+                                                    onComplete = { success ->
+                                                        if (!success) {
+                                                            Toast.makeText(
+                                                                context,
+                                                                context.getString(R.string.ai_denoise_failed),
+                                                                Toast.LENGTH_SHORT
+                                                            ).show()
+                                                        }
+                                                    }
+                                                )
                                             } else {
-                                                viewModel.setEditFrame(frame.id)
+                                                viewModel.resetDnCNNDenoise(
+                                                    photo = currentPhoto,
+                                                    onComplete = { success ->
+                                                        if (!success) {
+                                                            Toast.makeText(
+                                                                context,
+                                                                context.getString(R.string.ai_denoise_failed),
+                                                                Toast.LENGTH_SHORT
+                                                            ).show()
+                                                        }
+                                                    }
+                                                )
                                             }
                                         }
                                     )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    // 细节处理调整 (锐化, 降噪, 杂色降噪)
+                                    val aperture = editComputationalAperture
+                                    SliderSettingItem(
+                                        title = stringResource(R.string.virtual_aperture),
+                                        value = editComputationalAperture ?: 2.8f,
+                                        valueRange = 1.0f..16.0f,
+                                        onValueChange = { viewModel.setComputationalAperture(it) },
+                                        onValueChangeFinished = { },
+                                        toggleValue = aperture != null && aperture > 0f,
+                                        onToggleChange = { checked ->
+                                            if (checked) {
+                                                viewModel.setComputationalAperture(2.8f)
+                                            } else {
+                                                viewModel.setComputationalAperture(null)
+                                            }
+                                        }
+                                    )
+                                    SliderSettingItem(
+                                        title = stringResource(R.string.settings_sharpening),
+                                        value = editSharpening,
+                                        valueRange = 0f..1f,
+                                        resetValue = 0f,
+                                        onValueChange = { viewModel.setSharpening(it) },
+                                        onValueChangeFinished = { }
+                                    )
+                                    SliderSettingItem(
+                                        title = stringResource(R.string.settings_noise_reduction),
+                                        value = editNoiseReduction,
+                                        valueRange = 0f..1f,
+                                        resetValue = 0f,
+                                        onValueChange = { viewModel.setNoiseReduction(it) },
+                                        onValueChangeFinished = { }
+                                    )
+                                    SliderSettingItem(
+                                        title = stringResource(R.string.settings_chroma_noise_reduction),
+                                        value = editChromaNoiseReduction,
+                                        valueRange = 0f..1f,
+                                        resetValue = 0f,
+                                        onValueChange = { viewModel.setChromaNoiseReduction(it) },
+                                        onValueChangeFinished = { }
+                                    )
+                                }
+                                2 -> {
+                                    RawEditPanel(
+                                        selectedDcpId = editRawDcpId,
+                                        availableDcps = availableDcps,
+                                        rawNlmNoiseFactor = editRawNlmNoiseFactor,
+                                        rawExposureCompensation = editRawExposureCompensation,
+                                        rawAutoExposure = editRawAutoExposure,
+                                        rawMeteringCenterWeight = editRawMeteringCenterWeight,
+                                        rawBlackPointCorrection = editRawBlackPointCorrection,
+                                        rawWhitePointCorrection = editRawWhitePointCorrection,
+                                        onSelectDcp = { dcpId ->
+                                            viewModel.saveRawDcpSelection(currentPhoto, dcpId)
+                                        },
+                                        onImportDcp = {
+                                            rawDcpLauncher.launch(arrayOf("application/octet-stream", "*/*"))
+                                        },
+                                        onDeleteDcp = { dcp ->
+                                            viewModel.deleteRawDcp(currentPhoto, dcp.id) { success ->
+                                                Toast.makeText(
+                                                    context,
+                                                    if (success) R.string.raw_dcp_delete_success else R.string.raw_dcp_delete_failed,
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                        },
+                                        onRawNlmNoiseFactorChange = {
+                                            viewModel.saveRawDenoiseValue(currentPhoto, it)
+                                        },
+                                        onRawExposureCompensationChange = {
+                                            viewModel.saveRawExposureCompensationValue(currentPhoto, it)
+                                        },
+                                        onRawAutoExposureChange = {
+                                            viewModel.saveRawAutoExposureValue(currentPhoto, it)
+                                        },
+                                        onRawMeteringCenterWeightChange = {
+                                            viewModel.saveRawMeteringCenterWeightValue(currentPhoto, it)
+                                        },
+                                        onRawBlackPointCorrectionChange = {
+                                            viewModel.saveRawBlackPointCorrectionValue(currentPhoto, it)
+                                        },
+                                        onRawWhitePointCorrectionChange = {
+                                            viewModel.saveRawWhitePointCorrectionValue(currentPhoto, it)
+                                        },
+                                        onAdjustmentStart = { },
+                                        onAdjustmentEnd = { },
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
+                                3 -> {
+                                    // 裁剪编辑
+                                    CropEditPanel(
+                                        selectedOption = editCropAspectOption,
+                                        onOptionSelected = { viewModel.setCropAspectOption(it) },
+                                        imageWidth = previewBitmap?.width ?: 1,
+                                        imageHeight = previewBitmap?.height ?: 1
+                                    )
                                 }
                             }
-                        } else if (editTab == 1) {
-                            Spacer(modifier = Modifier.height(16.dp))
-                            // 细节处理调整 (锐化, 降噪, 杂色降噪)
-                            val aperture = editComputationalAperture
-                            SliderSettingItem(
-                                title = stringResource(R.string.virtual_aperture),
-                                value = editComputationalAperture ?: 2.8f,
-                                valueRange = 1.0f..16.0f,
-                                onValueChange = { isAdjusting = true; viewModel.setComputationalAperture(it) },
-                                onValueChangeFinished = { isAdjusting = false },
-                                toggleValue = aperture != null && aperture > 0f,
-                                onToggleChange = { checked ->
-                                    if (checked) {
-                                        viewModel.setComputationalAperture(2.8f)
-                                    } else {
-                                        viewModel.setComputationalAperture(null)
-                                    }
-                                }
-                            )
-                            SliderSettingItem(
-                                title = stringResource(R.string.settings_sharpening),
-                                value = editSharpening,
-                                valueRange = 0f..1f,
-                                onValueChange = { isAdjusting = true; viewModel.setSharpening(it) },
-                                onValueChangeFinished = { isAdjusting = false }
-                            )
-                            SliderSettingItem(
-                                title = stringResource(R.string.settings_noise_reduction),
-                                value = editNoiseReduction,
-                                valueRange = 0f..1f,
-                                onValueChange = { isAdjusting = true; viewModel.setNoiseReduction(it) },
-                                onValueChangeFinished = { isAdjusting = false }
-                            )
-                            SliderSettingItem(
-                                title = stringResource(R.string.settings_chroma_noise_reduction),
-                                value = editChromaNoiseReduction,
-                                valueRange = 0f..1f,
-                                onValueChange = { isAdjusting = true; viewModel.setChromaNoiseReduction(it) },
-                                onValueChangeFinished = { isAdjusting = false }
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                        } else if (editTab == 2) {
-                            RawEditPanel(
-                                viewModel = cameraViewModel,
-                                rawProfile = rawProfile,
-                                rawNlmNoiseFactor = editRawNlmNoiseFactor,
-                                onRawNlmNoiseFactorChange = { viewModel.saveRawDenoiseValue(currentPhoto, it) },
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        } else if (editTab == 3) {
-                            // 裁剪编辑
-                            CropEditPanel(
-                                selectedOption = editCropAspectOption,
-                                onOptionSelected = { viewModel.setCropAspectOption(it) },
-                                imageWidth = previewBitmap?.width ?: 1,
-                                imageHeight = previewBitmap?.height ?: 1
-                            )
                         }
                     }
                 }
@@ -790,15 +924,17 @@ fun PhotoEditScreen(
         LutEditBottomSheet(
             lutId = editLutId!!,
             initialParams = previewRecipeParamsOverride ?: editPhotoRecipeParams ?: editLutRecipeParams,
-            onParamsPreviewChange = { isAdjusting = true; previewRecipeParamsOverride = it },
+            onParamsPreviewChange = {
+                previewRecipeParamsOverride = it
+            },
             onDismiss = {
                 previewRecipeParamsOverride = null
-                isAdjusting = false
                 showLutEditDialog = false
             },
             photoRecipeParams = editPhotoRecipeParams,
             onPhotoParamsChange = { viewModel.setPhotoRecipeParams(it) },
-            defaultScope = RecipeScope.PHOTO_LOCAL
+            defaultScope = RecipeScope.PHOTO_LOCAL,
+            containerColor = Color(0x151A1A1A)
         )
     }
 
@@ -992,6 +1128,7 @@ private fun FrameOption(
 @Composable
 private fun ZoomableEditImage(
     previewBitmap: Bitmap?,
+    isLutEditing: Boolean,
     contentDescription: String,
     onZoomChange: (isZoomed: Boolean) -> Unit = {},
     modifier: Modifier = Modifier
@@ -1003,6 +1140,12 @@ private fun ZoomableEditImage(
 
     LaunchedEffect(zoomableState.zoomableState.zoomFraction) {
         onZoomChange((zoomableState.zoomableState.zoomFraction ?: 0f) > 0.01f)
+    }
+
+    LaunchedEffect(isLutEditing) {
+        if (isLutEditing) {
+            zoomableState.zoomableState.resetZoom()
+        }
     }
 
     val model = ImageRequest.Builder(context)
@@ -1024,45 +1167,6 @@ private fun ZoomableEditImage(
     }
 }
 
-@Composable
-private fun RawEditPanel(
-    viewModel: CameraViewModel,
-    rawProfile: RawProfile,
-    rawNlmNoiseFactor: Float,
-    onRawNlmNoiseFactorChange: (Float) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        SegmentedControl(
-            title = stringResource(R.string.settings_raw_profile),
-            items = RawProfile.entries.toList(),
-            selectedItem = rawProfile,
-            onItemSelected = { viewModel.setRawProfile(it) },
-            itemLabel = { rawProfileLabel(it) }
-        )
-
-        SliderSettingItem(
-            title = stringResource(R.string.settings_raw_nlm_noise_factor),
-            value = rawNlmNoiseFactor,
-            valueRange = 0f..1f,
-            onValueChange = onRawNlmNoiseFactorChange
-        )
-    }
-}
-
-@Composable
-private fun rawProfileLabel(rawProfile: RawProfile): String {
-    return when (rawProfile) {
-        RawProfile.ACES_CINE -> stringResource(R.string.raw_profile_aces_cine)
-        RawProfile.FUJI_PROVIA -> stringResource(R.string.raw_profile_fuji_provia)
-        RawProfile.STANDARD_SRGB -> stringResource(R.string.raw_profile_standard_srgb)
-    }
-}
 
 @Composable
 private fun <T> SegmentedControl(

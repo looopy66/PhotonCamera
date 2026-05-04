@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <stdexcept>
 #include <sys/resource.h>
 #include <unistd.h>
 
@@ -28,6 +29,7 @@ constexpr uint32_t kDenseAlignmentGridSpacing = 8;
 constexpr int kAlignmentRegularizationPasses = 2;
 constexpr float kAlignmentOutlierThreshold = 0.65f;
 constexpr bool kEnableRawSuperResPerfLogs = false;
+constexpr bool kFastPath = true;
 
 using PerfClock = std::chrono::steady_clock;
 
@@ -203,7 +205,12 @@ VulkanRawStacker::VulkanRawStacker(uint32_t w, uint32_t h, bool enableSuperRes,
     numTilesY = 1;
   }
 
-  VulkanManager::getInstance().init();
+  if (width == 0 || height == 0) {
+    throw std::runtime_error("Invalid Vulkan raw stacker dimensions");
+  }
+  if (!VulkanManager::getInstance().init()) {
+    throw std::runtime_error("Failed to initialize VulkanManager");
+  }
   initVulkanResources();
 }
 
@@ -215,6 +222,9 @@ VulkanRawStacker::~VulkanRawStacker() {
 void VulkanRawStacker::initVulkanResources() {
   VulkanManager &vm = VulkanManager::getInstance();
   VkDevice device = vm.getDevice();
+  if (device == VK_NULL_HANDLE) {
+    throw std::runtime_error("VulkanManager is not ready");
+  }
 
   float scale = mEnableSuperRes ? mSuperResScale : 1.0f;
   uint32_t outW = (uint32_t)std::lround(width * scale);
@@ -1828,6 +1838,253 @@ inline float computeFusionFrameWeight(const TileAlignment &alignment,
   return motionWeight * errorWeight * sharpnessWeight;
 }
 
+struct CoarseReliabilitySummary {
+  float flatGoodFraction = 0.0f;
+  float flatAreaFraction = 0.0f;
+  float detailAreaFraction = 0.0f;
+};
+
+inline float smoothstepf(float edge0, float edge1, float x) {
+  float width = std::max(edge1 - edge0, 1e-6f);
+  float t = clamp01((x - edge0) / width);
+  return t * t * (3.0f - 2.0f * t);
+}
+
+inline float computeSemanticFusionWeight(float errP90Rms,
+                                         float sharpnessRatio,
+                                         float flatGoodFraction,
+                                         float flatAreaFraction,
+                                         float detailAreaFraction) {
+  const float errorWeight =
+      clamp01(1.0f - std::max(0.0f, errP90Rms - 2.5f) / 5.0f);
+  const float sharpnessGuard = clamp01(0.88f + 0.12f * sharpnessRatio);
+  const float flatCoverage = clamp01(0.75f + 0.25f * flatAreaFraction);
+  const float flatReliability = clamp01(0.44f + 0.55f * flatGoodFraction);
+  const float detailPenalty = clamp01(1.0f - 0.15f * detailAreaFraction);
+  const float baseWeight =
+      0.6f + 0.40f * errorWeight * flatCoverage * flatReliability *
+                 detailPenalty;
+  return clamp01(baseWeight * sharpnessGuard);
+}
+
+inline CoarseReliabilitySummary
+buildCoarseReliabilitySummary(const GrayImage &reference,
+                              const TileAlignment &alignment) {
+  CoarseReliabilitySummary summary;
+  if (reference.data.empty() || alignment.errorMap.empty() ||
+      alignment.gridW <= 0 || alignment.gridH <= 0) {
+    return summary;
+  }
+
+  std::vector<float> detailScores;
+  detailScores.reserve((size_t)alignment.gridW * alignment.gridH);
+  uint32_t tileW =
+      ((uint32_t)reference.width + (uint32_t)alignment.gridW - 1u) /
+      (uint32_t)alignment.gridW;
+  uint32_t tileH =
+      ((uint32_t)reference.height + (uint32_t)alignment.gridH - 1u) /
+      (uint32_t)alignment.gridH;
+
+  for (int gy = 0; gy < alignment.gridH; ++gy) {
+    for (int gx = 0; gx < alignment.gridW; ++gx) {
+      uint32_t x0 = (uint32_t)gx * tileW;
+      uint32_t y0 = (uint32_t)gy * tileH;
+      uint32_t x1 =
+          std::min<uint32_t>(x0 + tileW, (uint32_t)reference.width);
+      uint32_t y1 =
+          std::min<uint32_t>(y0 + tileH, (uint32_t)reference.height);
+      double detailSum = 0.0;
+      size_t count = 0;
+      for (uint32_t y = y0; y < y1; ++y) {
+        for (uint32_t x = x0; x < x1; ++x) {
+          size_t idx = (size_t)y * (size_t)reference.width + x;
+          float center = (float)reference.data[idx];
+          float xp = (float)reference.data[(size_t)y * (size_t)reference.width +
+                                           std::min<uint32_t>(
+                                               x + 1, (uint32_t)reference.width - 1)];
+          float xm = (float)reference.data[(size_t)y * (size_t)reference.width +
+                                           (x > 0 ? x - 1 : 0)];
+          float yp =
+              (float)reference.data[(size_t)std::min<uint32_t>(
+                                        y + 1, (uint32_t)reference.height - 1) *
+                                        (size_t)reference.width +
+                                    x];
+          float ym = (float)reference.data[(size_t)(y > 0 ? y - 1 : 0) *
+                                               (size_t)reference.width +
+                                           x];
+          detailSum += std::abs(xp - xm) + std::abs(yp - ym) +
+                       0.5f * std::abs(4.0f * center - xp - xm - yp - ym);
+          ++count;
+        }
+      }
+      detailScores.push_back((count > 0) ? (float)(detailSum / (double)count)
+                                         : 0.0f);
+    }
+  }
+
+  ScalarStats detailStats =
+      computeScalarStats(detailScores.data(), detailScores.size());
+  float flatThreshold = detailStats.minValue +
+                        (detailStats.p50 - detailStats.minValue) * 0.70f;
+  float detailThreshold = std::max(
+      detailStats.p50, detailStats.minValue +
+                           (detailStats.p90 - detailStats.minValue) * 0.55f);
+
+  size_t flatCount = 0;
+  size_t flatGood = 0;
+  size_t detailCount = 0;
+  size_t tileCount =
+      std::min(detailScores.size(), alignment.errorMap.size());
+  for (size_t idx = 0; idx < tileCount; ++idx) {
+    float errRms = std::sqrt(std::max(alignment.errorMap[idx], 0.0f));
+    float detailPenalty =
+        smoothstepf(flatThreshold, detailThreshold, detailScores[idx]);
+    if (detailPenalty > 0.60f) {
+      ++detailCount;
+    } else {
+      ++flatCount;
+      if (errRms < 4.0f)
+        ++flatGood;
+    }
+  }
+
+  float tileCountF = static_cast<float>(tileCount);
+  summary.flatGoodFraction =
+      (flatCount > 0) ? (float)flatGood / (float)flatCount : 0.0f;
+  summary.flatAreaFraction =
+      (tileCountF > 0.0f) ? (float)flatCount / tileCountF : 0.0f;
+  summary.detailAreaFraction =
+      (tileCountF > 0.0f) ? (float)detailCount / tileCountF : 0.0f;
+  return summary;
+}
+
+inline LocalReliabilityMap
+buildCoarseLocalReliabilityMap(const GrayImage &reference,
+                               const TileAlignment &alignment,
+                               uint32_t dstTilesX,
+                               uint32_t dstTilesY) {
+  LocalReliabilityMap result;
+  if (reference.data.empty() || alignment.errorMap.empty() ||
+      alignment.gridW <= 0 || alignment.gridH <= 0 || dstTilesX == 0 ||
+      dstTilesY == 0) {
+    return result;
+  }
+
+  result.tilesX = dstTilesX;
+  result.tilesY = dstTilesY;
+  result.tileWeights.resize((size_t)dstTilesX * dstTilesY, 1.0f);
+
+  std::vector<float> detailScores;
+  detailScores.reserve(result.tileWeights.size());
+  uint32_t tileW = ((uint32_t)reference.width + dstTilesX - 1u) / dstTilesX;
+  uint32_t tileH = ((uint32_t)reference.height + dstTilesY - 1u) / dstTilesY;
+
+  for (uint32_t gy = 0; gy < dstTilesY; ++gy) {
+    for (uint32_t gx = 0; gx < dstTilesX; ++gx) {
+      uint32_t x0 = gx * tileW;
+      uint32_t y0 = gy * tileH;
+      uint32_t x1 = std::min<uint32_t>(x0 + tileW, (uint32_t)reference.width);
+      uint32_t y1 =
+          std::min<uint32_t>(y0 + tileH, (uint32_t)reference.height);
+      double detailSum = 0.0;
+      size_t count = 0;
+      for (uint32_t y = y0; y < y1; ++y) {
+        for (uint32_t x = x0; x < x1; ++x) {
+          size_t idx = (size_t)y * (size_t)reference.width + x;
+          float center = (float)reference.data[idx];
+          float xp = (float)reference.data[(size_t)y * (size_t)reference.width +
+                                           std::min<uint32_t>(
+                                               x + 1, (uint32_t)reference.width - 1)];
+          float xm = (float)reference.data[(size_t)y * (size_t)reference.width +
+                                           (x > 0 ? x - 1 : 0)];
+          float yp =
+              (float)reference.data[(size_t)std::min<uint32_t>(
+                                        y + 1, (uint32_t)reference.height - 1) *
+                                        (size_t)reference.width +
+                                    x];
+          float ym = (float)reference.data[(size_t)(y > 0 ? y - 1 : 0) *
+                                               (size_t)reference.width +
+                                           x];
+          detailSum += std::abs(xp - xm) + std::abs(yp - ym) +
+                       0.5f * std::abs(4.0f * center - xp - xm - yp - ym);
+          ++count;
+        }
+      }
+      detailScores.push_back((count > 0) ? (float)(detailSum / (double)count)
+                                         : 0.0f);
+    }
+  }
+
+  ScalarStats detailStats =
+      computeScalarStats(detailScores.data(), detailScores.size());
+  float flatThreshold = detailStats.minValue +
+                        (detailStats.p50 - detailStats.minValue) * 0.70f;
+  float detailThreshold = std::max(
+      detailStats.p50, detailStats.minValue +
+                           (detailStats.p90 - detailStats.minValue) * 0.55f);
+
+  size_t flatCount = 0;
+  size_t flatGood = 0;
+  size_t detailCount = 0;
+  size_t tileCount = detailScores.size();
+  for (uint32_t gy = 0; gy < dstTilesY; ++gy) {
+    for (uint32_t gx = 0; gx < dstTilesX; ++gx) {
+      size_t idx = (size_t)gy * dstTilesX + gx;
+      uint32_t srcGX = std::min<uint32_t>(
+          (uint32_t)((uint64_t)gx * alignment.gridW / dstTilesX),
+          (uint32_t)alignment.gridW - 1u);
+      uint32_t srcGY = std::min<uint32_t>(
+          (uint32_t)((uint64_t)gy * alignment.gridH / dstTilesY),
+          (uint32_t)alignment.gridH - 1u);
+      size_t srcIdx = (size_t)srcGY * (size_t)alignment.gridW + srcGX;
+      float errRms = std::sqrt(std::max(alignment.errorMap[srcIdx], 0.0f));
+    float detailPenalty =
+        smoothstepf(flatThreshold, detailThreshold, detailScores[idx]);
+    float tileWeight =
+        clamp01(1.0f - std::max(0.0f, errRms - 2.0f) / 4.5f);
+
+    if (detailPenalty > 0.60f) {
+      ++detailCount;
+    } else {
+      ++flatCount;
+      if (errRms < 4.0f)
+        ++flatGood;
+    }
+
+    if (errRms > 5.5f)
+      tileWeight *= 0.60f;
+    if (detailPenalty > 0.78f && errRms > 7.5f)
+      tileWeight = 0.0f;
+
+    result.tileWeights[idx] = clamp01(tileWeight);
+    }
+  }
+
+  float tileCountF = static_cast<float>(tileCount);
+  result.summary.edgeGoodFraction =
+      (flatCount > 0) ? (float)flatGood / (float)flatCount : 0.0f;
+  result.summary.edgeTileFraction =
+      (tileCountF > 0.0f) ? (float)flatCount / tileCountF : 0.0f;
+  result.summary.textGoodFraction =
+      (tileCountF > 0.0f) ? 1.0f - ((float)detailCount / tileCountF) : 0.0f;
+  return result;
+}
+
+inline float computeYuvStyleCoarseFrameWeight(
+    const TileAlignment &alignment, float sharpnessRatio,
+    const CoarseReliabilitySummary &local) {
+  if (alignment.errorMap.empty())
+    return clamp01(0.70f + 0.25f * sharpnessRatio);
+
+  ScalarStats errStats = computeScalarStats(alignment.errorMap.data(),
+                                           alignment.errorMap.size());
+  const float errP90Rms = std::sqrt(std::max(errStats.p90, 0.0f));
+  return computeSemanticFusionWeight(errP90Rms, sharpnessRatio,
+                                     local.flatGoodFraction,
+                                     local.flatAreaFraction,
+                                     local.detailAreaFraction);
+}
+
 inline float computeRobustnessFrameWeight(const FlowSummary &flow,
                                           const RobustnessSummary &robustness,
                                           const LocalReliabilitySummary &local) {
@@ -2359,12 +2616,15 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
   TIME_START(phase3_CoarseAlignment);
   struct FrameAlignment {
     TileAlignment coarseAlign;
+    std::vector<Point> seededFlow;
   };
   std::vector<FrameAlignment> frameAlignments(pendingFrames.size());
   std::vector<float> frameFusionWeights(pendingFrames.size(), 1.0f);
   std::vector<float> frameRetentionScores(pendingFrames.size(), 1.0f);
   std::vector<bool> skipFusionFrame(pendingFrames.size(), false);
   std::vector<bool> runGlobalReliability(pendingFrames.size(), false);
+  std::vector<CoarseReliabilitySummary> frameCoarseSummaries(
+      pendingFrames.size());
   std::vector<LocalReliabilitySummary> frameLocalSummaries(pendingFrames.size());
   std::vector<LocalReliabilityMap> frameLocalMaps(pendingFrames.size());
   std::vector<RefinedFrameCache> frameRefinedCaches(pendingFrames.size());
@@ -2373,15 +2633,30 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
   for (size_t i = 1; i < pendingFrames.size(); ++i) {
     const auto coarseAlignStart = PerfClock::now();
     frameAlignments[i].coarseAlign =
-        computeTileAlignment(referencePyramid, uploadedFrames[i].pyramid, 64);
+        computeTileAlignment(referencePyramid, uploadedFrames[i].pyramid, 64,
+                             tileSize);
+    frameAlignments[i].seededFlow = buildDenseAlignmentSeed(
+        frameAlignments[i].coarseAlign, (uint32_t)gridW, (uint32_t)gridH,
+        (uint32_t)tileSize);
     perf.coarseAlignmentComputeMs += elapsedMillis(coarseAlignStart);
     ++perf.coarseAlignedFrames;
     logAlignmentDiagnostics("coarse", i, frameAlignments[i].coarseAlign);
     float sharpnessRatio = pendingFrames[i].score / referenceScore;
-    float frameWeight = computeFusionFrameWeight(frameAlignments[i].coarseAlign,
-                                                 sharpnessRatio);
+    frameCoarseSummaries[i] = buildCoarseReliabilitySummary(
+        uploadedFrames[0].proxy, frameAlignments[i].coarseAlign);
+    frameLocalMaps[i] = buildCoarseLocalReliabilityMap(
+        uploadedFrames[0].proxy, frameAlignments[i].coarseAlign,
+        localTilesX, localTilesY);
+    float frameWeight = computeYuvStyleCoarseFrameWeight(
+        frameAlignments[i].coarseAlign, sharpnessRatio, frameCoarseSummaries[i]);
     frameFusionWeights[i] = frameWeight;
-    skipFusionFrame[i] = frameWeight < 0.12f;
+    float coarsePriority =
+        0.6f * frameCoarseSummaries[i].flatGoodFraction +
+        0.4f * frameCoarseSummaries[i].flatAreaFraction;
+    frameRetentionScores[i] = frameWeight * (0.85f + 0.30f * coarsePriority);
+    float keepThreshold =
+        (coarsePriority > 0.55f) ? 0.12f : 0.16f;
+    skipFusionFrame[i] = frameWeight < keepThreshold;
     if (!skipFusionFrame[i]) {
       ++coarseEligibleFrames;
     }
@@ -2389,14 +2664,14 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
   TIME_END(phase3_CoarseAlignment);
   perf.coarseAlignmentMs = elapsed_phase3_CoarseAlignment;
 
-  {
+  if (!kFastPath) {
     std::vector<std::pair<float, size_t>> coarseCandidates;
     coarseCandidates.reserve(coarseEligibleFrames);
     for (size_t i = 1; i < pendingFrames.size(); ++i) {
       if (skipFusionFrame[i]) {
         continue;
       }
-      coarseCandidates.emplace_back(frameFusionWeights[i], i);
+      coarseCandidates.emplace_back(frameRetentionScores[i], i);
     }
     std::sort(coarseCandidates.begin(), coarseCandidates.end(),
               [](const auto &lhs, const auto &rhs) {
@@ -2417,48 +2692,47 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
   // robustness. This lets us keep only the frames that genuinely help.
   // =====================================================================
   TIME_START(phase3b_GlobalReliability);
-  for (size_t i = 1; i < pendingFrames.size(); ++i) {
-    if (skipFusionFrame[i] || !runGlobalReliability[i]) {
-      continue;
-    }
-    ++perf.globalReliabilityFrames;
+  if (!kFastPath) {
+    for (size_t i = 1; i < pendingFrames.size(); ++i) {
+      if (skipFusionFrame[i] || !runGlobalReliability[i]) {
+        continue;
+      }
+      ++perf.globalReliabilityFrames;
 
-    PushConstants pc{};
-    pc.width = outputW;
-    pc.height = outputH;
-    pc.planeWidth = inputW;
-    pc.planeHeight = inputH;
-    pc.sensorWidth = width;
-    pc.sensorHeight = height;
-    pc.scale = (float)scale;
-    pc.cfaPattern = (uint32_t)pendingFrames[i].cfaPattern;
-    memcpy(pc.blackLevel, mBlackLevel, 4 * sizeof(float));
-    pc.whiteLevel = mWhiteLevel;
-    memcpy(pc.wbGains, mWbGains, 4 * sizeof(float));
-    pc.gridW = gridW;
-    pc.gridH = gridH;
-    pc.tileSize = (uint32_t)tileSize;
-    pc.noiseAlpha = mNoiseModel[0] / 65535.0f;
-    pc.noiseBeta = mNoiseModel[1] / (65535.0f * 65535.0f);
-    pc.baseNoise = pc.noiseBeta;
-    pc.frameWeight = frameFusionWeights[i];
-    pc.tileX = 0;
-    pc.tileY = 0;
-    pc.tileW = inputW;
-    pc.tileH = inputH;
-    pc.bufferStride = tileW + 16;
+      PushConstants pc{};
+      pc.width = outputW;
+      pc.height = outputH;
+      pc.planeWidth = inputW;
+      pc.planeHeight = inputH;
+      pc.sensorWidth = width;
+      pc.sensorHeight = height;
+      pc.scale = (float)scale;
+      pc.cfaPattern = (uint32_t)pendingFrames[i].cfaPattern;
+      memcpy(pc.blackLevel, mBlackLevel, 4 * sizeof(float));
+      pc.whiteLevel = mWhiteLevel;
+      memcpy(pc.wbGains, mWbGains, 4 * sizeof(float));
+      pc.gridW = gridW;
+      pc.gridH = gridH;
+      pc.tileSize = (uint32_t)tileSize;
+      pc.noiseAlpha = mNoiseModel[0] / 65535.0f;
+      pc.noiseBeta = mNoiseModel[1] / (65535.0f * 65535.0f);
+      pc.baseNoise = pc.noiseBeta;
+      pc.frameWeight = frameFusionWeights[i];
+      pc.tileX = 0;
+      pc.tileY = 0;
+      pc.tileW = inputW;
+      pc.tileH = inputH;
+      pc.bufferStride = tileW + 16;
 
-    const auto &coarseAlign = frameAlignments[i].coarseAlign;
-    const auto reliabilitySeedStart = PerfClock::now();
-    std::vector<Point> seededFlow =
-        buildDenseAlignmentSeed(coarseAlign, (uint32_t)gridW, (uint32_t)gridH,
-                                (uint32_t)tileSize);
-    uploadAlignmentField(device, alignmentMemory, seededFlow);
-    fillFloatBuffer(device, robustnessMemory, (size_t)inputW * inputH, 1.0f);
-    perf.globalReliabilitySeedMs += elapsedMillis(reliabilitySeedStart);
+      const auto &coarseAlign = frameAlignments[i].coarseAlign;
+      const auto reliabilitySeedStart = PerfClock::now();
+      std::vector<Point> seededFlow = frameAlignments[i].seededFlow;
+      uploadAlignmentField(device, alignmentMemory, seededFlow);
+      fillFloatBuffer(device, robustnessMemory, (size_t)inputW * inputH, 1.0f);
+      perf.globalReliabilitySeedMs += elapsedMillis(reliabilitySeedStart);
 
-    const auto reliabilityLkStage1Start = PerfClock::now();
-    VkCommandBuffer cb = vm.beginSingleTimeCommands();
+      const auto reliabilityLkStage1Start = PerfClock::now();
+      VkCommandBuffer cb = vm.beginSingleTimeCommands();
 
     VkBufferMemoryBarrier hostBarriers[2]{};
     hostBarriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
@@ -2690,45 +2964,48 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
     frameRetentionScores[i] = retentionScore;
     float keepThreshold = (localPriority > 0.58f) ? 0.16f : 0.20f;
     skipFusionFrame[i] = frameFusionWeights[i] < keepThreshold;
-    perf.globalReliabilityReadbackMs +=
-        elapsedMillis(reliabilityReadbackStart);
-
-  }
-
-  if (pendingFrames.size() > 2) {
-    std::vector<std::pair<float, size_t>> rankedFrames;
-    rankedFrames.reserve(pendingFrames.size() - 1);
-    for (size_t i = 1; i < pendingFrames.size(); ++i) {
-      if (!skipFusionFrame[i]) {
-        rankedFrames.push_back({frameRetentionScores[i], i});
-      }
+      perf.globalReliabilityReadbackMs +=
+          elapsedMillis(reliabilityReadbackStart);
     }
-    std::sort(rankedFrames.begin(), rankedFrames.end(),
-              [](const auto &a, const auto &b) { return a.first > b.first; });
 
-    const size_t baseMaxExtraFrames = 6;
-    size_t edgeReserve = 0;
-    for (size_t i = 1; i < pendingFrames.size(); ++i) {
-      if (!skipFusionFrame[i] && frameLocalSummaries[i].textGoodFraction > 0.72f &&
-          frameFusionWeights[i] > 0.14f) {
-        ++edgeReserve;
+    if (pendingFrames.size() > 2) {
+      std::vector<std::pair<float, size_t>> rankedFrames;
+      rankedFrames.reserve(pendingFrames.size() - 1);
+      for (size_t i = 1; i < pendingFrames.size(); ++i) {
+        if (!skipFusionFrame[i]) {
+          rankedFrames.push_back({frameRetentionScores[i], i});
+        }
       }
-    }
-    edgeReserve = std::min<size_t>(edgeReserve, 2);
-    const size_t maxExtraFrames = baseMaxExtraFrames + edgeReserve;
-    for (size_t rank = maxExtraFrames; rank < rankedFrames.size(); ++rank) {
-      size_t frameIndex = rankedFrames[rank].second;
-      const LocalReliabilitySummary &local = frameLocalSummaries[frameIndex];
-      bool preserveForText =
-          local.textGoodFraction > 0.80f && frameFusionWeights[frameIndex] > 0.16f;
-      if (preserveForText) {
-        continue;
+      std::sort(rankedFrames.begin(), rankedFrames.end(),
+                [](const auto &a, const auto &b) { return a.first > b.first; });
+
+      const size_t baseMaxExtraFrames = 6;
+      size_t edgeReserve = 0;
+      for (size_t i = 1; i < pendingFrames.size(); ++i) {
+        if (!skipFusionFrame[i] &&
+            frameLocalSummaries[i].textGoodFraction > 0.72f &&
+            frameFusionWeights[i] > 0.14f) {
+          ++edgeReserve;
+        }
       }
-      skipFusionFrame[frameIndex] = true;
+      edgeReserve = std::min<size_t>(edgeReserve, 2);
+      const size_t maxExtraFrames = baseMaxExtraFrames + edgeReserve;
+      for (size_t rank = maxExtraFrames; rank < rankedFrames.size(); ++rank) {
+        size_t frameIndex = rankedFrames[rank].second;
+        const LocalReliabilitySummary &local = frameLocalSummaries[frameIndex];
+        bool preserveForText =
+            local.textGoodFraction > 0.80f &&
+            frameFusionWeights[frameIndex] > 0.16f;
+        if (preserveForText) {
+          continue;
+        }
+        skipFusionFrame[frameIndex] = true;
+      }
     }
   }
   TIME_END(phase3b_GlobalReliability);
-  perf.globalReliabilityMs = elapsed_phase3b_GlobalReliability;
+  perf.globalReliabilityMs =
+      kFastPath ? 0.0 : elapsed_phase3b_GlobalReliability;
 
   auto ensureRefinedFrameCache = [&](size_t frameIndex) -> bool {
     if (frameIndex == 0 || frameIndex >= pendingFrames.size() ||
@@ -2762,8 +3039,7 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
     pc.bufferStride = tileW + 16;
 
     const auto &coarseAlign = frameAlignments[frameIndex].coarseAlign;
-    std::vector<Point> seededFlow = buildDenseAlignmentSeed(
-        coarseAlign, (uint32_t)gridW, (uint32_t)gridH, (uint32_t)tileSize);
+    std::vector<Point> seededFlow = frameAlignments[frameIndex].seededFlow;
     uploadAlignmentField(device, alignmentMemory, seededFlow);
     fillFloatBuffer(device, robustnessMemory, (size_t)inputW * inputH, 1.0f);
 
@@ -2949,6 +3225,53 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
     }
   }
 
+  struct FrameMaskBuffer {
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+  };
+  std::vector<FrameMaskBuffer> frameMaskBuffers(pendingFrames.size());
+  const VkDeviceSize frameMaskBufferSize =
+      (VkDeviceSize)localTilesX * localTilesY * sizeof(float);
+  for (size_t i = 0; i < pendingFrames.size(); ++i) {
+    const std::vector<float> &localTileMask =
+        (i > 0 && !frameLocalMaps[i].tileWeights.empty())
+            ? frameLocalMaps[i].tileWeights
+            : defaultLocalTileMask;
+
+    VkBufferCreateInfo maskInfo{};
+    maskInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    maskInfo.size = frameMaskBufferSize;
+    maskInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    maskInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VK_CHECK(vkCreateBuffer(device, &maskInfo, nullptr,
+                            &frameMaskBuffers[i].buffer));
+
+    VkMemoryRequirements maskReqs;
+    vkGetBufferMemoryRequirements(device, frameMaskBuffers[i].buffer, &maskReqs);
+    VkMemoryAllocateInfo maskAlloc{};
+    maskAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    maskAlloc.allocationSize = maskReqs.size;
+    maskAlloc.memoryTypeIndex = vm.findMemoryType(
+        maskReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                     VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VK_CHECK(
+        vkAllocateMemory(device, &maskAlloc, nullptr, &frameMaskBuffers[i].memory));
+    vkBindBufferMemory(device, frameMaskBuffers[i].buffer,
+                       frameMaskBuffers[i].memory, 0);
+
+    void *maskPtr = nullptr;
+    VkResult maskMapRes = vkMapMemory(device, frameMaskBuffers[i].memory, 0,
+                                      frameMaskBufferSize, 0, &maskPtr);
+    if (maskMapRes == VK_SUCCESS && maskPtr != nullptr) {
+      float *dst = static_cast<float *>(maskPtr);
+      std::fill(dst, dst + (size_t)localTilesX * (size_t)localTilesY, 1.0f);
+      size_t localMaskCount = std::min(
+          localTileMask.size(), (size_t)localTilesX * (size_t)localTilesY);
+      std::memcpy(dst, localTileMask.data(), localMaskCount * sizeof(float));
+      vkUnmapMemory(device, frameMaskBuffers[i].memory);
+    }
+  }
+
   // Phase 4: Sequential tile processing
   // For each tile: clear accum → accumulate all frames → normalize
   // =====================================================================
@@ -3040,31 +3363,32 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
         pc.baseNoise = pc.noiseBeta;
         pc.frameWeight = isRef ? 1.0f : frameFusionWeights[i];
 
-        const std::vector<float> &localTileMask =
-            (!isRef && !frameLocalMaps[i].tileWeights.empty())
-                ? frameLocalMaps[i].tileWeights
-                : defaultLocalTileMask;
         const auto localMaskUploadStart = PerfClock::now();
-        void *localMaskPtr = nullptr;
-        VkResult localMaskRes =
-            vkMapMemory(device, localTileMaskMemory, 0, VK_WHOLE_SIZE, 0,
-                        &localMaskPtr);
-        if (localMaskRes == VK_SUCCESS && localMaskPtr != nullptr) {
-          std::memcpy(localMaskPtr, localTileMask.data(),
-                      localTileMask.size() * sizeof(float));
-          vkUnmapMemory(device, localTileMaskMemory);
-        }
+        updateBufferDescriptorSet(device, greenScatterSet,
+                                  frameMaskBuffers[i].buffer, VK_WHOLE_SIZE, 8);
         perf.localMaskUploadMs += elapsedMillis(localMaskUploadStart);
-        if (!isRef && !frameRefinedCaches[i].valid) {
+        if (!kFastPath && !isRef &&
+            !frameRefinedCaches[i].valid) {
           ensureRefinedFrameCache(i);
         }
         const RefinedFrameCache *refinedCache =
-            (!isRef && frameRefinedCaches[i].valid) ? &frameRefinedCaches[i]
-                                                    : nullptr;
+            (!kFastPath && !isRef &&
+             frameRefinedCaches[i].valid)
+                ? &frameRefinedCaches[i]
+                : nullptr;
 
         if (!isRef) {
           ++perf.tileAlignedFrameInstances;
-          if (refinedCache != nullptr) {
+          if (kFastPath) {
+            const auto tileAlignmentSeedStart = PerfClock::now();
+            uploadAlignmentField(device, alignmentMemory,
+                                 frameAlignments[i].seededFlow);
+            fillFloatBuffer(device, robustnessMemory, (size_t)inputW * inputH,
+                            1.0f);
+            fillFloatBuffer(device, flowVarianceMemory, (size_t)inputW * inputH,
+                            0.0f);
+            perf.tileAlignmentSeedMs += elapsedMillis(tileAlignmentSeedStart);
+          } else if (refinedCache != nullptr) {
             const auto tileRefinedStateUploadStart = PerfClock::now();
             uploadAlignmentField(device, alignmentMemory, refinedCache->alignment);
             uploadFloatBuffer(device, robustnessMemory, refinedCache->robustness);
@@ -3075,10 +3399,7 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
           } else {
             const auto tileAlignmentSeedStart = PerfClock::now();
             // Upload coarse alignment for this frame
-            const auto &coarseAlign = frameAlignments[i].coarseAlign;
-            std::vector<Point> seededFlow = buildDenseAlignmentSeed(
-                coarseAlign, (uint32_t)gridW, (uint32_t)gridH,
-                (uint32_t)tileSize);
+            std::vector<Point> seededFlow = frameAlignments[i].seededFlow;
             uploadAlignmentField(device, alignmentMemory, seededFlow);
             fillFloatBuffer(device, robustnessMemory, (size_t)inputW * inputH,
                             1.0f);
@@ -3295,11 +3616,12 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
               VK_ACCESS_HOST_WRITE_BIT;
           preScatterBarriers[preScatterBarrierCount].dstAccessMask =
               VK_ACCESS_SHADER_READ_BIT;
-          preScatterBarriers[preScatterBarrierCount].buffer = localTileMaskBuffer;
+          preScatterBarriers[preScatterBarrierCount].buffer =
+              frameMaskBuffers[i].buffer;
           preScatterBarriers[preScatterBarrierCount].size = VK_WHOLE_SIZE;
           ++preScatterBarrierCount;
 
-          if (refinedCache != nullptr) {
+          if (kFastPath ? !isRef : refinedCache != nullptr) {
             preScatterBarriers[preScatterBarrierCount].sType =
                 VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
             preScatterBarriers[preScatterBarrierCount].srcAccessMask =
@@ -3499,53 +3821,6 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
                              nullptr, 2, priorBarriers, 0, nullptr);
 
-        for (int colorIdx = 0; colorIdx < 2; ++colorIdx) {
-          const uint32_t planeIndex = (colorIdx == 0) ? 0u : 3u;
-          PlaneTileRange colorRange = computePlaneTileRange(
-              mCfaPattern, (int)planeIndex, tileOriginX, tileOriginY,
-              currentTileW, currentTileH, outputW, outputH);
-          if (colorRange.width == 0 || colorRange.height == 0) {
-            continue;
-          }
-          updateBufferDescriptorSet(device, colorNormalizeSets[colorIdx],
-                                    fusedBayerBuffer, VK_WHOLE_SIZE, 0);
-          updateBufferDescriptorSet(device, colorNormalizeSets[colorIdx],
-                                    rbScatterAccumBuffers[colorIdx],
-                                    VK_WHOLE_SIZE, 1);
-          updateBufferDescriptorSet(device, colorNormalizeSets[colorIdx],
-                                    priorBayerBuffer, VK_WHOLE_SIZE, 2);
-          updateBufferDescriptorSet(device, colorNormalizeSets[colorIdx],
-                                    priorWeightBuffer, VK_WHOLE_SIZE, 3);
-          vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            colorNormalizePipeline);
-          vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                  colorNormalizePipelineLayout, 0, 1,
-                                  &colorNormalizeSets[colorIdx], 0, nullptr);
-
-          PushConstants colorPc{};
-          colorPc.width = outputW;
-          colorPc.height = outputH;
-          colorPc.scale = (float)scale;
-          colorPc.planeWidth = inputW;
-          colorPc.planeHeight = inputH;
-          colorPc.bufferStride = colorRange.width + 16;
-          colorPc.tileX = colorRange.startX;
-          colorPc.tileY = colorRange.startY;
-          colorPc.tileW = colorRange.width;
-          colorPc.tileH = colorRange.height;
-          colorPc.planeIndex = planeIndex;
-          colorPc.cfaPattern = (uint32_t)mCfaPattern;
-          colorPc.whiteLevel = mWhiteLevel;
-          memcpy(colorPc.blackLevel, mBlackLevel, 4 * sizeof(float));
-          memcpy(colorPc.wbGains, mWbGains, 4 * sizeof(float));
-
-          vkCmdPushConstants(cb, colorNormalizePipelineLayout,
-                             VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(colorPc),
-                             &colorPc);
-          vkCmdDispatch(cb, (colorRange.width + 15) / 16,
-                        (colorRange.height + 15) / 16, 1);
-        }
-
         PlaneTileRange greenRange0 = computePlaneTileRange(
             mCfaPattern, 1, tileOriginX, tileOriginY, currentTileW, currentTileH,
             outputW, outputH);
@@ -3607,6 +3882,64 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
         }
         }
 
+        VkBufferMemoryBarrier greenOutputBarrier{
+            VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+        greenOutputBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        greenOutputBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+                                           VK_ACCESS_SHADER_WRITE_BIT;
+        greenOutputBarrier.buffer = fusedBayerBuffer;
+        greenOutputBarrier.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+                             nullptr, 1, &greenOutputBarrier, 0, nullptr);
+
+        for (int colorIdx = 0; colorIdx < 2; ++colorIdx) {
+          const uint32_t planeIndex = (colorIdx == 0) ? 0u : 3u;
+          PlaneTileRange colorRange = computePlaneTileRange(
+              mCfaPattern, (int)planeIndex, tileOriginX, tileOriginY,
+              currentTileW, currentTileH, outputW, outputH);
+          if (colorRange.width == 0 || colorRange.height == 0) {
+            continue;
+          }
+          updateBufferDescriptorSet(device, colorNormalizeSets[colorIdx],
+                                    fusedBayerBuffer, VK_WHOLE_SIZE, 0);
+          updateBufferDescriptorSet(device, colorNormalizeSets[colorIdx],
+                                    rbScatterAccumBuffers[colorIdx],
+                                    VK_WHOLE_SIZE, 1);
+          updateBufferDescriptorSet(device, colorNormalizeSets[colorIdx],
+                                    priorBayerBuffer, VK_WHOLE_SIZE, 2);
+          updateBufferDescriptorSet(device, colorNormalizeSets[colorIdx],
+                                    priorWeightBuffer, VK_WHOLE_SIZE, 3);
+          vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            colorNormalizePipeline);
+          vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                  colorNormalizePipelineLayout, 0, 1,
+                                  &colorNormalizeSets[colorIdx], 0, nullptr);
+
+          PushConstants colorPc{};
+          colorPc.width = outputW;
+          colorPc.height = outputH;
+          colorPc.scale = (float)scale;
+          colorPc.planeWidth = inputW;
+          colorPc.planeHeight = inputH;
+          colorPc.bufferStride = colorRange.width + 16;
+          colorPc.tileX = colorRange.startX;
+          colorPc.tileY = colorRange.startY;
+          colorPc.tileW = colorRange.width;
+          colorPc.tileH = colorRange.height;
+          colorPc.planeIndex = planeIndex;
+          colorPc.cfaPattern = (uint32_t)mCfaPattern;
+          colorPc.whiteLevel = mWhiteLevel;
+          memcpy(colorPc.blackLevel, mBlackLevel, 4 * sizeof(float));
+          memcpy(colorPc.wbGains, mWbGains, 4 * sizeof(float));
+
+          vkCmdPushConstants(cb, colorNormalizePipelineLayout,
+                             VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(colorPc),
+                             &colorPc);
+          vkCmdDispatch(cb, (colorRange.width + 15) / 16,
+                        (colorRange.height + 15) / 16, 1);
+        }
+
         vm.endSingleTimeCommands(cb);
         perf.normalizeMs += elapsedMillis(normalizeStart);
       }
@@ -3646,6 +3979,12 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
       vkDestroyImage(device, uf.image, nullptr);
     if (uf.mem)
       vkFreeMemory(device, uf.mem, nullptr);
+  }
+  for (auto &mask : frameMaskBuffers) {
+    if (mask.buffer != VK_NULL_HANDLE)
+      vkDestroyBuffer(device, mask.buffer, nullptr);
+    if (mask.memory != VK_NULL_HANDLE)
+      vkFreeMemory(device, mask.memory, nullptr);
   }
 
   vkDestroySampler(device, sampler, nullptr);

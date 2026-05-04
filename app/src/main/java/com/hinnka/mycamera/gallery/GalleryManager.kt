@@ -17,6 +17,7 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.hdr.GainmapResult
 import com.hinnka.mycamera.hdr.GainmapSourceSet
+import com.hinnka.mycamera.hdr.HdrGainmapStrength
 import com.hinnka.mycamera.hdr.UltraHdrWriter
 import com.hinnka.mycamera.hdr.UnifiedGainmapProducer
 import com.hinnka.mycamera.livephoto.MotionPhotoWriter
@@ -26,6 +27,7 @@ import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawProcessingPreferences
 import com.hinnka.mycamera.utils.BitmapUtils
+import com.hinnka.mycamera.utils.DngBlackLevelPatcher
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.RawProcessor
 import com.hinnka.mycamera.utils.YuvProcessor
@@ -34,6 +36,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
@@ -63,6 +67,7 @@ import androidx.core.net.toUri
  */
 object GalleryManager {
     private const val TAG = "PhotoManager"
+    private val metadataMutex = Mutex()
     private const val THUMBNAIL_MAX_EDGE = 512
     private const val PHOTOS_DIR = "photos"
     private const val BURST_DIR = "burst"
@@ -72,6 +77,7 @@ object GalleryManager {
     private const val VIDEO_FILE = "video.mp4"
     private const val DNG_FILE = "original.dng"
     private const val METADATA_FILE = "metadata.json"
+    private const val AI_DENOISE_FILE = "ai_denoise.jpg"
     private const val THUMBNAIL_FILE = "thumbnail.jpg"
     private const val BOKEH_FILE = "bokeh.jpg"
     private const val DETAIL_HDR_FILE = "detail_hdr.jpg"
@@ -108,6 +114,33 @@ object GalleryManager {
     private val detailHdrBuildJobs = ConcurrentHashMap<String, Job>()
     private val _detailHdrReadyEvents = MutableSharedFlow<String>(extraBufferCapacity = 16)
     val detailHdrReadyEvents: SharedFlow<String> = _detailHdrReadyEvents.asSharedFlow()
+
+    private suspend fun resolveRawAutoWhiteBalanceEstimate(
+        context: Context,
+        metadata: MediaMetadata?
+    ): Boolean {
+        return metadata?.rawAutoWhiteBalanceEstimate
+            ?: (ContentRepository.getInstance(context).userPreferencesRepository.userPreferences.firstOrNull()
+                ?.rawAutoWhiteBalanceEstimate ?: false)
+    }
+
+    private suspend fun resolveRawAutoExposure(
+        context: Context,
+        metadata: MediaMetadata?
+    ): Boolean {
+        return metadata?.rawAutoExposure
+            ?: (ContentRepository.getInstance(context).userPreferencesRepository.userPreferences.firstOrNull()
+                ?.rawAutoExposure ?: true)
+    }
+
+    private suspend fun resolveRawMeteringCenterWeight(
+        context: Context,
+        metadata: MediaMetadata?
+    ): Float {
+        return metadata?.rawMeteringCenterWeight
+            ?: (ContentRepository.getInstance(context).userPreferencesRepository.userPreferences.firstOrNull()
+                ?.rawMeteringCenterWeight ?: 0f)
+    }
     private val _photoLibraryChangedEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 16)
     val photoLibraryChangedEvents: SharedFlow<Unit> = _photoLibraryChangedEvents.asSharedFlow()
     private val hdrWorkLock = Any()
@@ -163,6 +196,10 @@ object GalleryManager {
 
     fun getMetadataFile(context: Context, photoId: String): File {
         return File(getPhotoDir(context, photoId), METADATA_FILE)
+    }
+
+    fun getAiDenoiseFile(context: Context, photoId: String): File {
+        return File(getPhotoDir(context, photoId), AI_DENOISE_FILE)
     }
 
     fun getDepthFile(context: Context, photoId: String): File {
@@ -280,6 +317,8 @@ object GalleryManager {
                     hasAudio = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO)?.let {
                         it == "yes" || it == "true" || it == "1"
                     }
+                } catch (e: Exception) {
+                    PLog.w(TAG, "Video retriever metadata unavailable for $uri: ${e.message}")
                 } finally {
                     retriever.release()
                 }
@@ -356,7 +395,9 @@ object GalleryManager {
 
     private fun canReuseEmbeddedGainmap(metadata: MediaMetadata): Boolean {
         return metadata.manualHdrEffectEnabled &&
+                !metadata.hasAiDenoisedBase &&
                 metadata.hasEmbeddedGainmap &&
+                HdrGainmapStrength.coerce(metadata.hdrEffectStrength) == HdrGainmapStrength.DEFAULT &&
                 metadata.lutId == null &&
                 metadata.colorRecipeParams == null &&
                 metadata.sharpening == null &&
@@ -436,7 +477,10 @@ object GalleryManager {
                 return@withContext false
             }
 
-            val gainmapResult = gainmapProducer.build(ultraHdrSource)
+            val gainmapResult = gainmapProducer.build(
+                ultraHdrSource,
+                HdrGainmapStrength.coerce(resolvedMetadata.hdrEffectStrength)
+            )
             FileOutputStream(tempFile).use { outputStream ->
                 if (!writeFinalJpeg(ultraHdrSource.sdrBase, outputStream, quality, gainmapResult)) {
                     tempFile.delete()
@@ -541,12 +585,19 @@ object GalleryManager {
                 }
                 var gainmapResult: GainmapResult? = null
                 val gainmapElapsed = measureTimeMillis {
-                    gainmapResult = ultraHdrSource?.let { gainmapProducer.build(it) }
+                    gainmapResult = ultraHdrSource?.let {
+                        gainmapProducer.build(it, HdrGainmapStrength.coerce(metadata.hdrEffectStrength))
+                    }
                 }
                 PLog.d(TAG, "gainmapProducer.build took ${gainmapElapsed}ms, enabled=${gainmapResult != null}")
 
                 // 读取照片
-                val processedBitmap = ultraHdrSource?.sdrBase ?: bitmap?.let {
+                val processedBitmap = (ultraHdrSource?.sdrBase ?: if (metadata.hasAiDenoisedBase) {
+                    photoProcessor.process(
+                        context, id, metadata,
+                        sharpeningValue, noiseReductionValue, chromaNoiseReductionValue
+                    )
+                } else bitmap?.let {
                     photoProcessor.processBitmap(
                         context, id, bitmap, metadata,
                         sharpeningValue, noiseReductionValue, chromaNoiseReductionValue,
@@ -555,7 +606,7 @@ object GalleryManager {
                 } ?: photoProcessor.process(
                     context, id, metadata,
                     sharpeningValue, noiseReductionValue, chromaNoiseReductionValue
-                ) ?: return@withContext false
+                )) ?: return@withContext false
 
                 PLog.d(
                     TAG,
@@ -887,7 +938,7 @@ object GalleryManager {
                 height = finalHeight,
                 cropRegion = effectiveCropRegion,
             )
-            metadataFile.writeText(metadataWithInfo.toJson())
+            saveMetadata(context, photoId, metadataWithInfo)
 
             if (thumbnail != null && !thumbnail.isRecycled) {
                 generateThumbnail(thumbnail, thumbnailFile)
@@ -940,6 +991,10 @@ object GalleryManager {
 
     suspend fun generateBokehPhoto(context: Context, photoId: String, metadata: MediaMetadata, bitmap: Bitmap) {
         val aperture = metadata.computationalAperture ?: 0f
+        if (aperture <= 0f) {
+            getBokehFile(context, photoId).takeIf { it.exists() }?.delete()
+            return
+        }
         val focusPointX = metadata.focusPointX
         val focusPointY = metadata.focusPointY
         val bokeh = ContentRepository.getInstance(context).depthBokehProcessor.applyHighQualityBokeh(
@@ -1053,7 +1108,8 @@ object GalleryManager {
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
         exposureBias: Float? = null,
-        droMode: RawProcessingPreferences.DROMode = RawProcessingPreferences.DROMode.OFF
+        droMode: RawProcessingPreferences.DROMode = RawProcessingPreferences.DROMode.OFF,
+        exportDngWithRawExport: Boolean = false
     ) = withContext(Dispatchers.IO) {
         try {
             val photoDir = getPhotoDir(context, photoId, true)
@@ -1064,9 +1120,19 @@ object GalleryManager {
             val tempDngFile = File(photoDir, "temp.dng")
             val tempFile = File(photoDir, "temp.jpg")
 
-            val metadata = loadMetadata(context, photoId) ?: return@withContext
+            val metadata = loadMetadata(context, photoId)
+            if (metadata == null) {
+                PLog.e(TAG, "saveRawPhoto aborted: metadata unavailable for $photoId")
+                image.close()
+                return@withContext
+            }
 
-            captureResult ?: return@withContext
+            val resolvedCaptureResult = captureResult
+            if (resolvedCaptureResult == null) {
+                PLog.e(TAG, "saveRawPhoto aborted: captureResult unavailable for $photoId")
+                image.close()
+                return@withContext
+            }
 
             var dngSaveAttempted = false
             FileOutputStream(tempDngFile).use { outputStream ->
@@ -1075,7 +1141,7 @@ object GalleryManager {
                         RawProcessor.saveToDng(
                             image,
                             characteristics,
-                            captureResult,
+                            resolvedCaptureResult,
                             outputStream,
                             rotation,
                             thumbnail
@@ -1091,6 +1157,7 @@ object GalleryManager {
                 tempDngFile.delete()
                 return@withContext
             }
+            patchSavedDngBlackLevel(tempDngFile, metadata)
             if (dngFile.exists()) {
                 dngFile.delete()
             }
@@ -1098,7 +1165,7 @@ object GalleryManager {
                 tempDngFile.copyTo(dngFile, overwrite = true)
                 tempDngFile.delete()
             }
-            if (shouldAutoSave) {
+            if (shouldAutoSave && exportDngWithRawExport) {
                 exportDng(context, photoId, dngFile, metadata)
             }
 
@@ -1109,7 +1176,14 @@ object GalleryManager {
                 cropRegion = metadata.cropRegion,
                 rotation = rotation,
                 exposureBias = exposureBias ?: 0f,
-                sharpeningValue = 0.4f
+                rawExposureCompensation = metadata.rawExposureCompensation ?: 0f,
+                rawAutoExposure = resolveRawAutoExposure(context, metadata),
+                rawMeteringCenterWeight = resolveRawMeteringCenterWeight(context, metadata),
+                rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
+                rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
+                rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(context, metadata),
+                sharpeningValue = 0.4f,
+                rawDcpId = metadata.rawDcpId
             ) ?: return@withContext
             var bitmap = rawResult.sdrBitmap
 
@@ -1121,6 +1195,7 @@ object GalleryManager {
                 writeFinalJpeg(bitmap, outputStream, photoQuality)
             }
             tempFile.renameTo(photoFile)
+            generateBokehPhoto(context, photoId, metadata, bitmap)
             val preparedUltraHdrSource = if (metadata.manualHdrEffectEnabled) {
                 photoProcessor.prepareUltraHdrSourceFromRawResult(
                     context = context,
@@ -1202,7 +1277,8 @@ object GalleryManager {
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
         exposureBias: Float? = null,
-        droMode: RawProcessingPreferences.DROMode = RawProcessingPreferences.DROMode.OFF
+        droMode: RawProcessingPreferences.DROMode = RawProcessingPreferences.DROMode.OFF,
+        exportDngWithRawExport: Boolean = false
     ) {
         // 根据图像格式处理
         when (val format = image.format) {
@@ -1239,7 +1315,8 @@ object GalleryManager {
                     chromaNoiseReductionValue,
                     photoQuality,
                     exposureBias,
-                    droMode
+                    droMode,
+                    exportDngWithRawExport
                 )
             }
 
@@ -1270,6 +1347,7 @@ object GalleryManager {
                 writeFinalJpeg(bitmap, outputStream, photoQuality)
             }
             tempFile.renameTo(photoFile)
+//            generateBokehPhoto(context, photoId, metadata, bitmap)
             queueDetailHdrCacheBuild(
                 context = context,
                 photoId = photoId,
@@ -1528,6 +1606,7 @@ object GalleryManager {
                 writeFinalJpeg(result, outputStream, photoQuality)
             }
             tempFile.renameTo(photoFile)
+            generateBokehPhoto(context, photoId, metadata, result)
             // Auto Save
             if (shouldAutoSave) {
                 val metadata = loadMetadata(context, photoId) ?: return@withContext
@@ -1566,7 +1645,8 @@ object GalleryManager {
         useSuperResolution: Boolean = false,
         superResolutionScale: Float = 1.0f,
         useGpuAcceleration: Boolean = true,
-        exposureBias: Float? = null
+        exposureBias: Float? = null,
+        exportDngWithRawExport: Boolean = false
     ) = withContext(Dispatchers.IO) {
         try {
             val photoDir = getPhotoDir(context, photoId, true)
@@ -1629,80 +1709,62 @@ object GalleryManager {
 
             val finalStackResult = rawStackResult ?: return@withContext
 
+            val dngWritten = trySaveStackedRawDng(
+                context = context,
+                photoId = photoId,
+                dngFile = dngFile,
+                fusedBayerBuffer = finalStackResult.fusedBayerBuffer ?: return@withContext,
+                width = finalStackResult.width,
+                height = finalStackResult.height,
+                rawMetadata = rawMetadata,
+                isNormalizedSensorData = finalStackResult.isNormalizedSensorData,
+                characteristics = characteristics,
+                captureResult = captureResult,
+                rotation = rotation,
+                thumbnail = null,
+                metadata = metadata,
+                shouldAutoSave = shouldAutoSave,
+                exportDngWithRawExport = exportDngWithRawExport
+            )
+            if (!dngWritten) {
+                PLog.e(TAG, "Failed to persist stacked RAW DNG before rendering preview")
+                return@withContext
+            }
+            finalStackResult.fusedBayerBuffer = null
+            @Suppress("ExplicitGarbageCollectionCall")
+            System.gc()
+
             val result: Bitmap = run {
-                // Construct metadata for Linear RGB
-                val finalWidth = finalStackResult.width
-                val finalHeight = finalStackResult.height
-                val linearMetadata = rawMetadata.copy(
-                    width = finalWidth,
-                    height = finalHeight,
-                    cfaPattern = RawMetadata.CFA_LINEAR_RGB,
-                    blackLevel = floatArrayOf(0f, 0f, 0f, 0f),
-                    whiteLevel = 65535f,
-                    whiteBalanceGains = floatArrayOf(1f, 1f, 1f, 1f),
-                    noiseProfile = floatArrayOf(0f, 0f),
-                    // Keep original CCM and other params
-                )
                 var bitmap = RawDemosaicProcessor.getInstance().process(
                     context,
-                    finalStackResult.stackedRgbBuffer ?: return@run null,
-                    finalWidth,
-                    finalHeight,
-                    finalWidth * 6, // 3 channels * 2 bytes
-                    linearMetadata,
+                    dngFile.absolutePath,
                     aspectRatio,
                     metadata.cropRegion,
                     rotation,
+                    exposureBias = exposureBias ?: 0f,
+                    rawExposureCompensation = metadata.rawExposureCompensation ?: 0f,
+                    rawAutoExposure = resolveRawAutoExposure(context, metadata),
+                    rawMeteringCenterWeight = resolveRawMeteringCenterWeight(context, metadata),
+                    rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
+                    rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
+                    rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(context, metadata),
                     sharpeningValue = 0.4f,
                     denoiseValue = 0.2f,
-                    chromaDenoiseValue = 0.2f
-                )
-                // GPU 已消费 stackedRgbBuffer，立即释放引用（超分时约 288 MB）
-                // fusedBayerBuffer 仍由 finalStackResult 持有，用于后续 DNG 保存
-                finalStackResult.stackedRgbBuffer = null
-
-                if (metadata.isMirrored && bitmap != null) {
+                    rawDcpId = metadata.rawDcpId
+                ) ?: return@run null
+                if (metadata.isMirrored) {
                     bitmap = BitmapUtils.flipHorizontal(bitmap)
                 }
 
                 bitmap
             } ?: return@withContext
 
-            processingScope.launch {
-                val dngWritten = trySaveStackedRawDng(
-                    context = context,
-                    photoId = photoId,
-                    dngFile = dngFile,
-                    fusedBayerBuffer = finalStackResult.fusedBayerBuffer,
-                    width = finalStackResult.width,
-                    height = finalStackResult.height,
-                    rawMetadata = rawMetadata,
-                    isNormalizedSensorData = finalStackResult.isNormalizedSensorData,
-                    characteristics = characteristics,
-                    captureResult = captureResult,
-                    rotation = rotation,
-                    thumbnail = result,
-                    metadata = metadata,
-                    shouldAutoSave = shouldAutoSave
-                )
-                if (!dngWritten) {
-                    try {
-                        result.let {
-                            val buffer = ByteBuffer.allocateDirect(it.width * it.height * 8)
-                            it.copyPixelsToBuffer(buffer)
-                            YuvProcessor.saveCompressedArgb(buffer, it.width, it.height, yuvFile.absolutePath)
-                        }
-                    } catch (e: Throwable) {
-                        PLog.e(TAG, "saveRawStackedPhoto saveCompressedArgb", e)
-                    }
-                }
-            }
-
             // Save Original (Stacked Result)
             FileOutputStream(tempFile).use { outputStream ->
                 writeFinalJpeg(result, outputStream, photoQuality)
             }
             tempFile.renameTo(photoFile)
+            generateBokehPhoto(context, photoId, metadata, result)
             // Auto Save
             if (shouldAutoSave) {
                 exportPhoto(
@@ -1737,6 +1799,7 @@ object GalleryManager {
         thumbnail: Bitmap?,
         metadata: MediaMetadata,
         shouldAutoSave: Boolean,
+        exportDngWithRawExport: Boolean,
     ): Boolean {
         val tempDngFile = File(dngFile.parentFile, "temp_stacked.dng")
         val dngWritten = try {
@@ -1769,6 +1832,7 @@ object GalleryManager {
             tempDngFile.delete()
             return false
         }
+        patchSavedDngBlackLevel(tempDngFile, metadata)
 
         try {
             if (dngFile.exists()) {
@@ -1787,11 +1851,22 @@ object GalleryManager {
             return false
         }
 
-        if (shouldAutoSave) {
+        if (shouldAutoSave && exportDngWithRawExport) {
             exportDng(context, photoId, dngFile, metadata)
         }
 
         return true
+    }
+
+    private fun patchSavedDngBlackLevel(dngFile: File, metadata: MediaMetadata) {
+        val patched = DngBlackLevelPatcher.patchFromMode(
+            file = dngFile,
+            mode = metadata.rawBlackLevelMode,
+            customBlackLevel = metadata.rawCustomBlackLevel
+        )
+        if (patched) {
+            PLog.d(TAG, "Applied DNG BlackLevel correction (${metadata.rawBlackLevelMode}) to ${dngFile.name}")
+        }
     }
 
 
@@ -1816,7 +1891,8 @@ object GalleryManager {
         superResolutionScale: Float = 1.0f,
         useGpuAcceleration: Boolean = true,
         exposureBias: Float? = null,
-        droMode: RawProcessingPreferences.DROMode = RawProcessingPreferences.DROMode.OFF
+        droMode: RawProcessingPreferences.DROMode = RawProcessingPreferences.DROMode.OFF,
+        exportDngWithRawExport: Boolean = false
     ) = withContext(Dispatchers.IO) {
         when (val format = images[0].format) {
             ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
@@ -1856,7 +1932,8 @@ object GalleryManager {
                     useSuperResolution,
                     superResolutionScale,
                     useGpuAcceleration,
-                    exposureBias
+                    exposureBias,
+                    exportDngWithRawExport
                 )
             }
 
@@ -2033,7 +2110,6 @@ object GalleryManager {
         val baseDir = getPhotosBaseDir(context)
         return baseDir.listFiles()
             ?.filter { it.isDirectory }
-            ?.sortedByDescending { it.lastModified() }
             ?.map { it.name }
             ?: emptyList()
     }
@@ -2161,17 +2237,24 @@ object GalleryManager {
      * 加载元数据
      */
     suspend fun loadMetadata(context: Context, photoId: String): MediaMetadata? {
-        return withContext(Dispatchers.IO) {
-            try {
-                val file = getMetadataFile(context, photoId)
-                if (file.exists()) {
-                    MediaMetadata.fromJson(file.readText())
-                } else {
+        return metadataMutex.withLock {
+            withContext(Dispatchers.IO) {
+                try {
+                    val file = getMetadataFile(context, photoId)
+                    if (file.exists()) {
+                        val content = file.readText()
+                        val metadata = MediaMetadata.fromJson(content)
+                        if (metadata == null) {
+                            PLog.e(TAG, "loadMetadata: fromJson returned null for $photoId, content length=${content.length}")
+                        }
+                        metadata
+                    } else {
+                        null
+                    }
+                } catch (e: Exception) {
+                    PLog.e(TAG, "Failed to load metadata for photo: $photoId", e)
                     null
                 }
-            } catch (e: Exception) {
-                PLog.e(TAG, "Failed to load metadata for photo: $photoId", e)
-                null
             }
         }
     }
@@ -2180,15 +2263,18 @@ object GalleryManager {
      * 更新元数据
      */
     suspend fun saveMetadata(context: Context, photoId: String, metadata: MediaMetadata): Boolean {
-        return withContext(Dispatchers.IO) {
-            try {
-                val dir = getPhotoDir(context, photoId, true)
-                val file = File(dir, METADATA_FILE)
-                file.writeText(metadata.toJson())
-                true
-            } catch (e: Exception) {
-                PLog.e(TAG, "Failed to save metadata for photo: $photoId", e)
-                false
+        return metadataMutex.withLock {
+            withContext(Dispatchers.IO) {
+                try {
+                    val dir = getPhotoDir(context, photoId, true)
+                    val file = File(dir, METADATA_FILE)
+                    val json = metadata.toJson()
+                    file.writeText(json)
+                    true
+                } catch (e: Exception) {
+                    PLog.e(TAG, "Failed to save metadata for photo: $photoId", e)
+                    false
+                }
             }
         }
     }
@@ -2226,6 +2312,7 @@ object GalleryManager {
             return@withContext null
         }
         dir.setLastModified(info.dateTaken)
+        notifyPhotoLibraryChanged()
         photoId
     }
 
@@ -2275,6 +2362,7 @@ object GalleryManager {
         }
 
         val photoFile = getPhotoFile(context, photoId)
+        val originalFile = getDngFile(context, photoId).takeIf { it.exists() } ?: getYuvFile(context, photoId).takeIf { it.exists() } ?: photoFile
         if (!photoFile.exists()) return@withContext null
         val videoFile = getVideoFile(context, photoId)
         val isBurstPhoto = hasBurstPhotos(context, photoId)
@@ -2283,7 +2371,7 @@ object GalleryManager {
             uri = Uri.fromFile(photoFile),
             thumbnailUri = thumbnailUri,
             displayName = photoFile.name,
-            dateAdded = photoFile.lastModified().takeIf { it > 0 } ?: getPhotoDir(context, photoId).lastModified(),
+            dateAdded = originalFile.lastModified().takeIf { it > 0 } ?: getPhotoDir(context, photoId).lastModified(),
             size = photoFile.length(),
             width = metadata.width,
             height = metadata.height,
@@ -2546,8 +2634,15 @@ object GalleryManager {
                     val processedBitmap = RawDemosaicProcessor.getInstance().process(
                         context,
                         dngFile.absolutePath, null, null, 0,
+                        rawExposureCompensation = updatedMetadata.rawExposureCompensation ?: 0f,
+                        rawAutoExposure = resolveRawAutoExposure(context, updatedMetadata),
+                        rawMeteringCenterWeight = resolveRawMeteringCenterWeight(context, updatedMetadata),
+                        rawBlackPointCorrection = updatedMetadata.rawBlackPointCorrection ?: 0f,
+                        rawWhitePointCorrection = updatedMetadata.rawWhitePointCorrection ?: 0f,
+                        rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(context, updatedMetadata),
                         sharpeningValue = 0.4f,
                         denoiseValue = updatedMetadata.rawDenoiseValue,
+                        rawDcpId = updatedMetadata.rawDcpId,
                         onMetadata = { raw ->
                             updatedMetadata = updatedMetadata.merge(raw)
                         }
@@ -2569,10 +2664,10 @@ object GalleryManager {
                             rotation = 0,
                             manualHdrEffectEnabled = userPrefs?.autoEnableHdr ?: false,
                         )
-                        metadataFile.writeText(updatedMetadata.toJson())
-                        if (updatedMetadata.computationalAperture != null) {
-                            generateBokehPhoto(context, photoId, updatedMetadata, processedBitmap)
-                        }
+                        saveMetadata(context, photoId, updatedMetadata)
+//                        if (updatedMetadata.computationalAperture != null) {
+//                            generateBokehPhoto(context, photoId, updatedMetadata, processedBitmap)
+//                        }
 
                         processedBitmap.recycle()
                     } else {
@@ -2595,13 +2690,13 @@ object GalleryManager {
                         }
                     )
                     saveMetadata(context, photoId, updatedMetadata)
-                    if (metadata.computationalAperture != null) {
-                        val bitmap = BitmapFactory.decodeFile(photoFile.absolutePath)
-                        if (bitmap != null) {
-                            generateBokehPhoto(context, photoId, metadata, bitmap)
-                            bitmap.recycle()
-                        }
-                    }
+//                    if (metadata.computationalAperture != null) {
+//                        val bitmap = BitmapFactory.decodeFile(photoFile.absolutePath)
+//                        if (bitmap != null) {
+//                            generateBokehPhoto(context, photoId, metadata, bitmap)
+//                            bitmap.recycle()
+//                        }
+//                    }
                 }
 
                 // Check for Motion Photo after import
@@ -2656,8 +2751,15 @@ object GalleryManager {
                 val processedBitmap = RawDemosaicProcessor.getInstance().process(
                     context,
                     dngFile.absolutePath, metadata?.ratio, metadata?.cropRegion, 0,
+                    rawExposureCompensation = updatedMetadata?.rawExposureCompensation ?: 0f,
+                    rawAutoExposure = resolveRawAutoExposure(context, updatedMetadata),
+                    rawMeteringCenterWeight = resolveRawMeteringCenterWeight(context, updatedMetadata),
+                    rawBlackPointCorrection = updatedMetadata?.rawBlackPointCorrection ?: 0f,
+                    rawWhitePointCorrection = updatedMetadata?.rawWhitePointCorrection ?: 0f,
+                    rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(context, updatedMetadata),
                     sharpeningValue = 0.4f,
                     denoiseValue = (updatedMetadata ?: MediaMetadata()).rawDenoiseValue,
+                    rawDcpId = updatedMetadata?.rawDcpId,
                     onMetadata = { raw ->
                         updatedMetadata = updatedMetadata?.merge(raw) ?: MediaMetadata().merge(raw)
                     }
@@ -2668,16 +2770,31 @@ object GalleryManager {
                     FileOutputStream(photoFile).use { out ->
                         processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
                     }
+                    // 刷新 RAW 后，AI 降噪结果已失效，清理之
+                    getAiDenoiseFile(context, photoId).takeIf { it.exists() }?.delete()
+
                     updatedMetadata?.let {
-                        generateBokehPhoto(context, photoId, it, processedBitmap.copy(Bitmap.Config.ARGB_8888, true))
-                        saveMetadata(context, photoId, it)
+                        val finalMetadata = it.copy(hasAiDenoisedBase = false)
+                        generateBokehPhoto(context, photoId, finalMetadata, processedBitmap.copy(Bitmap.Config.ARGB_8888, true))
+                        saveMetadata(context, photoId, finalMetadata)
+                        if (finalMetadata.manualHdrEffectEnabled) {
+                            deleteDetailHdrFile(context, photoId)
+                            queueDetailHdrCacheBuild(
+                                context = context,
+                                photoId = photoId,
+                                metadata = finalMetadata,
+                                sharpening = finalMetadata.sharpening ?: 0f,
+                                noiseReduction = finalMetadata.noiseReduction ?: 0f,
+                                chromaNoiseReduction = finalMetadata.chromaNoiseReduction ?: 0f
+                            )
+                        }
                     }
                     // 生成缩略图
                     generateThumbnail(processedBitmap, thumbnailFile)
                 }
                 processedBitmap
             } catch (e: Exception) {
-                PLog.e(TAG, "Failed to import photo", e)
+                PLog.e(TAG, "Failed to refresh RAW preview", e)
                 null
             }
         }
@@ -2744,7 +2861,7 @@ object GalleryManager {
             tempFile.delete()
         }
 
-        metadataFile.writeText(updatedMetadata.toJson())
+        saveMetadata(context, photoDir.name, updatedMetadata)
         generateThumbnail(photoFile, thumbnailFile)
     }
 
@@ -2799,7 +2916,7 @@ object GalleryManager {
     internal fun rotateImage(img: Bitmap, degree: Float): Bitmap {
         val matrix = Matrix()
         matrix.postRotate(degree)
-        return Bitmap.createBitmap(img, 0, 0, img.width, img.height, matrix, true)
+        return Bitmap.createBitmap(img, 0, 0, img.width, img.height, matrix, false)
     }
 
     /**
@@ -2811,6 +2928,6 @@ object GalleryManager {
             if (horizontal) -1f else 1f,
             if (vertical) -1f else 1f
         )
-        return Bitmap.createBitmap(img, 0, 0, img.width, img.height, matrix, true)
+        return Bitmap.createBitmap(img, 0, 0, img.width, img.height, matrix, false)
     }
 }
