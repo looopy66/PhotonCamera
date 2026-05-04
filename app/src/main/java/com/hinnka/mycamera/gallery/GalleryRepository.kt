@@ -242,6 +242,7 @@ class GalleryRepository(private val context: Context) {
             MediaStore.Video.Media.SIZE,
             MediaStore.Video.Media.WIDTH,
             MediaStore.Video.Media.HEIGHT,
+            MediaStore.Video.Media.ORIENTATION,
             MediaStore.Video.Media.MIME_TYPE,
             MediaStore.Video.Media.DURATION
         )
@@ -278,6 +279,7 @@ class GalleryRepository(private val context: Context) {
                 val sizeColumn = cursor.getColumnIndex(MediaStore.Video.Media.SIZE)
                 val widthColumn = cursor.getColumnIndex(MediaStore.Video.Media.WIDTH)
                 val heightColumn = cursor.getColumnIndex(MediaStore.Video.Media.HEIGHT)
+                val orientationColumn = cursor.getColumnIndex(MediaStore.Video.Media.ORIENTATION)
                 val mimeColumn = cursor.getColumnIndex(MediaStore.Video.Media.MIME_TYPE)
                 val durationColumn = cursor.getColumnIndex(MediaStore.Video.Media.DURATION)
 
@@ -294,6 +296,7 @@ class GalleryRepository(private val context: Context) {
                         )
                         val width = cursor.getOptionalInt(widthColumn)
                         val height = cursor.getOptionalInt(heightColumn)
+                        val orientation = cursor.getOptionalInt(orientationColumn)
 
                         items.add(
                             MediaData(
@@ -312,11 +315,12 @@ class GalleryRepository(private val context: Context) {
                                 metadata = MediaMetadata(
                                     mediaType = MediaType.VIDEO,
                                     dateTaken = displayDate,
-                                    width = cursor.getOptionalInt(widthColumn),
+                                    width = width,
                                     height = height,
                                     sourceUri = contentUri.toString(),
                                     mimeType = mimeType,
                                     durationMs = durationMs,
+                                    rotationDegrees = orientation,
                                     videoWidth = width,
                                     videoHeight = height
                                 )
