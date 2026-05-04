@@ -2024,10 +2024,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     return@withContext cached
                 }
 
+                val isSystem = selectedTab == GalleryTab.SYSTEM
+
                 // 2. 原始底图缓存（按 maxEdge 加载，快速预览走小尺寸，正式预览走高分辨率）
                 val currentBitmap = bitmap ?: if (showOrigin) {
-                    GalleryManager.loadOriginalBitmap(context, photo.id, maxEdge)
-                        ?: if (selectedTab == GalleryTab.SYSTEM) GalleryManager.loadBitmap(context, photo.uri, maxEdge) else null
+                    GalleryManager.loadOriginalBitmap(context, photo.id, maxEdge, isSystem)
+                        ?: if (isSystem) GalleryManager.loadBitmap(context, photo.uri, maxEdge, isSystem) else null
                 } else {
                     val bokehFile = GalleryManager.getBokehFile(context, photo.id)
                     when {
@@ -2038,7 +2040,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                             maxEdge
                         )
                         else -> GalleryManager.loadOriginalBitmap(context, photo.id, maxEdge)
-                    } ?: if (selectedTab == GalleryTab.SYSTEM) GalleryManager.loadBitmap(context, photo.uri, maxEdge) else null
+                    } ?: if (isSystem) GalleryManager.loadBitmap(context, photo.uri, maxEdge) else null
                 } ?: return@withContext null
 
                 // 只在全分辨率路径下缓存原始底图（避免低分辨率污染 origin 缓存）

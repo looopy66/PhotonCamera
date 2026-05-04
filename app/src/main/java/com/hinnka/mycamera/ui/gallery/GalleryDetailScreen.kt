@@ -512,7 +512,7 @@ fun GalleryDetailScreen(
                                     ZoomableImage(
                                         photo = photo,
                                         colorSpace = currentColorSpace,
-                                        showOrigin = showOrigin,
+                                        showOrigin = showOrigin || viewModel.selectedTab == GalleryTab.SYSTEM,
                                         isActive = page == pagerState.currentPage,
                                         viewModel = viewModel,
                                         onZoomChange = { zoomed ->
