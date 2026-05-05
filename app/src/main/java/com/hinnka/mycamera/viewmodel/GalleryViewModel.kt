@@ -292,8 +292,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         private set
     var editRawAutoExposure = MutableStateFlow(true)
         private set
-    var editRawMeteringCenterWeight = MutableStateFlow(0f)
-        private set
     var editRawBlackPointCorrection = MutableStateFlow(0f)
         private set
     var editRawWhitePointCorrection = MutableStateFlow(0f)
@@ -1020,7 +1018,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editRawDenoise.value = m.rawDenoiseValue ?: 0f
             editRawExposureCompensation.value = m.rawExposureCompensation ?: 0f
             editRawAutoExposure.value = m.rawAutoExposure ?: true
-            editRawMeteringCenterWeight.value = m.rawMeteringCenterWeight ?: 0f
             editRawBlackPointCorrection.value = m.rawBlackPointCorrection ?: 0f
             editRawWhitePointCorrection.value = m.rawWhitePointCorrection ?: 0f
             editRawDcpId.value = m.rawDcpId
@@ -1589,7 +1586,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editRawDenoise.value = metadata.rawDenoiseValue ?: 0f
             editRawExposureCompensation.value = metadata.rawExposureCompensation ?: 0f
             editRawAutoExposure.value = metadata.rawAutoExposure ?: true
-            editRawMeteringCenterWeight.value = metadata.rawMeteringCenterWeight ?: 0f
             editRawBlackPointCorrection.value = metadata.rawBlackPointCorrection ?: 0f
             editRawWhitePointCorrection.value = metadata.rawWhitePointCorrection ?: 0f
             editRawDcpId.value = metadata.rawDcpId
@@ -1608,7 +1604,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editRawDenoise.value = 0.2f
             editRawExposureCompensation.value = 0f
             editRawAutoExposure.value = true
-            editRawMeteringCenterWeight.value = 0f
             editRawBlackPointCorrection.value = 0f
             editRawWhitePointCorrection.value = 0f
             editRawDcpId.value = null
@@ -1642,7 +1637,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editRawDenoise.value = 0.2f
         editRawExposureCompensation.value = 0f
         editRawAutoExposure.value = true
-        editRawMeteringCenterWeight.value = 0f
         editRawBlackPointCorrection.value = 0f
         editRawWhitePointCorrection.value = 0f
         editRawDcpId.value = null
@@ -1746,7 +1740,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             rawDenoiseValue = editRawDenoise.value,
             rawExposureCompensation = editRawExposureCompensation.value,
             rawAutoExposure = editRawAutoExposure.value,
-            rawMeteringCenterWeight = editRawMeteringCenterWeight.value,
             rawBlackPointCorrection = editRawBlackPointCorrection.value,
             rawWhitePointCorrection = editRawWhitePointCorrection.value,
             rawDcpId = editRawDcpId.value,
@@ -1774,11 +1767,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun saveRawAutoExposureValue(mediaData: MediaData, enabled: Boolean) {
         editRawAutoExposure.value = enabled
-        persistRawEditMetadata(mediaData)
-    }
-
-    fun saveRawMeteringCenterWeightValue(mediaData: MediaData, value: Float) {
-        editRawMeteringCenterWeight.value = value.coerceIn(0f, 1f)
         persistRawEditMetadata(mediaData)
     }
 
@@ -1986,7 +1974,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         rawDenoiseValue = editRawDenoise.value,
                         rawExposureCompensation = editRawExposureCompensation.value,
                         rawAutoExposure = editRawAutoExposure.value,
-                        rawMeteringCenterWeight = editRawMeteringCenterWeight.value,
                         rawBlackPointCorrection = editRawBlackPointCorrection.value,
                         rawWhitePointCorrection = editRawWhitePointCorrection.value,
                         rawDcpId = editRawDcpId.value,
@@ -2037,10 +2024,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     return@withContext cached
                 }
 
+                val isSystem = selectedTab == GalleryTab.SYSTEM
+
                 // 2. 原始底图缓存（按 maxEdge 加载，快速预览走小尺寸，正式预览走高分辨率）
                 val currentBitmap = bitmap ?: if (showOrigin) {
-                    GalleryManager.loadOriginalBitmap(context, photo.id, maxEdge)
-                        ?: if (selectedTab == GalleryTab.SYSTEM) GalleryManager.loadBitmap(context, photo.uri, maxEdge) else null
+                    GalleryManager.loadOriginalBitmap(context, photo.id, maxEdge, isSystem)
+                        ?: if (isSystem) GalleryManager.loadBitmap(context, photo.uri, maxEdge, isSystem) else null
                 } else {
                     val bokehFile = GalleryManager.getBokehFile(context, photo.id)
                     when {
@@ -2051,7 +2040,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                             maxEdge
                         )
                         else -> GalleryManager.loadOriginalBitmap(context, photo.id, maxEdge)
-                    } ?: if (selectedTab == GalleryTab.SYSTEM) GalleryManager.loadBitmap(context, photo.uri, maxEdge) else null
+                    } ?: if (isSystem) GalleryManager.loadBitmap(context, photo.uri, maxEdge) else null
                 } ?: return@withContext null
 
                 // 只在全分辨率路径下缓存原始底图（避免低分辨率污染 origin 缓存）
@@ -2269,7 +2258,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     rawDenoiseValue = editRawDenoise.value,
                     rawExposureCompensation = editRawExposureCompensation.value,
                     rawAutoExposure = editRawAutoExposure.value,
-                    rawMeteringCenterWeight = editRawMeteringCenterWeight.value,
                     rawBlackPointCorrection = editRawBlackPointCorrection.value,
                     rawWhitePointCorrection = editRawWhitePointCorrection.value,
                     rawDcpId = editRawDcpId.value,

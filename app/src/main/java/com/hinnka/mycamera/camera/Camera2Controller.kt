@@ -6,6 +6,7 @@ import android.graphics.ColorSpace
 import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
+import android.hardware.camera2.params.MeteringRectangle
 import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.DynamicRangeProfiles
 import android.hardware.camera2.params.RggbChannelVector
@@ -49,6 +50,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.roundToInt
@@ -85,8 +87,10 @@ class Camera2Controller(private val context: Context) {
         private const val STATE_PICTURE_TAKEN = 4 // Picture is already taken.
 
         // 场景变化检测阈值
-        private const val SCENE_CHANGE_EXPOSURE_RATIO = 3.0 // 曝光乘积变化超过 3x (~1.6 EV) 判定为场景变化
-        private const val SCENE_CHANGE_CONFIRM_FRAMES = 3   // 连续 N 帧检测到变化才确认
+        private const val SCENE_CHANGE_EXPOSURE_RATIO = 1.5   // 曝光乘积变化判定为场景变化
+        private const val SCENE_CHANGE_FOCUS_DISTANCE_DELTA = 0.2f // 焦距跳变阈值（diopters），对焦锁定后逐帧跟踪
+        private const val FOCUS_LOCK_SETTLE_FRAMES = 5        // 对焦锁定后等待镜头稳定的帧数
+        private const val SCENE_CHANGE_CONFIRM_FRAMES = 3     // 连续 N 帧检测到变化才确认
     }
 
     private val cameraManager: CameraManager by lazy {
@@ -200,6 +204,8 @@ class Camera2Controller(private val context: Context) {
     private var isFocusLockedWaitingForSceneChange = false
     private var focusLockedReferenceIso: Int = 0
     private var focusLockedReferenceExposureNs: Long = 0L
+    private var focusLockedReferenceDistance: Float = 0f
+    private var focusLockSettleFrames = 0       // 对焦锁定后等待镜头稳定的帧数
     private var sceneChangeFrameCount = 0
 
     // 高光优先测光：最亮区域坐标（归一化 0-1）及平滑状态
@@ -210,6 +216,8 @@ class Camera2Controller(private val context: Context) {
     private var highlightPointSmoothedX: Float = 0.5f
     private var highlightPointSmoothedY: Float = 0.5f
     private var highlightPointInitialized = false
+    private var lastSentHighlightPointX: Float = -1f
+    private var lastSentHighlightPointY: Float = -1f
 
     // 图片拍摄回调（携带 CaptureInfo, CameraCharacteristics 和 CaptureResult 用于 RAW 处理）
     var onImageCaptured: ((SafeImage, CaptureInfo, CameraCharacteristics?, CaptureResult?) -> Unit)? = null
@@ -316,51 +324,68 @@ class Camera2Controller(private val context: Context) {
 
             // 监听对焦状态
             val afState = result.get(CaptureResult.CONTROL_AF_STATE)
-            if (afState != null && afState != lastAfState) {
+            val afStateChanged = afState != null && afState != lastAfState
+            if (afStateChanged) {
                 lastAfState = afState
-                PLog.d(
-                    TAG,
-                    "AF state changed: state=$afState, mode=${request.get(CaptureRequest.CONTROL_AF_MODE)}, " +
-                            "lensState=${result.get(CaptureResult.LENS_STATE)}, " +
-                            "focusDistance=${result.get(CaptureResult.LENS_FOCUS_DISTANCE)}"
-                )
             }
             if (_state.value.isFocusing) {
                 when (afState) {
                     CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED -> {
-                        // 对焦成功并锁定
                         _state.value = _state.value.copy(focusSuccess = true)
-                        // 记录当前曝光值作为场景变化检测的参考基准
-                        recordFocusLockExposure(result)
+                        // 只在首次锁定时记录一次，后续 AF 狩猎重新锁定不再覆盖
+                        if (!isFocusLockedWaitingForSceneChange) recordFocusLockExposure(result)
                     }
 
                     CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED -> {
-                        // 对焦失败但已锁定
                         _state.value = _state.value.copy(focusSuccess = false)
-                        recordFocusLockExposure(result)
+                        if (!isFocusLockedWaitingForSceneChange) recordFocusLockExposure(result)
                     }
                 }
             }
 
-            // 场景变化检测：对焦锁定后持续监测曝光变化
+            // 场景变化检测：对焦锁定后持续监测曝光变化和焦距跳变
             if (isFocusLockedWaitingForSceneChange) {
-                val currentIso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0
-                val currentExposure = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
-                if (focusLockedReferenceIso > 0 && focusLockedReferenceExposureNs > 0 &&
-                    currentIso > 0 && currentExposure > 0L
-                ) {
-                    val refProduct = focusLockedReferenceIso.toDouble() * focusLockedReferenceExposureNs.toDouble()
-                    val curProduct = currentIso.toDouble() * currentExposure.toDouble()
-                    if (refProduct > 0) {
-                        val ratio = if (curProduct > refProduct) curProduct / refProduct else refProduct / curProduct
-                        if (ratio > SCENE_CHANGE_EXPOSURE_RATIO) {
-                            sceneChangeFrameCount++
-                            if (sceneChangeFrameCount >= SCENE_CHANGE_CONFIRM_FRAMES) {
-                                restoreContinuousAf()
+                // 对焦锁定后前几帧镜头还在微调，跳过不检测
+                if (focusLockSettleFrames > 0) {
+                    focusLockSettleFrames--
+                } else {
+                    val currentIso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0
+                    val currentExposure = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
+                    val currentFocusDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE) ?: 0f
+                    var sceneChanged = false
+
+                    // 1. 曝光变化检测
+                    if (focusLockedReferenceIso > 0 && focusLockedReferenceExposureNs > 0 &&
+                        currentIso > 0 && currentExposure > 0L
+                    ) {
+                        val refProduct = focusLockedReferenceIso.toDouble() * focusLockedReferenceExposureNs.toDouble()
+                        val curProduct = currentIso.toDouble() * currentExposure.toDouble()
+                        if (refProduct > 0) {
+                            val ratio = if (curProduct > refProduct) curProduct / refProduct else refProduct / curProduct
+                            if (ratio > SCENE_CHANGE_EXPOSURE_RATIO) {
+                                PLog.d(TAG, "scene change: exposure ratio=$ratio")
+                                sceneChanged = true
                             }
-                        } else {
-                            sceneChangeFrameCount = 0
                         }
+                    }
+
+                    // 2. 焦距跳变检测：逐帧跟踪，CONTINUOUS_PICTURE 模式下 AF 系统持续工作
+                    //    当场景距离变化时，AF 会重新对焦导致焦距大幅跳变
+                    if (focusLockedReferenceDistance > 0f && currentFocusDistance > 0f) {
+                        val delta = abs(currentFocusDistance - focusLockedReferenceDistance)
+                        if (delta > SCENE_CHANGE_FOCUS_DISTANCE_DELTA) {
+                            PLog.d(TAG, "scene change: focusDistance delta=$delta (ref=$focusLockedReferenceDistance, cur=$currentFocusDistance)")
+                            sceneChanged = true
+                        }
+                    }
+
+                    if (sceneChanged) {
+                        sceneChangeFrameCount++
+                        if (sceneChangeFrameCount >= SCENE_CHANGE_CONFIRM_FRAMES) {
+                            restoreContinuousAf()
+                        }
+                    } else {
+                        sceneChangeFrameCount = 0
                     }
                 }
             }
@@ -2217,6 +2242,11 @@ class Camera2Controller(private val context: Context) {
      */
     fun setMeteringMode(mode: MeteringMode) {
         _state.value = _state.value.copy(meteringMode = mode)
+        if (mode == MeteringMode.HIGHLIGHT_PRIORITY) {
+            highlightPointInitialized = false
+            lastSentHighlightPointX = -1f
+            lastSentHighlightPointY = -1f
+        }
         applyMeteringRegions()
         updatePreview()
         PLog.d(TAG, "测光模式: $mode")
@@ -2240,6 +2270,20 @@ class Camera2Controller(private val context: Context) {
         }
         if (_state.value.meteringMode == MeteringMode.HIGHLIGHT_PRIORITY) {
             applyMeteringRegions()
+            
+            // 计算当前平滑点与上次发送点的位移距离
+            val dist = hypot(
+                highlightPointSmoothedX.toDouble() - lastSentHighlightPointX,
+                highlightPointSmoothedY.toDouble() - lastSentHighlightPointY
+            )
+            
+            // 只有位移超过 5% (0.05) 或者这是初始化后的第一帧，才更新预览
+            // 这能有效防止测光区域频繁微动导致的画面“呼吸感”
+            if (dist > 0.05 || lastSentHighlightPointX < 0) {
+                lastSentHighlightPointX = highlightPointSmoothedX
+                lastSentHighlightPointY = highlightPointSmoothedY
+                updatePreview()
+            }
         }
     }
 
@@ -2252,16 +2296,17 @@ class Camera2Controller(private val context: Context) {
     private fun applyMeteringRegions() {
         if (maxAeRegions <= 0) return
         val builder = previewRequestBuilder ?: return
+        val characteristics = cachedCharacteristics ?: return
+        val activeRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
         val mode = _state.value.meteringMode
 
         if (mode == MeteringMode.AVERAGE) {
-            builder.set(CaptureRequest.CONTROL_AE_REGIONS, null)
+            val fullRegion = MeteringRectangle(activeRect, MeteringRectangle.METERING_WEIGHT_MAX)
+            builder.set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(fullRegion))
             return
         }
 
         try {
-            val characteristics = cachedCharacteristics ?: return
-            val activeRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
             val sensorOrientation = getSensorOrientation()
             val lensFacing = getLensFacing()
 
@@ -2294,8 +2339,8 @@ class Camera2Controller(private val context: Context) {
             val centerY = (finalY * activeRect.height()).toInt()
             val regionSizeFraction = when (mode) {
                 MeteringMode.SPOT -> 0.03f
-                MeteringMode.CENTER_WEIGHTED -> 0.1f
-                MeteringMode.HIGHLIGHT_PRIORITY -> 0.15f
+                MeteringMode.CENTER_WEIGHTED -> 0.2f
+                MeteringMode.HIGHLIGHT_PRIORITY -> 0.08f
             }
             val regionSize = (activeRect.width() * regionSizeFraction).toInt()
 
@@ -2307,9 +2352,9 @@ class Camera2Controller(private val context: Context) {
             )
             builder.set(
                 CaptureRequest.CONTROL_AE_REGIONS,
-                arrayOf(android.hardware.camera2.params.MeteringRectangle(
+                arrayOf(MeteringRectangle(
                     rect,
-                    android.hardware.camera2.params.MeteringRectangle.METERING_WEIGHT_MAX
+                    MeteringRectangle.METERING_WEIGHT_MAX
                 ))
             )
         } catch (e: Exception) {
@@ -2544,7 +2589,9 @@ class Camera2Controller(private val context: Context) {
         val exposure = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: return
         focusLockedReferenceIso = iso
         focusLockedReferenceExposureNs = exposure
+        focusLockedReferenceDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE) ?: 0f
         isFocusLockedWaitingForSceneChange = true
+        focusLockSettleFrames = FOCUS_LOCK_SETTLE_FRAMES
         sceneChangeFrameCount = 0
     }
 
@@ -2553,6 +2600,8 @@ class Camera2Controller(private val context: Context) {
         sceneChangeFrameCount = 0
         focusLockedReferenceIso = 0
         focusLockedReferenceExposureNs = 0L
+        focusLockedReferenceDistance = 0f
+        focusLockSettleFrames = 0
 
         previewRequestBuilder?.apply {
             set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
@@ -2613,35 +2662,46 @@ class Camera2Controller(private val context: Context) {
             // 映射到传感器坐标
             val focusX = (finalX * activeRect.width()).toInt()
             val focusY = (finalY * activeRect.height()).toInt()
-            val focusSizeFraction = when (_state.value.meteringMode) {
-                MeteringMode.SPOT -> 0.03f           // 点测光: 3% 传感器宽度
-                MeteringMode.CENTER_WEIGHTED -> 0.1f  // 中央重点: 10% 传感器宽度
-                MeteringMode.AVERAGE -> 0.1f          // 平均测光: AF 区域不变，仅跳过 AE 区域
-                MeteringMode.HIGHLIGHT_PRIORITY -> 0.15f // 高光优先: 15% 传感器宽度
+
+            // 1. AF 区域：固定为 10% 传感器宽度，不随测光模式改变，确保对焦稳定性
+            val afSize = (activeRect.width() * 0.1f).toInt()
+            val afRect = android.graphics.Rect(
+                (focusX - afSize).coerceAtLeast(0),
+                (focusY - afSize).coerceAtLeast(0),
+                (focusX + afSize).coerceAtMost(activeRect.width()),
+                (focusY + afSize).coerceAtMost(activeRect.height())
+            )
+            val afRegion = MeteringRectangle(afRect, MeteringRectangle.METERING_WEIGHT_MAX)
+
+            // 2. AE 区域：根据测光模式决定
+            val aeRegion = if (_state.value.meteringMode == MeteringMode.AVERAGE) {
+                // 平均测光模式下，点击屏幕仅改变对焦点，测光区域强制保持全屏平均
+                MeteringRectangle(activeRect, MeteringRectangle.METERING_WEIGHT_MAX)
+            } else {
+                val aeSizeFraction = when (_state.value.meteringMode) {
+                    MeteringMode.SPOT -> 0.03f
+                    MeteringMode.CENTER_WEIGHTED -> 0.2f
+                    MeteringMode.HIGHLIGHT_PRIORITY -> 0.08f
+                    else -> 0.1f
+                }
+                val aeSize = (activeRect.width() * aeSizeFraction).toInt()
+                val aeRect = android.graphics.Rect(
+                    (focusX - aeSize).coerceAtLeast(0),
+                    (focusY - aeSize).coerceAtLeast(0),
+                    (focusX + aeSize).coerceAtMost(activeRect.width()),
+                    (focusY + aeSize).coerceAtMost(activeRect.height())
+                )
+                MeteringRectangle(aeRect, MeteringRectangle.METERING_WEIGHT_MAX)
             }
-            val focusSize = (activeRect.width() * focusSizeFraction).toInt()
 
-            val focusRect = android.graphics.Rect(
-                (focusX - focusSize).coerceAtLeast(0),
-                (focusY - focusSize).coerceAtLeast(0),
-                (focusX + focusSize).coerceAtMost(activeRect.width()),
-                (focusY + focusSize).coerceAtMost(activeRect.height())
-            )
-
-            val meteringRectangle = android.hardware.camera2.params.MeteringRectangle(
-                focusRect,
-                android.hardware.camera2.params.MeteringRectangle.METERING_WEIGHT_MAX
-            )
-
-            PLog.d(TAG, "Focus: UI($normX, $normY) -> Sensor($finalX, $finalY) -> Rect($focusX, $focusY), metering=${_state.value.meteringMode}")
+            PLog.d(TAG, "Focus: UI($normX, $normY) -> Sensor($finalX, $finalY), mode=${_state.value.meteringMode}")
 
             previewRequestBuilder?.apply {
                 if (maxAfRegions > 0) {
-                    set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(meteringRectangle))
+                    set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(afRegion))
                 }
-                // 平均测光模式下不设置 AE 区域，让硬件使用全画面默认测光
-                if (maxAeRegions > 0 && _state.value.meteringMode != MeteringMode.AVERAGE) {
-                    set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(meteringRectangle))
+                if (maxAeRegions > 0) {
+                    set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(aeRegion))
                 }
                 val afMode = CaptureRequest.CONTROL_AF_MODE_AUTO
                 set(CaptureRequest.CONTROL_AF_MODE, afMode)
@@ -3166,7 +3226,8 @@ class Camera2Controller(private val context: Context) {
         imageWidth: Int,
         imageHeight: Int,
         latitude: Double? = null,
-        longitude: Double? = null
+        longitude: Double? = null,
+        effectiveCharacteristics: CameraCharacteristics? = null
     ): CaptureInfo {
         val cameraId = _state.value.currentCameraId
         val zoomRatio = _state.value.zoomRatio
@@ -3177,7 +3238,7 @@ class Camera2Controller(private val context: Context) {
         var focalLength35mm: Int? = null
 
         try {
-            val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
+            val characteristics = effectiveCharacteristics ?: cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
 
             // 光圈值（取第一个可用光圈）
             val apertures = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)
@@ -3207,7 +3268,7 @@ class Camera2Controller(private val context: Context) {
             focalLength = it * zoomRatio
             // 重新计算35mm等效焦距
             try {
-                val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
+                val characteristics = effectiveCharacteristics ?: cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
                 focalLength35mm = calculate35mmEquivalent(characteristics)?.times(zoomRatio)?.roundToInt()
             } catch (e: Exception) {
                 // 忽略
@@ -3363,15 +3424,51 @@ class Camera2Controller(private val context: Context) {
         try {
             val width = image.width
             val height = image.height
-            // PLog.d(TAG, "Matching Image and CaptureResult found for timestamp ${image.timestamp}")
+            var effectiveCharacteristics = cachedCharacteristics
+            var effectiveResult: CaptureResult? = result
+
+            // For RAW images, ensure characteristics match image dimensions to avoid DngCreator crash.
+            // This is especially important for logical multi-camera devices where the RAW might come from a physical sub-camera.
+            if (image.format == ImageFormat.RAW_SENSOR && result != null) {
+                val checkMatch = { chars: CameraCharacteristics? ->
+                    val pixelArray = chars?.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
+                    val preCorrectionArray = chars?.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE)
+                    (pixelArray?.width == width && pixelArray?.height == height) ||
+                            (preCorrectionArray?.width() == width && preCorrectionArray?.height() == height)
+                }
+
+                if (!checkMatch(effectiveCharacteristics)) {
+                    PLog.d(TAG, "RAW dimensions $width x $height mismatch logical characteristics. Searching physical cameras...")
+                    for ((physicalId, physicalResult) in result.physicalCameraResults) {
+                        try {
+                            val physicalChars = cameraManager.getCameraCharacteristics(physicalId)
+                            if (checkMatch(physicalChars)) {
+                                PLog.i(TAG, "Found matching physical camera $physicalId for RAW image")
+                                effectiveCharacteristics = physicalChars
+                                effectiveResult = physicalResult
+                                break
+                            }
+                        } catch (e: Exception) {
+                            PLog.w(TAG, "Failed to check physical camera $physicalId", e)
+                        }
+                    }
+                }
+            }
 
             // 构建 CaptureInfo
-            val captureInfo = rebuildCaptureInfo(result, width, height, _state.value.latitude, _state.value.longitude)
+            val captureInfo = rebuildCaptureInfo(
+                result = if (effectiveResult is TotalCaptureResult) effectiveResult else result,
+                imageWidth = width,
+                imageHeight = height,
+                latitude = _state.value.latitude,
+                longitude = _state.value.longitude,
+                effectiveCharacteristics = effectiveCharacteristics
+            )
 
             // 传递完整的 Image 对象、CaptureInfo、CameraCharacteristics 和 CaptureResult
             val callback = onImageCaptured
             if (callback != null) {
-                callback.invoke(image, captureInfo, cachedCharacteristics, result)
+                callback.invoke(image, captureInfo, effectiveCharacteristics, effectiveResult ?: result)
             } else {
                 image.close()
             }
