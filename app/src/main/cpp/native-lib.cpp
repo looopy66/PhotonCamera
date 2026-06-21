@@ -5,6 +5,7 @@
  */
 #include <algorithm>
 #include <android/bitmap.h>
+#include <array>
 #include <cmath>
 #include <chrono>
 #include <cstring>
@@ -26,9 +27,6 @@
 #include "libraw/libraw.h"
 #include "math_utils.h"
 #include "stacking_utils.h"
-#include "vulkan_raw_stacker.h"
-#include "vulkan_stacker.h"
-#include <android/hardware_buffer_jni.h>
 
 #ifndef LOG_TAG
 #define LOG_TAG "native-lib"
@@ -431,7 +429,89 @@ static float sampleDngGainMapBilinear(const DngGainMap &gainMap, float x, float 
   return top + (bottom - top) * ty;
 }
 
-static void computeEffectiveBlackLevels(LibRaw &rawProcessor, float out[4]) {
+static int quadChannelIndexForPattern(int cfaPattern, int col, int row) {
+  const int pattern = cfaPattern >= 8 ? cfaPattern - 8
+                                      : (cfaPattern >= 4 ? cfaPattern - 4 : cfaPattern);
+  const int blockSize = cfaPattern >= 8 ? 4 : 2;
+  const int blockCol = (col / blockSize) & 1;
+  const int blockRow = (row / blockSize) & 1;
+  if (pattern == 0) { // Quad RGGB
+    return blockRow == 0 ? (blockCol == 0 ? 0 : 1) : (blockCol == 0 ? 2 : 3);
+  }
+  if (pattern == 1) { // Quad GRBG
+    return blockRow == 0 ? (blockCol == 0 ? 1 : 0) : (blockCol == 0 ? 3 : 2);
+  }
+  if (pattern == 2) { // Quad GBRG
+    return blockRow == 0 ? (blockCol == 0 ? 2 : 3) : (blockCol == 0 ? 0 : 1);
+  }
+  return blockRow == 0 ? (blockCol == 0 ? 3 : 2) : (blockCol == 0 ? 1 : 0);
+}
+
+static int gcdInt(int a, int b) {
+  a = std::abs(a);
+  b = std::abs(b);
+  while (b != 0) {
+    const int t = a % b;
+    a = b;
+    b = t;
+  }
+  return a == 0 ? 1 : a;
+}
+
+static bool computeQuadDngBlackLevels(LibRaw &rawProcessor, int cfaPattern,
+                                      int left, int top, float out[4]) {
+  if (cfaPattern < 4 || cfaPattern > 11)
+    return false;
+
+  const auto &levels = rawProcessor.imgdata.color.dng_levels;
+  const int cols = static_cast<int>(levels.dng_cblack[4]);
+  const int rows = static_cast<int>(levels.dng_cblack[5]);
+  const int repeatCount = cols * rows;
+  if (cols <= 0 || rows <= 0 || repeatCount > LIBRAW_CBLACK_SIZE - 7) {
+    const float scalarBlack =
+        levels.dng_fblack > 0.0f ? levels.dng_fblack : static_cast<float>(levels.dng_black);
+    if (scalarBlack <= 0.0f)
+      return false;
+    for (int i = 0; i < 4; ++i)
+      out[i] = scalarBlack;
+    return true;
+  }
+
+  const int cfaPeriod = cfaPattern >= 8 ? 8 : 4;
+  const int periodX = (cfaPeriod / gcdInt(cfaPeriod, cols)) * cols;
+  const int periodY = (cfaPeriod / gcdInt(cfaPeriod, rows)) * rows;
+  double sums[4] = {0.0, 0.0, 0.0, 0.0};
+  int counts[4] = {0, 0, 0, 0};
+  bool hasRepeatValue = false;
+
+  for (int y = 0; y < periodY; ++y) {
+    for (int x = 0; x < periodX; ++x) {
+      const int channel = quadChannelIndexForPattern(cfaPattern, x, y);
+      const int blackRow = ((top + y) % rows + rows) % rows;
+      const int blackCol = ((left + x) % cols + cols) % cols;
+      const float repeatBlack = levels.dng_fcblack[6 + blackRow * cols + blackCol];
+      hasRepeatValue = hasRepeatValue || std::abs(repeatBlack) > 1e-6f;
+      sums[channel] += static_cast<double>(levels.dng_fblack + repeatBlack);
+      counts[channel] += 1;
+    }
+  }
+
+  if (!hasRepeatValue && std::abs(levels.dng_fblack) <= 1e-6f)
+    return false;
+
+  for (int i = 0; i < 4; ++i) {
+    if (counts[i] <= 0)
+      return false;
+    out[i] = static_cast<float>(sums[i] / static_cast<double>(counts[i]));
+  }
+  return true;
+}
+
+static void computeEffectiveBlackLevels(LibRaw &rawProcessor, int cfaPattern,
+                                        int left, int top, float out[4]) {
+  if (computeQuadDngBlackLevels(rawProcessor, cfaPattern, left, top, out))
+    return;
+
   const float base = static_cast<float>(rawProcessor.imgdata.color.black);
   const unsigned cols = rawProcessor.imgdata.color.cblack[4];
   const unsigned rows = rawProcessor.imgdata.color.cblack[5];
@@ -517,26 +597,34 @@ static bool applySupportedDngGainMaps(LibRaw &rawProcessor, const float blackLev
                            : rawWidth;
   auto *rawImage = rawProcessor.imgdata.rawdata.raw_image;
 
-  const float colScale = static_cast<float>(gainMaps[0].mapPointsH - 1) /
-                         std::max(1, rawWidth);
-  const float rowScale = static_cast<float>(gainMaps[0].mapPointsV - 1) /
-                         std::max(1, rawHeight);
-
   const DngGainMap *mapByParity[2][2] = {};
   for (const auto &gainMap : gainMaps) {
     mapByParity[gainMap.top & 1u][gainMap.left & 1u] = &gainMap;
   }
 
+  const int activeWidth = std::max(1, static_cast<int>(rawProcessor.imgdata.sizes.width));
+  const int activeHeight = std::max(1, static_cast<int>(rawProcessor.imgdata.sizes.height));
+  const int leftMargin = static_cast<int>(rawProcessor.imgdata.sizes.left_margin);
+  const int topMargin = static_cast<int>(rawProcessor.imgdata.sizes.top_margin);
+
   for (int y = 0; y < rawHeight; ++y) {
-    const float ys = static_cast<float>(y) * rowScale;
     const float rowBlack[2] = {blackLevels[rawProcessor.FC(y, 0)], blackLevels[rawProcessor.FC(y, 1)]};
-    float xs = 0.0f;
-    for (int x = 0; x < rawWidth; ++x, xs += colScale) {
+    const float normY = (static_cast<float>(y - topMargin) + 0.5f) / static_cast<float>(activeHeight);
+
+    for (int x = 0; x < rawWidth; ++x) {
       const DngGainMap *gainMap = mapByParity[y & 1][x & 1];
       if (!gainMap) {
         continue;
       }
-      const float gain = sampleDngGainMapBilinear(*gainMap, xs, ys);
+
+      const float normX = (static_cast<float>(x - leftMargin) + 0.5f) / static_cast<float>(activeWidth);
+
+      const float spacingH = static_cast<float>(gainMap->mapSpacingH);
+      const float spacingV = static_cast<float>(gainMap->mapSpacingV);
+      const float mapX = spacingH > 0.0f ? (normX - static_cast<float>(gainMap->mapOriginH)) / spacingH : 0.0f;
+      const float mapY = spacingV > 0.0f ? (normY - static_cast<float>(gainMap->mapOriginV)) / spacingV : 0.0f;
+
+      const float gain = sampleDngGainMapBilinear(*gainMap, mapX, mapY);
       const float black = rowBlack[x & 1];
       float corrected = (static_cast<float>(rawImage[y * rawPitch + x]) - black) * gain + black;
       corrected = std::max(corrected, 0.0f);
@@ -547,6 +635,105 @@ static bool applySupportedDngGainMaps(LibRaw &rawProcessor, const float blackLev
   LOGI("dng gain map: applied 4 maps size=%ux%u grid=%ux%u",
        rawWidth, rawHeight, gainMaps[0].mapPointsH, gainMaps[0].mapPointsV);
   return true;
+}
+
+static jfloatArray buildDngLensShadingArray(JNIEnv *env, LibRaw &rawProcessor,
+                                            int cfaPattern, int activeLeft, int activeTop,
+                                            int &outWidth, int &outHeight,
+                                            float outGrid[4]) {
+  outWidth = 0;
+  outHeight = 0;
+  outGrid[0] = 0.0f;
+  outGrid[1] = 0.0f;
+  outGrid[2] = 1.0f;
+  outGrid[3] = 1.0f;
+
+  std::vector<DngGainMap> gainMaps;
+  if (!parseDngGainMaps(rawProcessor.imgdata.color.dng_levels.rawopcodes[1], gainMaps) ||
+      gainMaps.size() != 4) {
+    return nullptr;
+  }
+
+  const uint32_t mapWidth = gainMaps[0].mapPointsH;
+  const uint32_t mapHeight = gainMaps[0].mapPointsV;
+  if (mapWidth == 0 || mapHeight == 0) {
+    return nullptr;
+  }
+
+  unsigned check = 0;
+  for (const auto &gainMap : gainMaps) {
+    if (gainMap.mapPointsH != mapWidth || gainMap.mapPointsV != mapHeight ||
+        gainMap.rowPitch != 2 || gainMap.colPitch != 2 ||
+        gainMap.mapPlanes != 1 || gainMap.mapGain.empty() ||
+        gainMap.mapGain.size() != static_cast<size_t>(gainMap.mapPointsV) *
+                                     static_cast<size_t>(gainMap.mapPointsH) *
+                                     static_cast<size_t>(gainMap.mapPlanes)) {
+      LOGI("dng gain map export: incompatible map layout");
+      return nullptr;
+    }
+    if (std::abs(gainMap.mapOriginH - gainMaps[0].mapOriginH) > 1e-9 ||
+        std::abs(gainMap.mapOriginV - gainMaps[0].mapOriginV) > 1e-9 ||
+        std::abs(gainMap.mapSpacingH - gainMaps[0].mapSpacingH) > 1e-9 ||
+        std::abs(gainMap.mapSpacingV - gainMaps[0].mapSpacingV) > 1e-9) {
+      LOGI("dng gain map export: per-channel grid differs");
+      return nullptr;
+    }
+    if ((gainMap.top & 1u) == 0u) {
+      check += ((gainMap.left & 1u) == 0u) ? 1u : 2u;
+    } else {
+      check += ((gainMap.left & 1u) == 0u) ? 4u : 8u;
+    }
+  }
+  if (check != 15u) {
+    LOGI("dng gain map export: unsupported CFA parity combination check=%u", check);
+    return nullptr;
+  }
+
+  const bool isQuadBayer = cfaPattern >= 4 && cfaPattern <= 11;
+  std::vector<float> packed(static_cast<size_t>(mapWidth) * mapHeight * 4, 1.0f);
+  for (const auto &gainMap : gainMaps) {
+    int outChannel;
+    if (isQuadBayer) {
+      const int relX = static_cast<int>(gainMap.left) - activeLeft;
+      const int relY = static_cast<int>(gainMap.top) - activeTop;
+      outChannel = quadChannelIndexForPattern(cfaPattern, relX, relY);
+    } else {
+      int cfa = rawProcessor.FC(gainMap.top, gainMap.left);
+      if (cfa == 0) {
+        outChannel = 0; // R
+      } else if (cfa == 1) {
+        outChannel = 1; // Gr
+      } else if (cfa == 2) {
+        outChannel = 3; // B in LibRaw CFA order, packed as A
+      } else {
+        outChannel = 2; // Gb
+      }
+    }
+
+    for (uint32_t y = 0; y < mapHeight; ++y) {
+      for (uint32_t x = 0; x < mapWidth; ++x) {
+        const size_t src = static_cast<size_t>(y) * mapWidth + x;
+        const size_t dst = src * 4 + static_cast<size_t>(outChannel);
+        packed[dst] = gainMap.mapGain[src];
+      }
+    }
+  }
+
+  outWidth = static_cast<int>(mapWidth);
+  outHeight = static_cast<int>(mapHeight);
+  outGrid[0] = static_cast<float>(gainMaps[0].mapOriginH);
+  outGrid[1] = static_cast<float>(gainMaps[0].mapOriginV);
+  outGrid[2] = static_cast<float>(gainMaps[0].mapSpacingH);
+  outGrid[3] = static_cast<float>(gainMaps[0].mapSpacingV);
+  jfloatArray result = env->NewFloatArray(static_cast<jsize>(packed.size()));
+  if (!result) {
+    return nullptr;
+  }
+  env->SetFloatArrayRegion(result, 0, static_cast<jsize>(packed.size()), packed.data());
+  LOGI("dng gain map export: %dx%d origin=(%f,%f) spacing=(%f,%f) mode=%s",
+       outWidth, outHeight, outGrid[0], outGrid[1], outGrid[2], outGrid[3],
+       isQuadBayer ? "quad-parity" : "bayer-channel");
+  return result;
 }
 
 static bool estimateRawAutoWhiteBalance(LibRaw &rawProcessor, const float blackLevels[4],
@@ -691,6 +878,178 @@ static float illuminantToTemp(int illuminant) {
   }
 }
 
+static bool hasMatrixSignal(const Matrix3x3 &matrix) {
+  float sum = 0.0f;
+  for (float value : matrix.m) {
+    sum += std::abs(value);
+  }
+  return sum > 0.01f;
+}
+
+static std::array<float, 3> multiplyMatrixVector(const Matrix3x3 &matrix,
+                                                 const std::array<float, 3> &v) {
+  return {matrix.m[0] * v[0] + matrix.m[1] * v[1] + matrix.m[2] * v[2],
+          matrix.m[3] * v[0] + matrix.m[4] * v[1] + matrix.m[5] * v[2],
+          matrix.m[6] * v[0] + matrix.m[7] * v[1] + matrix.m[8] * v[2]};
+}
+
+static bool xyzToXy(const std::array<float, 3> &xyz,
+                    std::array<float, 2> &xy) {
+  const float sum = xyz[0] + xyz[1] + xyz[2];
+  if (sum <= 1e-6f || !std::isfinite(sum)) {
+    return false;
+  }
+  xy = {xyz[0] / sum, xyz[1] / sum};
+  return std::isfinite(xy[0]) && std::isfinite(xy[1]);
+}
+
+static float xyCoordToTemperature(const std::array<float, 2> &xy) {
+  float denominator = xy[1] - 0.1858f;
+  if (std::abs(denominator) < 1e-6f) {
+    denominator = denominator < 0.0f ? -1e-6f : 1e-6f;
+  }
+  const float n = (xy[0] - 0.3320f) / denominator;
+  const float temp = -449.0f * n * n * n + 3525.0f * n * n -
+                     6823.3f * n + 5520.33f;
+  return std::clamp(temp, 2000.0f, 50000.0f);
+}
+
+static float calculateTemperatureInterpolationWeight(
+    int illuminant1, int illuminant2, const std::array<float, 2> &whiteXy) {
+  const float t1 = illuminantToTemp(illuminant1);
+  const float t2 = illuminantToTemp(illuminant2);
+  if (t1 <= 0.0f || t2 <= 0.0f || std::abs(t1 - t2) < 1.0f) {
+    return 1.0f;
+  }
+
+  const float whiteTemp = xyCoordToTemperature(whiteXy);
+  const float low = std::min(t1, t2);
+  const float high = std::max(t1, t2);
+  float mix;
+  if (whiteTemp <= low) {
+    mix = 1.0f;
+  } else if (whiteTemp >= high) {
+    mix = 0.0f;
+  } else {
+    const float invT = 1.0f / whiteTemp;
+    mix = (invT - (1.0f / high)) / ((1.0f / low) - (1.0f / high));
+  }
+  mix = std::clamp(mix, 0.0f, 1.0f);
+  return t1 > t2 ? 1.0f - mix : mix;
+}
+
+static Matrix3x3 interpolateMatrix(const Matrix3x3 &m1, const Matrix3x3 &m2,
+                                   float weight) {
+  Matrix3x3 result;
+  for (int i = 0; i < 9; ++i) {
+    result.m[i] = m1.m[i] * weight + m2.m[i] * (1.0f - weight);
+  }
+  return result;
+}
+
+static bool findXyzToCamera(const std::array<float, 2> &whiteXy,
+                            const Matrix3x3 &colorMatrix1, bool hasColor1,
+                            const Matrix3x3 &colorMatrix2, bool hasColor2,
+                            int illuminant1, int illuminant2,
+                            Matrix3x3 &xyzToCamera) {
+  if (hasColor1 && hasColor2) {
+    const float weight =
+        calculateTemperatureInterpolationWeight(illuminant1, illuminant2, whiteXy);
+    xyzToCamera = interpolateMatrix(colorMatrix1, colorMatrix2, weight);
+    return true;
+  }
+  if (hasColor1) {
+    xyzToCamera = colorMatrix1;
+    return true;
+  }
+  if (hasColor2) {
+    xyzToCamera = colorMatrix2;
+    return true;
+  }
+  return false;
+}
+
+static bool neutralToXy(const std::array<float, 3> &neutral,
+                        const Matrix3x3 &colorMatrix1, bool hasColor1,
+                        const Matrix3x3 &colorMatrix2, bool hasColor2,
+                        int illuminant1, int illuminant2,
+                        std::array<float, 2> &whiteXy) {
+  std::array<float, 2> lastXy = {0.3457f, 0.3585f};
+  for (int pass = 0; pass < 30; ++pass) {
+    Matrix3x3 xyzToCamera;
+    if (!findXyzToCamera(lastXy, colorMatrix1, hasColor1, colorMatrix2,
+                         hasColor2, illuminant1, illuminant2, xyzToCamera)) {
+      return false;
+    }
+    const Matrix3x3 cameraToXyz = xyzToCamera.invert();
+    const std::array<float, 3> nextXyz =
+        multiplyMatrixVector(cameraToXyz, neutral);
+    std::array<float, 2> nextXy;
+    if (!xyzToXy(nextXyz, nextXy)) {
+      return false;
+    }
+
+    if (std::abs(nextXy[0] - lastXy[0]) + std::abs(nextXy[1] - lastXy[1]) <
+        1e-7f) {
+      whiteXy = nextXy;
+      return true;
+    }
+    if (pass == 29) {
+      whiteXy = {(lastXy[0] + nextXy[0]) * 0.5f,
+                 (lastXy[1] + nextXy[1]) * 0.5f};
+      return true;
+    }
+    lastXy = nextXy;
+  }
+  whiteXy = lastXy;
+  return true;
+}
+
+static float calculateRatioInterpolationWeight(int illuminant1, int illuminant2,
+                                               const float wb[4]) {
+  const float t1 = illuminantToTemp(illuminant1);
+  const float t2 = illuminantToTemp(illuminant2);
+  const float currentRatio = wb[0] / std::max(wb[2], 1e-4f);
+  constexpr float rWarm = 0.5f;
+  constexpr float rCool = 1.6f;
+  auto getTargetRatio = [&](float temp) {
+    if (temp <= 2856.0f)
+      return rWarm;
+    if (temp >= 6504.0f)
+      return rCool;
+    return rWarm + (rCool - rWarm) * (temp - 2856.0f) / (6504.0f - 2856.0f);
+  };
+  const float r1 = getTargetRatio(t1);
+  const float r2 = getTargetRatio(t2);
+  if (std::abs(r1 - r2) <= 0.01f) {
+    return 0.5f;
+  }
+  return std::clamp((currentRatio - r2) / (r1 - r2), 0.0f, 1.0f);
+}
+
+static float calculateDngReferenceInterpolationWeight(
+    int illuminant1, int illuminant2, const float wb[4],
+    const Matrix3x3 &colorMatrix1, bool hasColor1,
+    const Matrix3x3 &colorMatrix2, bool hasColor2) {
+  if (illuminant1 == 0 || illuminant2 == 0) {
+    return 0.5f;
+  }
+
+  const float green = std::max(wb[1], 1e-6f);
+  const std::array<float, 3> neutral = {
+      green / std::max(wb[0], 1e-6f),
+      1.0f,
+      green / std::max(wb[2], 1e-6f),
+  };
+  std::array<float, 2> whiteXy;
+  if (neutralToXy(neutral, colorMatrix1, hasColor1, colorMatrix2, hasColor2,
+                  illuminant1, illuminant2, whiteXy)) {
+    return calculateTemperatureInterpolationWeight(illuminant1, illuminant2,
+                                                   whiteXy);
+  }
+  return calculateRatioInterpolationWeight(illuminant1, illuminant2, wb);
+}
+
 static Matrix3x3 computeXYZD50ToGamut(float xr, float yr, float xg, float yg,
                                       float xb, float yb, float xw, float yw) {
 
@@ -754,12 +1113,20 @@ static inline float hlgToLinear(float value) {
 static unsigned char mapCfaPatternToLibRaw(int cfaPattern) {
   switch (cfaPattern) {
   case 0:
+  case 4:
+  case 8:
     return LIBRAW_OPENBAYER_RGGB;
   case 1:
+  case 5:
+  case 9:
     return LIBRAW_OPENBAYER_GRBG;
   case 2:
+  case 6:
+  case 10:
     return LIBRAW_OPENBAYER_GBRG;
   case 3:
+  case 7:
+  case 11:
     return LIBRAW_OPENBAYER_BGGR;
   default:
     return 0;
@@ -888,82 +1255,6 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_releaseStackerNative(
 }
 
 /**
- * Vulkan Stacking JNI Interface
- */
-JNIEXPORT jlong JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_createVulkanStackerNative(
-    JNIEnv *env, jobject /* this */, jint width, jint height,
-    jboolean enableSuperRes) {
-  try {
-    auto *stacker = new VulkanImageStacker(width, height, enableSuperRes);
-    return reinterpret_cast<jlong>(stacker);
-  } catch (const std::exception &e) {
-    LOGE("createVulkanStackerNative failed: %s", e.what());
-  } catch (...) {
-    LOGE("createVulkanStackerNative failed with unknown error");
-  }
-  return 0;
-}
-
-JNIEXPORT jboolean JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_addVulkanFrameNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject hardwareBuffer) {
-  auto *stacker = reinterpret_cast<VulkanImageStacker *>(stackerPtr);
-  if (!stacker || !hardwareBuffer)
-    return JNI_FALSE;
-
-  AHardwareBuffer *buffer =
-      AHardwareBuffer_fromHardwareBuffer(env, hardwareBuffer);
-  if (!buffer)
-    return JNI_FALSE;
-
-  bool success = stacker->addFrame(buffer);
-  return success ? JNI_TRUE : JNI_FALSE;
-}
-
-JNIEXPORT jboolean JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_processVulkanStackNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject outBitmap,
-    jint rotation) {
-  auto *stacker = reinterpret_cast<VulkanImageStacker *>(stackerPtr);
-  if (!stacker)
-    return JNI_FALSE;
-
-  AndroidBitmapInfo info;
-  void *bitmapPixels = nullptr;
-  if (outBitmap &&
-      (AndroidBitmap_getInfo(env, outBitmap, &info) < 0 ||
-       AndroidBitmap_lockPixels(env, outBitmap, &bitmapPixels) < 0)) {
-    return JNI_FALSE;
-  }
-
-  bool success =
-      stacker->processStack(static_cast<uint32_t *>(bitmapPixels), info.width,
-                            info.height, info.stride, rotation);
-
-  if (outBitmap) {
-    AndroidBitmap_unlockPixels(env, outBitmap);
-  }
-  return success ? JNI_TRUE : JNI_FALSE;
-}
-
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_releaseVulkanStackerNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr) {
-  auto *stacker = reinterpret_cast<VulkanImageStacker *>(stackerPtr);
-  delete stacker;
-}
-
-JNIEXPORT jboolean JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_resetVulkanStackerNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr) {
-  auto *stacker = reinterpret_cast<VulkanImageStacker *>(stackerPtr);
-  if (!stacker)
-    return JNI_FALSE;
-  return stacker->resetForReuse() ? JNI_TRUE : JNI_FALSE;
-}
-
-/**
  * Raw Stacking JNI Interface
  */
 JNIEXPORT jlong JNICALL
@@ -1042,109 +1333,6 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_processRawStackWithBufferNa
     LOGE("Output buffer too small: capacity=%ld, required=%ld", (long)capacity,
          (long)(result.size() * sizeof(uint16_t)));
   }
-}
-
-/**
- * Vulkan Raw Stacking JNI Interface
- */
-JNIEXPORT jlong JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_createVulkanRawStackerNative(
-    JNIEnv *env, jobject, jint width, jint height, jboolean enableSuperRes,
-    jfloat superResScale,
-    jfloatArray blackLevel, jint whiteLevel, jfloatArray wbGains,
-    jfloatArray noiseModel, jfloatArray lensShadingMap, jint lscWidth,
-    jint lscHeight) {
-
-  float bl[4] = {0, 0, 0, 0};
-  if (blackLevel) {
-    jfloat *body = env->GetFloatArrayElements(blackLevel, nullptr);
-    memcpy(bl, body, 4 * sizeof(float));
-    env->ReleaseFloatArrayElements(blackLevel, body, 0);
-  }
-
-  float wb[4] = {1, 1, 1, 1};
-  if (wbGains) {
-    jfloat *body = env->GetFloatArrayElements(wbGains, nullptr);
-    memcpy(wb, body, 4 * sizeof(float));
-    env->ReleaseFloatArrayElements(wbGains, body, 0);
-  }
-
-  float noise[2] = {0, 0};
-  if (noiseModel) {
-    jfloat *body = env->GetFloatArrayElements(noiseModel, nullptr);
-    memcpy(noise, body, 2 * sizeof(float));
-    env->ReleaseFloatArrayElements(noiseModel, body, 0);
-  }
-
-  float *lsc = nullptr;
-  if (lensShadingMap && lscWidth > 0 && lscHeight > 0) {
-    lsc = env->GetFloatArrayElements(lensShadingMap, nullptr);
-  }
-
-  VulkanRawStacker *stacker = nullptr;
-  try {
-    stacker = new VulkanRawStacker(width, height, enableSuperRes,
-                                   superResScale, bl, (float)whiteLevel, wb,
-                                   noise, lsc, (uint32_t)lscWidth,
-                                   (uint32_t)lscHeight);
-  } catch (const std::exception &e) {
-    LOGE("createVulkanRawStackerNative failed: %s", e.what());
-  } catch (...) {
-    LOGE("createVulkanRawStackerNative failed with unknown error");
-  }
-
-  if (lsc) {
-    env->ReleaseFloatArrayElements(lensShadingMap, lsc, 0);
-  }
-
-  if (!stacker) {
-    return 0;
-  }
-  return reinterpret_cast<jlong>(stacker);
-}
-
-JNIEXPORT jboolean JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_addVulkanRawFrameNative(
-    JNIEnv *env, jobject, jlong stackerPtr, jobject rawData, jint rowStride,
-    jint cfaPattern) {
-  auto *stacker = reinterpret_cast<VulkanRawStacker *>(stackerPtr);
-  if (!stacker)
-    return JNI_FALSE;
-
-  auto *data = static_cast<uint16_t *>(env->GetDirectBufferAddress(rawData));
-  if (!data) {
-    LOGE("addVulkanRawFrameNative: Failed to get buffer address");
-    return JNI_FALSE;
-  }
-
-  bool success = stacker->addFrame(data, rowStride, cfaPattern);
-  return success ? JNI_TRUE : JNI_FALSE;
-}
-
-JNIEXPORT jboolean JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_processVulkanRawStackNative(
-    JNIEnv *env, jobject, jlong stackerPtr, jobject outputBuffer) {
-  auto *stacker = reinterpret_cast<VulkanRawStacker *>(stackerPtr);
-  if (!stacker)
-    return JNI_FALSE;
-
-  auto *outData =
-      static_cast<uint16_t *>(env->GetDirectBufferAddress(outputBuffer));
-  if (!outData) {
-    LOGE("processVulkanRawStackNative: Failed to get buffer address");
-    return JNI_FALSE;
-  }
-
-  jlong capacity = env->GetDirectBufferCapacity(outputBuffer);
-  bool success = stacker->processStack(outData, (size_t)capacity);
-  return success ? JNI_TRUE : JNI_FALSE;
-}
-
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_releaseVulkanRawStackerNative(
-    JNIEnv *env, jobject, jlong stackerPtr) {
-  auto *stacker = reinterpret_cast<VulkanRawStacker *>(stackerPtr);
-  delete stacker;
 }
 
 JNIEXPORT void JNICALL
@@ -1793,6 +1981,7 @@ struct ExifData {
   bool hasNoiseProfile = false;
   int subjectLocation[4] = {0, 0, 0, 0};
   int subjectLocationLen = 0;
+  int rotation = 0;
 };
 
 static int sget2(unsigned int ord, LibRaw_abstract_datastream *stream) {
@@ -1819,6 +2008,284 @@ static int sget4(unsigned int ord, LibRaw_abstract_datastream *stream) {
     return (s[3] << 24) | (s[2] << 16) | (s[1] << 8) | s[0];
 }
 
+struct DngCfaInfo {
+  int repeatRows = 0;
+  int repeatCols = 0;
+  std::array<unsigned char, 64> pattern{};
+  int patternLen = 0;
+  std::array<unsigned char, 4> planeColor{{0, 1, 2, 3}};
+  int planeColorLen = 0;
+};
+
+static uint16_t tiffReadU16(const unsigned char *data, bool littleEndian) {
+  if (littleEndian)
+    return static_cast<uint16_t>(data[0] | (data[1] << 8));
+  return static_cast<uint16_t>((data[0] << 8) | data[1]);
+}
+
+static uint32_t tiffReadU32(const unsigned char *data, bool littleEndian) {
+  if (littleEndian) {
+    return static_cast<uint32_t>(data[0]) |
+           (static_cast<uint32_t>(data[1]) << 8) |
+           (static_cast<uint32_t>(data[2]) << 16) |
+           (static_cast<uint32_t>(data[3]) << 24);
+  }
+  return (static_cast<uint32_t>(data[0]) << 24) |
+         (static_cast<uint32_t>(data[1]) << 16) |
+         (static_cast<uint32_t>(data[2]) << 8) |
+         static_cast<uint32_t>(data[3]);
+}
+
+static bool tiffReadAt(std::ifstream &file, uint32_t offset, unsigned char *dst,
+                       size_t size) {
+  file.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+  if (!file.good())
+    return false;
+  file.read(reinterpret_cast<char *>(dst), static_cast<std::streamsize>(size));
+  return file.gcount() == static_cast<std::streamsize>(size);
+}
+
+static int tiffTypeSize(uint16_t type) {
+  switch (type) {
+  case 1:  // BYTE
+  case 2:  // ASCII
+  case 6:  // SBYTE
+  case 7:  // UNDEFINED
+    return 1;
+  case 3:  // SHORT
+  case 8:  // SSHORT
+    return 2;
+  case 4:  // LONG
+  case 9:  // SLONG
+  case 11: // FLOAT
+    return 4;
+  case 5:  // RATIONAL
+  case 10: // SRATIONAL
+  case 12: // DOUBLE
+    return 8;
+  default:
+    return 0;
+  }
+}
+
+static bool tiffEntryData(std::ifstream &file, const unsigned char entry[12],
+                          bool littleEndian, uint16_t type, uint32_t count,
+                          std::vector<unsigned char> &out) {
+  const int typeSize = tiffTypeSize(type);
+  if (typeSize <= 0 || count == 0)
+    return false;
+  const uint64_t byteCount = static_cast<uint64_t>(typeSize) * count;
+  if (byteCount > 4096)
+    return false;
+
+  out.assign(static_cast<size_t>(byteCount), 0);
+  if (byteCount <= 4) {
+    memcpy(out.data(), entry + 8, static_cast<size_t>(byteCount));
+    return true;
+  }
+
+  const uint32_t offset = tiffReadU32(entry + 8, littleEndian);
+  return tiffReadAt(file, offset, out.data(), out.size());
+}
+
+static int tiffReadValueAt(const std::vector<unsigned char> &data, uint16_t type,
+                           uint32_t index, bool littleEndian) {
+  const int typeSize = tiffTypeSize(type);
+  const size_t offset = static_cast<size_t>(index) * static_cast<size_t>(typeSize);
+  if (typeSize <= 0 || offset + static_cast<size_t>(typeSize) > data.size())
+    return 0;
+  if (type == 3 || type == 8)
+    return tiffReadU16(data.data() + offset, littleEndian);
+  if (type == 4 || type == 9)
+    return static_cast<int>(tiffReadU32(data.data() + offset, littleEndian));
+  return data[offset];
+}
+
+static void parseDngCfaIfd(std::ifstream &file, bool littleEndian,
+                           uint32_t ifdOffset, DngCfaInfo &info, int depth) {
+  if (ifdOffset == 0 || depth > 8)
+    return;
+
+  unsigned char countBytes[2];
+  if (!tiffReadAt(file, ifdOffset, countBytes, sizeof(countBytes)))
+    return;
+  const uint16_t entryCount = tiffReadU16(countBytes, littleEndian);
+  if (entryCount == 0 || entryCount > 1024)
+    return;
+
+  std::vector<uint32_t> childIfds;
+  for (uint16_t entryIndex = 0; entryIndex < entryCount; ++entryIndex) {
+    unsigned char entry[12];
+    const uint32_t entryOffset =
+        ifdOffset + 2u + static_cast<uint32_t>(entryIndex) * 12u;
+    if (!tiffReadAt(file, entryOffset, entry, sizeof(entry)))
+      return;
+
+    const uint16_t tag = tiffReadU16(entry, littleEndian);
+    const uint16_t type = tiffReadU16(entry + 2, littleEndian);
+    const uint32_t count = tiffReadU32(entry + 4, littleEndian);
+    std::vector<unsigned char> data;
+
+    if (tag == 0x828d && type == 3 && count >= 2 &&
+        tiffEntryData(file, entry, littleEndian, type, count, data)) {
+      info.repeatRows = tiffReadValueAt(data, type, 0, littleEndian);
+      info.repeatCols = tiffReadValueAt(data, type, 1, littleEndian);
+    } else if (tag == 0x828e && count > 0 &&
+               tiffEntryData(file, entry, littleEndian, type, count, data)) {
+      info.patternLen = static_cast<int>(
+          std::min<uint32_t>(count, static_cast<uint32_t>(info.pattern.size())));
+      for (int i = 0; i < info.patternLen; ++i)
+        info.pattern[i] = static_cast<unsigned char>(
+            tiffReadValueAt(data, type, static_cast<uint32_t>(i), littleEndian));
+    } else if (tag == 0xc616 && count > 0 &&
+               tiffEntryData(file, entry, littleEndian, type, count, data)) {
+      info.planeColorLen = static_cast<int>(
+          std::min<uint32_t>(count, static_cast<uint32_t>(info.planeColor.size())));
+      for (int i = 0; i < info.planeColorLen; ++i)
+        info.planeColor[i] = static_cast<unsigned char>(
+            tiffReadValueAt(data, type, static_cast<uint32_t>(i), littleEndian));
+    } else if (tag == 0x014a &&
+               tiffEntryData(file, entry, littleEndian, type, count, data)) {
+      const uint32_t childCount =
+          std::min<uint32_t>(count, static_cast<uint32_t>(data.size() / std::max(1, tiffTypeSize(type))));
+      for (uint32_t i = 0; i < childCount && i < 16; ++i) {
+        const int offset = tiffReadValueAt(data, type, i, littleEndian);
+        if (offset > 0)
+          childIfds.push_back(static_cast<uint32_t>(offset));
+      }
+    }
+  }
+
+  unsigned char nextBytes[4];
+  const uint32_t nextOffsetPos = ifdOffset + 2u + static_cast<uint32_t>(entryCount) * 12u;
+  if (tiffReadAt(file, nextOffsetPos, nextBytes, sizeof(nextBytes))) {
+    const uint32_t nextIfd = tiffReadU32(nextBytes, littleEndian);
+    if (nextIfd != 0)
+      childIfds.push_back(nextIfd);
+  }
+
+  for (uint32_t child : childIfds)
+    parseDngCfaIfd(file, littleEndian, child, info, depth + 1);
+}
+
+static bool parseDngCfaInfo(const char *path, DngCfaInfo &info) {
+  if (!path)
+    return false;
+  std::ifstream file(path, std::ios::binary);
+  if (!file)
+    return false;
+
+  unsigned char header[8];
+  if (!tiffReadAt(file, 0, header, sizeof(header)))
+    return false;
+  const bool littleEndian = header[0] == 'I' && header[1] == 'I';
+  const bool bigEndian = header[0] == 'M' && header[1] == 'M';
+  if (!littleEndian && !bigEndian)
+    return false;
+  if (tiffReadU16(header + 2, littleEndian) != 42)
+    return false;
+
+  const uint32_t firstIfd = tiffReadU32(header + 4, littleEndian);
+  parseDngCfaIfd(file, littleEndian, firstIfd, info, 0);
+  return info.repeatRows > 0 && info.repeatCols > 0 && info.patternLen > 0;
+}
+
+static int dngCfaColorAt(const DngCfaInfo &info, int row, int col) {
+  if (info.repeatRows <= 0 || info.repeatCols <= 0)
+    return -1;
+  const int r = ((row % info.repeatRows) + info.repeatRows) % info.repeatRows;
+  const int c = ((col % info.repeatCols) + info.repeatCols) % info.repeatCols;
+  const int idx = r * info.repeatCols + c;
+  if (idx < 0 || idx >= info.patternLen)
+    return -1;
+  const int planeIndex = info.pattern[idx];
+  int color = planeIndex;
+  if (info.planeColorLen > 0 && planeIndex >= 0 && planeIndex < info.planeColorLen)
+    color = info.planeColor[planeIndex];
+  return color == 3 ? 1 : color;
+}
+
+static bool matchesCfa4x4(const int actual[4][4], const int expected[4][4]) {
+  for (int row = 0; row < 4; ++row) {
+    for (int col = 0; col < 4; ++col) {
+      if (actual[row][col] != expected[row][col])
+        return false;
+    }
+  }
+  return true;
+}
+
+static int expandedCfaColorForBasePattern(int basePattern, int col, int row,
+                                          int blockSize) {
+  const int blockCol = (col / blockSize) & 1;
+  const int blockRow = (row / blockSize) & 1;
+  int channel;
+  if (basePattern == 0) { // RGGB
+    channel = blockRow == 0 ? (blockCol == 0 ? 0 : 1) : (blockCol == 0 ? 2 : 3);
+  } else if (basePattern == 1) { // GRBG
+    channel = blockRow == 0 ? (blockCol == 0 ? 1 : 0) : (blockCol == 0 ? 3 : 2);
+  } else if (basePattern == 2) { // GBRG
+    channel = blockRow == 0 ? (blockCol == 0 ? 2 : 3) : (blockCol == 0 ? 0 : 1);
+  } else { // BGGR
+    channel = blockRow == 0 ? (blockCol == 0 ? 3 : 2) : (blockCol == 0 ? 1 : 0);
+  }
+  return channel == 0 ? 0 : (channel == 3 ? 2 : 1);
+}
+
+static bool matchesExpandedCfa(const DngCfaInfo &info, int left, int top,
+                               int blockSize, int basePattern) {
+  const int period = blockSize * 2;
+  for (int row = 0; row < period; ++row) {
+    for (int col = 0; col < period; ++col) {
+      const int actual = dngCfaColorAt(info, top + row, left + col);
+      const int expected = expandedCfaColorForBasePattern(basePattern, col, row, blockSize);
+      if (actual != expected)
+        return false;
+    }
+  }
+  return true;
+}
+
+static int identifyQuadCfaFromDng(const DngCfaInfo &info, int left, int top,
+                                  int out4x4[4][4]) {
+  for (int row = 0; row < 4; ++row) {
+    for (int col = 0; col < 4; ++col)
+      out4x4[row][col] = dngCfaColorAt(info, top + row, left + col);
+  }
+
+  for (int basePattern = 0; basePattern < 4; ++basePattern) {
+    if (matchesExpandedCfa(info, left, top, 4, basePattern))
+      return 8 + basePattern;
+  }
+
+  const int quadRggb[4][4] = {{0, 0, 1, 1},
+                              {0, 0, 1, 1},
+                              {1, 1, 2, 2},
+                              {1, 1, 2, 2}};
+  const int quadGrbg[4][4] = {{1, 1, 0, 0},
+                              {1, 1, 0, 0},
+                              {2, 2, 1, 1},
+                              {2, 2, 1, 1}};
+  const int quadGbrg[4][4] = {{1, 1, 2, 2},
+                              {1, 1, 2, 2},
+                              {0, 0, 1, 1},
+                              {0, 0, 1, 1}};
+  const int quadBggr[4][4] = {{2, 2, 1, 1},
+                              {2, 2, 1, 1},
+                              {1, 1, 0, 0},
+                              {1, 1, 0, 0}};
+
+  if (matchesCfa4x4(out4x4, quadRggb))
+    return 4;
+  if (matchesCfa4x4(out4x4, quadGrbg))
+    return 5;
+  if (matchesCfa4x4(out4x4, quadGbrg))
+    return 6;
+  if (matchesCfa4x4(out4x4, quadBggr))
+    return 7;
+  return -1;
+}
+
 static void exif_callback(void *datap, int tag, int type, int len,
                           unsigned int ord, void *ifp, long long offset) {
   auto *ed = static_cast<ExifData *>(datap);
@@ -1837,6 +2304,20 @@ static void exif_callback(void *datap, int tag, int type, int len,
         ed->iso = sget2(ord, stream);
       else if (type == 4)
         ed->iso = sget4(ord, stream);
+    }
+  } else if (actual_tag == 0x0112) { // Orientation
+    if (len > 0) {
+      int orientation = 0;
+      if (type == 3)
+        orientation = sget2(ord, stream);
+      else if (type == 4)
+        orientation = sget4(ord, stream);
+      
+      if (orientation == 3) ed->rotation = 180;
+      else if (orientation == 6) ed->rotation = 90;
+      else if (orientation == 8) ed->rotation = 270;
+      else ed->rotation = 0;
+      LOGI("processDngNative: EXIF orientation parsed tag 0x0112 = %d -> rotation = %d", orientation, ed->rotation);
     }
   } else if (actual_tag == 0xC635 || actual_tag == 0xC761) { // NoiseProfile
     if (len > 0) {
@@ -1939,14 +2420,97 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
          libraw_strerror(ret));
   }*/
 
+  if (!RawProcessor.imgdata.rawdata.raw_image) {
+    LOGE("processDngNative: raw_image is null after unpack");
+    env->ReleaseStringUTFChars(filePath, path);
+    return nullptr;
+  }
+
+  int left = RawProcessor.imgdata.sizes.left_margin;
+  int top = RawProcessor.imgdata.sizes.top_margin;
+  int width = RawProcessor.imgdata.sizes.width;
+  int height = RawProcessor.imgdata.sizes.height;
+  int rawWidth = RawProcessor.imgdata.sizes.raw_width;
+
+  // 判定 CFA 模式。LibRaw COLOR()/FC() folds DNG CFAPattern into the dcraw
+  // 2-column filters representation, so Quad Bayer must be detected from the
+  // original DNG CFARepeatPatternDim/CFAPattern tags.
+  int libRawCfa4x4[4][4];
+  for (int row = 0; row < 4; ++row) {
+    for (int col = 0; col < 4; ++col) {
+      libRawCfa4x4[row][col] = RawProcessor.COLOR(top + row, left + col);
+    }
+  }
+  int dngCfa4x4[4][4] = {{-1, -1, -1, -1},
+                         {-1, -1, -1, -1},
+                         {-1, -1, -1, -1},
+                         {-1, -1, -1, -1}};
+  int c00 = libRawCfa4x4[0][0];
+  int c01 = libRawCfa4x4[0][1];
+  int c10 = libRawCfa4x4[1][0];
+  int c11 = libRawCfa4x4[1][1];
+  jint cfaPattern = -1;
+  auto normalizedColor = [](int c) { return (c == 3) ? 1 : c; };
+  auto isG = [&](int c) { return normalizedColor(c) == 1; };
+
+  DngCfaInfo dngCfaInfo;
+  const bool hasDngCfaInfo = parseDngCfaInfo(path, dngCfaInfo);
+  if (hasDngCfaInfo) {
+    cfaPattern = identifyQuadCfaFromDng(dngCfaInfo, left, top, dngCfa4x4);
+    LOGI("processDngNative: DNG CFA tags repeat=%dx%d patternLen=%d "
+         "planeColorLen=%d active4x4=[%d,%d,%d,%d/%d,%d,%d,%d/%d,%d,%d,%d/%d,%d,%d,%d] expandedPattern=%d",
+         dngCfaInfo.repeatRows, dngCfaInfo.repeatCols, dngCfaInfo.patternLen,
+         dngCfaInfo.planeColorLen,
+         dngCfa4x4[0][0], dngCfa4x4[0][1], dngCfa4x4[0][2], dngCfa4x4[0][3],
+         dngCfa4x4[1][0], dngCfa4x4[1][1], dngCfa4x4[1][2], dngCfa4x4[1][3],
+         dngCfa4x4[2][0], dngCfa4x4[2][1], dngCfa4x4[2][2], dngCfa4x4[2][3],
+         dngCfa4x4[3][0], dngCfa4x4[3][1], dngCfa4x4[3][2], dngCfa4x4[3][3],
+         cfaPattern);
+  }
+
+  if (cfaPattern == -1) {
+    if (c00 == 0 && isG(c01) && isG(c10) && c11 == 2) {
+      cfaPattern = 0; // RGGB
+    } else if (isG(c00) && c01 == 0 && c10 == 2 && isG(c11)) {
+      cfaPattern = 1; // GRBG
+    } else if (isG(c00) && c01 == 2 && c10 == 0 && isG(c11)) {
+      cfaPattern = 2; // GBRG
+    } else if (c00 == 2 && isG(c01) && isG(c10) && c11 == 0) {
+      cfaPattern = 3; // BGGR
+    }
+  }
+  if (cfaPattern == -1) {
+    LOGW("processDngNative: Unknown CFA matrix (%d,%d,%d,%d), fallback to RGGB(0) to avoid GPU out-of-bounds crash", c00, c01, c10, c11);
+    cfaPattern = 0;
+  }
+  LOGI("processDngNative: CFA pattern identified from pixel [%d,%d] "
+       "libraw2x2=(%d,%d,%d,%d) libraw4x4=[%d,%d,%d,%d/%d,%d,%d,%d/%d,%d,%d,%d/%d,%d,%d,%d] -> %d",
+       top, left, c00, c01, c10, c11,
+       libRawCfa4x4[0][0], libRawCfa4x4[0][1], libRawCfa4x4[0][2], libRawCfa4x4[0][3],
+       libRawCfa4x4[1][0], libRawCfa4x4[1][1], libRawCfa4x4[1][2], libRawCfa4x4[1][3],
+       libRawCfa4x4[2][0], libRawCfa4x4[2][1], libRawCfa4x4[2][2], libRawCfa4x4[2][3],
+       libRawCfa4x4[3][0], libRawCfa4x4[3][1], libRawCfa4x4[3][2], libRawCfa4x4[3][3],
+       cfaPattern);
+
   // Read the TOTAL effective black level per channel.
   // LibRaw stores it as: color.black + cblack[channel] + repeat_pattern[position].
   float dngBlackLevels[4] = {};
-  computeEffectiveBlackLevels(RawProcessor, dngBlackLevels);
+  computeEffectiveBlackLevels(RawProcessor, cfaPattern, left, top, dngBlackLevels);
   LOGI("dng black levels (metadata): %f %f %f %f", dngBlackLevels[0], dngBlackLevels[1], dngBlackLevels[2], dngBlackLevels[3]);
-  const bool appliedDngGainMap = applySupportedDngGainMaps(RawProcessor, dngBlackLevels);
-  LOGI("dng gain map: opcode2_len=%u applied=%d", RawProcessor.imgdata.color.dng_levels.rawopcodes[1].len,
-       appliedDngGainMap ? 1 : 0);
+  int exportedLscWidth = 0;
+  int exportedLscHeight = 0;
+  float exportedLscGrid[4] = {0.0f, 0.0f, 1.0f, 1.0f};
+  jfloatArray exportedLscArray = buildDngLensShadingArray(
+      env, RawProcessor, cfaPattern, left, top, exportedLscWidth,
+      exportedLscHeight, exportedLscGrid);
+  jfloatArray exportedLscGridArray = nullptr;
+  if (exportedLscArray) {
+    exportedLscGridArray = env->NewFloatArray(4);
+    env->SetFloatArrayRegion(exportedLscGridArray, 0, 4, exportedLscGrid);
+  }
+  LOGI("dng gain map: opcode2_len=%u native_apply=0 exported=%d",
+       RawProcessor.imgdata.color.dng_levels.rawopcodes[1].len,
+       exportedLscArray ? 1 : 0);
 
   RawProcessor.imgdata.params.output_bps = 16;
   RawProcessor.imgdata.params.gamm[0] = 1.0; // Linear
@@ -1988,32 +2552,27 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     LOGI("raw awb estimate: disabled, using camera wb");
   }
 
-  ret = RawProcessor.dcraw_process();
-  if (ret != LIBRAW_SUCCESS) {
-    LOGE("processDngNative: Failed to process %s, ret=%d", path, ret);
-    env->ReleaseStringUTFChars(filePath, path);
-    return nullptr;
-  }
-
-  // 获取处理后的图像
-  libraw_processed_image_t *image = RawProcessor.dcraw_make_mem_image(&ret);
-  if (!image || ret != 0) {
-    LOGE("processDngNative: Failed to make mem image, ret=%d", ret);
-    env->ReleaseStringUTFChars(filePath, path);
-    return nullptr;
-  }
-
-  // 准备返回结果
-  size_t outputSize = (size_t)image->width * image->height * 3 * 2;
+  // 准备返回结果：仅拷贝有效 Bayer 像素区域的单通道数据，以极大地减少 JNI 开销
+  size_t outputSize = (size_t)width * height * 2; // 16-bit single channel
   void *outData = malloc(outputSize);
-  memcpy(outData, image->data, outputSize);
+  if (!outData) {
+    LOGE("processDngNative: Out of memory");
+    env->ReleaseStringUTFChars(filePath, path);
+    return nullptr;
+  }
+
+  unsigned short *src = RawProcessor.imgdata.rawdata.raw_image;
+  unsigned short *dst = (unsigned short *)outData;
+  for (int y = 0; y < height; y++) {
+    memcpy(dst + y * width, src + (y + top) * rawWidth + left, width * 2);
+  }
   jobject rawDataBuffer = env->NewDirectByteBuffer(outData, outputSize);
 
   // 提取元数据
   jclass dngDataClass = env->FindClass("com/hinnka/mycamera/raw/DngRawData");
   jmethodID constructor =
       env->GetMethodID(dngDataClass, "<init>",
-                       "(Ljava/nio/ByteBuffer;IIIF[F[F[F[FIIF[FIIFIJF[I[FLandroid/graphics/Bitmap;)V");
+                       "(Ljava/nio/ByteBuffer;IIIF[F[F[F[FIIF[FII[FFIJF[I[FLandroid/graphics/Bitmap;)V");
 
   jfloatArray blackLevelArray = env->NewFloatArray(4);
   for (int i = 0; i < 4; i++) {
@@ -2142,24 +2701,22 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
 
   float weight = 0.5f;
   if (hasM1 && hasM2) {
-    float t1 =
-        illuminantToTemp(RawProcessor.imgdata.color.dng_color[0].illuminant);
-    float t2 =
-        illuminantToTemp(RawProcessor.imgdata.color.dng_color[1].illuminant);
-    float currentRatio = wb[0] / wb[2]; // R/B
-    float rWarm = 0.5f, rCool = 1.6f;
-    auto getTargetRatio = [&](float temp) {
-      if (temp <= 2856.0f)
-        return rWarm;
-      if (temp >= 6504.0f)
-        return rCool;
-      return rWarm + (rCool - rWarm) * (temp - 2856.0f) / (6504.0f - 2856.0f);
-    };
-    float r1 = getTargetRatio(t1), r2 = getTargetRatio(t2);
-    if (std::abs(r1 - r2) > 0.01f) {
-      weight = (currentRatio - r2) / (r1 - r2);
-      weight = std::max(0.0f, std::min(1.0f, weight));
+    Matrix3x3 colorMatrix1;
+    Matrix3x3 colorMatrix2;
+    for (int i = 0; i < 3; ++i) {
+      for (int j = 0; j < 3; ++j) {
+        colorMatrix1.m[i * 3 + j] =
+            RawProcessor.imgdata.color.dng_color[0].colormatrix[i][j];
+        colorMatrix2.m[i * 3 + j] =
+            RawProcessor.imgdata.color.dng_color[1].colormatrix[i][j];
+      }
     }
+    const bool hasColor1 = hasMatrixSignal(colorMatrix1);
+    const bool hasColor2 = hasMatrixSignal(colorMatrix2);
+    weight = calculateDngReferenceInterpolationWeight(
+        RawProcessor.imgdata.color.dng_color[0].illuminant,
+        RawProcessor.imgdata.color.dng_color[1].illuminant, wb, colorMatrix1,
+        hasColor1, colorMatrix2, hasColor2);
   }
 
   Matrix3x3 camToXYZ;
@@ -2285,14 +2842,11 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
        finalCCM.m[5], finalCCM.m[6], finalCCM.m[7], finalCCM.m[8]);
 
   // 其它
-  jint width = image->width;
-  jint height = image->height;
-  jint rowStride = width * 6; // RGB16
+  jint rowStride = width * 2; // Single channel 16-bit Bayer
   jfloat whiteLevel =
       (jfloat)RawProcessor.imgdata.color.dng_levels.dng_whitelevel[0];
   if (whiteLevel <= 0)
     whiteLevel = (jfloat)RawProcessor.imgdata.color.maximum;
-  jint cfaPattern = -1; // CFA_LINEAR_RGB
 
   jfloat baselineExposure =
       RawProcessor.imgdata.color.dng_levels.baseline_exposure;
@@ -2333,12 +2887,12 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   jobject dngData = env->NewObject(
       dngDataClass, constructor, rawDataBuffer, width, height, rowStride,
       whiteLevel, blackLevelArray, preMulArray, wbArray, colorMatrixArray,
-      cfaPattern, 0, baselineExposure, nullptr, 0, 0, exposureBias, iso,
+      cfaPattern, ed.rotation, baselineExposure, exportedLscArray, exportedLscWidth, exportedLscHeight,
+      exportedLscGridArray, exposureBias, iso,
       shutterSpeedLong, aperture, activeArray, noiseProfileArray,
       embeddedPreviewBitmap);
 
   // 释放资源
-  LibRaw::dcraw_clear_mem(image);
   env->ReleaseStringUTFChars(filePath, path);
 
   return dngData;
@@ -2526,6 +3080,27 @@ Java_com_hinnka_mycamera_ml_DnCNNDenoiseEstimator_postprocessNative(
 
   AndroidBitmap_unlockPixels(env, srcBitmap);
   AndroidBitmap_unlockPixels(env, dstBitmap);
+}
+
+JNIEXPORT jobject JNICALL
+Java_com_hinnka_mycamera_utils_DirectBufferAllocator_allocateNative(
+    JNIEnv *env, jobject, jlong capacity) {
+  void* ptr = malloc(capacity);
+  if (!ptr) {
+    LOGE("Failed to allocate %lld bytes", (long long)capacity);
+    return nullptr;
+  }
+  return env->NewDirectByteBuffer(ptr, capacity);
+}
+
+JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_utils_DirectBufferAllocator_freeNative(
+    JNIEnv *env, jobject, jobject buffer) {
+  if (!buffer) return;
+  void* ptr = env->GetDirectBufferAddress(buffer);
+  if (ptr) {
+    free(ptr);
+  }
 }
 
 } // extern "C"

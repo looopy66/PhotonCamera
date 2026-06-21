@@ -3,14 +3,18 @@ package com.hinnka.mycamera.ui.camera
 import android.hardware.camera2.CameraMetadata
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.CameraState
 
 @Composable
@@ -24,9 +28,10 @@ fun CameraParameterBarVerticel(
 
     Column(
         modifier = modifier
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 8.dp, vertical = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceAround
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         ParameterItem(
             label = "AE",
@@ -58,7 +63,11 @@ fun CameraParameterBarVerticel(
         )
         ParameterItem(
             label = "AF",
-            value = if (state.isAutoFocus) "AUTO" else formatFocusDistance(state.focusDistance),
+            value = when {
+                state.isAutoFocus -> stringResource(R.string.camera_focus_auto)
+                state.isHyperfocalFocusEnabled -> stringResource(R.string.camera_hyperfocal_label)
+                else -> formatFocusDistance(state.focusDistance)
+            },
             labelColor = yellow,
             isSelected = selectedParameter == CameraParameter.FOCUS,
             isEnabled = true,

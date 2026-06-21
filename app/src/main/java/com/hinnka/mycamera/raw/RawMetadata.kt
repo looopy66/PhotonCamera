@@ -24,6 +24,8 @@ data class RawMetadata(
     /**
      * CFA（彩色滤波阵列）排列模式
      * 0 = RGGB, 1 = GRBG, 2 = GBRG, 3 = BGGR
+     * 4 = Quad RGGB, 5 = Quad GRBG, 6 = Quad GBRG, 7 = Quad BGGR
+     * 8 = 8x8 RGGB, 9 = 8x8 GRBG, 10 = 8x8 GBRG, 11 = 8x8 BGGR
      */
     val cfaPattern: Int,
 
@@ -64,6 +66,7 @@ data class RawMetadata(
     val lensShadingMap: FloatArray? = null,
     val lensShadingMapWidth: Int = 0,
     val lensShadingMapHeight: Int = 0,
+    val lensShadingMapGrid: FloatArray? = null,
 
     /**
      * 数字增益 (Post RAW Boost)
@@ -78,7 +81,8 @@ data class RawMetadata(
     val exposureBias: Float = 0f,
     val iso: Int = 100,
     val shutterSpeed: Long = 0L,
-    val aperture: Float = 0f
+    val aperture: Float = 0f,
+    val frameCount: Int = 1
 ) {
     companion object {
         private const val TAG = "RawMetadata"
@@ -88,7 +92,22 @@ data class RawMetadata(
         const val CFA_GRBG = 1
         const val CFA_GBRG = 2
         const val CFA_BGGR = 3
-        const val CFA_LINEAR_RGB = -1
+        const val CFA_QUAD_RGGB = 4
+        const val CFA_QUAD_GRBG = 5
+        const val CFA_QUAD_GBRG = 6
+        const val CFA_QUAD_BGGR = 7
+        const val CFA_QUAD_8X8_RGGB = 8
+        const val CFA_QUAD_8X8_GRBG = 9
+        const val CFA_QUAD_8X8_GBRG = 10
+        const val CFA_QUAD_8X8_BGGR = 11
+
+        fun isQuadBayer(cfaPattern: Int): Boolean {
+            return cfaPattern in CFA_QUAD_RGGB..CFA_QUAD_8X8_BGGR
+        }
+
+        fun isQuadBayer8x8(cfaPattern: Int): Boolean {
+            return cfaPattern in CFA_QUAD_8X8_RGGB..CFA_QUAD_8X8_BGGR
+        }
 
         /**
          * 从 CameraCharacteristics 和 CaptureResult 创建 RawMetadata
@@ -338,8 +357,8 @@ data class RawMetadata(
                 ?: XYZ_D50_TO_SRGB // 如果计算失败则回退到 sRGB
 
             // 获取参考光源
-            val illuminant1 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1)?.toInt()
-            val illuminant2 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt()
+            val illuminant1: Int? = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1)
+            val illuminant2: Int? = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt()
 
             // 获取矩阵（两组）
             val colorMatrix1 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1)
@@ -351,7 +370,13 @@ data class RawMetadata(
             val wbGains = captureResult.get(CaptureResult.COLOR_CORRECTION_GAINS)
 
             // 1. 计算双光源插值权重
-            val weight = calculateInterpolationWeight(illuminant1, illuminant2, wbGains)
+            val weight = calculateInterpolationWeight(
+                illuminant1,
+                illuminant2,
+                wbGains,
+                colorMatrix1,
+                colorMatrix2
+            )
 
             // 2. 获取两个光源下的 Camera -> XYZ(D50) 矩阵
             val m1: FloatArray? = computeCamToXYZ(forwardMatrix1, colorMatrix1, illuminant1)
@@ -387,12 +412,33 @@ data class RawMetadata(
         private fun calculateInterpolationWeight(
             illuminant1: Int?,
             illuminant2: Int?,
-            wbGains: RggbChannelVector?
+            wbGains: RggbChannelVector?,
+            colorMatrix1: ColorSpaceTransform?,
+            colorMatrix2: ColorSpaceTransform?
         ): Float {
             if (illuminant1 == null || illuminant2 == null || illuminant1 == 0 || illuminant2 == 0 || wbGains == null) {
-                return 0.0f // 默认使用第二个矩阵 (通常是 D65)
+                return 0.0f
             }
 
+            val dngReferenceWeight = calculateDngReferenceInterpolationWeight(
+                illuminant1 = illuminant1,
+                illuminant2 = illuminant2,
+                wbGains = wbGains,
+                colorMatrix1 = colorMatrix1,
+                colorMatrix2 = colorMatrix2
+            )
+            if (dngReferenceWeight != null) {
+                return dngReferenceWeight
+            }
+
+            return calculateRatioInterpolationWeight(illuminant1, illuminant2, wbGains)
+        }
+
+        private fun calculateRatioInterpolationWeight(
+            illuminant1: Int,
+            illuminant2: Int,
+            wbGains: RggbChannelVector
+        ): Float {
             val t1 = illuminantToTemp(illuminant1)
             val t2 = illuminantToTemp(illuminant2)
             if (kotlin.math.abs(t1 - t2) < 100f) return 1.0f
@@ -424,6 +470,118 @@ data class RawMetadata(
 
             val weight = (currentRatio - r2) / diff
             return weight.coerceIn(0.0f, 1.0f)
+        }
+
+        private fun calculateDngReferenceInterpolationWeight(
+            illuminant1: Int,
+            illuminant2: Int,
+            wbGains: RggbChannelVector,
+            colorMatrix1: ColorSpaceTransform?,
+            colorMatrix2: ColorSpaceTransform?
+        ): Float? {
+            val matrix1 = colorMatrix1?.let { extractCCM(it) }
+            val matrix2 = colorMatrix2?.let { extractCCM(it) }
+            if (matrix1 == null && matrix2 == null) return null
+
+            val green = ((wbGains.greenEven + wbGains.greenOdd) * 0.5f).takeIf { it > 1e-6f } ?: 1f
+            val neutral = floatArrayOf(
+                green / wbGains.red.coerceAtLeast(1e-6f),
+                1f,
+                green / wbGains.blue.coerceAtLeast(1e-6f)
+            )
+            val whiteXy = neutralToXy(neutral, matrix1, matrix2, illuminant1, illuminant2) ?: return null
+            return calculateTemperatureInterpolationWeight(illuminant1, illuminant2, whiteXy)
+        }
+
+        private fun neutralToXy(
+            neutral: FloatArray,
+            colorMatrix1: FloatArray?,
+            colorMatrix2: FloatArray?,
+            illuminant1: Int,
+            illuminant2: Int
+        ): FloatArray? {
+            var lastXy = floatArrayOf(0.3457f, 0.3585f)
+            repeat(30) { pass ->
+                val xyzToCamera = findXyzToCamera(lastXy, colorMatrix1, colorMatrix2, illuminant1, illuminant2)
+                    ?: return null
+                val cameraToXyz = invertMatrix3x3(xyzToCamera) ?: return null
+                val nextXyz = multiplyMatrixVector(cameraToXyz, neutral)
+                val nextXy = xyzToXy(nextXyz) ?: return null
+
+                if (kotlin.math.abs(nextXy[0] - lastXy[0]) + kotlin.math.abs(nextXy[1] - lastXy[1]) < 1e-7f) {
+                    return nextXy
+                }
+                if (pass == 29) {
+                    nextXy[0] = (lastXy[0] + nextXy[0]) * 0.5f
+                    nextXy[1] = (lastXy[1] + nextXy[1]) * 0.5f
+                    return nextXy
+                }
+                lastXy = nextXy
+            }
+            return lastXy
+        }
+
+        private fun findXyzToCamera(
+            whiteXy: FloatArray,
+            colorMatrix1: FloatArray?,
+            colorMatrix2: FloatArray?,
+            illuminant1: Int,
+            illuminant2: Int
+        ): FloatArray? {
+            if (colorMatrix1 != null && colorMatrix2 != null) {
+                val weight = calculateTemperatureInterpolationWeight(illuminant1, illuminant2, whiteXy)
+                return FloatArray(9) { index -> colorMatrix1[index] * weight + colorMatrix2[index] * (1f - weight) }
+            }
+            return colorMatrix1 ?: colorMatrix2
+        }
+
+        private fun calculateTemperatureInterpolationWeight(
+            illuminant1: Int,
+            illuminant2: Int,
+            whiteXy: FloatArray
+        ): Float {
+            val t1 = illuminantToTemp(illuminant1)
+            val t2 = illuminantToTemp(illuminant2)
+            if (t1 <= 0f || t2 <= 0f || kotlin.math.abs(t1 - t2) < 1f) return 1f
+
+            val whiteTemp = xyCoordToTemperature(whiteXy)
+            val low = kotlin.math.min(t1, t2)
+            val high = kotlin.math.max(t1, t2)
+            val mix = when {
+                whiteTemp <= low -> 1f
+                whiteTemp >= high -> 0f
+                else -> {
+                    val invT = 1f / whiteTemp
+                    (invT - (1f / high)) / ((1f / low) - (1f / high))
+                }
+            }.coerceIn(0f, 1f)
+            return if (t1 > t2) 1f - mix else mix
+        }
+
+        private fun xyCoordToTemperature(xy: FloatArray): Float {
+            val denominator = xy[1] - 0.1858f
+            val safeDenominator = if (kotlin.math.abs(denominator) < 1e-6f) {
+                if (denominator < 0f) -1e-6f else 1e-6f
+            } else {
+                denominator
+            }
+            val n = (xy[0] - 0.3320f) / safeDenominator
+            return (-449f * n * n * n + 3525f * n * n - 6823.3f * n + 5520.33f)
+                .coerceIn(2000f, 50000f)
+        }
+
+        private fun xyzToXy(xyz: FloatArray): FloatArray? {
+            val sum = xyz[0] + xyz[1] + xyz[2]
+            if (sum <= 1e-6f || xyz.any { !it.isFinite() }) return null
+            return floatArrayOf(xyz[0] / sum, xyz[1] / sum)
+        }
+
+        private fun multiplyMatrixVector(matrix: FloatArray, vector: FloatArray): FloatArray {
+            return floatArrayOf(
+                matrix[0] * vector[0] + matrix[1] * vector[1] + matrix[2] * vector[2],
+                matrix[3] * vector[0] + matrix[4] * vector[1] + matrix[5] * vector[2],
+                matrix[6] * vector[0] + matrix[7] * vector[1] + matrix[8] * vector[2]
+            )
         }
 
         /**
@@ -564,15 +722,19 @@ data class RawMetadata(
                 mS[6] * sR, mS[7] * sG, mS[8] * sB
             )
 
-            // 2. 色彩适应：从 XYZ(D65) 转换到 XYZ(D50) 基准
-            // 使用标准 Bradford 矩阵
-            val BRADFORD_D65_TO_D50 = floatArrayOf(
-                1.0478112f, 0.0228866f, -0.0501270f,
-                0.0295424f, 0.9904844f, -0.0170491f,
-                -0.0092345f, 0.0150436f, 0.7521316f
-            )
+            val isD50WhitePoint = kotlin.math.abs(xw - 0.3457f) < 0.002f &&
+                    kotlin.math.abs(yw - 0.3585f) < 0.002f
 
-            val gamutToXYZD50 = multiplyMatrix3x3(BRADFORD_D65_TO_D50, gamutToXYZD65)
+            val gamutToXYZD50 = if (isD50WhitePoint) {
+                gamutToXYZD65
+            } else {
+                val bradfordD65ToD50 = floatArrayOf(
+                    1.0478112f, 0.0228866f, -0.0501270f,
+                    0.0295424f, 0.9904844f, -0.0170491f,
+                    -0.0092345f, 0.0150436f, 0.7521316f
+                )
+                multiplyMatrix3x3(bradfordD65ToD50, gamutToXYZD65)
+            }
 
             // 3. 求逆：得到最终的 XYZ(D50) -> Gamut 转换矩阵
             return invertMatrix3x3(gamutToXYZD50)
@@ -660,6 +822,7 @@ data class RawMetadata(
         if (baselineExposure != other.baselineExposure) return false
         if (iso != other.iso) return false
         if (shutterSpeed != other.shutterSpeed) return false
+        if (frameCount != other.frameCount) return false
 
         return true
     }
@@ -675,10 +838,12 @@ data class RawMetadata(
         result = 31 * result + (lensShadingMap?.contentHashCode() ?: 0)
         result = 31 * result + lensShadingMapWidth
         result = 31 * result + lensShadingMapHeight
+        result = 31 * result + (lensShadingMapGrid?.contentHashCode() ?: 0)
         result = 31 * result + postRawSensitivityBoost.hashCode()
         result = 31 * result + baselineExposure.hashCode()
         result = 31 * result + iso
         result = 31 * result + shutterSpeed.hashCode()
+        result = 31 * result + frameCount
         return result
     }
 }

@@ -4,14 +4,14 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import com.hinnka.mycamera.gallery.GalleryManager
-import com.hinnka.mycamera.ml.DepthEstimator
+import com.hinnka.mycamera.ml.SharedDepthEstimator
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
  * Handles the post-processing of the Depth Map for high-quality optical bokeh.
- * This class coordinates the Vulkan compute pipeline for edge refinement (Guided Filter)
+ * This class coordinates the GPU compute pipeline for edge refinement (Guided Filter)
  * and realistic bokeh convolution.
  */
 class DepthBokehProcessor(context: Context) {
@@ -21,10 +21,6 @@ class DepthBokehProcessor(context: Context) {
 
     private val appContext = context.applicationContext
     private val processor = OglBokehProcessor()
-    private val depthEstimator by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
-//        DepthEstimator(appContext, DepthEstimator.MODEL_DEPTH_ANYTHING)
-        DepthEstimator(appContext, DepthEstimator.MODEL_MIDAS)
-    }
     private val mutex = Mutex()
 
     /**
@@ -59,7 +55,7 @@ class DepthBokehProcessor(context: Context) {
         val inputForBokeh = ensureArgb8888(originalImage)
 
         if (depthMap == null) {
-            depthMap = depthEstimator.estimateDepth(inputForBokeh)
+            depthMap = SharedDepthEstimator.estimateDepth(appContext, inputForBokeh)
 
             if (depthMap != null && depthFile != null) {
                 try {
@@ -111,7 +107,5 @@ class DepthBokehProcessor(context: Context) {
         return converted ?: bitmap
     }
 
-    fun close() {
-        depthEstimator.close()
-    }
+    fun close() = Unit
 }

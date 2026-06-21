@@ -21,29 +21,19 @@
       "isVip": false
     },
     {
-      "id": "ricoh_negative",
+      "id": "leica_m9",
       "name": {
-        "en": "Negative",
-        "zh": "理光负片"
+        "en": "M9 CCD",
+        "zh": "徕卡M9"
       },
-      "path": "ricoh_negative.plut",
-      "isDefault": true,
-      "isVip": false
-    },
-    {
-      "id": "ricoh_positive",
-      "name": {
-        "en": "Positive",
-        "zh": "理光正片"
-      },
-      "path": "ricoh_positive.plut",
+      "path": "Leica_M9_STD.plut",
       "isVip": false
     },
     {
       "id": "leica",
       "name": {
         "en": "Leica",
-        "zh": "徕卡影调"
+        "zh": "徕卡ETN"
       },
       "path": "leica.plut",
       "isVip": false
@@ -58,12 +48,30 @@
       "isVip": false
     },
     {
-      "id": "pentax",
+      "id": "Hasselblad",
       "name": {
-        "en": "Pentax",
-        "zh": "宾得明亮"
+        "en": "Hasselblad",
+        "zh": "哈苏自然"
       },
-      "path": "pentax.plut",
+      "path": "Hasselblad.plut",
+      "isVip": false
+    },
+    {
+      "id": "Hasselblad_portrait",
+      "name": {
+        "en": "Hasselblad Portrait",
+        "zh": "哈苏人像"
+      },
+      "path": "Hasselblad_portrait.plut",
+      "isVip": false
+    },
+    {
+      "id": "fl3",
+      "name": {
+        "en": "FL3",
+        "zh": "FL3"
+      },
+      "path": "fl3.plut",
       "isVip": false
     },
     {
@@ -82,7 +90,37 @@
         "zh": "富士CC"
       },
       "path": "cc.plut",
-      "isDefault": true,
+      "isVip": false
+    },
+    {
+      "id": "ricoh_negative",
+      "name": {
+        "en": "Negative",
+        "zh": "理光负片"
+      },
+      "path": "ricoh_negative.plut",
+      "isDefault": false,
+      "category": "Ricoh",
+      "isVip": false
+    },
+    {
+      "id": "ricoh_positive",
+      "name": {
+        "en": "Positive",
+        "zh": "理光正片"
+      },
+      "path": "ricoh_positive.plut",
+      "category": "Ricoh",
+      "isVip": false
+    },
+    {
+      "id": "ricoh_gr2_positive",
+      "name": {
+        "en": "Positive GR2",
+        "zh": "理光正片GR2"
+      },
+      "path": "Ricoh_GR2_POSI.plut",
+      "category": "Ricoh",
       "isVip": false
     },
     {
@@ -92,6 +130,7 @@
         "zh": "电影绿"
       },
       "path": "ricoh_green.plut",
+      "category": "Ricoh",
       "isVip": false
     },
     {
@@ -101,15 +140,97 @@
         "zh": "电影黄"
       },
       "path": "ricoh_yellow.plut",
+      "category": "Ricoh",
       "isVip": false
     },
     {
-      "id": "fl3",
+      "id": "pentax",
       "name": {
-        "en": "FL3",
-        "zh": "FL3"
+        "en": "Pentax",
+        "zh": "宾得明亮"
       },
-      "path": "fl3.plut",
+      "path": "pentax.plut",
+      "category": "Pentax",
+      "isVip": false
+    },
+    {
+      "id": "pentax_harubeni",
+      "name": {
+        "en": "Harubeni",
+        "zh": "宾得春红"
+      },
+      "path": "Pentax_Harubeni.plut",
+      "category": "Pentax",
+      "isVip": false
+    },
+    {
+      "id": "pentax_katen",
+      "name": {
+        "en": "Katen",
+        "zh": "宾得夏天"
+      },
+      "path": "Pentax_Katen.plut",
+      "category": "Pentax",
+      "isVip": false
+    },
+    {
+      "id": "pentax_kyushu",
+      "name": {
+        "en": "Kyushu",
+        "zh": "宾得九秋"
+      },
+      "path": "Pentax_Kyushu.plut",
+      "category": "Pentax",
+      "isVip": false
+    },
+    {
+      "id": "pentax_fuyuno",
+      "name": {
+        "en": "Fuyuno",
+        "zh": "宾得冬野"
+      },
+      "path": "Pentax_Fuyuno.plut",
+      "category": "Pentax",
+      "isVip": false
+    },
+    {
+      "id": "lumix_std",
+      "name": {
+        "en": "Lumix STD",
+        "zh": "Lumix标准"
+      },
+      "path": "lumix_std.plut",
+      "category": "Lumix",
+      "isVip": false
+    },
+    {
+      "id": "lumix_portrait",
+      "name": {
+        "en": "Lumix Portrait",
+        "zh": "Lumix肖像"
+      },
+      "path": "lumix_portrait.plut",
+      "category": "Lumix",
+      "isVip": false
+    },
+    {
+      "id": "lumix_nat",
+      "name": {
+        "en": "Lumix Nature",
+        "zh": "Lumix自然"
+      },
+      "path": "lumix_nat.plut",
+      "category": "Lumix",
+      "isVip": false
+    },
+    {
+      "id": "lumix_vivid",
+      "name": {
+        "en": "Lumix Vivid",
+        "zh": "Lumix生动"
+      },
+      "path": "lumix_vivid.plut",
+      "category": "Lumix",
       "isVip": false
     },
     {
@@ -119,7 +240,7 @@
         "zh": "Ultramax 400"
       },
       "path": "ultramax400.plut",
-      "isDefault": false,
+      "category": "Film",
       "isVip": true
     },
     {
@@ -129,7 +250,7 @@
         "zh": "E100"
       },
       "path": "e100.plut",
-      "isDefault": false,
+      "category": "Film",
       "isVip": true
     },
     {
@@ -139,7 +260,7 @@
         "zh": "CN200"
       },
       "path": "cn200.plut",
-      "isDefault": false,
+      "category": "Film",
       "isVip": true
     },
     {
@@ -149,7 +270,7 @@
         "zh": "Natura 1600"
       },
       "path": "nature1600.plut",
-      "isDefault": false,
+      "category": "Film",
       "isVip": true
     },
     {
@@ -159,7 +280,7 @@
         "zh": "Superia 1600"
       },
       "path": "superia1600.plut",
-      "isDefault": false,
+      "category": "Film",
       "isVip": true
     },
     {
@@ -169,7 +290,7 @@
         "zh": "Cinestill 800T"
       },
       "path": "cinestill800t.33.plut",
-      "isDefault": false,
+      "category": "Film",
       "isVip": true
     }
   ]

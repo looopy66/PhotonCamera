@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.frame
 
 import android.graphics.Color
+import androidx.compose.runtime.snapshots.toInt
 import java.util.UUID
 
 /**
@@ -15,15 +16,19 @@ data class FrameEditorDraft(
     val name: String = "",
     val layout: FrameLayoutDraft = FrameLayoutDraft(),
     val elements: List<FrameElementDraft> = emptyList(),
+    val elementsTop: List<FrameElementDraft>? = null,
     val selectedElementId: String? = elements.firstOrNull()?.draftId,
 ) {
     val effectiveSelectedElementId: String?
-        get() = selectedElementId?.takeIf { id -> elements.any { it.draftId == id } }
-            ?: elements.firstOrNull()?.draftId
+        get() = selectedElementId?.takeIf { id ->
+            elements.any { it.draftId == id } || elementsTop?.any { it.draftId == id } == true
+        } ?: elements.firstOrNull()?.draftId ?: elementsTop?.firstOrNull()?.draftId
 
     fun withSelectedElement(elementId: String?): FrameEditorDraft {
-        val resolvedId = elementId?.takeIf { id -> elements.any { it.draftId == id } }
-        return copy(selectedElementId = resolvedId ?: elements.firstOrNull()?.draftId)
+        val resolvedId = elementId?.takeIf { id ->
+            elements.any { it.draftId == id } || elementsTop?.any { it.draftId == id } == true
+        }
+        return copy(selectedElementId = resolvedId ?: elements.firstOrNull()?.draftId ?: elementsTop?.firstOrNull()?.draftId)
     }
 
     fun toTemplate(templateId: String): FrameTemplate {
@@ -37,6 +42,11 @@ data class FrameEditorDraft(
                 emptyList()
             } else {
                 elements.map { it.toFrameElement() }
+            },
+            elementsTop = if (layout.position == FramePosition.BOTH) {
+                elementsTop?.map { it.toFrameElement() }
+            } else {
+                null
             }
         )
     }
@@ -57,23 +67,6 @@ data class FrameEditorDraft(
                         fontSizeSp = 20,
                         color = Color.BLACK,
                         fontWeight = FontWeight.BOLD,
-                        line = -1
-                    ),
-                    FrameElementDraft.Divider(
-                        orientation = DividerOrientation.VERTICAL,
-                        alignment = ElementAlignment.START,
-                        lengthDp = 36,
-                        thicknessDp = 1,
-                        color = 0xFFE0E0E0.toInt(),
-                        marginDp = 8,
-                        line = -1
-                    ),
-                    FrameElementDraft.Logo(
-                        logoType = LogoType.BRAND,
-                        alignment = ElementAlignment.START,
-                        sizeDp = 32,
-                        maxWidth = 128,
-                        marginDp = 8,
                         line = -1
                     ),
                     FrameElementDraft.Text(
@@ -128,10 +121,11 @@ data class FrameEditorDraft(
                     )
                 } else {
                     FrameLayoutDraft(
-                        position = FramePosition.BOTTOM,
+                        position = FramePosition.BORDER,
                         heightDp = 80,
                         backgroundColor = Color.WHITE,
-                        paddingDp = 20
+                        paddingDp = 20,
+                        borderWidthDp = 4
                     )
                 },
                 elements = defaultElements,
@@ -144,13 +138,16 @@ data class FrameEditorDraft(
             frameInfo: FrameInfo? = null
         ): FrameEditorDraft {
             val elements = template.elements.map { FrameElementDraft.fromElement(it) }
+            val elementsTop = template.elementsTop?.map { FrameElementDraft.fromElement(it) }
+            val editableFrameId = frameInfo?.id?.takeIf { frameInfo.isBuiltIn == false }
             return FrameEditorDraft(
-                sourceFrameId = template.id,
-                editableFrameId = template.id.takeIf { frameInfo?.isBuiltIn == false },
+                sourceFrameId = editableFrameId ?: template.id,
+                editableFrameId = editableFrameId,
                 isBuiltInSource = frameInfo?.isBuiltIn ?: false,
                 name = template.getName(),
                 layout = FrameLayoutDraft.fromLayout(template.layout),
                 elements = elements,
+                elementsTop = elementsTop,
                 selectedElementId = elements.firstOrNull()?.draftId
             )
         }
@@ -161,8 +158,16 @@ data class FrameLayoutDraft(
     val position: FramePosition = FramePosition.BOTTOM,
     val heightDp: Int = 80,
     val backgroundColor: Int = Color.WHITE,
+    val borderColor: Int = backgroundColor,
+    val lineSpacingDp: Int = 8,
     val paddingDp: Int = 16,
     val borderWidthDp: Int = 0,
+    val photoCornerRadiusDp: Int = 0,
+    val photoShadowEnabled: Boolean = false,
+    val photoShadowRadiusDp: Int = 0,
+    val photoShadowOffsetXDp: Int = 0,
+    val photoShadowOffsetYDp: Int = 2,
+    val photoShadowColor: Int = 0xCC000000.toInt(),
     val imageResName: String? = null,
     val imagePath: String? = null
 ) {
@@ -170,8 +175,16 @@ data class FrameLayoutDraft(
         position = position,
         heightDp = heightDp.coerceAtLeast(0),
         backgroundColor = backgroundColor,
+        borderColor = borderColor,
+        lineSpacingDp = lineSpacingDp,
         paddingDp = paddingDp.coerceAtLeast(0),
         borderWidthDp = borderWidthDp.coerceAtLeast(0),
+        photoCornerRadiusDp = photoCornerRadiusDp.coerceAtLeast(0),
+        photoShadowEnabled = photoShadowEnabled,
+        photoShadowRadiusDp = photoShadowRadiusDp.coerceAtLeast(0),
+        photoShadowOffsetXDp = photoShadowOffsetXDp,
+        photoShadowOffsetYDp = photoShadowOffsetYDp,
+        photoShadowColor = photoShadowColor,
         imageResName = imageResName,
         imagePath = imagePath
     )
@@ -181,8 +194,16 @@ data class FrameLayoutDraft(
             position = layout.position,
             heightDp = layout.heightDp,
             backgroundColor = layout.backgroundColor,
+            borderColor = layout.borderColor,
+            lineSpacingDp = layout.lineSpacingDp,
             paddingDp = layout.paddingDp,
             borderWidthDp = layout.borderWidthDp,
+            photoCornerRadiusDp = layout.photoCornerRadiusDp,
+            photoShadowEnabled = layout.photoShadowEnabled,
+            photoShadowRadiusDp = layout.photoShadowRadiusDp,
+            photoShadowOffsetXDp = layout.photoShadowOffsetXDp,
+            photoShadowOffsetYDp = layout.photoShadowOffsetYDp,
+            photoShadowColor = layout.photoShadowColor,
             imageResName = layout.imageResName,
             imagePath = layout.imagePath
         )

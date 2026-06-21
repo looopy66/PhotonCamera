@@ -3,6 +3,7 @@ package com.hinnka.mycamera.update
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
 import android.net.Uri
 import android.os.Environment
 import android.provider.Settings
@@ -37,7 +38,7 @@ data class AppUpdateRelease(
 
 object AppUpdateManager {
     private const val TAG = "AppUpdateManager"
-    private const val VERSION_CHECK_URL = "https://camera-api.hinnka.com/api/version/check"
+    private const val VERSION_CHECK_URL = "https://camera-api.hinnka.me/api/version/check"
     private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
     private const val APK_MAGIC_0 = 'P'.code.toByte()
     private const val APK_MAGIC_1 = 'K'.code.toByte()
@@ -55,11 +56,15 @@ object AppUpdateManager {
     private val _readyApk = MutableStateFlow<File?>(null)
     val readyApk: StateFlow<File?> = _readyApk.asStateFlow()
 
-    suspend fun checkForUpdate(currentVersion: String = BuildConfig.VERSION_NAME): AppUpdateRelease? =
+    suspend fun checkForUpdate(
+        currentVersion: String = BuildConfig.VERSION_NAME,
+        flavor: String = BuildConfig.FLAVOR
+    ): AppUpdateRelease? =
         withContext(Dispatchers.IO) {
             val encodedVersion = URLEncoder.encode(currentVersion, "UTF-8")
+            val encodedFlavor = URLEncoder.encode(flavor, "UTF-8")
             val request = Request.Builder()
-                .url("$VERSION_CHECK_URL?current_version=$encodedVersion")
+                .url("$VERSION_CHECK_URL?current_version=$encodedVersion&flavor=$encodedFlavor")
                 .get()
                 .build()
 
@@ -71,9 +76,10 @@ object AppUpdateManager {
                     }
 
                     val body = response.body?.string().orEmpty()
+                    PLog.d(TAG, "version: $body")
                     val root = JSONObject(body)
                     if (!root.optBoolean("has_update", false)) {
-                        PLog.d(TAG, "No update available: current=$currentVersion")
+                        PLog.d(TAG, "No update available: current=$currentVersion, flavor=$flavor")
                         return@withContext null
                     }
 
@@ -83,11 +89,10 @@ object AppUpdateManager {
                     val isApkAsset = assetName.endsWith(".apk", ignoreCase = true) ||
                         downloadUrl.substringBefore("?").endsWith(".apk", ignoreCase = true)
                     if (downloadUrl.isBlank() || !isApkAsset) {
-                        PLog.w(TAG, "Update found but APK asset is missing")
+                        PLog.w(TAG, "Update found but APK asset is missing: flavor=$flavor")
                         return@withContext null
                     }
-                    val versionName = root.optString("version_name").takeIf { it.isNotBlank() }
-                        ?: root.optString("tag_name").takeIf { it.isNotBlank() }
+                    val versionName = root.optString("latest_version")
 
                     AppUpdateRelease(
                         versionName = versionName,
@@ -123,7 +128,7 @@ object AppUpdateManager {
 
     fun findDownloadedApk(context: Context, release: AppUpdateRelease): File? {
         val apkFile = resolveApkFile(context.applicationContext, release)
-        return apkFile.takeIf { it.isCompleteApk() }
+        return apkFile.takeIf { it.isUsableForRelease(context.applicationContext, release) }
     }
 
     fun consumeReadyApk(apkFile: File?) {
@@ -186,13 +191,14 @@ object AppUpdateManager {
             val deferred = downloadScope.async {
                 runCatching {
                     val apkFile = resolveApkFile(context, release)
-                    if (apkFile.isCompleteApk()) {
+                    if (apkFile.isUsableForRelease(context, release)) {
                         PLog.d(TAG, "Reuse downloaded APK: ${apkFile.absolutePath}, size=${apkFile.length()}")
                         return@async apkFile
                     }
 
+                    discardInvalidCachedApk(context, release, apkFile)
                     downloadApkFile(release.downloadUrl, apkFile)
-                    if (!apkFile.isCompleteApk()) {
+                    if (!apkFile.isUsableForRelease(context, release)) {
                         throw IllegalStateException("Downloaded APK is invalid: ${apkFile.absolutePath}")
                     }
                     PLog.d(TAG, "APK downloaded: ${apkFile.absolutePath}, size=${apkFile.length()}")
@@ -288,6 +294,55 @@ object AppUpdateManager {
         if (!exists() || length() < 2L) return false
         return inputStream().use { input ->
             input.read().toByte() == APK_MAGIC_0 && input.read().toByte() == APK_MAGIC_1
+        }
+    }
+
+    private fun File.isUsableForRelease(context: Context, release: AppUpdateRelease): Boolean {
+        if (!isCompleteApk()) {
+            PLog.d(TAG, "Cached APK missing or incomplete: $absolutePath")
+            return false
+        }
+
+        val packageInfo = readArchivePackageInfo(context) ?: run {
+            PLog.w(TAG, "Cached APK cannot be parsed: $absolutePath")
+            return false
+        }
+
+        val expectedVersionName = release.versionName?.normalizedVersionName()
+        if (expectedVersionName == null) {
+            PLog.w(TAG, "Latest release version is missing, cached APK will not be reused")
+            return false
+        }
+
+        val actualVersionName = packageInfo.versionName?.normalizedVersionName()
+        if (actualVersionName != expectedVersionName) {
+            PLog.w(
+                TAG,
+                "Cached APK version mismatch: expected=$expectedVersionName, actual=$actualVersionName"
+            )
+            return false
+        }
+
+        return true
+    }
+
+    @Suppress("DEPRECATION")
+    private fun File.readArchivePackageInfo(context: Context): PackageInfo? =
+        context.packageManager.getPackageArchiveInfo(absolutePath, 0)
+
+    private fun String.normalizedVersionName(): String =
+        trim().removePrefix("v").removePrefix("V")
+
+    private fun discardInvalidCachedApk(context: Context, release: AppUpdateRelease, apkFile: File) {
+        if (!apkFile.exists()) return
+        if (apkFile.isUsableForRelease(context, release)) return
+
+        runCatching {
+            if (apkFile.delete()) {
+                PLog.d(TAG, "Deleted invalid cached APK: ${apkFile.absolutePath}")
+            }
+        }.onFailure { error ->
+            PLog.w(TAG, "Failed to delete invalid cached APK: ${apkFile.absolutePath}", error)
         }
     }
 }

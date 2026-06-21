@@ -10,6 +10,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.raw.ColorSpace
+import com.hinnka.mycamera.utils.BoundedTextLineReader
 import com.hinnka.mycamera.utils.PLog
 // LutConfig is in the same package (com.hinnka.mycamera.lut), no import needed
 import kotlin.math.roundToInt
@@ -22,6 +23,7 @@ import kotlin.math.roundToInt
  */
 object LutConverter {
 
+    private const val TAG = "LutConverter"
     private const val MAGIC_PLUT = "PLUT"
     private const val MAGIC_PLUT_INT = 0x54554C50  // 'PLUT' in Little Endian
     private const val VERSION = 3
@@ -63,7 +65,7 @@ object LutConverter {
 
             true
         } catch (e: Exception) {
-            e.printStackTrace()
+            PLog.e(TAG, "Failed to convert cube LUT", e)
             false
         }
     }
@@ -86,14 +88,19 @@ object LutConverter {
             val options = BitmapFactory.Options()
             options.inScaled = false
             options.inPremultiplied = false
-            options.inPreferredColorSpace = android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB)
 
-            val bitmap = BitmapFactory.decodeStream(pngInputStream, null, options) ?: return false
+            val bitmap = BitmapFactory.decodeStream(pngInputStream, null, options)
+            if (bitmap == null) {
+                PLog.e("LutConverter", "convertPngToplut: decodeStream returned null")
+                return false
+            }
             val width = bitmap.width
             val height = bitmap.height
 
             val isHaldStr = isHald(width, height)
             val isUnwrappedCubeStr = isUnwrappedCube(width, height)
+            
+            PLog.d("LutConverter", "convertPngToplut: decoded size = ${width}x${height}, isHald = $isHaldStr, isUnwrappedCube = $isUnwrappedCubeStr")
 
             val lutSize: Int
             val values: ShortArray
@@ -102,7 +109,12 @@ object LutConverter {
             bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
 
             if (isHaldStr) {
-                val haldLevel = determineHaldLevel(width) ?: return false
+                val haldLevel = determineHaldLevel(width)
+                if (haldLevel == null) {
+                    PLog.e("LutConverter", "convertPngToplut: determineHaldLevel returned null for width = $width")
+                    bitmap.recycle()
+                    return false
+                }
                 lutSize = haldLevel * haldLevel
                 values = ShortArray(lutSize * lutSize * lutSize * 3)
                 
@@ -131,7 +143,13 @@ object LutConverter {
                     }
                 }
             } else if (isUnwrappedCubeStr) {
-                lutSize = determineUnwrappedCubeRoot(width, height) ?: return false
+                val root = determineUnwrappedCubeRoot(width, height)
+                if (root == null) {
+                    PLog.e("LutConverter", "convertPngToplut: determineUnwrappedCubeRoot returned null for ${width}x${height}")
+                    bitmap.recycle()
+                    return false
+                }
+                lutSize = root
                 values = ShortArray(lutSize * lutSize * lutSize * 3)
                 
                 var dataIndex = 0
@@ -157,6 +175,7 @@ object LutConverter {
                     }
                 }
             } else {
+                PLog.e("LutConverter", "convertPngToplut: neither Hald nor UnwrappedCube size format matched")
                 bitmap.recycle()
                 return false
             }
@@ -168,9 +187,10 @@ object LutConverter {
                 cubeData = resampleSize(cubeData, 33)
             }
             writePLutFile(cubeData, plutOutputStream, colorSpace, curve)
+            PLog.d("LutConverter", "convertPngToplut: successfully converted to plut with size = $lutSize")
             true
         } catch (e: Exception) {
-            e.printStackTrace()
+            PLog.e("LutConverter", "convertPngToplut exception", e)
             false
         }
     }
@@ -195,20 +215,12 @@ object LutConverter {
 
     private fun isUnwrappedCube(width: Int, height: Int): Boolean {
         if (width <= height || height < 1) return false
-        val size = width.toDouble() * height
-        val root = Math.cbrt(size).roundToInt()
-        return width % root == 0 && height == root && root * root * root == width * height
+        return width == height * height
     }
 
     private fun determineUnwrappedCubeRoot(width: Int, height: Int): Int? {
         if (width <= height || height < 1) return null
-        val size = width.toDouble() * height
-        val root = Math.cbrt(size).roundToInt()
-        return if (width % root == 0 && height == root && root * root * root == width * height) {
-            root
-        } else {
-            null
-        }
+        return if (width == height * height) height else null
     }
 
     private fun resampleLut(cubeData: CubeData, curve: TransferCurve): CubeData {
@@ -378,7 +390,7 @@ object LutConverter {
         }
 
         inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
-            reader.forEachLine { line ->
+            BoundedTextLineReader.forEachLine(reader) { line ->
                 val trimmed = line.trim()
 
                 // 跳过空行和注释

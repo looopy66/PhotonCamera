@@ -55,18 +55,23 @@ import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.delay
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.ui.PlayerView
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.isVisible
 import androidx.media3.ui.AspectRatioFrameLayout
 import coil.request.ImageRequest
+import coil.compose.AsyncImage
 import com.hinnka.mycamera.hdr.HdrGainmapStrength
 import com.hinnka.mycamera.lut.creator.AiPhotoEvaluation
+import com.hinnka.mycamera.lut.VideoLutEffect
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.components.CustomSliderThinThumb
 import com.hinnka.mycamera.ui.components.PaymentDialog
 import com.hinnka.mycamera.utils.DeviceUtil
+import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.viewmodel.GalleryTab
 import kotlinx.coroutines.Dispatchers
 import me.saket.telephoto.zoomable.ZoomSpec
@@ -90,6 +95,7 @@ fun GalleryDetailScreen(
     photoId: String? = null,
     isExpanded: Boolean = false,
     onBack: () -> Unit = {},
+    onGoToGallery: (() -> Unit)? = null,
     onEdit: () -> Unit,
     onViewBurst: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
@@ -103,6 +109,9 @@ fun GalleryDetailScreen(
     var showExportDialog by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
     var isExportingDng by remember { mutableStateOf(false) }
+    val isVideoExporting = viewModel.isVideoExporting
+    val videoExportProgress = viewModel.videoExportProgress
+    var showVideoExportConfirmDialog by remember { mutableStateOf(false) }
     val isSharing by viewModel.isSharing.collectAsState()
     val isPurchased by viewModel.isPurchased.collectAsState()
     var showAiScoreSheet by remember { mutableStateOf(false) }
@@ -115,15 +124,15 @@ fun GalleryDetailScreen(
     val deletePhotoLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            // User confirmed deletion, delete internal photo
+        if (result.resultCode == Activity.RESULT_OK || viewModel.selectedTab == GalleryTab.PHOTON) {
+            // User confirmed deletion or we are in PHOTON tab (delete internal photo anyway)
             viewModel.deletePhotoAfterConfirmation { success ->
                 if (success && viewModel.currentPhotos.value.isEmpty()) {
                     onBack()
                 }
             }
         } else {
-            // User cancelled deletion
+            // User cancelled deletion in SYSTEM tab
             viewModel.clearDeleteRequest()
         }
     }
@@ -187,6 +196,11 @@ fun GalleryDetailScreen(
         pageCount = { photos.size }
     )
 
+    // 记录是否已经执行过初始的 photoId 跳转
+    var initialJumpDone by rememberSaveable(photoId) { mutableStateOf(false) }
+    // 记录上次的照片数量，用于判断是否有新照片增加
+    var lastPhotosCount by rememberSaveable { mutableIntStateOf(photos.size) }
+
     // 同步当前索引，并在快到底部时加载更多系统照片
     LaunchedEffect(pagerState.currentPage, photos.size) {
         viewModel.setCurrentPhoto(pagerState.currentPage)
@@ -198,17 +212,21 @@ fun GalleryDetailScreen(
     }
 
     LaunchedEffect(photos.size, isExpanded) {
-        if (isExpanded) {
+        // 仅在分屏模式且照片数量增加（通常是新拍摄）时才自动跳到第一张
+        if (isExpanded == true && photos.size > lastPhotosCount) {
             pagerState.scrollToPage(0)
         }
+        lastPhotosCount = photos.size
     }
 
-    // 当 photoId 提供时，确保在照片列表加载后自动跳转到该照片
+    // 当 photoId 提供时，确保在照片列表加载后自动跳转到该照片（仅执行一次）
     LaunchedEffect(photos, photoId) {
-        if (photoId != null) {
+        if (photoId != null && initialJumpDone == false) {
             val index = photos.indexOfFirst { it.id == photoId }
-            if (index != -1 && index != pagerState.currentPage) {
+            if (index != -1) {
+                // 即使 index == currentPage 也执行跳转，以应对 HorizontalPager 内部键位同步导致的索引偏移
                 pagerState.scrollToPage(index)
+                initialJumpDone = true
             }
         }
     }
@@ -250,11 +268,38 @@ fun GalleryDetailScreen(
             TopAppBar(
                 modifier = Modifier,
                 title = {
-                    Text(
-                        text = "${pagerState.currentPage + 1} / ${photos.size}",
-                        maxLines = 1,
-                        color = Color.White
-                    )
+                    if (onGoToGallery != null) {
+                        Surface(
+                            onClick = onGoToGallery,
+                            shape = CircleShape,
+                            color = Color.White.copy(alpha = 0.15f),
+                            contentColor = Color.White
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.GridView,
+                                    contentDescription = "Gallery",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "${pagerState.currentPage + 1} / ${photos.size}",
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = "${pagerState.currentPage + 1} / ${photos.size}",
+                            maxLines = 1,
+                            color = Color.White,
+                            fontSize = 18.sp
+                        )
+                    }
                 },
                 navigationIcon = {
                     if (!isExpanded) {
@@ -386,7 +431,7 @@ fun GalleryDetailScreen(
                     }
 
                     // 编辑
-                    if (currentPhoto?.isImage == true) {
+                    if (currentPhoto?.isImage == true || currentPhoto?.isVideo == true) {
                         GalleryActionItem(
                             icon = Icons.Default.Edit,
                             text = stringResource(R.string.edit),
@@ -505,7 +550,8 @@ fun GalleryDetailScreen(
                                 if (photo.isVideo) {
                                     VideoDetailPlayer(
                                         photo = photo,
-                                        isActive = page == pagerState.currentPage,
+                                        isActive = page == pagerState.currentPage && !viewModel.isEditing,
+                                        viewModel = viewModel,
                                         modifier = Modifier.fillMaxSize()
                                     )
                                 } else {
@@ -514,6 +560,7 @@ fun GalleryDetailScreen(
                                         colorSpace = currentColorSpace,
                                         showOrigin = showOrigin || viewModel.selectedTab == GalleryTab.SYSTEM,
                                         isActive = page == pagerState.currentPage,
+                                        isScrollInProgress = pagerState.isScrollInProgress,
                                         viewModel = viewModel,
                                         onZoomChange = { zoomed ->
                                             if (page == pagerState.currentPage) {
@@ -568,9 +615,19 @@ fun GalleryDetailScreen(
         }
     }
 
+    val deleteExportedPref by viewModel.deleteExported.collectAsState()
+
     // 删除确认对话框
     if (showDeleteDialog) {
-//        var deleteExported by remember { mutableStateOf(true) }
+        val exportedPhotosCount = remember(currentPhoto, currentPhoto?.metadata, currentPhoto?.metadata?.exportedUris) {
+            val baseCount = currentPhoto?.metadata?.exportedUris?.size ?: 0
+            val sourceUri = currentPhoto?.metadata?.sourceUri
+            val isVideoAndCaptured = currentPhoto?.isVideo == true &&
+                    currentPhoto.metadata?.isImported != true &&
+                    !sourceUri.isNullOrBlank()
+            baseCount + (if (isVideoAndCaptured) 1 else 0)
+        }
+        var deleteExportedState by remember(showDeleteDialog) { mutableStateOf(deleteExportedPref) }
 
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
@@ -578,35 +635,48 @@ fun GalleryDetailScreen(
             text = {
                 Column {
                     Text(stringResource(R.string.delete_confirm))
-                    /*if (viewModel.selectedTab == GalleryTab.PHOTON) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.clickable { deleteExported = !deleteExported }
-                        ) {
-                            Checkbox(
-                                checked = deleteExported,
-                                onCheckedChange = { deleteExported = it },
-                                colors = CheckboxDefaults.colors(
-                                    checkedColor = Color(0xFFFF6B35),
-                                    uncheckedColor = Color.White.copy(alpha = 0.6f)
+                    if (viewModel.selectedTab == GalleryTab.PHOTON) {
+                        if (exportedPhotosCount > 0) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { deleteExportedState = !deleteExportedState }
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                Checkbox(
+                                    checked = deleteExportedState,
+                                    onCheckedChange = { deleteExportedState = it },
+                                    colors = CheckboxDefaults.colors(
+                                        checkedColor = AccentOrange,
+                                        uncheckedColor = Color.White.copy(alpha = 0.6f)
+                                    )
                                 )
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = stringResource(R.string.delete_exported_photos),
-                                color = Color.White.copy(alpha = 0.9f),
-                                fontSize = 14.sp
-                            )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = if (currentPhoto?.isVideo == true) {
+                                        stringResource(R.string.delete_exported_videos_count, exportedPhotosCount)
+                                    } else {
+                                        stringResource(R.string.delete_exported_photos_count, exportedPhotosCount)
+                                    },
+                                    color = Color.White,
+                                    fontSize = 14.sp
+                                )
+                            }
                         }
-                    }*/
+                    }
                 }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
                         currentPhoto?.let { photo ->
-                            viewModel.requestDeletePhoto(photo, true)
+                            val finalDeleteExported = if (viewModel.selectedTab == GalleryTab.PHOTON && exportedPhotosCount > 0) deleteExportedState else true
+                            if (viewModel.selectedTab == GalleryTab.PHOTON && exportedPhotosCount > 0) {
+                                viewModel.setDeleteExported(deleteExportedState)
+                            }
+                            viewModel.requestDeletePhoto(photo, finalDeleteExported)
                         }
                         showDeleteDialog = false
                     }
@@ -640,6 +710,7 @@ fun GalleryDetailScreen(
                         currentPhoto?.let {
                             isSaving = true
                             viewModel.exportPhoto(it) { success ->
+                                showMoreSheet = false
                                 isSaving = false
                                 if (success) {
                                     Toast.makeText(context, R.string.export_success, Toast.LENGTH_SHORT).show()
@@ -661,6 +732,34 @@ fun GalleryDetailScreen(
             containerColor = Color(0xFF2D2D2D),
             titleContentColor = Color.White,
             textContentColor = Color.White
+        )
+    }
+
+    // 视频导出确认对话框
+    if (showVideoExportConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showVideoExportConfirmDialog = false },
+            title = { Text(stringResource(R.string.export_video)) },
+            text = { Text(stringResource(R.string.export_video_confirm)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showVideoExportConfirmDialog = false
+                    currentPhoto?.let { photo ->
+                        viewModel.exportVideo(photo) { success, _ ->
+                            showMoreSheet = false
+                            val msgRes = if (success) R.string.export_video_success else R.string.export_video_failed
+                            Toast.makeText(context, msgRes, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }) {
+                    Text(stringResource(R.string.export_video))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showVideoExportConfirmDialog = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
         )
     }
 
@@ -780,8 +879,19 @@ fun GalleryDetailScreen(
                             text = stringResource(R.string.export),
                             isLoading = isSaving,
                             onClick = {
-                                showMoreSheet = false
                                 showExportDialog = true
+                            }
+                        )
+                    }
+
+                    // 视频导出按钮（仅视频）
+                    if (currentPhoto.isVideo) {
+                        GalleryActionItem(
+                            icon = Icons.Default.Output,
+                            text = if (isVideoExporting && videoExportProgress > 0) "$videoExportProgress%" else stringResource(R.string.export),
+                            isLoading = isVideoExporting,
+                            onClick = {
+                                showVideoExportConfirmDialog = true
                             }
                         )
                     }
@@ -1285,46 +1395,143 @@ private fun Context.findActivity(): Activity? {
 private fun VideoDetailPlayer(
     photo: MediaData,
     isActive: Boolean,
+    viewModel: GalleryViewModel,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val mediaUri = remember(photo.id, photo.uri, photo.sourceUri) {
         photo.sourceUri ?: photo.uri
     }
-    val exoPlayer = remember(photo.id, mediaUri) {
+
+    PLog.d("VideoDetailPlayer", "VideoDetailPlayer recomposing/initializing. photoId: ${photo.id}, isActive: $isActive, mediaUri: $mediaUri")
+
+    val contentRepository = remember {
+        com.hinnka.mycamera.data.ContentRepository.getInstance(context)
+    }
+
+    var lutConfig by remember { mutableStateOf<com.hinnka.mycamera.lut.LutConfig?>(null) }
+    var recipeParams by remember { mutableStateOf<com.hinnka.mycamera.model.ColorRecipeParams?>(null) }
+    val refreshKey = viewModel.photoRefreshKeys[photo.id] ?: 0L
+
+    LaunchedEffect(photo.id, refreshKey) {
+        withContext(Dispatchers.IO) {
+            PLog.d("VideoDetailPlayer", "Loading video metadata from DB.")
+            val metadata = com.hinnka.mycamera.gallery.GalleryManager.loadMetadata(context, photo.id) ?: photo.metadata
+            val lutId = metadata?.lutId
+            val params = metadata?.colorRecipeParams
+            PLog.d("VideoDetailPlayer", "Metadata loaded. lutId: $lutId, recipeEnabled: ${params != null}")
+
+            val config = if (lutId != null) {
+                contentRepository.lutManager.loadLut(lutId)
+            } else {
+                null
+            }
+
+            withContext(Dispatchers.Main) {
+                lutConfig = config
+                recipeParams = params
+            }
+        }
+    }
+
+    // Maintain the video LUT effect
+    val videoLutEffect = remember {
+        PLog.d("VideoDetailPlayer", "Instantiating new VideoLutEffect.")
+        VideoLutEffect(lutConfig, recipeParams)
+    }
+
+    // Update effect parameters dynamically on the GL pipeline without reconstruction
+    LaunchedEffect(lutConfig, recipeParams) {
+        PLog.d("VideoDetailPlayer", "Updating VideoLutEffect params. lut: ${lutConfig?.title}, recipe: ${recipeParams != null}")
+        videoLutEffect.update(lutConfig, recipeParams)
+    }
+
+    val exoPlayer = remember(photo.id, mediaUri, isActive) {
+        if (!isActive) return@remember null
+        PLog.d("VideoDetailPlayer", "Creating ExoPlayer for detail video.")
         ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(mediaUri))
             repeatMode = Player.REPEAT_MODE_OFF
-            prepare()
-            playWhenReady = true
+            setVideoEffects(listOf(videoLutEffect))
+
+            addListener(object : Player.Listener {
+                override fun onPlaybackStateChanged(state: Int) {
+                    PLog.d("VideoDetailPlayer", "ExoPlayer state changed: $state")
+                }
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    PLog.e("VideoDetailPlayer", "ExoPlayer encountered error!", error)
+                }
+            })
         }
     }
 
     DisposableEffect(exoPlayer) {
-        onDispose { exoPlayer.release() }
-    }
-
-    LaunchedEffect(exoPlayer, isActive) {
-        exoPlayer.playWhenReady = isActive
-        if (!isActive) {
-            exoPlayer.pause()
+        onDispose {
+            if (exoPlayer != null) {
+                PLog.d("VideoDetailPlayer", "Disposing ExoPlayer.")
+                exoPlayer.release()
+            }
         }
     }
 
-    AndroidView(
-        factory = {
-            LayoutInflater.from(context).inflate(R.layout.view_motion_photo_player, null) as PlayerView
-        },
-        update = {
-            it.player = exoPlayer
-            it.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-            it.useController = true
-            it.controllerAutoShow = false
-            it.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
-            it.isVisible = true
-        },
-        modifier = modifier.autoRotate(matchParentSize = true)
-    )
+    LaunchedEffect(exoPlayer, isActive) {
+        PLog.d("VideoDetailPlayer", "VideoDetailPlayer isActive changed: $isActive, player: $exoPlayer")
+        if (exoPlayer != null && isActive) {
+            delay(150) // Wait for transitions to complete and EGL surface to be fully ready
+            PLog.d("VideoDetailPlayer", "Preparing and starting ExoPlayer.")
+            exoPlayer.setMediaItem(MediaItem.fromUri(mediaUri))
+            exoPlayer.prepare()
+            exoPlayer.playWhenReady = true
+        }
+    }
+
+    if (exoPlayer != null) {
+        AndroidView(
+            factory = {
+                PLog.d("VideoDetailPlayer", "Creating PlayerView factory.")
+                LayoutInflater.from(context).inflate(R.layout.view_motion_photo_player, null) as PlayerView
+            },
+            update = {
+                PLog.d("VideoDetailPlayer", "Updating PlayerView with player.")
+                it.player = exoPlayer
+                it.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                it.useController = true
+                it.controllerAutoShow = false
+                it.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                it.isVisible = true
+            },
+            modifier = modifier.autoRotate(matchParentSize = true)
+        )
+    } else {
+        // Show video thumbnail with a play icon when player is not active
+        Box(
+            modifier = modifier.autoRotate(matchParentSize = true),
+            contentAlignment = Alignment.Center
+        ) {
+            val transformation = remember(photo) {
+                viewModel.getPhotoTransformation(photo)
+            }
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(photo.thumbnailUri)
+                    .crossfade(true)
+                    .apply {
+                        if (transformation != null) {
+                            transformations(transformation)
+                        }
+                    }
+                    .build(),
+                contentDescription = photo.displayName,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize()
+            )
+            Icon(
+                imageVector = Icons.Default.PlayArrow,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.8f),
+                modifier = Modifier.size(64.dp)
+            )
+        }
+    }
 }
 
 /**
@@ -1337,6 +1544,7 @@ private fun ZoomableImage(
     colorSpace: MutableState<ColorSpace?>,
     showOrigin: Boolean,
     isActive: Boolean,
+    isScrollInProgress: Boolean,
     viewModel: GalleryViewModel,
     onZoomChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
@@ -1344,7 +1552,7 @@ private fun ZoomableImage(
     val context = LocalContext.current
 
     var isLoading by remember { mutableStateOf(true) }
-    val maxZoom = min(photo.width, photo.height) / 300f
+    val maxZoom = min(photo.width, photo.height) / 100f
     val zoomableState = rememberZoomableImageState(
         zoomableState = rememberZoomableState(zoomSpec = ZoomSpec(maxZoomFactor = maxZoom))
     )
@@ -1371,11 +1579,13 @@ private fun ZoomableImage(
             label = "hdrFadeIn"
         )
         val refreshKey = viewModel.photoRefreshKeys[photo.id] ?: 0L
+        val isSettledActive = isActive && !isScrollInProgress
 
-        LaunchedEffect(photo.id, metadataHash, showOrigin, refreshKey, isActive) {
+        LaunchedEffect(photo.id, metadataHash, showOrigin, refreshKey, isSettledActive) {
             suspend fun loadBitmap() {
                 isLoading = bitmap == null
-                bitmap = viewModel.getPreviewBitmap(photo, showOrigin = showOrigin, ignoreDenoise = !isActive)
+                bitmap = viewModel.getPreviewBitmap(photo, showOrigin = showOrigin,
+                    ignoreDenoise = !isSettledActive, maxEdge = if (isSettledActive) 4096 else 1024)
                 if (bitmap == null) {
                     delay(500)
                     loadBitmap()
@@ -1383,7 +1593,7 @@ private fun ZoomableImage(
                 colorSpace.value = bitmap?.colorSpace
                 isLoading = bitmap == null
 
-                if (photo.metadata?.manualHdrEffectEnabled == true) {
+                if (photo.metadata?.manualHdrEffectEnabled == true && isSettledActive) {
                     hdrBitmap = viewModel.getDetailBitmap(photo)
                     hdrBitmap?.let {
                         colorSpace.value = it.colorSpace
@@ -1391,9 +1601,6 @@ private fun ZoomableImage(
                 } else {
                     hdrBitmap = null
                 }
-            }
-            if (isActive) {
-                delay(300L)
             }
             loadBitmap()
         }
@@ -1454,36 +1661,122 @@ fun MotionPhotoPlayer(
     viewModel: GalleryViewModel,
     modifier: Modifier = Modifier
 ) {
-    if (!photo.isMotionPhoto) return
     val context = LocalContext.current
+    val videoFile = remember(photo.id) {
+        viewModel.getMotionPhotoVideo(photo)
+    }
 
-    var isReadyToShow by remember(photo.id, isPlaying) { mutableStateOf(false) }
-
-    val exoPlayer = remember(photo.id, isPlaying) {
-        val videoFile = viewModel.getMotionPhotoVideo(photo)
-        if (videoFile == null || !videoFile.exists()) {
-            return@remember null
+    if (!photo.isMotionPhoto || videoFile == null || !videoFile.exists()) {
+        if (photo.isMotionPhoto) {
+            PLog.w("MotionPhotoPlayer", "Motion Photo video file missing: ${photo.id}")
         }
+        return
+    }
+
+    val contentRepository = remember {
+        com.hinnka.mycamera.data.ContentRepository.getInstance(context)
+    }
+
+    var lutConfig by remember { mutableStateOf<com.hinnka.mycamera.lut.LutConfig?>(null) }
+    var recipeParams by remember { mutableStateOf<com.hinnka.mycamera.model.ColorRecipeParams?>(null) }
+    var effectMetadataLoaded by remember(photo.id) { mutableStateOf(false) }
+    val refreshKey = viewModel.photoRefreshKeys[photo.id] ?: 0L
+
+    LaunchedEffect(photo.id, refreshKey) {
+        effectMetadataLoaded = false
+        withContext(Dispatchers.IO) {
+            PLog.d("MotionPhotoPlayer", "Loading video metadata from DB.")
+            val metadata = com.hinnka.mycamera.gallery.GalleryManager.loadMetadata(context, photo.id) ?: photo.metadata
+            val applyEffects = metadata?.applyEffectsToVideo == true
+            val lutId = if (applyEffects) metadata.lutId else null
+            val params = if (applyEffects) metadata.colorRecipeParams else null
+            PLog.d("MotionPhotoPlayer", "Metadata loaded. applyEffects: $applyEffects, lutId: $lutId, recipeEnabled: ${params != null}")
+
+            val config = if (lutId != null) {
+                contentRepository.lutManager.loadLut(lutId)
+            } else {
+                null
+            }
+
+            withContext(Dispatchers.Main) {
+                lutConfig = config
+                recipeParams = params
+                effectMetadataLoaded = true
+            }
+        }
+    }
+
+    // Maintain the video LUT effect
+    val videoLutEffect = remember {
+        PLog.d("MotionPhotoPlayer", "Instantiating new VideoLutEffect.")
+        VideoLutEffect(lutConfig, recipeParams)
+    }
+
+    // Update effect parameters dynamically on the GL pipeline without reconstruction
+    LaunchedEffect(lutConfig, recipeParams) {
+        PLog.d("MotionPhotoPlayer", "Updating VideoLutEffect params. lut: ${lutConfig?.title}, recipe: ${recipeParams != null}")
+        videoLutEffect.update(lutConfig, recipeParams)
+    }
+
+    if (!effectMetadataLoaded) return
+
+    val hasVideoEffects = lutConfig != null || recipeParams != null
+    val shouldApplyVideoEffects = hasVideoEffects
+
+    var isReadyToShow by remember(photo.id) { mutableStateOf(false) }
+
+    val exoPlayer = remember(photo.id, videoFile.absolutePath, shouldApplyVideoEffects) {
         ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(Uri.fromFile(videoFile)))
+            PLog.d(
+                "MotionPhotoPlayer",
+                "Creating ExoPlayer for ${photo.id}, video=${videoFile.absolutePath}, size=${videoFile.length()}, effects=$shouldApplyVideoEffects"
+            )
             repeatMode = Player.REPEAT_MODE_ONE
+            if (shouldApplyVideoEffects) {
+                setVideoEffects(listOf(videoLutEffect))
+            }
             addListener(object : Player.Listener {
                 override fun onRenderedFirstFrame() {
                     isReadyToShow = true
                 }
+
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                }
+
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                }
             })
             prepare()
-            playWhenReady = isPlaying
+        }
+    }
+
+    LaunchedEffect(exoPlayer, isPlaying, shouldApplyVideoEffects) {
+        if (isPlaying) {
+            isReadyToShow = false
+            delay(150)
+            if (exoPlayer.mediaItemCount == 0) {
+                PLog.d("MotionPhotoPlayer", "Preparing Motion Photo player after PlayerView attach: ${photo.id}")
+                exoPlayer.setMediaItem(MediaItem.fromUri(Uri.fromFile(videoFile)))
+                exoPlayer.prepare()
+            }
+            exoPlayer.seekTo(0)
+            exoPlayer.playWhenReady = true
+            exoPlayer.play()
+        } else {
+            isReadyToShow = false
+            exoPlayer.playWhenReady = false
+            exoPlayer.pause()
         }
     }
 
     DisposableEffect(exoPlayer) {
         onDispose {
-            exoPlayer?.release()
+            exoPlayer.release()
         }
     }
-
-    if (exoPlayer == null) return
 
     AndroidView(
         factory = {
@@ -1492,8 +1785,9 @@ fun MotionPhotoPlayer(
         update = {
             it.player = exoPlayer
             it.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-            it.isVisible = isPlaying
-            it.alpha = if (isReadyToShow) 1f else 0f
+            it.setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+            it.isVisible = true
+            it.alpha = if (isPlaying && isReadyToShow) 1f else 0f
         },
         modifier = modifier.autoRotate(matchParentSize = true)
     )

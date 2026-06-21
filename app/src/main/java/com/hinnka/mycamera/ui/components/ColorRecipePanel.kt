@@ -11,6 +11,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -47,8 +50,21 @@ fun ColorRecipePanel(
     onParamsChange: (ColorRecipeParams) -> Unit,
     onRemarksChange: (String) -> Unit,
     onCurveChange: (CurveChannel, FloatArray?) -> Unit = { _, _ -> },
+    hideNonBakeable: Boolean = true,
     modifier: Modifier = Modifier
 ) {
+    val isBakeable: (RecipeParam) -> Boolean = { param ->
+        param != RecipeParam.VIGNETTE &&
+        param != RecipeParam.FILM_GRAIN &&
+        param != RecipeParam.BLOOM &&
+        param != RecipeParam.SOFT_LIGHT &&
+        param != RecipeParam.HDF &&
+        param != RecipeParam.HALATION &&
+        param != RecipeParam.CHROMATIC_ABERRATION &&
+        param != RecipeParam.NOISE &&
+        param != RecipeParam.LOW_RES
+    }
+
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var selectedLchTabIndex by remember { mutableIntStateOf(0) }
     var selectedCalibrationTabIndex by remember { mutableIntStateOf(0) }
@@ -146,17 +162,14 @@ fun ColorRecipePanel(
         R.string.recipe_lch_red to listOf(
             RecipeParam.PRIMARY_RED_HUE,
             RecipeParam.PRIMARY_RED_SATURATION,
-            RecipeParam.PRIMARY_RED_LIGHTNESS,
         ),
         R.string.recipe_lch_green to listOf(
             RecipeParam.PRIMARY_GREEN_HUE,
             RecipeParam.PRIMARY_GREEN_SATURATION,
-            RecipeParam.PRIMARY_GREEN_LIGHTNESS,
         ),
         R.string.recipe_lch_blue to listOf(
             RecipeParam.PRIMARY_BLUE_HUE,
             RecipeParam.PRIMARY_BLUE_SATURATION,
-            RecipeParam.PRIMARY_BLUE_LIGHTNESS,
         ),
     )
 
@@ -184,12 +197,39 @@ fun ColorRecipePanel(
             5 -> onParamsChange(resetParams(currentParams, lchGroups.flatMap { it.second }))
             8 -> Unit
             else -> {
-                val params = parameterGroups.getOrNull(tabIndex).orEmpty()
+                val allParams = parameterGroups.getOrNull(tabIndex).orEmpty()
+                val params = if (hideNonBakeable) allParams.filter(isBakeable) else allParams
                 if (params.isNotEmpty()) {
                     onParamsChange(resetParams(currentParams, params))
                 }
             }
         }
+    }
+
+    fun resetAllParams() {
+        if (!hideNonBakeable) {
+            onParamsChange(ColorRecipeParams.DEFAULT)
+            return
+        }
+
+        val defaultPaletteState = ColorPaletteState.DEFAULT
+        val visibleParams = parameterGroups
+            .flatten()
+            .filter(isBakeable) + calibrationGroups.flatMap { it.second } + lchGroups.flatMap { it.second }
+        onParamsChange(
+            resetParams(
+                currentParams.copy(
+                    paletteX = defaultPaletteState.x,
+                    paletteY = defaultPaletteState.y,
+                    paletteDensity = defaultPaletteState.density,
+                    masterCurvePoints = null,
+                    redCurvePoints = null,
+                    greenCurvePoints = null,
+                    blueCurvePoints = null
+                ),
+                visibleParams
+            )
+        )
     }
 
     Column(
@@ -287,7 +327,15 @@ fun ColorRecipePanel(
                                 }
                             }
                             else -> {
-                                parameterGroups[selectedTabIndex].forEach { param ->
+                                val allParams = parameterGroups.getOrNull(selectedTabIndex).orEmpty()
+                                val visibleParams = remember(selectedTabIndex, hideNonBakeable) {
+                                    if (hideNonBakeable) {
+                                        allParams.filter(isBakeable)
+                                    } else {
+                                        allParams
+                                    }
+                                }
+                                visibleParams.forEach { param ->
                                     key(param) {
                                         ColorRecipeSlider(
                                             param = param,
@@ -325,44 +373,70 @@ fun ColorRecipePanel(
                 .background(Color.Black)
                 .padding(8.dp)
         ) {
-            Row(modifier = Modifier.fillMaxSize().horizontalScroll(rememberScrollState())) {
-                tabs.forEachIndexed { index, title ->
-                    val isSelected = selectedTabIndex == index && isExpanded
-                    val backgroundColor by animateColorAsState(
-                        if (isSelected) Color.White.copy(alpha = 0.2f) else Color.Transparent,
-                        label = "tabBackground"
-                    )
-
-                    Box(
-                        modifier = Modifier
-                            .widthIn(min = 48.dp)
-                            .fillMaxHeight()
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(backgroundColor)
-                            .pointerInput(index, currentParams) {
-                                detectTapGestures(
-                                    onTap = {
-                                        selectedTabIndex = index
-                                        isExpanded = true
-                                    },
-                                    onDoubleTap = {
-                                        selectedTabIndex = index
-                                        isExpanded = true
-                                        resetTab(index)
-                                    }
-                                )
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = stringResource(title),
-                            fontSize = 11.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                            color = if (isSelected) Color.White else Color.White.copy(alpha = 0.6f),
-                            modifier = Modifier.padding(horizontal = 4.dp)
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .horizontalScroll(rememberScrollState())
+                ) {
+                    tabs.forEachIndexed { index, title ->
+                        if (hideNonBakeable && (title == R.string.recipe_tab_lens || title == R.string.recipe_tab_remarks)) {
+                            return@forEachIndexed
+                        }
+                        val isSelected = selectedTabIndex == index && isExpanded
+                        val backgroundColor by animateColorAsState(
+                            if (isSelected) Color.White.copy(alpha = 0.2f) else Color.Transparent,
+                            label = "tabBackground"
                         )
+
+                        Box(
+                            modifier = Modifier
+                                .widthIn(min = 48.dp)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(backgroundColor)
+                                .pointerInput(index, currentParams) {
+                                    detectTapGestures(
+                                        onTap = {
+                                            selectedTabIndex = index
+                                            isExpanded = true
+                                        },
+                                        onDoubleTap = {
+                                            selectedTabIndex = index
+                                            isExpanded = true
+                                            resetTab(index)
+                                        }
+                                    )
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = stringResource(title),
+                                fontSize = 11.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                color = if (isSelected) Color.White else Color.White.copy(alpha = 0.6f),
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                        }
                     }
                 }
+
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = stringResource(R.string.color_recipe_reset_all),
+                    tint = Color.White.copy(alpha = 0.72f),
+                    modifier = Modifier
+                        .padding(start = 8.dp)
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.12f))
+                        .clickable { resetAllParams() }
+                        .padding(7.dp)
+                )
             }
         }
 
@@ -618,6 +692,9 @@ private fun formatParamValue(param: RecipeParam, value: Float): String {
         RecipeParam.NOISE,
         RecipeParam.LOW_RES,
         RecipeParam.BLEACH_BYPASS,
+        RecipeParam.BLOOM,
+        RecipeParam.SOFT_LIGHT,
+        RecipeParam.HDF,
         RecipeParam.HALATION,
         RecipeParam.CHROMATIC_ABERRATION -> String.format("%.2f", value)
 
@@ -679,7 +756,10 @@ private fun getParamColor(param: RecipeParam): Color {
         RecipeParam.NOISE -> Color(0xFFA1887F) // 浅棕色
         RecipeParam.VIGNETTE -> Color(0xFF795548) // 棕色
         RecipeParam.BLEACH_BYPASS -> Color(0xFF00BCD4) // 青色
-        RecipeParam.HALATION -> Color(0xFFFF7043) // 暖橙色（光晕）
+        RecipeParam.BLOOM -> Color(0xFFFFD54F) // 泛光
+        RecipeParam.SOFT_LIGHT -> Color(0xFFE8E1D4) // 柔光
+        RecipeParam.HDF -> Color(0xFFFFC107) // 暖黄色（高光扩散）
+        RecipeParam.HALATION -> Color(0xFFFF7043) // 暖橙色（胶片光晕）
         RecipeParam.CHROMATIC_ABERRATION -> Color(0xFFAB47BC) // 紫色（色散）
         RecipeParam.LOW_RES -> Color(0xFF8D6E63) // 棕灰色（低像素）
         RecipeParam.LUT_INTENSITY -> Color(0xFF9E9E9E) // 灰色

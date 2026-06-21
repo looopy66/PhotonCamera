@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.video
 
 import android.graphics.Rect
+import android.os.Environment
 import android.util.Size
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.color.TransferCurve
@@ -16,6 +17,7 @@ enum class VideoStabilizationMode(val displayName: String) {
 
 enum class CaptureMode {
     PHOTO,
+    QUICK_SHOT,
     VIDEO
 }
 
@@ -51,10 +53,11 @@ enum class VideoResolutionPreset(
     HD_720P("720p", 720, 1280);
 
     fun resolveOutputSize(portraitAspectRatio: Float): Size {
-        val clampedAspect = portraitAspectRatio.coerceIn(0.1f, 1f)
+        val clampedAspect = portraitAspectRatio.coerceIn(0.1f, 1.0f)
         val height = longEdge
-        val width = (height * clampedAspect).roundToInt().coerceAtLeast(2).makeEven()
-        return Size(width, height.makeEven())
+        val width = (height * clampedAspect).toInt().align16()
+
+        return Size(width, height.align16())
     }
 }
 
@@ -81,6 +84,17 @@ enum class VideoCodec(val displayName: String, val mimeType: String) {
     H265("H.265", "video/hevc");
 }
 
+enum class VideoRecordingPath(val relativePath: String?) {
+    DCIM_PHOTON(Environment.DIRECTORY_DCIM + "/PhotonCamera"),
+    EXTERNAL_TREE(null);
+
+    companion object {
+        fun fromPersistedName(name: String?): VideoRecordingPath {
+            return entries.firstOrNull { it.name == name } ?: DCIM_PHOTON
+        }
+    }
+}
+
 enum class VideoLogProfile(
     val displayName: String,
     val logCurve: TransferCurve,
@@ -91,6 +105,7 @@ enum class VideoLogProfile(
     FLOG2_BT2020("F-Log2", TransferCurve.FLOG2, ColorSpace.BT2020),
     V_LOG("V-Log", TransferCurve.VLOG, ColorSpace.VGamut),
     LOGC4_ARRI4("LogC4", TransferCurve.LOGC4, ColorSpace.ARRI4),
+    LOG3G10_RED("Log3G10", TransferCurve.LOG3G10, ColorSpace.RED),
     ACESCCT_AP1("ACEScct", TransferCurve.ACES_CCT, ColorSpace.ACES_AP1);
 
     val isEnabled: Boolean
@@ -105,6 +120,8 @@ data class VideoConfig(
     val bitrate: VideoBitratePreset = VideoBitratePreset.P1,
     val codec: VideoCodec = VideoCodec.H264,
     val audioInputId: String = VIDEO_AUDIO_INPUT_AUTO,
+    val recordingPath: VideoRecordingPath = VideoRecordingPath.DCIM_PHOTON,
+    val recordingTreeUri: String? = null,
     val stabilizationMode: VideoStabilizationMode = VideoStabilizationMode.OIS,
     val torchEnabled: Boolean = false
 ) {
@@ -155,6 +172,6 @@ fun resolveOpenGatePortraitAspectRatio(
     }.coerceIn(0.1f, 1f)
 }
 
-private fun Int.makeEven(): Int {
-    return if (this % 2 == 0) this else this - 1
+private fun Int.align16(): Int {
+    return (this / 16 * 16).coerceAtLeast(16)
 }

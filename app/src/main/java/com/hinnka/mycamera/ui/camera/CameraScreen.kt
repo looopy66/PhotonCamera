@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Pause
@@ -33,7 +34,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.paint
 import androidx.compose.ui.draw.scale
@@ -47,6 +47,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -69,13 +70,17 @@ import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraState
+import com.hinnka.mycamera.data.AiFocusTargetMode
+import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
+import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.ui.components.*
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import com.hinnka.mycamera.video.CaptureMode
-import com.hinnka.mycamera.video.VideoAudioInputOption
+import com.hinnka.mycamera.video.QuickShotResolutionPreset
 import com.hinnka.mycamera.video.VideoAspectRatio
 import com.hinnka.mycamera.video.VideoFpsPreset
 import com.hinnka.mycamera.video.VideoLogProfile
@@ -91,11 +96,57 @@ enum class ActivePanel {
     NONE,
     SETTINGS,
     FILTERS,
-    LUT_EDIT
+    LUT_EDIT,
+    PRESETS
 }
 
-private const val InitialPreviewTransitionDelayMillis = 500L
+private const val InitialPreviewTransitionDelayMillis = 150L
 private const val PreviewTransitionRevealDurationMillis = 800
+private const val RawCaptureTapDebounceMillis = 1000L
+private const val DefaultShutterSpeedNs = 1_000_000_000f / 60f
+private const val DefaultIso = 100f
+private const val DefaultAwbTemperature = 5000f
+private const val DefaultFocusDistance = 0f
+private val CameraTopBarBaseTopPadding = 32.dp
+private val CameraTopBarBaseHeight = 80.dp
+
+@Composable
+private fun cameraTopSafePadding(): Dp {
+    val density = LocalDensity.current
+    val topInset = with(density) {
+        maxOf(
+            WindowInsets.statusBars.getTop(this).toDp(),
+            WindowInsets.displayCutout.getTop(this).toDp()
+        )
+    }
+    return (topInset - CameraTopBarBaseTopPadding).coerceAtLeast(0.dp)
+}
+
+private fun Bitmap.copyForCaptureAnimation(): Bitmap? {
+    if (isRecycled) return null
+    val copyConfig = if (config == Bitmap.Config.HARDWARE) {
+        Bitmap.Config.ARGB_8888
+    } else {
+        config ?: Bitmap.Config.ARGB_8888
+    }
+    return copy(copyConfig, false) ?: copy(Bitmap.Config.ARGB_8888, false)
+}
+
+private fun Bitmap.recycleIfAlive() {
+    if (!isRecycled) {
+        recycle()
+    }
+}
+
+private fun CameraParameter.defaultResetValue(): Float {
+    return when (this) {
+        CameraParameter.EXPOSURE_COMPENSATION -> 0f
+        CameraParameter.SHUTTER_SPEED -> DefaultShutterSpeedNs
+        CameraParameter.ISO -> DefaultIso
+        CameraParameter.FOCUS -> DefaultFocusDistance
+        CameraParameter.WHITE_BALANCE -> DefaultAwbTemperature
+    }
+}
 
 @Composable
 fun CameraScreen(
@@ -103,8 +154,11 @@ fun CameraScreen(
     galleryViewModel: GalleryViewModel,
     onGalleryClick: () -> Unit,
     onSettingsClick: () -> Unit,
-    onFilterManagementClick: () -> Unit,
+    onFilterManagementClick: (String?) -> Unit,
     onFrameManagementClick: () -> Unit,
+    onToolboxClick: () -> Unit,
+    onPresetEditClick: (String?) -> Unit,
+    onPresetManagementClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -112,22 +166,52 @@ fun CameraScreen(
     val state by viewModel.state.collectAsState()
     val latestPhoto by galleryViewModel.latestPhoto.collectAsState()
     val showLevelIndicator by viewModel.showLevelIndicator.collectAsState(initial = false)
+    val focusPeakingEnabled by viewModel.focusPeakingEnabled.collectAsState(initial = true)
+    val keepScreenOn by viewModel.keepScreenOn.collectAsState(initial = false)
     val currentLutId by viewModel.currentLutId.collectAsState()
     val currentRecipeParams by viewModel.currentRecipeParams.collectAsState()
+    val lutSelectorMode by viewModel.lutSelectorMode.collectAsState()
+    val currentEffectParams by viewModel.currentEffectParams.collectAsState()
+    val activePresetId by viewModel.activePresetId.collectAsState()
+    val customPresets by viewModel.customPresets.collectAsState()
+    val mergedRecipeParams = remember(currentRecipeParams, currentEffectParams) {
+        currentEffectParams.applyTo(currentRecipeParams)
+    }
     val currentBaselineRecipeParams by viewModel.currentBaselineRecipeParams.collectAsState()
     val categoryOrder by viewModel.categoryOrder.collectAsState(emptyList())
     val useRaw by viewModel.useRaw.collectAsState()
     val useMFNR by viewModel.useMFNR.collectAsState()
+    val useHdrComposition by viewModel.useHdrComposition.collectAsState()
     val useMultipleExposure by viewModel.useMultipleExposure.collectAsState()
     val useMFSR by viewModel.useMFSR.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
+    val aiFocusTargetMode by viewModel.aiFocusTargetMode.collectAsState()
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
     val hlgHardwareCompatibilityEnabled by viewModel.hlgHardwareCompatibilityEnabled.collectAsState()
     val phantomMode by viewModel.phantomMode.collectAsState()
+    val topSheetAspectRatios by viewModel.topSheetAspectRatios.collectAsState()
     val videoCodec by viewModel.videoCodec.collectAsState()
     val videoAudioInputOptions by viewModel.videoAudioInputOptions.collectAsState()
     val phantomPipPreview by viewModel.phantomPipPreview.collectAsState()
+    val rawDcpId by viewModel.rawDcpId.collectAsState()
+    val jpgBaselineLutId by viewModel.jpgBaselineLutId.collectAsState()
+    val rawBaselineLutId by viewModel.rawBaselineLutId.collectAsState()
+    val phantomBaselineLutId by viewModel.phantomBaselineLutId.collectAsState()
+    val rawExposureCompensation by viewModel.rawExposureCompensation.collectAsState()
+    val rawAutoExposure by viewModel.rawAutoExposure.collectAsState()
+    val rawHighlightsAdjustment by viewModel.rawHighlightsAdjustment.collectAsState()
+    val rawShadowsAdjustment by viewModel.rawShadowsAdjustment.collectAsState()
+    val rawBlackPointCorrection by viewModel.rawBlackPointCorrection.collectAsState()
+    val rawWhitePointCorrection by viewModel.rawWhitePointCorrection.collectAsState()
+    val droMode by viewModel.droMode.collectAsState()
+    val rawColorEngine by viewModel.rawRenderingEngine.collectAsState()
+    val rawToneMappingParameters by viewModel.rawToneMappingParameters.collectAsState()
+    val rawSpectralFilmStock by viewModel.rawSpectralFilmStock.collectAsState()
+    val rawSpectralFilmSelection by viewModel.rawSpectralFilmSelection.collectAsState()
+    val rawSpectralFilmPrint by viewModel.rawSpectralFilmPrint.collectAsState()
     val multipleExposureState = viewModel.multipleExposureState
+    val canStartShutterAnimation by viewModel.canStartShutterAnimation.collectAsState()
+    val currentCaptureModeForEffects by rememberUpdatedState(state.captureMode)
     var previewRecipeParamsOverride by remember(currentLutId) { mutableStateOf<ColorRecipeParams?>(null) }
     var pendingCaptureAnimationBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var previewBounds by remember { mutableStateOf<Rect?>(null) }
@@ -140,15 +224,29 @@ fun CameraScreen(
     var previewTransitionAwaitingResume by remember { mutableStateOf(false) }
     var previewTransitionSawPause by remember { mutableStateOf(false) }
     var hasPlayedInitialPreviewTransition by remember { mutableStateOf(false) }
+    var rawCaptureTapLocked by remember { mutableStateOf(false) }
+    var baselineEditLutId by remember { mutableStateOf<String?>(null) }
+    var baselineEditTarget by remember { mutableStateOf<BaselineColorCorrectionTarget?>(null) }
 
     // 标记相机是否已打开
     var cameraOpened by remember { mutableStateOf(false) }
 
     // UI State
     var activePanel by remember { mutableStateOf(ActivePanel.NONE) }
+    var showEffectsSheet by remember { mutableStateOf(false) }
     var selectedParameter by remember { mutableStateOf(CameraParameter.EXPOSURE_COMPENSATION) }
     var showVideoParameterRuler by remember { mutableStateOf(false) }
     val isXpan = state.aspectRatio == AspectRatio.XPAN
+    val activeBaselineTarget = when {
+        phantomMode -> BaselineColorCorrectionTarget.PHANTOM
+        useRaw && state.captureMode == CaptureMode.PHOTO && state.isRawSupported -> BaselineColorCorrectionTarget.RAW
+        else -> BaselineColorCorrectionTarget.JPG
+    }
+    val activeBaselineLutId = when (activeBaselineTarget) {
+        BaselineColorCorrectionTarget.JPG -> jpgBaselineLutId
+        BaselineColorCorrectionTarget.RAW -> rawBaselineLutId
+        BaselineColorCorrectionTarget.PHANTOM -> phantomBaselineLutId
+    }
 
 
     val burstCapturingCount = viewModel.burstImageCount
@@ -163,6 +261,15 @@ fun CameraScreen(
         }
     )
 
+    val dcpImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetMultipleContents(),
+        onResult = { uris ->
+            if (uris.isNotEmpty()) {
+                viewModel.importRawDcps(uris) { _, _ -> }
+            }
+        }
+    )
+
     // 当打开滤镜面板时，生成预览图
     LaunchedEffect(activePanel) {
         if (activePanel == ActivePanel.FILTERS) {
@@ -170,11 +277,16 @@ fun CameraScreen(
         }
     }
 
+    LaunchedEffect(useRaw, state.captureMode) {
+        if (!useRaw || state.captureMode != CaptureMode.PHOTO) {
+            rawCaptureTapLocked = false
+        }
+    }
+
     // 从后台返回时检查并恢复相机，刷新最新照片
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
-        if (cameraOpened) {
-            viewModel.checkAndRecoverCamera()
-        }
+        viewModel.checkAndRecoverCamera()
+        viewModel.refreshLocationOnResume()
         galleryViewModel.refreshLatestPhoto()
 
         // Handle automated ghost mode permission sequence
@@ -210,7 +322,7 @@ fun CameraScreen(
     LaunchedEffect(Unit) {
         viewModel.imageSavedEvent.collect {
             galleryViewModel.refreshLatestPhoto()
-            if (!enableDevelopAnimation) {
+            if (!enableDevelopAnimation || currentCaptureModeForEffects != CaptureMode.PHOTO) {
                 pendingCaptureAnimationBitmap = null
                 captureAnimationSnapshot = null
                 MyCameraApplication.updateWidgets(context)
@@ -221,15 +333,22 @@ fun CameraScreen(
 
             fun startCaptureAnimation(bitmap: Bitmap) {
                 if (sourceBounds == null || targetBounds == null) {
+                    bitmap.recycleIfAlive()
                     return
                 }
                 scope.launch {
-                    val bitmap = viewModel.applyLut(bitmap)
-                    captureAnimationSnapshot = CaptureAnimationSnapshot(
-                        bitmap = bitmap.asImageBitmap(),
-                        sourceBounds = sourceBounds,
-                        targetBounds = targetBounds
-                    )
+                    val processedBitmap = viewModel.applyLut(bitmap)
+                    val animationBitmap = processedBitmap.copyForCaptureAnimation()
+                    if (processedBitmap !== animationBitmap) {
+                        processedBitmap.recycleIfAlive()
+                    }
+                    animationBitmap?.let {
+                        captureAnimationSnapshot = CaptureAnimationSnapshot(
+                            bitmap = it.asImageBitmap(),
+                            sourceBounds = sourceBounds,
+                            targetBounds = targetBounds
+                        )
+                    }
                 }
             }
 
@@ -242,7 +361,7 @@ fun CameraScreen(
 
     val previewSize = state.currentPreviewSize
     val previewAspectRatio = state.getPreviewAspectRatio()
-    val previewTransitionCoverFraction by animateFloatAsState(
+    val previewTransitionCoverFractionState = animateFloatAsState(
         targetValue = when {
             previewTransitionActive && !previewTransitionRevealing -> 1f
             previewTransitionActive -> 0f
@@ -258,6 +377,7 @@ fun CameraScreen(
         },
         label = "previewTransitionCoverFraction"
     )
+    val previewTransitionCoverFraction = previewTransitionCoverFractionState.value
 
     fun runPreviewTransition(onSwitch: () -> Unit) {
         previewTransitionActive = true
@@ -265,12 +385,36 @@ fun CameraScreen(
         previewTransitionToken += 1
         previewTransitionAwaitingResume = true
         previewTransitionSawPause = false
-        onSwitch()
+        scope.launch {
+            withFrameNanos { }
+            onSwitch()
+        }
     }
 
     fun switchToLensWithPreviewTransition(cameraId: String) {
         if (cameraId == state.getCurrentCameraInfo()?.cameraId) return
         runPreviewTransition { viewModel.switchToLens(cameraId) }
+    }
+
+    fun setZoomWithPreviewTransition(targetZoom: Float) {
+        if (viewModel.isCurrentLensCustomZoomRatioStop(targetZoom)) {
+            viewModel.setZoomRatio(targetZoom)
+            return
+        }
+        val currentCamera = state.getCurrentCameraInfo()
+        val currentCameraId = currentCamera?.cameraId ?: "0"
+        val camera = viewModel.findOptimalLens(
+            targetZoom,
+            state.availableCameras,
+            currentCameraId
+        )
+        if (camera != null && camera.cameraId != currentCamera?.cameraId) {
+            runPreviewTransition {
+                viewModel.switchToLensAndSetZoomRatio(camera.cameraId, targetZoom)
+            }
+        } else {
+            viewModel.setZoomRatio(targetZoom)
+        }
     }
 
     fun switchCameraWithPreviewTransition() {
@@ -285,6 +429,36 @@ fun CameraScreen(
             }
             viewModel.setCaptureMode(mode)
         }
+    }
+
+    fun presetTargetAspectRatio(preset: CameraPreset?): AspectRatio {
+        return try {
+            AspectRatio.valueOf(preset?.aspectRatio ?: AspectRatio.RATIO_4_3.name)
+        } catch (_: Exception) {
+            AspectRatio.RATIO_4_3
+        }
+    }
+
+    fun presetRequiresPreviewTransition(preset: CameraPreset?): Boolean {
+        val targetAspectRatio = presetTargetAspectRatio(preset)
+        var targetUseRaw = preset?.useRaw ?: false
+        var targetUseMFNR = preset?.useMFNR ?: false
+        var targetUseMFSR = preset?.useMFSR ?: false
+
+        if (targetUseRaw) {
+            targetUseMFSR = false
+        }
+        if (targetUseMFNR) {
+            targetUseMFSR = false
+        }
+        if (targetUseMFSR && targetUseRaw) {
+            targetUseMFSR = false
+        }
+
+        return targetAspectRatio != state.aspectRatio ||
+            targetUseRaw != useRaw ||
+            targetUseMFNR != useMFNR ||
+            targetUseMFSR != useMFSR
     }
 
     LaunchedEffect(previewTransitionToken, state.isPreviewActive, previewTransitionAwaitingResume) {
@@ -305,8 +479,10 @@ fun CameraScreen(
         }
     }
 
-    DisposableEffect(activity, state.videoRecordingState.isRecording) {
-        if (state.videoRecordingState.isRecording) {
+    val shouldKeepScreenOn = keepScreenOn || state.videoRecordingState.isRecording
+
+    DisposableEffect(activity, shouldKeepScreenOn) {
+        if (shouldKeepScreenOn) {
             activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         } else {
             activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -329,8 +505,17 @@ fun CameraScreen(
         }
     }
 
-    LaunchedEffect(state.isPreviewActive, hasPlayedInitialPreviewTransition) {
-        if (hasPlayedInitialPreviewTransition || !state.isPreviewActive) return@LaunchedEffect
+    LaunchedEffect(
+        state.isPreviewActive,
+        state.captureMode,
+        hasPlayedInitialPreviewTransition,
+        canStartShutterAnimation
+    ) {
+        val canRevealInitialPreview =
+            canStartShutterAnimation ||
+                state.captureMode == CaptureMode.VIDEO ||
+                state.captureMode == CaptureMode.QUICK_SHOT
+        if (hasPlayedInitialPreviewTransition || !state.isPreviewActive || !canRevealInitialPreview) return@LaunchedEffect
         previewTransitionActive = true
         delay(InitialPreviewTransitionDelayMillis)
         previewTransitionRevealing = true
@@ -342,7 +527,7 @@ fun CameraScreen(
     var showGhostPermissionDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.captureMode) {
-        if (state.captureMode == CaptureMode.VIDEO) {
+        if (state.captureMode != CaptureMode.PHOTO) {
             showVideoParameterRuler = false
         }
     }
@@ -439,22 +624,32 @@ fun CameraScreen(
         val backgroundPainter = rememberBackgroundPainter(viewModel)
 
         val isVideoMode = state.captureMode == CaptureMode.VIDEO
+        val isPhotoStyleMode = state.captureMode != CaptureMode.VIDEO
         val videoAspectRatio =
             state.videoConfig.aspectRatio.getPortraitAspectRatio(state.videoCapabilities.openGatePortraitAspectRatio)
 
-        val width = with(LocalDensity.current) { constraints.maxWidth.toDp() }
-        val height = with(LocalDensity.current) { constraints.maxHeight.toDp() }
+        val density = LocalDensity.current
+        val width = with(density) { constraints.maxWidth.toDp() }
+        val height = with(density) { constraints.maxHeight.toDp() }
+        val topSafePadding = cameraTopSafePadding()
+        val topBarHeight = CameraTopBarBaseHeight + topSafePadding
         val cardWidth = if (isXpan) {
-            (height - 280.dp) * 24 / 65 + 8.dp
+            (height - topSafePadding - 280.dp) * 24 / 65 + 8.dp
         } else {
             width
         }
         val cardHeight = if (isXpan) {
-            height - 224.dp
+            height - topSafePadding - 224.dp
         } else if (isVideoMode) {
             width / videoAspectRatio
         } else {
-            (width - 24.dp) * 4 / 3 + 50.dp
+            val standardHeight = (width - 24.dp) * 4 / 3 + 50.dp
+            val bottomMinHeight = 196.dp // Precise height for parameterBar (52.dp) + controls (136.dp min + 8.dp buffer)
+            val navigationBarHeight = with(density) {
+                WindowInsets.navigationBars.getBottom(this).toDp()
+            }
+            val maxCardHeight = (height - topBarHeight - bottomMinHeight - navigationBarHeight).coerceAtLeast(300.dp)
+            standardHeight.coerceAtMost(maxCardHeight)
         }
 
         val topBar = @Composable {
@@ -474,6 +669,11 @@ fun CameraScreen(
                 },
                 useLivePhoto = useLivePhoto,
                 onLivePhotoToggle = { viewModel.setUseLivePhoto(!state.useLivePhoto) },
+                quickShotConfig = state.quickShotConfig,
+                quickShotCapabilities = state.quickShotCapabilities,
+                onQuickShotResolutionClick = {
+                    cycleQuickShotResolution(state)?.let(viewModel::setQuickShotResolution)
+                },
                 videoConfig = state.videoConfig,
                 videoCapabilities = state.videoCapabilities,
                 onVideoTorchToggle = { viewModel.setVideoTorchEnabled(!state.videoConfig.torchEnabled) },
@@ -488,7 +688,8 @@ fun CameraScreen(
                 },
                 onSettingsClick = {
                     activePanel = if (activePanel == ActivePanel.SETTINGS) ActivePanel.NONE else ActivePanel.SETTINGS
-                }
+                },
+                modifier = Modifier.padding(top = topSafePadding)
             )
         }
 
@@ -499,7 +700,7 @@ fun CameraScreen(
                     zoomRatio = viewModel.zoomRatioByMain,
                     availableCameras = state.availableCameras,
                     currentCameraId = state.getCurrentCameraInfo()?.cameraId ?: "0",
-                    onZoomChange = { viewModel.setZoomRatio(it) },
+                    onZoomChange = { setZoomWithPreviewTransition(it) },
                     onLensSwitch = { lensId -> switchToLensWithPreviewTransition(lensId) },
                     onFilterClick = {
                         activePanel = if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
@@ -551,6 +752,13 @@ fun CameraScreen(
                 showAutoButton = when (selectedParameter) {
                     CameraParameter.SHUTTER_SPEED, CameraParameter.ISO, CameraParameter.WHITE_BALANCE, CameraParameter.FOCUS -> true
                     else -> false
+                },
+                resetValue = selectedParameter.defaultResetValue(),
+                showHyperfocalButton = selectedParameter == CameraParameter.FOCUS && state.minimumFocusDistance > 0f,
+                hyperfocalEnabled = state.isHyperfocalFocusEnabled,
+                hyperfocalDistanceMeters = state.hyperfocalDistanceMeters,
+                onHyperfocalToggle = { enabled ->
+                    viewModel.setHyperfocalFocusEnabled(enabled)
                 },
                 onValueChange = { value ->
                     when (selectedParameter) {
@@ -645,17 +853,7 @@ fun CameraScreen(
                                                     viewModel.globalMinZoom,
                                                     viewModel.globalMaxZoom
                                                 )
-                                            // Check for lens switch
-                                            val info = state.getCurrentCameraInfo()
-                                            val camera = viewModel.findOptimalLens(
-                                                nextZoom,
-                                                state.availableCameras,
-                                                info?.cameraId ?: "0"
-                                            )
-                                            if (camera != null && camera.cameraId != info?.cameraId) {
-                                                switchToLensWithPreviewTransition(camera.cameraId)
-                                            }
-                                            viewModel.setZoomRatio(nextZoom)
+                                            setZoomWithPreviewTransition(nextZoom)
                                         }
                                         event.changes.forEach { it.consume() }
                                     } else if (event.changes.size == 1) {
@@ -694,16 +892,20 @@ fun CameraScreen(
 
                     // 相机预览
                     CameraPreviewGL(
+                        isAiFocusBusy = viewModel.isAiFocusBusy,
                         aspectRatio = previewAspectRatio,
                         previewSize = previewSize,
+                        captureSize = state.currentCaptureSize,
+                        captureMode = state.captureMode,
                         sensorOrientation = state.getCurrentCameraInfo()?.sensorOrientation ?: 0,
                         lensFacing = if (state.getCurrentCameraInfo()?.lensFacing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT) 0 else 1,
                         calibrationOffset = calibrationOffset,
                         baselineLut = viewModel.currentBaselineLutConfig,
                         currentLut = viewModel.currentLutConfig,
                         baselineColorRecipeParams = currentBaselineRecipeParams,
-                        colorRecipeParams = previewRecipeParamsOverride ?: currentRecipeParams,
+                        colorRecipeParams = previewRecipeParamsOverride ?: mergedRecipeParams,
                         focusPoint = state.focusPoint,
+                        focusPointSource = state.focusPointSource,
                         isFocusing = state.isFocusing,
                         focusSuccess = state.focusSuccess,
                         meteringMode = state.meteringMode,
@@ -728,6 +930,11 @@ fun CameraScreen(
                         onMeteringUpdated = { w, l -> viewModel.handleMeteringUpdate(w, l) },
                         onHighlightPointUpdated = { hx, hy -> viewModel.handleHighlightPointUpdate(hx, hy) },
                         onDepthInputAvailable = { viewModel.handleDepthMapUpdate(it) },
+                        onAiFocusInputAvailable = if (aiFocusTargetMode == AiFocusTargetMode.OFF) {
+                            null
+                        } else {
+                            { viewModel.handleAiFocusInputUpdate(it) }
+                        },
                         onGLSurfaceViewReady = {
                             viewModel.glSurfaceView = it
                         },
@@ -737,27 +944,37 @@ fun CameraScreen(
                         isHlgInput = if (hlgHardwareCompatibilityEnabled) state.isHLG else false,
                         aperture = if (state.isVirtualApertureEnabled) state.virtualAperture else 0f,
                         isAutoFocus = state.isAutoFocus,
+                        focusPeakingEnabled = focusPeakingEnabled && !state.isHyperfocalFocusEnabled,
                         modifier = Modifier.fillMaxSize()
                     )
 
-                    if (previewTransitionActive || previewTransitionCoverFraction > 0.001f) {
-                        val shutterHeightFraction = (previewTransitionCoverFraction / 2f).coerceIn(0f, 0.5f)
-                        Box(modifier = Modifier.fillMaxSize()) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .fillMaxHeight(shutterHeightFraction)
-                                    .align(Alignment.TopCenter)
-                                    .background(Color.Black)
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .fillMaxHeight(shutterHeightFraction)
-                                    .align(Alignment.BottomCenter)
-                                    .background(Color.Black)
-                            )
-                        }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                alpha = if (previewTransitionActive || previewTransitionCoverFractionState.value > 0.001f) 1f else 0f
+                            }
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .fillMaxHeight(0.5f)
+                                .align(Alignment.TopCenter)
+                                .graphicsLayer {
+                                    translationY = -size.height * (1f - previewTransitionCoverFractionState.value)
+                                }
+                                .background(Color.Black)
+                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .fillMaxHeight(0.5f)
+                                .align(Alignment.BottomCenter)
+                                .graphicsLayer {
+                                    translationY = size.height * (1f - previewTransitionCoverFractionState.value)
+                                }
+                                .background(Color.Black)
+                        )
                     }
 
                     // Live Photo Indicator
@@ -798,7 +1015,7 @@ fun CameraScreen(
                         }
 
                         // 实时直方图 (Overlaid on preview if enabled)
-                        if (state.captureMode == CaptureMode.PHOTO && state.histogram != null && viewModel.showHistogram) {
+                        if (isPhotoStyleMode && state.histogram != null && viewModel.showHistogram) {
                             HistogramView(
                                 histogram = state.histogram,
                                 modifier = Modifier
@@ -833,14 +1050,14 @@ fun CameraScreen(
                             )
                         }
 
-                        if (burstCapturingCount > 0) {
+                        if (state.burstCapturing && burstCapturingCount > 0) {
                             BurstCaptureOverlay(
                                 count = burstCapturingCount,
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
 
-                        if (useMultipleExposure) {
+                        if (useMultipleExposure && state.captureMode == CaptureMode.PHOTO) {
                             MultipleExposureOverlay(
                                 state = multipleExposureState,
                                 onFinish = { viewModel.finishMultipleExposureSession() },
@@ -850,8 +1067,8 @@ fun CameraScreen(
                             )
                         }
 
-                        // Zoom bar overlaid on preview (only in Photo mode)
-                        if (state.captureMode == CaptureMode.PHOTO) {
+                        // Zoom bar overlaid on preview for photo-style modes.
+                        if (isPhotoStyleMode) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
@@ -869,7 +1086,7 @@ fun CameraScreen(
                         color = Color.Black
                     )
                 }
-                if (state.captureMode == CaptureMode.PHOTO) {
+                if (isPhotoStyleMode) {
                     parameterRuler()
                 }
             }
@@ -891,14 +1108,15 @@ fun CameraScreen(
                             zoomRatio = viewModel.zoomRatioByMain,
                             availableCameras = state.availableCameras,
                             currentCameraId = state.getCurrentCameraInfo()?.cameraId ?: "0",
-                            onZoomChange = { viewModel.setZoomRatio(it) },
+                            onZoomChange = { setZoomWithPreviewTransition(it) },
                             onLensSwitch = { lensId -> switchToLensWithPreviewTransition(lensId) },
                             onFilterClick = {
                                 // Toggle Filter Panel
                                 activePanel =
                                     if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
                             },
-                            modifier = Modifier.align(Alignment.Center)
+                            modifier = Modifier
+                                .align(Alignment.Center)
                         )
                     }
                     Box(
@@ -912,7 +1130,8 @@ fun CameraScreen(
                             onParameterClick = { param ->
                                 selectedParameter = param
                             },
-                            modifier = Modifier.align(Alignment.Center)
+                            modifier = Modifier
+                                .align(Alignment.Center)
                         )
                     }
                 }
@@ -934,8 +1153,21 @@ fun CameraScreen(
                 onSwitchCameraClick = ::switchCameraWithPreviewTransition,
                 onCaptureModeSelected = ::setCaptureModeWithPreviewTransition,
                 onCaptureTap = {
+                    val shouldDebounceRawCapture = useRaw && state.captureMode == CaptureMode.PHOTO
+                    if (shouldDebounceRawCapture) {
+                        if (rawCaptureTapLocked) {
+                            return@Controls
+                        }
+                        rawCaptureTapLocked = true
+                        scope.launch {
+                            delay(RawCaptureTapDebounceMillis)
+                            rawCaptureTapLocked = false
+                        }
+                    }
+
                     if (enableDevelopAnimation && state.captureMode == CaptureMode.PHOTO) {
                         viewModel.glSurfaceView?.capturePreviewFrame { bitmap ->
+                            pendingCaptureAnimationBitmap?.recycleIfAlive()
                             pendingCaptureAnimationBitmap = bitmap
                         }
                     }
@@ -1019,7 +1251,7 @@ fun CameraScreen(
 
 
                     AnimatedVisibility(
-                        visible = !isXpan && state.captureMode == CaptureMode.PHOTO,
+                        visible = !isXpan && isPhotoStyleMode,
                     ) {
                         parameterBar { param ->
                             selectedParameter = param
@@ -1075,6 +1307,7 @@ fun CameraScreen(
             visible = activePanel == ActivePanel.SETTINGS,
             captureMode = state.captureMode,
             aspectRatio = state.aspectRatio,
+            topSheetAspectRatios = topSheetAspectRatios,
             onAspectRatioChange = { runPreviewTransition { viewModel.setAspectRatio(it) } },
             videoAspectRatio = state.videoConfig.aspectRatio,
             onVideoAspectRatioChange = { runPreviewTransition { viewModel.setVideoAspectRatio(it) } },
@@ -1087,26 +1320,67 @@ fun CameraScreen(
             videoAudioInputId = state.videoConfig.audioInputId,
             videoAudioInputOptions = videoAudioInputOptions,
             onVideoAudioInputChange = { viewModel.setVideoAudioInputId(it) },
+            quickShotResolution = state.quickShotConfig.resolution,
+            quickShotCapabilities = state.quickShotCapabilities,
+            onQuickShotResolutionChange = { runPreviewTransition { viewModel.setQuickShotResolution(it) } },
             useRaw = useRaw && state.isRawSupported,
-            onRawToggle = { viewModel.toggleRaw() },
+            onRawToggle = { viewModel.setUseRaw(it) },
             isRawSupported = state.isRawSupported,
+            rawDcpId = rawDcpId,
+            availableDcps = viewModel.availableDcps,
+            rawBaselineLutId = rawBaselineLutId,
+            availableLuts = viewModel.availableLutList,
+            previewThumbnail = viewModel.previewThumbnail,
+            rawExposureCompensation = rawExposureCompensation,
+            rawAutoExposure = rawAutoExposure,
+            rawHighlightsAdjustment = rawHighlightsAdjustment,
+            rawShadowsAdjustment = rawShadowsAdjustment,
+            rawDROMode = droMode,
+            rawBlackPointCorrection = rawBlackPointCorrection,
+            rawWhitePointCorrection = rawWhitePointCorrection,
+            rawRenderingEngine = rawColorEngine,
+            rawToneMappingParameters = rawToneMappingParameters,
+            rawSpectralFilmSelection = rawSpectralFilmSelection ?: SpectralFilmSelection(rawSpectralFilmStock ?: "kodak_portra_400"),
+            rawSpectralFilmPrint = rawSpectralFilmPrint ?: "kodak_portra_endura",
+            onRawDcpChange = { viewModel.setRawDcpId(it) },
+            onImportRawDcp = { dcpImportLauncher.launch("*/*") },
+            onDeleteRawDcp = { dcp ->
+                viewModel.deleteRawDcp(dcp.id) { success ->
+                    android.widget.Toast.makeText(
+                        context,
+                        if (success) R.string.raw_dcp_delete_success else R.string.raw_dcp_delete_failed,
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            },
+            onRawBaselineLutChange = {
+                viewModel.setBaselineLut(BaselineColorCorrectionTarget.RAW, it)
+            },
+            onEditRawBaselineRecipe = { lutId ->
+                baselineEditLutId = lutId
+                baselineEditTarget = BaselineColorCorrectionTarget.RAW
+            },
+            onRawDROModeChange = { viewModel.setDroMode(it) },
+            onRawColorEngineChange = { viewModel.setRawColorEngine(it) },
+            onRawSpectralFilmSelectionChange = { viewModel.setRawSpectralFilmSelection(it) },
+            onRawSpectralFilmPrintChange = { viewModel.setRawSpectralFilmPrint(it) },
             meteringMode = state.meteringMode,
             onMeteringModeChange = { viewModel.setMeteringMode(it) },
             onFilterManageClick = {
                 activePanel = ActivePanel.NONE
-                onFilterManagementClick()
+                onFilterManagementClick(null)
             },
             onFrameManageClick = {
                 activePanel = ActivePanel.NONE
                 onFrameManagementClick()
             },
-            phantomMode = phantomMode,
-            onPhantomModeToggle = {
-                if (it && (!Settings.canDrawOverlays(context) || !Environment.isExternalStorageManager())) {
-                    showGhostPermissionDialog = true
-                } else {
-                    viewModel.togglePhantomMode()
-                }
+            onPresetManageClick = {
+                activePanel = ActivePanel.NONE
+                onPresetManagementClick()
+            },
+            onToolboxClick = {
+                activePanel = ActivePanel.NONE
+                onToolboxClick()
             },
             onMoreSettingsClick = {
                 activePanel = ActivePanel.NONE
@@ -1116,12 +1390,13 @@ fun CameraScreen(
             onMFNRToggle = {
                 viewModel.setUseMFNR(it)
             },
+            useHdrComposition = useHdrComposition,
+            onHdrCompositionToggle = {
+                viewModel.setUseHdrComposition(it)
+            },
             useMultipleExposure = useMultipleExposure,
             onMultipleExposureToggle = { viewModel.setUseMultipleExposure(it) },
-            useMFSR = useMFSR,
-            onMFSRToggle = {
-                viewModel.setUseMFSR(it)
-            }
+            modifier = Modifier.padding(top = topSafePadding)
         )
 
         AnimatedVisibility(
@@ -1140,7 +1415,7 @@ fun CameraScreen(
                             Modifier.height(maxHeight - 170.dp)
                         } else {
                             Modifier
-                                .padding(top = 80.dp)
+                                .padding(top = topBarHeight)
                                 .height(cardHeight - 48.dp)
                         }
                     ),
@@ -1154,7 +1429,17 @@ fun CameraScreen(
                                 Modifier
                                     .padding(bottom = 48.dp)
                                     .background(Color.Black)
-                            } else Modifier
+                            } else {
+                                Modifier.background(
+                                    Brush.verticalGradient(
+                                        colors = listOf(
+                                            Color.Transparent,
+                                            Color.Black.copy(alpha = 0.2f),
+                                            Color.Black.copy(alpha = 0.6f)
+                                        )
+                                    )
+                                )
+                            }
                         )
                         .padding(horizontal = 8.dp)
                         .padding(4.dp),
@@ -1177,39 +1462,72 @@ fun CameraScreen(
                         )
 
                         Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(Color.White.copy(alpha = 0.15f))
-                                .clickable {
-                                    activePanel = ActivePanel.LUT_EDIT
-                                }
-                                .padding(horizontal = 12.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Tune,
-                                contentDescription = stringResource(R.string.color_recipe),
-                                tint = Color(0xFFFFD700), // Gold color to match VIP/Premium feel
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Text(
-                                text = stringResource(R.string.color_recipe),
-                                color = Color.White,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Medium
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(Color.White.copy(alpha = 0.15f))
+                                    .clickable {
+                                        activePanel = ActivePanel.LUT_EDIT
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Tune,
+                                    contentDescription = stringResource(R.string.color_recipe),
+                                    tint = Color(0xFFFFD700), // Gold color to match VIP/Premium feel
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = stringResource(R.string.color_recipe),
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+
+                            EffectsActionChip(
+                                onClick = { showEffectsSheet = true }
                             )
                         }
                     }
 
-                    // LUT 选择器
+                    val allPresets by viewModel.allPresets.collectAsState()
+                    val activePresetId by viewModel.activePresetId.collectAsState()
+                    val defaultPresetName = stringResource(R.string.preset_new_preset_default)
+
+                    // LUT 选择器 (内嵌 Presets 列表)
                     LutSelector(
                         availableLuts = viewModel.availableLutList,
                         currentLutId = currentLutId,
                         thumbnail = viewModel.previewThumbnail,
                         onLutSelected = { viewModel.setLut(it) },
+                        allPresets = allPresets,
+                        activePresetId = activePresetId,
+                        selectedMode = lutSelectorMode,
+                        onModeSelected = { viewModel.setLutSelectorMode(it) },
+                        onPresetSelected = { preset ->
+                            if (presetRequiresPreviewTransition(preset)) {
+                                runPreviewTransition { viewModel.applyPreset(preset) }
+                            } else {
+                                viewModel.applyPreset(preset)
+                            }
+                        },
+                        onCreatePresetClick = {
+                            viewModel.prepareCurrentSettingsPresetDraft(defaultPresetName)
+                            onPresetEditClick(null)
+                        },
+                        onPresetManagementClick = onPresetManagementClick,
                         onEditClick = {
                             activePanel = ActivePanel.LUT_EDIT
+                        },
+                        onManageClick = { lutId ->
+                            activePanel = ActivePanel.NONE
+                            onFilterManagementClick(lutId)
                         },
                         categoryOrder = categoryOrder
                     )
@@ -1223,7 +1541,31 @@ fun CameraScreen(
                 onParamsPreviewChange = { previewRecipeParamsOverride = it },
                 onDismiss = {
                     previewRecipeParamsOverride = null
+                    viewModel.refreshActivePresetMatch()
                     activePanel = ActivePanel.FILTERS
+                }
+            )
+        }
+
+        if (showEffectsSheet) {
+            EffectsBottomSheet(
+                currentParams = currentEffectParams,
+                onParamsChange = { viewModel.setEffectParams(it) },
+                onDismiss = { showEffectsSheet = false }
+            )
+        }
+
+        if (baselineEditLutId != null && baselineEditTarget != null) {
+            LutEditBottomSheet(
+                lutId = baselineEditLutId!!,
+                editorTarget = when (baselineEditTarget!!) {
+                    BaselineColorCorrectionTarget.JPG -> LutEditorTarget.BASELINE_JPG
+                    BaselineColorCorrectionTarget.RAW -> LutEditorTarget.BASELINE_RAW
+                    BaselineColorCorrectionTarget.PHANTOM -> LutEditorTarget.BASELINE_PHANTOM
+                },
+                onDismiss = {
+                    baselineEditLutId = null
+                    baselineEditTarget = null
                 }
             )
         }
@@ -1372,7 +1714,8 @@ fun Controls(
                     isCapturing = state.isCapturing,
                     isVideoRecording = state.videoRecordingState.isRecording,
                     isPaused = state.videoRecordingState.isPaused,
-                    allowLongPress = state.captureMode == CaptureMode.PHOTO && !useMultipleExposure,
+                    allowLongPress = (state.captureMode == CaptureMode.PHOTO && !useMultipleExposure) ||
+                        state.captureMode == CaptureMode.QUICK_SHOT,
                     multipleExposureEnabled = useMultipleExposure && state.captureMode == CaptureMode.PHOTO,
                     multipleExposureProgress = multipleExposureState.capturedCount.toFloat() /
                             multipleExposureState.targetCount.coerceAtLeast(1).toFloat(),
@@ -1612,7 +1955,7 @@ private fun CaptureModeSwitcher(
 
     Box(
         modifier = Modifier
-            .width(100.dp)
+            .width(148.dp)
             .height(30.dp)
             .clip(RoundedCornerShape(16.dp))
             .background(Color.White.copy(alpha = 0.12f))
@@ -1620,7 +1963,11 @@ private fun CaptureModeSwitcher(
     ) {
         val knobWidth = 48.dp
         val knobOffset by animateDpAsState(
-            targetValue = if (captureMode == CaptureMode.PHOTO) 0.dp else 48.dp,
+            targetValue = when (captureMode) {
+                CaptureMode.QUICK_SHOT -> 0.dp
+                CaptureMode.PHOTO -> 48.dp
+                CaptureMode.VIDEO -> 96.dp
+            },
             animationSpec = tween(durationMillis = 220),
             label = "modeSwitcher"
         )
@@ -1637,9 +1984,18 @@ private fun CaptureModeSwitcher(
             verticalAlignment = Alignment.CenterVertically
         ) {
             ModeSwitcherItem(
+                icon = Icons.Default.Bolt,
+                selected = captureMode == CaptureMode.QUICK_SHOT,
+                enabled = enabled,
+                contentDescription = stringResource(R.string.capture_mode_quick_shot),
+                onClick = { onModeSelected(CaptureMode.QUICK_SHOT) },
+                modifier = Modifier.weight(1f)
+            )
+            ModeSwitcherItem(
                 icon = Icons.Default.CameraAlt,
                 selected = captureMode == CaptureMode.PHOTO,
                 enabled = enabled,
+                contentDescription = stringResource(R.string.capture_mode_photo),
                 onClick = { onModeSelected(CaptureMode.PHOTO) },
                 modifier = Modifier.weight(1f)
             )
@@ -1647,6 +2003,7 @@ private fun CaptureModeSwitcher(
                 icon = Icons.Default.Videocam,
                 selected = captureMode == CaptureMode.VIDEO,
                 enabled = enabled,
+                contentDescription = stringResource(R.string.capture_mode_video),
                 onClick = { onModeSelected(CaptureMode.VIDEO) },
                 modifier = Modifier.weight(1f)
             )
@@ -1659,6 +2016,7 @@ private fun ModeSwitcherItem(
     icon: ImageVector,
     selected: Boolean,
     enabled: Boolean,
+    contentDescription: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1671,7 +2029,7 @@ private fun ModeSwitcherItem(
     ) {
         Icon(
             imageVector = icon,
-            contentDescription = null,
+            contentDescription = contentDescription,
             tint = if (selected) Color.Black else Color.White,
             modifier = Modifier.size(18.dp)
         )
@@ -1680,6 +2038,10 @@ private fun ModeSwitcherItem(
 
 private fun cycleVideoResolution(state: CameraState): VideoResolutionPreset? {
     return nextOption(state.videoConfig.resolution, state.videoCapabilities.availableResolutions)
+}
+
+private fun cycleQuickShotResolution(state: CameraState): QuickShotResolutionPreset? {
+    return nextOption(state.quickShotConfig.resolution, state.quickShotCapabilities.availableResolutions)
 }
 
 private fun cycleVideoFps(state: CameraState): VideoFpsPreset? {

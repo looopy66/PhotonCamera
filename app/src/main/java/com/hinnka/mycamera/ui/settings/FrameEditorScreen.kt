@@ -6,9 +6,11 @@ import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -53,6 +55,8 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
@@ -75,8 +79,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -93,6 +102,7 @@ import com.hinnka.mycamera.frame.FrameElementDraft
 import com.hinnka.mycamera.frame.FramePosition
 import com.hinnka.mycamera.frame.LogoType
 import com.hinnka.mycamera.frame.TextType
+import com.hinnka.mycamera.ui.components.CustomSliderThinThumb
 import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import kotlinx.coroutines.Dispatchers
@@ -101,6 +111,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -131,7 +142,7 @@ fun FrameEditorScreen(
     var pendingLogoElementId by remember { mutableStateOf<String?>(null) }
 
     val imagePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
+        contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri ?: return@rememberLauncherForActivityResult
         scope.launch {
@@ -150,7 +161,7 @@ fun FrameEditorScreen(
     }
 
     val fontPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
+        contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         val targetId = pendingFontElementId ?: return@rememberLauncherForActivityResult
         pendingFontElementId = null
@@ -374,7 +385,7 @@ fun FrameEditorScreen(
                 0 -> FrameBasicTab(
                     draft = draft,
                     onDraftChange = { draft = it },
-                    onPickImage = { imagePicker.launch(arrayOf("image/png", "image/webp", "image/*")) },
+                    onPickImage = { imagePicker.launch("*/*") },
                     modifier = Modifier.weight(1f)
                 )
 
@@ -385,7 +396,7 @@ fun FrameEditorScreen(
                     onShowAddMenuChange = { showAddElementMenu = it },
                     onImportFont = { draftId ->
                         pendingFontElementId = draftId
-                        fontPicker.launch(arrayOf("font/*", "application/octet-stream"))
+                        fontPicker.launch("*/*")
                     },
                     onImportLogo = { draftId ->
                         pendingLogoElementId = draftId
@@ -560,7 +571,21 @@ private fun FrameBasicTab(
                             onDraftChange(draft.copy(layout = draft.layout.copy(backgroundColor = it)))
                         }
                     )
-                    if (draft.layout.position == FramePosition.BORDER) {
+                    ColorField(
+                        label = stringResource(R.string.frame_editor_layout_border_color),
+                        value = draft.layout.borderColor,
+                        onValueChange = {
+                            onDraftChange(draft.copy(layout = draft.layout.copy(borderColor = it)))
+                        }
+                    )
+                    IntField(
+                        label = stringResource(R.string.frame_editor_layout_line_spacing),
+                        value = draft.layout.lineSpacingDp,
+                        onValueChange = {
+                            onDraftChange(draft.copy(layout = draft.layout.copy(lineSpacingDp = it.coerceAtLeast(0))))
+                        }
+                    )
+                    if (draft.layout.position == FramePosition.BORDER || draft.layout.position == FramePosition.BOTH) {
                         IntField(
                             label = stringResource(R.string.frame_editor_layout_border_width),
                             value = draft.layout.borderWidthDp,
@@ -568,6 +593,65 @@ private fun FrameBasicTab(
                                 onDraftChange(draft.copy(layout = draft.layout.copy(borderWidthDp = it.coerceAtLeast(0))))
                             }
                         )
+                        if (draft.layout.borderWidthDp > 0) {
+                            IntField(
+                                label = stringResource(R.string.frame_editor_photo_corner_radius),
+                                value = draft.layout.photoCornerRadiusDp,
+                                onValueChange = {
+                                    onDraftChange(draft.copy(layout = draft.layout.copy(photoCornerRadiusDp = it.coerceAtLeast(0))))
+                                }
+                            )
+                            SwitchRow(
+                                label = stringResource(R.string.frame_editor_photo_shadow),
+                                checked = draft.layout.photoShadowEnabled,
+                                onCheckedChange = {
+                                    onDraftChange(
+                                        draft.copy(
+                                            layout = draft.layout.copy(
+                                                photoShadowEnabled = it,
+                                                photoShadowRadiusDp = if (it && draft.layout.photoShadowRadiusDp == 0) {
+                                                    36
+                                                } else {
+                                                    draft.layout.photoShadowRadiusDp
+                                                }
+                                            )
+                                        )
+                                    )
+                                }
+                            )
+                            if (draft.layout.photoShadowEnabled) {
+                                IntField(
+                                    label = stringResource(R.string.frame_editor_photo_shadow_radius),
+                                    value = draft.layout.photoShadowRadiusDp,
+                                    onValueChange = {
+                                        onDraftChange(draft.copy(layout = draft.layout.copy(photoShadowRadiusDp = it.coerceAtLeast(0))))
+                                    }
+                                )
+                                IntField(
+                                    label = stringResource(R.string.frame_editor_photo_shadow_offset_x),
+                                    value = draft.layout.photoShadowOffsetXDp,
+                                    allowNegative = true,
+                                    onValueChange = {
+                                        onDraftChange(draft.copy(layout = draft.layout.copy(photoShadowOffsetXDp = it)))
+                                    }
+                                )
+                                IntField(
+                                    label = stringResource(R.string.frame_editor_photo_shadow_offset_y),
+                                    value = draft.layout.photoShadowOffsetYDp,
+                                    allowNegative = true,
+                                    onValueChange = {
+                                        onDraftChange(draft.copy(layout = draft.layout.copy(photoShadowOffsetYDp = it)))
+                                    }
+                                )
+                                ColorField(
+                                    label = stringResource(R.string.frame_editor_photo_shadow_color),
+                                    value = draft.layout.photoShadowColor,
+                                    onValueChange = {
+                                        onDraftChange(draft.copy(layout = draft.layout.copy(photoShadowColor = it)))
+                                    }
+                                )
+                            }
+                        }
                     }
                 } else {
                     Text(
@@ -640,21 +724,33 @@ private fun FrameElementsTab(
     var editingElementId by remember(draft.sourceFrameId, draft.editableFrameId) {
         mutableStateOf<String?>(null)
     }
+    var editingTop by remember { mutableStateOf(false) }
+
+    val currentElements = if (editingTop) {
+        draft.elementsTop ?: draft.elements
+    } else {
+        draft.elements
+    }
+
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
         val fromId = from.key as? String ?: return@rememberReorderableLazyListState
         val toId = to.key as? String ?: return@rememberReorderableLazyListState
-        val fromIndex = draft.elements.indexOfFirst { it.draftId == fromId }
-        val toIndex = draft.elements.indexOfFirst { it.draftId == toId }
+        val fromIndex = currentElements.indexOfFirst { it.draftId == fromId }
+        val toIndex = currentElements.indexOfFirst { it.draftId == toId }
         if (fromIndex == -1 || toIndex == -1) return@rememberReorderableLazyListState
 
-        val updated = draft.elements.toMutableList().apply {
+        val updated = currentElements.toMutableList().apply {
             add(toIndex, removeAt(fromIndex))
         }
-        onDraftChange(draft.copy(elements = updated))
+        if (editingTop) {
+            onDraftChange(draft.copy(elementsTop = updated))
+        } else {
+            onDraftChange(draft.copy(elements = updated))
+        }
     }
 
-    val selectedElement = draft.elements.firstOrNull { it.draftId == draft.effectiveSelectedElementId }
-    val editingElement = draft.elements.firstOrNull { it.draftId == editingElementId }
+    val selectedElement = currentElements.firstOrNull { it.draftId == draft.effectiveSelectedElementId }
+    val editingElement = currentElements.firstOrNull { it.draftId == editingElementId }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -662,6 +758,65 @@ private fun FrameElementsTab(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        if (draft.layout.position == FramePosition.BOTH) {
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    val bottomSelected = !editingTop
+                    Surface(
+                        onClick = { editingTop = false },
+                        color = if (bottomSelected) AccentOrange.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.05f),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .border(
+                                width = 1.dp,
+                                color = if (bottomSelected) AccentOrange else Color.Transparent,
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                    ) {
+                        Text(
+                            text = stringResource(R.string.frame_editor_position_bottom),
+                            color = if (bottomSelected) AccentOrange else Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(vertical = 12.dp, horizontal = 16.dp)
+                        )
+                    }
+
+                    Surface(
+                        onClick = {
+                            if (draft.elementsTop == null) {
+                                onDraftChange(draft.copy(elementsTop = draft.elements.map { duplicateElement(it) }))
+                            }
+                            editingTop = true
+                        },
+                        color = if (editingTop) AccentOrange.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.05f),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .border(
+                                width = 1.dp,
+                                color = if (editingTop) AccentOrange else Color.Transparent,
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                    ) {
+                        Text(
+                            text = stringResource(R.string.frame_editor_position_top),
+                            color = if (editingTop) AccentOrange else Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(vertical = 12.dp, horizontal = 16.dp)
+                        )
+                    }
+                }
+            }
+        }
+
         item {
             SectionCard(title = stringResource(R.string.frame_editor_section_elements)) {
                 Box {
@@ -682,12 +837,22 @@ private fun FrameElementsTab(
                                 text = { Text(frameElementTypeLabel(type)) },
                                 onClick = {
                                     val newElement = createDraftElement(type)
-                                    onDraftChange(
-                                        draft.copy(
-                                            elements = draft.elements + newElement,
-                                            selectedElementId = newElement.draftId
+                                    val updated = currentElements + newElement
+                                    if (editingTop) {
+                                        onDraftChange(
+                                            draft.copy(
+                                                elementsTop = updated,
+                                                selectedElementId = newElement.draftId
+                                            )
                                         )
-                                    )
+                                    } else {
+                                        onDraftChange(
+                                            draft.copy(
+                                                elements = updated,
+                                                selectedElementId = newElement.draftId
+                                            )
+                                        )
+                                    }
                                     editingElementId = newElement.draftId
                                     onShowAddMenuChange(false)
                                 }
@@ -698,7 +863,7 @@ private fun FrameElementsTab(
             }
         }
 
-        items(draft.elements, key = { it.draftId }) { element ->
+        items(currentElements, key = { it.draftId }) { element ->
             ReorderableItem(reorderableState, key = element.draftId) { isDragging ->
                 ElementListItem(
                     element = element,
@@ -714,25 +879,44 @@ private fun FrameElementsTab(
                     },
                     onDuplicate = {
                         val duplicated = duplicateElement(element)
-                        onDraftChange(
-                            draft.copy(
-                                elements = draft.elements + duplicated,
-                                selectedElementId = duplicated.draftId
+                        val updated = currentElements + duplicated
+                        if (editingTop) {
+                            onDraftChange(
+                                draft.copy(
+                                    elementsTop = updated,
+                                    selectedElementId = duplicated.draftId
+                                )
                             )
-                        )
+                        } else {
+                            onDraftChange(
+                                draft.copy(
+                                    elements = updated,
+                                    selectedElementId = duplicated.draftId
+                                )
+                            )
+                        }
                         editingElementId = duplicated.draftId
                     },
                     onDelete = {
-                        val updated = draft.elements.filterNot { it.draftId == element.draftId }
+                        val updated = currentElements.filterNot { it.draftId == element.draftId }
                         if (editingElementId == element.draftId) {
                             editingElementId = null
                         }
-                        onDraftChange(
-                            draft.copy(
-                                elements = updated,
-                                selectedElementId = updated.firstOrNull()?.draftId
+                        if (editingTop) {
+                            onDraftChange(
+                                draft.copy(
+                                    elementsTop = updated,
+                                    selectedElementId = updated.firstOrNull()?.draftId
+                                )
                             )
-                        )
+                        } else {
+                            onDraftChange(
+                                draft.copy(
+                                    elements = updated,
+                                    selectedElementId = updated.firstOrNull()?.draftId
+                                )
+                            )
+                        }
                     },
                     dragModifier = Modifier.draggableHandle()
                 )
@@ -741,8 +925,9 @@ private fun FrameElementsTab(
 
     }
 
-    LaunchedEffect(editingElementId, draft.elements) {
-        if (editingElementId != null && draft.elements.none { it.draftId == editingElementId }) {
+    LaunchedEffect(editingElementId, draft.elements, draft.elementsTop) {
+        val allElements = draft.elements + (draft.elementsTop ?: emptyList())
+        if (editingElementId != null && allElements.none { it.draftId == editingElementId }) {
             editingElementId = null
         }
     }
@@ -1218,25 +1403,266 @@ private fun ColorField(
     value: Int,
     onValueChange: (Int) -> Unit
 ) {
-    var text by remember(value) { mutableStateOf(colorToHex(value)) }
-    OutlinedTextField(
-        value = text,
-        onValueChange = {
-            text = it
-            parseColorOrNull(it)?.let(onValueChange)
-        },
-        label = { Text(label) },
-        singleLine = true,
-        trailingIcon = {
+    var showPicker by remember { mutableStateOf(false) }
+
+    Surface(
+        onClick = { showPicker = true },
+        color = Color.White.copy(alpha = 0.05f),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = label,
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSize = 12.sp
+                )
+                Text(
+                    text = colorToHex(value),
+                    color = Color.White.copy(alpha = 0.88f),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
             Box(
                 modifier = Modifier
-                    .size(18.dp)
+                    .size(36.dp)
                     .clip(RoundedCornerShape(4.dp))
+                    .checkerboardBackground()
                     .background(Color(value))
+                    .border(1.dp, Color.White.copy(alpha = 0.24f), RoundedCornerShape(4.dp))
             )
+        }
+    }
+
+    if (showPicker) {
+        ColorPickerDialog(
+            title = label,
+            initialColor = value,
+            onDismiss = { showPicker = false },
+            onConfirm = { color ->
+                showPicker = false
+                onValueChange(color)
+            }
+        )
+    }
+}
+
+@Composable
+private fun ColorPickerDialog(
+    title: String,
+    initialColor: Int,
+    onDismiss: () -> Unit,
+    onConfirm: (Int) -> Unit
+) {
+    val hsv = remember(initialColor) {
+        FloatArray(3).also { AndroidColor.colorToHSV(initialColor, it) }
+    }
+    var hue by remember(initialColor) { mutableStateOf(hsv[0]) }
+    var saturation by remember(initialColor) { mutableStateOf(hsv[1]) }
+    var value by remember(initialColor) { mutableStateOf(hsv[2]) }
+    var alpha by remember(initialColor) { mutableStateOf((initialColor ushr 24) / 255f) }
+    val selectedColor = hsvToColor(hue, saturation, value, alpha)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .checkerboardBackground()
+                            .background(Color(selectedColor))
+                            .border(1.dp, Color.White.copy(alpha = 0.24f), RoundedCornerShape(8.dp))
+                    )
+                    Text(
+                        text = colorToHex(selectedColor),
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+
+                SaturationValuePicker(
+                    hue = hue,
+                    saturation = saturation,
+                    value = value,
+                    onColorPositionChange = { newSaturation, newValue ->
+                        saturation = newSaturation
+                        value = newValue
+                    }
+                )
+
+                HuePicker(
+                    hue = hue,
+                    onHueChange = { hue = it }
+                )
+
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = stringResource(R.string.frame_editor_color_opacity),
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 12.sp
+                        )
+                        Text(
+                            text = "${(alpha * 100).roundToInt()}%",
+                            color = Color.White.copy(alpha = 0.86f),
+                            fontSize = 12.sp
+                        )
+                    }
+                    CustomSliderThinThumb(
+                        value = alpha,
+                        onValueChange = { alpha = it.coerceIn(0f, 1f) },
+                    )
+                }
+            }
         },
-        modifier = Modifier.fillMaxWidth()
+        confirmButton = {
+            TextButton(onClick = { onConfirm(selectedColor) }) {
+                Text(stringResource(R.string.confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        },
+        containerColor = Color(0xFF1A1A1A),
+        textContentColor = Color.White,
+        titleContentColor = Color.White
     )
+}
+
+@Composable
+private fun SaturationValuePicker(
+    hue: Float,
+    saturation: Float,
+    value: Float,
+    onColorPositionChange: (Float, Float) -> Unit
+) {
+    fun updatePosition(offset: Offset, width: Float, height: Float) {
+        if (width <= 0f || height <= 0f) return
+        onColorPositionChange(
+            (offset.x / width).coerceIn(0f, 1f),
+            (1f - offset.y / height).coerceIn(0f, 1f)
+        )
+    }
+
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(150.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .pointerInput(hue) {
+                detectDragGestures(
+                    onDragStart = { offset -> updatePosition(offset, size.width.toFloat(), size.height.toFloat()) },
+                    onDrag = { change, _ -> updatePosition(change.position, size.width.toFloat(), size.height.toFloat()) }
+                )
+            }
+    ) {
+        drawRect(
+            brush = Brush.horizontalGradient(
+                colors = listOf(Color.White, Color.hsv(hue, 1f, 1f))
+            )
+        )
+        drawRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(Color.Transparent, Color.Black)
+            )
+        )
+        val marker = Offset(saturation * size.width, (1f - value) * size.height)
+        drawCircle(Color.Black.copy(alpha = 0.45f), radius = 11.dp.toPx(), center = marker)
+        drawCircle(Color.White, radius = 9.dp.toPx(), center = marker)
+        drawCircle(Color.hsv(hue, saturation, value), radius = 7.dp.toPx(), center = marker)
+    }
+}
+
+@Composable
+private fun HuePicker(
+    hue: Float,
+    onHueChange: (Float) -> Unit
+) {
+    fun updateHue(offset: Offset, width: Float) {
+        if (width <= 0f) return
+        onHueChange(((offset.x / width).coerceIn(0f, 1f) * 360f).coerceIn(0f, 360f))
+    }
+
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(20.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = { offset -> updateHue(offset, size.width.toFloat()) },
+                    onDrag = { change, _ -> updateHue(change.position, size.width.toFloat()) }
+                )
+            }
+    ) {
+        drawRect(
+            brush = Brush.horizontalGradient(
+                colors = listOf(
+                    Color.Red,
+                    Color.Yellow,
+                    Color.Green,
+                    Color.Cyan,
+                    Color.Blue,
+                    Color.Magenta,
+                    Color.Red
+                )
+            )
+        )
+        val x = (hue / 360f).coerceIn(0f, 1f) * (size.width - 20.dp.toPx()) + 10.dp.toPx()
+        drawCircle(Color.Black.copy(alpha = 0.45f), radius = 10.dp.toPx(), center = Offset(x, size.height / 2f))
+        drawCircle(Color.White, radius = 8.dp.toPx(), center = Offset(x, size.height / 2f))
+        drawCircle(Color.hsv(hue, 1f, 1f), radius = 6.dp.toPx(), center = Offset(x, size.height / 2f))
+    }
+}
+
+private fun Modifier.checkerboardBackground(): Modifier {
+    return drawBehind {
+        drawRect(Color.White.copy(alpha = 0.22f))
+        val tileSize = 6.dp.toPx()
+        var y = 0f
+        var row = 0
+        while (y < size.height) {
+            var x = 0f
+            var column = 0
+            while (x < size.width) {
+                if ((row + column) % 2 == 0) {
+                    drawRect(
+                        color = Color.Black.copy(alpha = 0.12f),
+                        topLeft = Offset(x, y),
+                        size = Size(
+                            width = tileSize.coerceAtMost(size.width - x),
+                            height = tileSize.coerceAtMost(size.height - y)
+                        )
+                    )
+                }
+                x += tileSize
+                column++
+            }
+            y += tileSize
+            row++
+        }
+    }
 }
 
 @Composable
@@ -1335,10 +1761,17 @@ private fun duplicateElement(element: FrameElementDraft): FrameElementDraft {
 }
 
 private fun updateElement(draft: FrameEditorDraft, updated: FrameElementDraft): FrameEditorDraft {
-    return draft.copy(
-        elements = draft.elements.map { if (it.draftId == updated.draftId) updated else it },
-        selectedElementId = updated.draftId
-    )
+    return if (draft.elementsTop?.any { it.draftId == updated.draftId } == true) {
+        draft.copy(
+            elementsTop = draft.elementsTop.map { if (it.draftId == updated.draftId) updated else it },
+            selectedElementId = updated.draftId
+        )
+    } else {
+        draft.copy(
+            elements = draft.elements.map { if (it.draftId == updated.draftId) updated else it },
+            selectedElementId = updated.draftId
+        )
+    }
 }
 
 private fun updateTextElementById(
@@ -1346,16 +1779,29 @@ private fun updateTextElementById(
     elementId: String,
     updater: (FrameElementDraft.Text) -> FrameElementDraft.Text
 ): FrameEditorDraft {
-    return draft.copy(
-        elements = draft.elements.map { element ->
-            if (element is FrameElementDraft.Text && element.draftId == elementId) {
-                updater(element)
-            } else {
-                element
-            }
-        },
-        selectedElementId = elementId
-    )
+    return if (draft.elementsTop?.any { it.draftId == elementId } == true) {
+        draft.copy(
+            elementsTop = draft.elementsTop.map { element ->
+                if (element is FrameElementDraft.Text && element.draftId == elementId) {
+                    updater(element)
+                } else {
+                    element
+                }
+            },
+            selectedElementId = elementId
+        )
+    } else {
+        draft.copy(
+            elements = draft.elements.map { element ->
+                if (element is FrameElementDraft.Text && element.draftId == elementId) {
+                    updater(element)
+                } else {
+                    element
+                }
+            },
+            selectedElementId = elementId
+        )
+    }
 }
 
 private fun updateLogoElementById(
@@ -1363,16 +1809,29 @@ private fun updateLogoElementById(
     elementId: String,
     updater: (FrameElementDraft.Logo) -> FrameElementDraft.Logo
 ): FrameEditorDraft {
-    return draft.copy(
-        elements = draft.elements.map { element ->
-            if (element is FrameElementDraft.Logo && element.draftId == elementId) {
-                updater(element)
-            } else {
-                element
-            }
-        },
-        selectedElementId = elementId
-    )
+    return if (draft.elementsTop?.any { it.draftId == elementId } == true) {
+        draft.copy(
+            elementsTop = draft.elementsTop.map { element ->
+                if (element is FrameElementDraft.Logo && element.draftId == elementId) {
+                    updater(element)
+                } else {
+                    element
+                }
+            },
+            selectedElementId = elementId
+        )
+    } else {
+        draft.copy(
+            elements = draft.elements.map { element ->
+                if (element is FrameElementDraft.Logo && element.draftId == elementId) {
+                    updater(element)
+                } else {
+                    element
+                }
+            },
+            selectedElementId = elementId
+        )
+    }
 }
 
 private fun FrameEditorDraft.applyLegacyCustomProperties(properties: Map<String, String>): FrameEditorDraft {
@@ -1422,8 +1881,15 @@ private fun colorToHex(color: Int): String {
     }
 }
 
-private fun parseColorOrNull(value: String): Int? {
-    return runCatching { AndroidColor.parseColor(value) }.getOrNull()
+private fun hsvToColor(hue: Float, saturation: Float, value: Float, alpha: Float): Int {
+    return AndroidColor.HSVToColor(
+        (alpha.coerceIn(0f, 1f) * 255).roundToInt(),
+        floatArrayOf(
+            hue.coerceIn(0f, 360f),
+            saturation.coerceIn(0f, 1f),
+            value.coerceIn(0f, 1f)
+        )
+    )
 }
 
 @Composable
@@ -1460,6 +1926,7 @@ private fun textTypeLabel(type: TextType): String = when (type) {
     TextType.RESOLUTION -> stringResource(R.string.frame_editor_text_type_resolution)
     TextType.CUSTOM -> stringResource(R.string.frame_editor_text_type_custom)
     TextType.APP_NAME -> stringResource(R.string.frame_editor_text_type_app_name)
+    TextType.FILTER_NAME -> stringResource(R.string.frame_editor_text_type_filter_name)
 }
 
 @Composable
@@ -1506,6 +1973,7 @@ private fun fontFamilyLabel(fontFamily: String?): String {
 private fun logoSourceOptions(): List<Pair<String?, String>> = listOf(
     null to stringResource(R.string.default_text),
     "none" to stringResource(R.string.none),
+    "photon" to "Photon Camera",
     "apple" to "Apple",
     "samsung" to "Samsung",
     "xiaomi" to "Xiaomi",
@@ -1519,11 +1987,13 @@ private fun logoSourceOptions(): List<Pair<String?, String>> = listOf(
     "fujifilm" to "Fujifilm",
     "leica" to "Leica",
     "hasselblad" to "Hasselblad",
+    "hasselblad_l" to "Hasselblad L",
     "dji" to "DJI",
     "panasonic" to "Panasonic",
     "olympus" to "Olympus",
     "pentax" to "Pentax",
-    "ricoh" to "Ricoh"
+    "ricoh" to "Ricoh",
+    "xpan" to "XPAN",
 )
 
 @Composable

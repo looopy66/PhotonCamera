@@ -19,41 +19,62 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hinnka.mycamera.camera.*
 import com.hinnka.mycamera.data.ContentRepository
+import com.hinnka.mycamera.data.AiFocusTargetMode
+import com.hinnka.mycamera.data.CameraFeaturePreferencesUpdate
+import com.hinnka.mycamera.data.PreferenceUpdateValue
+import com.hinnka.mycamera.data.UserPreferences
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameEditorDraft
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.frame.FramePreviewFactory
 import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.gallery.MediaMetadata
+import com.hinnka.mycamera.gallery.PhotoSavePath
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
+import com.hinnka.mycamera.lut.BakedLutExporter
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutConverter
 import com.hinnka.mycamera.lut.LutInfo
+import com.hinnka.mycamera.lut.getBaselineColorCorrectionConfig
 import com.hinnka.mycamera.lut.creator.LutGenerator
 import com.hinnka.mycamera.lut.creator.OpenAIApiClient
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.model.LutSelectorMode
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.phantom.PhantomWidgetProvider
 import com.hinnka.mycamera.raw.ColorSpace
+import com.hinnka.mycamera.raw.DcpProfileParser
 import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.color.TransferCurve
+import com.hinnka.mycamera.model.EffectParams
+import com.hinnka.mycamera.raw.RawProcessingPreferences
 import com.hinnka.mycamera.raw.RawProfile
+import com.hinnka.mycamera.raw.RawCfaCorrection
+import com.hinnka.mycamera.raw.RawRenderingEngine
+import com.hinnka.mycamera.raw.RawToneMappingParameters
+import com.hinnka.mycamera.raw.SpectralFilmSelection
+import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.ui.camera.CameraGLSurfaceView
+import com.hinnka.mycamera.ui.camera.ZoomDisplayMode
 import com.hinnka.mycamera.utils.*
 import com.hinnka.mycamera.video.CaptureMode
+import com.hinnka.mycamera.video.QuickShotResolutionPreset
 import com.hinnka.mycamera.video.VideoAudioInputManager
 import com.hinnka.mycamera.video.VideoAudioInputOption
 import com.hinnka.mycamera.video.VideoAspectRatio
 import com.hinnka.mycamera.video.VideoBitratePreset
 import com.hinnka.mycamera.video.VideoFpsPreset
 import com.hinnka.mycamera.video.VideoLogProfile
+import com.hinnka.mycamera.video.VideoRecordingPath
 import com.hinnka.mycamera.video.VideoResolutionPreset
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.*
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
 
 data class MultipleExposureFrame(
@@ -77,15 +98,131 @@ data class MultipleExposureSessionState(
         get() = capturedCount >= 2 && !isProcessing
 }
 
+private fun resolvePreviewBaselineTarget(useRaw: Boolean): BaselineColorCorrectionTarget? {
+    return if (useRaw) null else BaselineColorCorrectionTarget.JPG
+}
+
+private fun UserPreferences.getBaselineLutId(target: BaselineColorCorrectionTarget): String? {
+    return getBaselineColorCorrectionConfig(target).lutId
+}
+
+private data class RawSpectralFilmSettings(
+    val stock: String?,
+    val print: String?,
+    val tuning: SpectralFilmTuning
+)
+
+private fun resolveEffectiveRawAutoExposure(
+    userPrefs: UserPreferences?,
+    isRawCapture: Boolean,
+    exposureBias: Float
+): Boolean {
+    val rawAutoExposure = userPrefs?.rawAutoExposure ?: true
+    if (!isRawCapture || abs(exposureBias) <= 0.0001f) return rawAutoExposure
+    return false
+}
+
+private data class PresetMatchSnapshot(
+    val lutId: String?,
+    val colorRecipe: ColorRecipeParams,
+    val effects: com.hinnka.mycamera.model.EffectParams,
+    val aspectRatio: String,
+    val useRaw: Boolean,
+    val useMFNR: Boolean,
+    val useHdrComposition: Boolean,
+    val useMFSR: Boolean,
+    val frameId: String?,
+    val rawDcpId: String?,
+    val rawRenderingEngine: RawRenderingEngine,
+    val rawSpectralFilmStock: String?,
+    val rawSpectralFilmPrint: String?,
+    val rawDROMode: String,
+    val jpgBaselineLutId: String?,
+    val rawBaselineLutId: String?,
+    val phantomBaselineLutId: String?
+) {
+    fun matches(preset: com.hinnka.mycamera.model.CameraPreset): Boolean {
+        val colorRecipeMatches = colorRecipe.isSameAs(preset.colorRecipe)
+//        PLog.d("PresetMatchSnapshot", "colorRecipe=$colorRecipe ${preset.colorRecipe} colorRecipe match: $colorRecipeMatches")
+        return lutId == preset.lutId &&
+            colorRecipeMatches &&
+            effects == preset.effects &&
+            aspectRatio == preset.aspectRatio &&
+            useRaw == preset.useRaw &&
+            useMFNR == preset.useMFNR &&
+            useHdrComposition == preset.useHdrComposition &&
+            useMFSR == preset.useMFSR &&
+            frameId == preset.frameId &&
+            rawDcpId == preset.rawDcpId &&
+            rawRenderingEngine == RawRenderingEngine.fromPersistedName(preset.rawRenderingEngine) &&
+            rawSpectralFilmStock == preset.rawSpectralFilmStock &&
+            rawSpectralFilmPrint == preset.rawSpectralFilmPrint &&
+            rawDROMode == preset.rawDROMode &&
+            jpgBaselineLutId == preset.jpgBaselineLutId &&
+            rawBaselineLutId == preset.rawBaselineLutId &&
+            phantomBaselineLutId == preset.phantomBaselineLutId
+    }
+}
+
+private data class ActivePresetMatchState(
+    val prefs: UserPreferences,
+    val presets: List<com.hinnka.mycamera.model.CameraPreset>,
+    val aspectRatio: String,
+    val lutId: String,
+    val recipe: ColorRecipeParams,
+    val effects: com.hinnka.mycamera.model.EffectParams
+)
+
+private data class SettingValue<T>(val value: T)
+
+private data class CameraFeatureUpdate(
+    val lutId: SettingValue<String?>? = null,
+    val colorRecipe: SettingValue<ColorRecipeParams>? = null,
+    val effects: SettingValue<com.hinnka.mycamera.model.EffectParams>? = null,
+    val aspectRatio: SettingValue<AspectRatio>? = null,
+    val useRaw: SettingValue<Boolean>? = null,
+    val useMFNR: SettingValue<Boolean>? = null,
+    val useHdrComposition: SettingValue<Boolean>? = null,
+    val useMFSR: SettingValue<Boolean>? = null,
+    val frameId: SettingValue<String?>? = null,
+    val rawDcpId: SettingValue<String?>? = null,
+    val rawRenderingEngine: SettingValue<RawRenderingEngine>? = null,
+    val rawSpectralFilmStock: SettingValue<String?>? = null,
+    val rawSpectralFilmPrint: SettingValue<String?>? = null,
+    val droMode: SettingValue<String>? = null,
+    val jpgBaselineLutId: SettingValue<String?>? = null,
+    val rawBaselineLutId: SettingValue<String?>? = null,
+    val phantomBaselineLutId: SettingValue<String?>? = null,
+    val activePresetId: SettingValue<String?>? = null,
+    val useMultipleExposure: SettingValue<Boolean>? = null
+)
+
 /**
  * 相机 ViewModel
  * 使用 Camera2Controller 支持隐藏摄像头
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class CameraViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         private const val TAG = "CameraViewModel"
+        private const val HDR_BRACKET_FRAME_COUNT = 3
+        private const val HDR_BRACKET_ZERO_INDEX = 0
+        private const val HDR_BRACKET_LOW_INDEX = 2
+        private const val QUICK_SHOT_BURST_MAX_PENDING_SAVES = 2
     }
+
+    private data class HdrBracketFrame(
+        val image: SafeImage,
+        val captureResult: CaptureResult?,
+        val originalIndex: Int,
+        val timestamp: Long
+    )
+
+    private data class HdrBracketFrameOrder(
+        val images: List<SafeImage>,
+        val captureResults: List<CaptureResult?>
+    )
 
     private val cameraController = Camera2Controller(application)
 
@@ -116,6 +253,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _imageSavedEvent = MutableSharedFlow<Unit>()
     val imageSavedEvent: SharedFlow<Unit> = _imageSavedEvent.asSharedFlow()
 
+    private val _isInitialized = MutableStateFlow(false)
+    val isInitialized = _isInitialized.asStateFlow()
+
+    private val _canStartShutterAnimation = MutableStateFlow(false)
+    val canStartShutterAnimation = _canStartShutterAnimation.asStateFlow()
+
     // LUT 相关状态
     var currentLutConfig: LutConfig? by mutableStateOf(null)
         private set
@@ -135,20 +278,459 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         initialValue = ColorRecipeParams.DEFAULT
     )
 
+    private fun recipeFlowFor(lutId: String): StateFlow<ColorRecipeParams> {
+        return contentRepository.lutManager.getColorRecipeParams(lutId).stateIn(
+            viewModelScope,
+            started = SharingStarted.Lazily,
+            initialValue = ColorRecipeParams.DEFAULT,
+        )
+    }
+
+    val currentEffectParams: StateFlow<com.hinnka.mycamera.model.EffectParams> = userPreferencesRepository.userPreferences
+        .map { it.activeEffectParams }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, com.hinnka.mycamera.model.EffectParams.DEFAULT)
+
+    val customPresets: StateFlow<List<com.hinnka.mycamera.model.CameraPreset>> = userPreferencesRepository.userPreferences
+        .map { it.customPresets }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    // 合并内置预设与用户自定义预设
+    val allPresets: StateFlow<List<com.hinnka.mycamera.model.CameraPreset>> = userPreferencesRepository.userPreferences
+        .map { prefs ->
+            val deletedIds = prefs.deletedBuiltInIds.split(",").filter { it.isNotEmpty() }.toSet()
+            val builtInsById = com.hinnka.mycamera.model.CameraPreset.BUILT_IN_PRESETS.associateBy { it.id }
+            val orderedPresets = prefs.customPresets
+                .filter { it.id !in deletedIds }
+                .map { saved ->
+                    builtInsById[saved.id]?.let { builtin ->
+                        builtin.copy(
+                            name = saved.name,
+                            lutId = saved.lutId,
+                            colorRecipe = saved.colorRecipe,
+                            effects = saved.effects,
+                            aspectRatio = saved.aspectRatio,
+                            useRaw = saved.useRaw,
+                            useMFNR = saved.useMFNR,
+                            useHdrComposition = saved.useHdrComposition,
+                            useMFSR = saved.useMFSR,
+                            frameId = saved.frameId,
+                            rawDcpId = saved.rawDcpId,
+                            rawRenderingEngine = saved.rawRenderingEngine,
+                            rawSpectralFilmStock = saved.rawSpectralFilmStock,
+                            rawSpectralFilmPrint = saved.rawSpectralFilmPrint,
+                            rawDROMode = saved.rawDROMode,
+                            jpgBaselineLutId = saved.jpgBaselineLutId,
+                            rawBaselineLutId = saved.rawBaselineLutId,
+                            phantomBaselineLutId = saved.phantomBaselineLutId
+                        )
+                    } ?: saved
+                }
+            val orderedIds = orderedPresets.map { it.id }.toSet()
+            val missingBuiltIns = com.hinnka.mycamera.model.CameraPreset.BUILT_IN_PRESETS
+                .filter { it.id !in deletedIds && it.id !in orderedIds }
+            val visibleBuiltInIds = com.hinnka.mycamera.model.CameraPreset.BUILT_IN_PRESETS
+                .filter { it.id !in deletedIds }
+                .map { it.id }
+                .toSet()
+            val hasCompleteSavedBuiltInOrder = visibleBuiltInIds.isNotEmpty() &&
+                visibleBuiltInIds.all { builtInId -> orderedPresets.any { it.id == builtInId } }
+
+            if (hasCompleteSavedBuiltInOrder) {
+                orderedPresets + missingBuiltIns
+            } else {
+                val overridesById = orderedPresets.associateBy { it.id }
+                val builtInsWithOverrides = com.hinnka.mycamera.model.CameraPreset.BUILT_IN_PRESETS
+                    .filter { it.id !in deletedIds }
+                    .map { builtin -> overridesById[builtin.id] ?: builtin }
+                val customs = orderedPresets.filter { it.id !in visibleBuiltInIds }
+                builtInsWithOverrides + customs
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, com.hinnka.mycamera.model.CameraPreset.BUILT_IN_PRESETS)
+
+    val activePresetId: StateFlow<String?> = userPreferencesRepository.userPreferences
+        .map { it.activePresetId }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    var draftPreset: com.hinnka.mycamera.model.CameraPreset? = null
+
+    @Volatile
+    private var isApplyingPreset = false
+
+    fun prepareCurrentSettingsPresetDraft(name: String): com.hinnka.mycamera.model.CameraPreset {
+        return com.hinnka.mycamera.model.CameraPreset(
+            id = UUID.randomUUID().toString(),
+            name = name,
+            lutId = currentLutId.value,
+            colorRecipe = currentRecipeParams.value,
+            effects = currentEffectParams.value,
+            aspectRatio = state.value.aspectRatio.name,
+            useRaw = useRaw.value,
+            useMFNR = useMFNR.value,
+            useHdrComposition = useHdrComposition.value,
+            useMFSR = useMFSR.value,
+            frameId = currentFrameId,
+            rawDcpId = rawDcpId.value,
+            rawRenderingEngine = rawRenderingEngine.value.name,
+            rawSpectralFilmStock = rawSpectralFilmStock.value,
+            rawSpectralFilmPrint = rawSpectralFilmPrint.value,
+            rawDROMode = droMode.value,
+            jpgBaselineLutId = jpgBaselineLutId.value,
+            rawBaselineLutId = rawBaselineLutId.value,
+            phantomBaselineLutId = phantomBaselineLutId.value,
+            isBuiltIn = false
+        ).also {
+            draftPreset = it
+        }
+    }
+
+    fun getMergedRecipeParams(recipe: ColorRecipeParams = currentRecipeParams.value): ColorRecipeParams {
+        return currentEffectParams.value.applyTo(recipe)
+    }
+
+    fun setEffectParams(effects: com.hinnka.mycamera.model.EffectParams) {
+        viewModelScope.launch {
+            applyCameraFeatureUpdate(
+                CameraFeatureUpdate(effects = SettingValue(effects))
+            )
+        }
+    }
+
+    fun applyPreset(preset: com.hinnka.mycamera.model.CameraPreset?) {
+        viewModelScope.launch {
+            isApplyingPreset = true
+            try {
+                PLog.d(
+                    TAG,
+                    "Applying preset id=${preset?.id}, aspectRatio=${preset?.aspectRatio}, frameId=${preset?.frameId}"
+                )
+                applyCameraFeatureUpdate(
+                    preset.toCameraFeatureUpdate().copy(activePresetId = SettingValue(preset?.id)),
+                    clearActivePresetOnMismatch = false
+                )
+            } finally {
+                isApplyingPreset = false
+            }
+        }
+    }
+
+    private fun com.hinnka.mycamera.model.CameraPreset?.toCameraFeatureUpdate(): CameraFeatureUpdate {
+        val ratio = try {
+            AspectRatio.valueOf(this?.aspectRatio ?: AspectRatio.RATIO_4_3.name)
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to apply preset aspectRatio: ${this?.aspectRatio}", e)
+            AspectRatio.RATIO_4_3
+        }
+        return CameraFeatureUpdate(
+            lutId = SettingValue(this?.lutId),
+            colorRecipe = SettingValue(this?.colorRecipe ?: ColorRecipeParams.DEFAULT),
+            effects = SettingValue(this?.effects ?: EffectParams.DEFAULT),
+            aspectRatio = SettingValue(ratio),
+            useRaw = SettingValue(this?.useRaw ?: false),
+            useMFNR = SettingValue(this?.useMFNR ?: false),
+            useHdrComposition = SettingValue(this?.useHdrComposition ?: false),
+            useMFSR = SettingValue(this?.useMFSR ?: false),
+            frameId = SettingValue(this?.frameId),
+            rawDcpId = SettingValue(this?.rawDcpId),
+            rawRenderingEngine = SettingValue(RawRenderingEngine.fromPersistedName(this?.rawRenderingEngine)),
+            rawSpectralFilmStock = SettingValue(this?.rawSpectralFilmStock),
+            rawSpectralFilmPrint = SettingValue(this?.rawSpectralFilmPrint),
+            droMode = SettingValue(this?.rawDROMode ?: RawProcessingPreferences.DROMode.OFF.name),
+            jpgBaselineLutId = SettingValue(this?.jpgBaselineLutId),
+            rawBaselineLutId = SettingValue(this?.rawBaselineLutId),
+            phantomBaselineLutId = SettingValue(this?.phantomBaselineLutId)
+        )
+    }
+
+    private suspend fun applyCameraFeatureUpdate(
+        update: CameraFeatureUpdate,
+        clearActivePresetOnMismatch: Boolean = true
+    ) {
+        val prefs = userPreferencesRepository.userPreferences.first()
+        var desiredUseRaw = prefs.useRaw
+        var desiredUseMFNR = prefs.useMFNR
+        var desiredUseHdrComposition = prefs.useHdrComposition
+        var desiredUseMFSR = prefs.useMFSR
+        var desiredUseMultipleExposure = prefs.useMultipleExposure
+
+        update.useRaw?.let { desiredUseRaw = it.value }
+        update.useMFNR?.let { desiredUseMFNR = it.value }
+        update.useHdrComposition?.let { desiredUseHdrComposition = it.value }
+        update.useMFSR?.let { desiredUseMFSR = it.value }
+        update.useMultipleExposure?.let { desiredUseMultipleExposure = it.value }
+
+        if (update.useRaw?.value == true) {
+            desiredUseMultipleExposure = false
+            desiredUseMFSR = false
+        }
+        if (update.useMFNR?.value == true) {
+            desiredUseMultipleExposure = false
+            desiredUseMFSR = false
+        }
+        if (update.useMFSR?.value == true) {
+            if (desiredUseRaw) {
+                desiredUseMFSR = false
+            } else {
+                desiredUseMultipleExposure = false
+                desiredUseMFNR = false
+            }
+        }
+        if (update.useMultipleExposure?.value == true) {
+            desiredUseRaw = false
+            desiredUseMFNR = false
+            desiredUseMFSR = false
+        }
+
+        val currentState = state.value
+        val targetAspectRatio = update.aspectRatio?.value
+        val needsCameraReopen =
+            targetAspectRatio != null && targetAspectRatio != currentState.aspectRatio ||
+                desiredUseRaw != prefs.useRaw ||
+                desiredUseMFNR != prefs.useMFNR ||
+                desiredUseMFSR != currentState.useMFSR ||
+                desiredUseHdrComposition != currentState.useHdrComposition
+
+        update.colorRecipe?.let {
+            val recipeLutId = if (update.lutId != null) {
+                update.lutId.value ?: "none"
+            } else {
+                currentLutId.value
+            }
+            contentRepository.lutManager.saveColorRecipeParams(recipeLutId, it.value)
+        }
+
+        update.lutId?.let {
+            setLut(it.value, persist = false)
+        }
+
+        update.aspectRatio?.let {
+            cameraController.setAspectRatio(it.value)
+        }
+
+        if (desiredUseMultipleExposure != prefs.useMultipleExposure) {
+            if (!desiredUseMultipleExposure) {
+                cancelMultipleExposureSession()
+            }
+            multipleExposureState = multipleExposureState.copy(enabled = desiredUseMultipleExposure)
+        }
+        if (update.useMultipleExposure != null || desiredUseMultipleExposure != prefs.useMultipleExposure) {
+            cameraController.setUseMultipleExposure(desiredUseMultipleExposure)
+        }
+
+        if (update.useRaw != null || desiredUseRaw != prefs.useRaw) {
+            cameraController.setUseRaw(desiredUseRaw)
+        }
+        if (update.useMFNR != null || desiredUseMFNR != prefs.useMFNR) {
+            cameraController.setUseMFNR(desiredUseMFNR)
+        }
+        if (update.useHdrComposition != null || desiredUseHdrComposition != prefs.useHdrComposition) {
+            cameraController.setUseHdrComposition(desiredUseHdrComposition)
+        }
+        if (update.useMFSR != null || desiredUseMFSR != prefs.useMFSR ||
+            desiredUseHdrComposition != prefs.useHdrComposition
+        ) {
+            cameraController.setUseMFSR(desiredUseMFSR)
+        }
+
+        update.frameId?.let {
+            currentFrameId = it.value
+        }
+
+        update.rawDcpId?.let {
+            prewarmRawDcp(it.value)
+        }
+
+        userPreferencesRepository.saveCameraFeaturePreferences(
+            CameraFeaturePreferencesUpdate(
+                lutId = update.lutId?.let { PreferenceUpdateValue(it.value) },
+                effects = update.effects?.let { PreferenceUpdateValue(it.value) },
+                aspectRatio = update.aspectRatio?.let { PreferenceUpdateValue(it.value.name) },
+                useRaw = update.useRaw?.let { PreferenceUpdateValue(desiredUseRaw) },
+                useMFNR = if (update.useMFNR != null || desiredUseMFNR != prefs.useMFNR) {
+                    PreferenceUpdateValue(desiredUseMFNR)
+                } else {
+                    null
+                },
+                useHdrComposition = if (update.useHdrComposition != null ||
+                    desiredUseHdrComposition != prefs.useHdrComposition
+                ) {
+                    PreferenceUpdateValue(desiredUseHdrComposition)
+                } else {
+                    null
+                },
+                useMFSR = if (update.useMFSR != null || desiredUseMFSR != prefs.useMFSR) {
+                    PreferenceUpdateValue(desiredUseMFSR)
+                } else {
+                    null
+                },
+                useMultipleExposure = if (update.useMultipleExposure != null ||
+                    desiredUseMultipleExposure != prefs.useMultipleExposure
+                ) {
+                    PreferenceUpdateValue(desiredUseMultipleExposure)
+                } else {
+                    null
+                },
+                frameId = update.frameId?.let { PreferenceUpdateValue(it.value) },
+                rawDcpId = update.rawDcpId?.let { PreferenceUpdateValue(it.value) },
+                rawRenderingEngine = update.rawRenderingEngine?.let { PreferenceUpdateValue(it.value) },
+                rawSpectralFilmStock = update.rawSpectralFilmStock?.let { PreferenceUpdateValue(it.value) },
+                rawSpectralFilmPrint = update.rawSpectralFilmPrint?.let { PreferenceUpdateValue(it.value) },
+                droMode = update.droMode?.let {
+                    PreferenceUpdateValue(RawProcessingPreferences.DROMode.fromPersistedName(it.value).name)
+                },
+                jpgBaselineLutId = update.jpgBaselineLutId?.let { PreferenceUpdateValue(it.value) },
+                rawBaselineLutId = update.rawBaselineLutId?.let { PreferenceUpdateValue(it.value) },
+                phantomBaselineLutId = update.phantomBaselineLutId?.let { PreferenceUpdateValue(it.value) },
+                activePresetId = update.activePresetId?.let { PreferenceUpdateValue(it.value) }
+            )
+        )
+
+        if (needsCameraReopen) {
+            reopenCamera()
+        }
+        if (clearActivePresetOnMismatch) {
+            clearActivePresetIfCurrentSettingsMismatch()
+        }
+    }
+
+    fun savePreset(preset: com.hinnka.mycamera.model.CameraPreset) {
+        viewModelScope.launch {
+            val currentList = customPresets.value.toMutableList()
+            val index = currentList.indexOfFirst { it.id == preset.id }
+            if (index >= 0) {
+                currentList[index] = preset
+            } else {
+                currentList.add(preset)
+            }
+            userPreferencesRepository.saveCustomPresets(currentList)
+            applyPreset(preset)
+        }
+    }
+
+    fun deletePreset(presetId: String) {
+        viewModelScope.launch {
+            val currentList = customPresets.value.toMutableList()
+            currentList.removeAll { it.id == presetId }
+            userPreferencesRepository.saveCustomPresets(currentList)
+
+            // 如果删除的是内置预设，将其加入 deletedBuiltInIds
+            val isBuiltIn = com.hinnka.mycamera.model.CameraPreset.BUILT_IN_PRESETS.any { it.id == presetId }
+            if (isBuiltIn) {
+                val currentDeleted = userPreferencesRepository.userPreferences.first().deletedBuiltInIds
+                val deletedList = currentDeleted.split(",").filter { it.isNotEmpty() }.toMutableList()
+                if (presetId !in deletedList) {
+                    deletedList.add(presetId)
+                    userPreferencesRepository.saveDeletedBuiltInIds(deletedList.joinToString(","))
+                }
+            }
+
+            if (activePresetId.value == presetId) {
+                userPreferencesRepository.saveActivePresetId(null)
+            }
+        }
+    }
+
+    fun resetToDefaultPresets() {
+        viewModelScope.launch {
+            userPreferencesRepository.saveDeletedBuiltInIds("")
+            val currentList = customPresets.value.toMutableList()
+            currentList.removeAll { it.isBuiltIn || it.id.startsWith("builtin_") }
+            userPreferencesRepository.saveCustomPresets(currentList)
+        }
+    }
+
+    fun savePresetOrder(presets: List<com.hinnka.mycamera.model.CameraPreset>) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveCustomPresets(presets)
+        }
+    }
+
+    fun refreshActivePresetMatch() {
+        viewModelScope.launch {
+            clearActivePresetIfCurrentSettingsMismatch()
+        }
+    }
+
+    private suspend fun clearActivePresetIfCurrentSettingsMismatch() {
+        if (isApplyingPreset) return
+        val presetId = activePresetId.value ?: return
+        val preset = allPresets.value.firstOrNull { it.id == presetId }
+        if (preset == null) {
+            userPreferencesRepository.saveActivePresetId(null)
+            return
+        }
+        val snapshot = currentPresetMatchSnapshot()
+        if (!snapshot.matches(preset)) {
+            PLog.d(TAG, "Active preset [$presetId] no longer matches current settings; showing default preset")
+            userPreferencesRepository.saveActivePresetId(null)
+        }
+    }
+
+    private suspend fun clearActivePresetIfCurrentSettingsMismatch(matchState: ActivePresetMatchState) {
+        if (isApplyingPreset) return
+        val presetId = matchState.prefs.activePresetId ?: return
+        val preset = matchState.presets.firstOrNull { it.id == presetId }
+        if (preset == null) {
+            userPreferencesRepository.saveActivePresetId(null)
+            return
+        }
+        val snapshot = matchState.toPresetMatchSnapshot()
+        if (!snapshot.matches(preset)) {
+            PLog.d(TAG, "Active preset [$presetId] no longer matches current settings; showing default preset")
+            userPreferencesRepository.saveActivePresetId(null)
+        }
+    }
+
+    private fun currentPresetMatchSnapshot(): PresetMatchSnapshot {
+        return PresetMatchSnapshot(
+            lutId = currentLutId.value.takeIf { it != "none" },
+            colorRecipe = currentRecipeParams.value,
+            effects = currentEffectParams.value,
+            aspectRatio = state.value.aspectRatio.name,
+            useRaw = useRaw.value,
+            useMFNR = useMFNR.value,
+            useHdrComposition = useHdrComposition.value,
+            useMFSR = useMFSR.value,
+            frameId = currentFrameId,
+            rawDcpId = rawDcpId.value,
+            rawRenderingEngine = rawRenderingEngine.value,
+            rawSpectralFilmStock = rawSpectralFilmStock.value,
+            rawSpectralFilmPrint = rawSpectralFilmPrint.value,
+            rawDROMode = droMode.value,
+            jpgBaselineLutId = jpgBaselineLutId.value,
+            rawBaselineLutId = rawBaselineLutId.value,
+            phantomBaselineLutId = phantomBaselineLutId.value
+        )
+    }
+
+    private fun ActivePresetMatchState.toPresetMatchSnapshot(): PresetMatchSnapshot {
+        return PresetMatchSnapshot(
+            lutId = lutId.takeIf { it != "none" },
+            colorRecipe = recipe,
+            effects = effects,
+            aspectRatio = aspectRatio,
+            useRaw = prefs.useRaw,
+            useMFNR = prefs.useMFNR,
+            useHdrComposition = prefs.useHdrComposition,
+            useMFSR = prefs.useMFSR,
+            frameId = prefs.frameId,
+            rawDcpId = prefs.rawDcpId,
+            rawRenderingEngine = prefs.rawRenderingEngine,
+            rawSpectralFilmStock = prefs.rawSpectralFilmStock,
+            rawSpectralFilmPrint = prefs.rawSpectralFilmPrint,
+            rawDROMode = prefs.droMode,
+            jpgBaselineLutId = prefs.jpgBaselineLutId,
+            rawBaselineLutId = prefs.rawBaselineLutId,
+            phantomBaselineLutId = prefs.phantomBaselineLutId
+        )
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     val currentBaselineRecipeParams: StateFlow<ColorRecipeParams> =
         userPreferencesRepository.userPreferences.flatMapLatest { prefs ->
-            val target = if (prefs.useRaw) {
-                BaselineColorCorrectionTarget.RAW
-            } else {
-                BaselineColorCorrectionTarget.JPG
-            }
-            val lutId = when (target) {
-                BaselineColorCorrectionTarget.JPG -> prefs.jpgBaselineLutId
-                BaselineColorCorrectionTarget.RAW -> prefs.rawBaselineLutId
-                BaselineColorCorrectionTarget.PHANTOM -> prefs.phantomBaselineLutId
-            }
-            if (lutId == null) {
+            val target = resolvePreviewBaselineTarget(prefs.useRaw)
+            val lutId = target?.let { prefs.getBaselineLutId(it) }
+            if (target == null || lutId == null) {
                 flowOf(ColorRecipeParams.DEFAULT)
             } else {
                 contentRepository.lutManager.getColorRecipeParams(lutId, target)
@@ -181,23 +763,49 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     var zoomRatioByMain by mutableFloatStateOf(1f)
     var isZooming by mutableStateOf(false)
     val globalMinZoom: Float
-        get() = state.value.availableCameras.filter { it.lensType != LensType.FRONT }.minOfOrNull { it.minZoom * it.intrinsicZoomRatio } ?: 1f
+        get() = state.value.availableCameras.filter { it.lensType != LensType.FRONT }.minOfOrNull { it.minZoom * it.displayIntrinsicZoomRatio } ?: 1f
     val globalMaxZoom: Float
-        get() = state.value.availableCameras.filter { it.lensType != LensType.FRONT }.maxOfOrNull { it.maxZoom * it.intrinsicZoomRatio } ?: 20f
+        get() = state.value.availableCameras.filter { it.lensType != LensType.FRONT }.maxOfOrNull { it.maxZoom * it.displayIntrinsicZoomRatio } ?: 20f
 
     // 付费弹窗状态
     var showPaymentDialog by mutableStateOf(false)
 
     var isExpanded by mutableStateOf(false)
 
+    var isAiFocusBusy by mutableStateOf(false)
+    private var startupPrewarmJob: Job? = null
+
     // 新增设置项 StateFlow
     val showLevelIndicator: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.showLevelIndicator }
+    val focusPeakingEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.focusPeakingEnabled }
+    val aiFocusTargetMode: StateFlow<AiFocusTargetMode> =
+        userPreferencesRepository.userPreferences.map { it.aiFocusTargetMode }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, AiFocusTargetMode.OFF)
+    val aiFocusScoreThreshold: StateFlow<Float> =
+        userPreferencesRepository.userPreferences.map { it.aiFocusScoreThreshold }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, 0.5f)
     val shutterSoundEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.shutterSoundEnabled }
     val vibrationEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.vibrationEnabled }
+    val keepScreenOn: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.keepScreenOn }
     val volumeKeyAction: StateFlow<VolumeKeyAction> =
         userPreferencesRepository.userPreferences.map { it.volumeKeyAction }
             .stateIn(viewModelScope, SharingStarted.Eagerly, initialValue = VolumeKeyAction.NONE)
     val autoSaveAfterCapture: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.autoSaveAfterCapture }
+    val photoSavePath: StateFlow<PhotoSavePath> = userPreferencesRepository.userPreferences
+        .map { it.photoSavePath }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, PhotoSavePath.DCIM_PHOTON)
+    val photoSaveTreeUri: StateFlow<String?> = userPreferencesRepository.userPreferences
+        .map { it.photoSaveTreeUri }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val topSheetAspectRatios: StateFlow<List<AspectRatio>> = userPreferencesRepository.userPreferences
+        .map { it.topSheetAspectRatios }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, AspectRatio.defaultTopSheetRatios)
+    val customAspectRatios: StateFlow<List<AspectRatio>> = userPreferencesRepository.userPreferences
+        .map { it.customAspectRatios }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    val availablePhotoAspectRatios: StateFlow<List<AspectRatio>> = userPreferencesRepository.userPreferences
+        .map { AspectRatio.entries + it.customAspectRatios }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, AspectRatio.entries)
     val nrLevel: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.nrLevel }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 5)
@@ -207,13 +815,51 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val edgeLevel: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.edgeLevel }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 1)
+    val vendorCaptureSettingsByLens: StateFlow<VendorCaptureSettingsByLens> =
+        userPreferencesRepository.userPreferences
+            .map { it.vendorCaptureSettingsByLens }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, VendorCaptureSettingsByLens.Empty)
+    val rawRenderingEngine: StateFlow<RawRenderingEngine> = userPreferencesRepository.userPreferences
+        .map { it.rawRenderingEngine }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, RawRenderingEngine.AdobeCurve)
+    val rawToneMappingParameters: StateFlow<RawToneMappingParameters> = userPreferencesRepository.userPreferences
+        .map { it.rawToneMappingParameters }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, RawToneMappingParameters.DEFAULT)
+    val rawSpectralFilmStock: StateFlow<String?> = userPreferencesRepository.userPreferences
+        .map { it.rawSpectralFilmStock }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val rawSpectralFilmPrint: StateFlow<String?> = userPreferencesRepository.userPreferences
+        .map { it.rawSpectralFilmPrint }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val rawSpectralFilmSelection: StateFlow<SpectralFilmSelection?> = userPreferencesRepository.userPreferences
+        .map { prefs ->
+            prefs.rawSpectralFilmStock?.let { stock ->
+                SpectralFilmSelection(
+                    id = stock,
+                    tuning = prefs.rawSpectralFilmTuningsByStock[stock] ?: SpectralFilmTuning.DEFAULT
+                )
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val photoQuality: Flow<Int> = userPreferencesRepository.userPreferences.map { it.photoQuality }
+    val useHeicExport: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.useHeicExport }
 
     val defaultFocalLength: Flow<Float> = userPreferencesRepository.userPreferences.map { it.defaultFocalLength }
+    val zoomDisplayMode: StateFlow<ZoomDisplayMode> = userPreferencesRepository.userPreferences
+        .map { ZoomDisplayMode.fromPersistedName(it.zoomDisplayMode) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, ZoomDisplayMode.FOCAL_LENGTH)
     val customFocalLengths: Flow<List<Float>> = userPreferencesRepository.userPreferences.map { it.customFocalLengths }
+    val hiddenFocalLengths: Flow<List<Float>> = userPreferencesRepository.userPreferences.map { it.hiddenFocalLengths }
     val customLensIds: Flow<List<String>> = userPreferencesRepository.userPreferences.map { it.customLensIds }
-    val userPreferences: StateFlow<com.hinnka.mycamera.data.UserPreferences> = userPreferencesRepository.userPreferences
-        .stateIn(viewModelScope, SharingStarted.Eagerly, com.hinnka.mycamera.data.UserPreferences())
+    val lensIdBlacklist: Flow<List<String>> = userPreferencesRepository.userPreferences.map { it.lensIdBlacklist }
+    val iszLensConfigs: Flow<List<IszLensConfig>> = userPreferencesRepository.userPreferences.map { it.iszLensConfigs }
+    val preferredMainCameraId: Flow<String?> = userPreferencesRepository.userPreferences.map { it.preferredMainCameraId }
+    val enableLogicalMultiCameraDiscovery: Flow<Boolean> =
+        userPreferencesRepository.userPreferences.map { it.enableLogicalMultiCameraDiscovery }
+    val logicalCameraBindingWhitelist: Flow<List<String>> =
+        userPreferencesRepository.userPreferences.map { it.logicalCameraBindingWhitelist }
+    val userPreferences: StateFlow<UserPreferences> = userPreferencesRepository.userPreferences
+        .stateIn(viewModelScope, SharingStarted.Eagerly, UserPreferences())
     val jpgBaselineLutId: StateFlow<String?> = userPreferencesRepository.userPreferences
         .map { it.jpgBaselineLutId }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -226,15 +872,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val rawDcpId: StateFlow<String?> = userPreferencesRepository.userPreferences
         .map { it.rawDcpId }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-    val rawNlmNoiseFactor: StateFlow<Float> = userPreferencesRepository.userPreferences
-        .map { it.rawNlmNoiseFactor }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
     val rawExposureCompensation: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.rawExposureCompensation }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
     val rawAutoExposure: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.rawAutoExposure }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    val rawHighlightsAdjustment: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.rawHighlightsAdjustment }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
+    val rawShadowsAdjustment: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.rawShadowsAdjustment }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
+    val rawMinShutterSpeedNs: StateFlow<Long> = userPreferencesRepository.userPreferences
+        .map { it.rawMinShutterSpeedNs }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0L)
+    val rawDROEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.rawDROEnabled }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val rawBlackPointCorrection: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.rawBlackPointCorrection }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
@@ -256,16 +911,22 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     ) { cameraId, prefs ->
         prefs.rawCustomBlackLevels[cameraId] ?: 0f
     }.stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
+    val rawCfaCorrectionMode: StateFlow<String> = combine(
+        state.map { it.currentCameraId }.distinctUntilChanged(),
+        userPreferencesRepository.userPreferences
+    ) { cameraId, prefs ->
+        prefs.rawCfaCorrectionModes[cameraId] ?: RawCfaCorrection.MODE_DEFAULT
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, RawCfaCorrection.MODE_DEFAULT)
     val exportDngWithRawExport: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.exportDngWithRawExport }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    var availableDcps: List<com.hinnka.mycamera.raw.DcpInfo> by mutableStateOf(emptyList())
+    var availableDcps: List<DcpInfo> by mutableStateOf(emptyList())
         private set
-    val phantomLutId: StateFlow<String?> = userPreferencesRepository.userPreferences
-        .map { it.phantomLutId }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val useMFNR: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useMFNR }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val useHdrComposition: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.useHdrComposition }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val useMultipleExposure: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useMultipleExposure }
@@ -294,6 +955,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val droMode: StateFlow<String> = userPreferencesRepository.userPreferences
         .map { it.droMode }
         .stateIn(viewModelScope, SharingStarted.Eagerly, "OFF")
+    val tonemapMode: StateFlow<String> = userPreferencesRepository.userPreferences
+        .map { it.tonemapMode }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "FAST")
+    val fixTonemapPreview: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.fixTonemapPreview }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val applyUltraHDR: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.applyUltraHDR }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -327,13 +994,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val hlgHardwareCompatibilityEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.hlgHardwareCompatibilityEnabled }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val useP3ColorSpace: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useP3ColorSpace }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val autoEnableHdr: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.autoEnableHdr }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    val useHdrScreenMode: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.useHdrScreenMode }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     val phantomMode: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.phantomMode }
@@ -342,6 +1013,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val videoCodec: StateFlow<com.hinnka.mycamera.video.VideoCodec> = userPreferencesRepository.userPreferences
         .map { it.videoCodec }
         .stateIn(viewModelScope, SharingStarted.Eagerly, com.hinnka.mycamera.video.VideoCodec.H264)
+    val videoRecordingPath: StateFlow<VideoRecordingPath> = userPreferencesRepository.userPreferences
+        .map { it.videoRecordingPath }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, VideoRecordingPath.DCIM_PHOTON)
+    val videoRecordingTreeUri: StateFlow<String?> = userPreferencesRepository.userPreferences
+        .map { it.videoRecordingTreeUri }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val videoAudioInputOptions: StateFlow<List<VideoAudioInputOption>> = videoAudioInputManager.availableInputs
 
     val phantomButtonHidden: StateFlow<Boolean> = userPreferencesRepository.userPreferences
@@ -396,6 +1073,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     // 保存当前的 SurfaceTexture 以便切换摄像头时重用
     private var currentSurfaceTexture: SurfaceTexture? = null
+    private var cameraOpenInFlight = false
+    private var cameraReopenJob: Job? = null
 
     // 用于处理音量键连续按下的时间戳，防止抖动和过快响应
     private var lastVolumeKeyEventTime = 0L
@@ -408,18 +1087,38 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     var multipleExposureState by mutableStateOf(MultipleExposureSessionState())
         private set
 
+    private val hdrBracketImages = mutableListOf<SafeImage>()
+    private var hdrBracketCaptureInfo: CaptureInfo? = null
+    private var hdrBracketCharacteristics: CameraCharacteristics? = null
+    private var hdrBracketCaptureResult: CaptureResult? = null
+    private val hdrBracketCaptureResults = mutableListOf<CaptureResult?>()
+    private var hdrBracketExpectedFrameCount = HDR_BRACKET_FRAME_COUNT
+    private var hdrBracketZeroEvFrameCount = 1
+
     private val burstImages = mutableListOf<SafeImage>()
     private var burstCaptureInfo: CaptureInfo? = null
     private var burstPhotoId: String? = null
     var burstImageCount by mutableStateOf(0)
         private set
+    private var quickShotBurstActive = false
+    private var quickShotBurstCaptureInFlight = false
+    private val quickShotBurstPendingSaves = AtomicInteger(0)
 
     var showGhostPermissions by mutableStateOf(false)
 
     init {
         cameraController.initialize()
+        viewModelScope.launch {
+            cameraController.state.collect { cameraState ->
+                if (cameraState.isPreviewActive) {
+                    cameraOpenInFlight = false
+                }
+            }
+        }
         cameraController.onImageCaptured = { image, captureInfo, characteristics, captureResult ->
-            if (state.value.burstCapturing) {
+            if (hdrBracketImages.isNotEmpty() || state.value.hdrBracketCapturing) {
+                handleHdrBracketFrameCaptured(image, captureInfo, characteristics, captureResult)
+            } else if (state.value.burstCapturing) {
                 if (burstCaptureInfo == null) {
                     burstCaptureInfo = captureInfo
                 }
@@ -465,6 +1164,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // 相机恢复应该由 CameraScreen 的 ON_RESUME 生命周期事件处理
             // 这样可以避免在相机被其他应用占用时的无限重试循环
             PLog.d(TAG, "onCameraError: code=$code, message=$message, canRetry=$canRetry")
+            cameraOpenInFlight = false
+            resetExposureCompensationForCameraRestart()
             stackingImages.forEach {
                 it.close()
             }
@@ -474,6 +1175,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             burstImages.clear()
             burstImageCount = 0
+            resetHdrBracketCapture(closeImages = true)
+        }
+
+        cameraController.onHdrBracketCaptureFailed = {
+            resetHdrBracketCapture(closeImages = true)
         }
 
         // 监听快门声音、震动和软件处理设置
@@ -483,6 +1189,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             userPreferencesRepository.userPreferences.collect {
                 if (!firstPreferencesLogged) {
                     firstPreferencesLogged = true
+
+                    if (it.rawAutoWhiteBalanceEstimate) {
+                        setRawAutoWhiteBalanceEstimate(false)
+                    }
+
                     StartupTrace.mark(
                         "CameraViewModel.userPreferences first collect",
                         "costMs=${SystemClock.elapsedRealtime() - preferenceCollectStart}"
@@ -491,11 +1202,61 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 isShutterSoundEnabled = it.shutterSoundEnabled
                 isVibrationEnabled = it.vibrationEnabled
                 // 同步降噪等级到相机控制器
-                cameraController.setNRLevel(it.nrLevel)
+                val currentCameraState = cameraController.state.value
+                if (currentCameraState.nrLevel != it.nrLevel) {
+                    cameraController.setNRLevel(it.nrLevel)
+                }
                 // 同步锐化等级到相机控制器
                 cameraController.setEdgeLevel(it.edgeLevel)
+                if (currentCameraState.vendorCaptureSettingsByLens != it.vendorCaptureSettingsByLens) {
+                    cameraController.setVendorCaptureSettingsByLens(it.vendorCaptureSettingsByLens)
+                }
+                if (currentCameraState.quickShotConfig.resolution != it.quickShotResolution) {
+                    cameraController.setQuickShotResolution(it.quickShotResolution)
+                }
                 // 同步 RAW 设置到相机控制器
-                cameraController.setUseRaw(it.useRaw)
+                val multipleExposureEnabled = it.useMultipleExposure
+                val effectiveUseRaw = it.useRaw && !multipleExposureEnabled
+                val effectiveUseMFNR = it.useMFNR && !multipleExposureEnabled
+                val effectiveUseMFSR = it.useMFSR && !multipleExposureEnabled
+                if (currentCameraState.useHdrComposition != it.useHdrComposition) {
+                    cameraController.setUseHdrComposition(it.useHdrComposition)
+                }
+                if (currentCameraState.useMultipleExposure != multipleExposureEnabled) {
+                    cameraController.setUseMultipleExposure(multipleExposureEnabled)
+                }
+                if (currentCameraState.useRaw != effectiveUseRaw) {
+                    cameraController.setUseRaw(effectiveUseRaw)
+                }
+                if (currentCameraState.useMFNR != effectiveUseMFNR) {
+                    cameraController.setUseMFNR(effectiveUseMFNR)
+                }
+                if (currentCameraState.useMFSR != effectiveUseMFSR) {
+                    cameraController.setUseMFSR(effectiveUseMFSR)
+                }
+                if (multipleExposureEnabled && (it.useRaw || it.useMFNR || it.useMFSR)) {
+                    viewModelScope.launch {
+                        userPreferencesRepository.saveCameraFeaturePreferences(
+                            CameraFeaturePreferencesUpdate(
+                                useRaw = PreferenceUpdateValue(false),
+                                useMFNR = PreferenceUpdateValue(false),
+                                useMFSR = PreferenceUpdateValue(false)
+                            )
+                        )
+                    }
+                }
+                if (currentCameraState.rawMinShutterSpeedNs != it.rawMinShutterSpeedNs) {
+                    cameraController.setRawMinShutterSpeedNs(it.rawMinShutterSpeedNs)
+                }
+                if (currentCameraState.tonemapMode != it.tonemapMode) {
+                    cameraController.setTonemapMode(it.tonemapMode)
+                }
+                if (currentCameraState.fixTonemapPreview != it.fixTonemapPreview) {
+                    cameraController.setFixTonemapPreview(it.fixTonemapPreview)
+                }
+                if (cameraController.state.value.meteringMode != it.meteringMode) {
+                    cameraController.setMeteringMode(it.meteringMode)
+                }
                 cameraController.setCaptureMode(it.captureMode)
                 cameraController.setVideoResolution(it.videoResolution)
                 cameraController.setVideoFps(it.videoFps)
@@ -503,9 +1264,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoLogProfile(it.videoLogProfile)
                 cameraController.setVideoBitrate(it.videoBitrate)
                 cameraController.setVideoAudioInputId(it.videoAudioInputId)
+                cameraController.setVideoRecordingPath(it.videoRecordingPath, it.videoRecordingTreeUri)
                 cameraController.setVideoStabilizationMode(it.videoStabilizationMode)
                 cameraController.setVideoTorchEnabled(it.videoTorchEnabled)
                 cameraController.setVideoCodec(it.videoCodec)
+                cameraController.setMirrorFrontCameraEnabled(it.mirrorFrontCamera)
                 multipleExposureState = multipleExposureState.copy(
                     enabled = it.useMultipleExposure,
                     targetCount = it.multipleExposureCount
@@ -517,8 +1280,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 // 同步 P010 设置到相机控制器
                 cameraController.setUseP010(it.useP010)
                 // 同步 HLG10 设置到相机控制器
-//                cameraController.setUseHlg10(it.useHlg10)
-                cameraController.setUseHlg10(false)
+                cameraController.setUseHlg10(it.useHlg10)
                 // 同步 P3 色域设置到相机控制器
                 cameraController.setUseP3ColorSpace(it.useP3ColorSpace)
             }
@@ -577,18 +1339,40 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             userPreferencesRepository.userPreferences.collectLatest { prefs ->
-                val target = if (prefs.useRaw) {
-                    BaselineColorCorrectionTarget.RAW
-                } else {
-                    BaselineColorCorrectionTarget.JPG
-                }
-                val baselineLutId = when (target) {
-                    BaselineColorCorrectionTarget.JPG -> prefs.jpgBaselineLutId
-                    BaselineColorCorrectionTarget.RAW -> prefs.rawBaselineLutId
-                    BaselineColorCorrectionTarget.PHANTOM -> prefs.phantomBaselineLutId
-                }
                 currentBaselineLutConfig = withContext(Dispatchers.IO) {
-                    baselineLutId?.let { contentRepository.lutManager.loadLut(it) }
+                    resolvePreviewBaselineLut(prefs)
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            val presetInputs = combine(
+                userPreferencesRepository.userPreferences,
+                allPresets,
+                isInitialized
+            ) { prefs, presets, initialized ->
+                if (initialized) prefs to presets else null
+            }
+
+            combine(
+                presetInputs,
+                state.map { it.aspectRatio.name }.distinctUntilChanged(),
+                currentLutId.flatMapLatest { lutId -> contentRepository.lutManager.getColorRecipeParams(lutId) },
+                currentEffectParams
+            ) { inputs, aspectRatio, recipe, effects ->
+                inputs?.let { (prefs, presets) ->
+                    ActivePresetMatchState(
+                        prefs = prefs,
+                        presets = presets,
+                        aspectRatio = aspectRatio,
+                        lutId = currentLutId.value,
+                        recipe = recipe,
+                        effects = effects
+                    )
+                }
+            }.collect { matchState ->
+                if (matchState != null) {
+                    clearActivePresetIfCurrentSettingsMismatch(matchState)
                 }
             }
         }
@@ -605,15 +1389,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     // 如果保存的值无效，使用默认值
                 }
                 cameraController.setCaptureMode(prefs.captureMode)
+                cameraController.setQuickShotResolution(prefs.quickShotResolution)
                 cameraController.setVideoResolution(prefs.videoResolution)
                 cameraController.setVideoFps(prefs.videoFps)
                 cameraController.setVideoAspectRatio(prefs.videoAspectRatio)
                 cameraController.setVideoLogProfile(prefs.videoLogProfile)
                 cameraController.setVideoBitrate(prefs.videoBitrate)
                 cameraController.setVideoAudioInputId(prefs.videoAudioInputId)
+                cameraController.setVideoRecordingPath(prefs.videoRecordingPath, prefs.videoRecordingTreeUri)
                 cameraController.setVideoStabilizationMode(prefs.videoStabilizationMode)
                 cameraController.setVideoTorchEnabled(prefs.videoTorchEnabled)
                 cameraController.setVideoCodec(prefs.videoCodec)
+                cameraController.setMeteringMode(prefs.meteringMode)
 
                 // 应用保存的 LUT 配置
                 if (prefs.lutId != null) {
@@ -621,7 +1408,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 } else {
                     // 如果没有保存的 LUT，使用配置文件中的默认 LUT（第一个）
                     val defaultLut = availableLutList.firstOrNull { it.isDefault }
-                    defaultLut?.let { setLut(it.id) }
+                    defaultLut?.let { setLut(it.id, persist = false) }
                 }
 
                 // 应用保存的边框配置
@@ -634,10 +1421,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 // 应用保存的网格线设置
                 cameraController.setShowGrid(prefs.showGrid)
 
-                cameraController.setUseMFNR(prefs.useMFNR)
-                cameraController.setUseMFSR(prefs.useMFSR)
+                cameraController.setUseMultipleExposure(prefs.useMultipleExposure)
+                cameraController.setUseMFNR(prefs.useMFNR && !prefs.useMultipleExposure)
+                cameraController.setUseHdrComposition(prefs.useHdrComposition)
+                cameraController.setUseMFSR(prefs.useMFSR && !prefs.useMultipleExposure)
                 cameraController.setMultiFrameCount(prefs.multiFrameCount)
                 cameraController.setUseLivePhoto(prefs.useLivePhoto && prefs.captureMode == CaptureMode.PHOTO)
+                cameraController.setTonemapMode(prefs.tonemapMode)
+                cameraController.setFixTonemapPreview(prefs.fixTonemapPreview)
 
                 // 应用保存的虚拟光圈
                 if (prefs.defaultVirtualAperture > 0f) {
@@ -647,8 +1438,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             } else {
                 // 如果没有任何偏好设置，使用配置文件中的默认 LUT（第一个）
                 val defaultLut = availableLutList.firstOrNull { it.isDefault }
-                defaultLut?.let { setLut(it.id) }
+                defaultLut?.let { setLut(it.id, persist = false) }
             }
+
+            _isInitialized.value = true
+            StartupTrace.mark("CameraViewModel.isInitialized set to true")
         }
 
         // 监听相机状态，用于同步预览渲染参数
@@ -659,7 +1453,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (availableCameras.isNotEmpty() && !hasAppliedDefaultFocalLength) {
                     val prefs = userPreferencesRepository.userPreferences.firstOrNull()
                     val defaultFL = prefs?.defaultFocalLength ?: 0f
-                    if (defaultFL > 0f) {
+                    if (defaultFL != 0f) {
                         applyDefaultFocalLength(defaultFL)
                     }
                     hasAppliedDefaultFocalLength = true
@@ -689,6 +1483,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 glSurfaceView?.setDepthMap(depth)
             }
         }
+
+        cameraController.previewAiFocusProcessor.onBusyStateChanged = { busy ->
+            viewModelScope.launch(Dispatchers.Main) {
+                isAiFocusBusy = busy
+            }
+        }
+
         StartupTrace.mark("CameraViewModel.init end")
     }
 
@@ -702,17 +1503,93 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         return emptyList()
     }
 
-    fun setRawDcpId(dcpId: String?) {
-        viewModelScope.launch { userPreferencesRepository.saveRawDcpId(dcpId) }
+    fun setUseHdrScreenMode(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveUseHdrScreenMode(enabled)
+        }
     }
-    fun setRawNlmNoiseFactor(value: Float) {
-        viewModelScope.launch { userPreferencesRepository.saveRawNlmNoiseFactor(value) }
+
+    fun setRawDcpId(dcpId: String?) {
+        viewModelScope.launch {
+            applyCameraFeatureUpdate(
+                CameraFeatureUpdate(rawDcpId = SettingValue(dcpId))
+            )
+        }
+    }
+    fun setRawBaselineLutId(lutId: String?) {
+        viewModelScope.launch {
+            applyCameraFeatureUpdate(
+                CameraFeatureUpdate(rawBaselineLutId = SettingValue(lutId))
+            )
+        }
+    }
+    fun setRawColorEngine(engine: RawRenderingEngine) {
+        viewModelScope.launch {
+            val prefs = userPreferencesRepository.userPreferences.first()
+            applyCameraFeatureUpdate(
+                CameraFeatureUpdate(
+                    rawRenderingEngine = SettingValue(engine),
+                    rawSpectralFilmStock = if (engine == RawRenderingEngine.Spektrafilm && prefs.rawSpectralFilmStock == null) {
+                        SettingValue("kodak_portra_400")
+                    } else {
+                        null
+                    },
+                    rawSpectralFilmPrint = if (engine == RawRenderingEngine.Spektrafilm && prefs.rawSpectralFilmPrint == null) {
+                        SettingValue("kodak_portra_endura")
+                    } else {
+                        null
+                    }
+                )
+            )
+        }
+    }
+    fun setRawSpectralFilmStock(stock: String?) {
+        viewModelScope.launch {
+            applyCameraFeatureUpdate(
+                CameraFeatureUpdate(rawSpectralFilmStock = SettingValue(stock))
+            )
+        }
+    }
+    fun setRawSpectralFilmPrint(print: String?) {
+        viewModelScope.launch {
+            applyCameraFeatureUpdate(
+                CameraFeatureUpdate(rawSpectralFilmPrint = SettingValue(print))
+            )
+        }
+    }
+    fun setRawSpectralFilmSelection(selection: SpectralFilmSelection?) {
+        viewModelScope.launch {
+            val prefs = userPreferencesRepository.userPreferences.first()
+            val previousStock = prefs.rawSpectralFilmStock
+            applyCameraFeatureUpdate(
+                CameraFeatureUpdate(rawSpectralFilmStock = SettingValue(selection?.id))
+            )
+            if (selection != null && selection.id == previousStock) {
+                userPreferencesRepository.saveRawSpectralFilmTuning(selection.id, selection.tuning)
+            }
+            clearActivePresetIfCurrentSettingsMismatch()
+        }
+    }
+    fun setRawToneMappingParameters(value: RawToneMappingParameters) {
+        viewModelScope.launch { userPreferencesRepository.saveRawToneMappingParameters(value) }
     }
     fun setRawExposureCompensation(value: Float) {
         viewModelScope.launch { userPreferencesRepository.saveRawExposureCompensation(value) }
     }
     fun setRawAutoExposure(enabled: Boolean) {
         viewModelScope.launch { userPreferencesRepository.saveRawAutoExposure(enabled) }
+    }
+    fun setRawHighlightsAdjustment(value: Float) {
+        viewModelScope.launch { userPreferencesRepository.saveRawHighlightsAdjustment(value) }
+    }
+    fun setRawShadowsAdjustment(value: Float) {
+        viewModelScope.launch { userPreferencesRepository.saveRawShadowsAdjustment(value) }
+    }
+    fun setRawMinShutterSpeedNs(value: Long) {
+        viewModelScope.launch { userPreferencesRepository.saveRawMinShutterSpeedNs(value) }
+    }
+    fun setRawDROEnabled(enabled: Boolean) {
+        viewModelScope.launch { userPreferencesRepository.updateRawDROEnabled(enabled) }
     }
     fun setRawBlackPointCorrection(value: Float) {
         viewModelScope.launch { userPreferencesRepository.saveRawBlackPointCorrection(value) }
@@ -733,7 +1610,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             userPreferencesRepository.saveRawCustomBlackLevel(state.value.currentCameraId, value)
         }
     }
-    fun importRawDcp(uri: android.net.Uri, onComplete: (Boolean) -> Unit) {
+    fun setRawCfaCorrectionMode(mode: String) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveRawCfaCorrectionMode(state.value.currentCameraId, mode)
+        }
+    }
+    fun importRawDcp(uri: Uri, onComplete: (Boolean) -> Unit) {
         viewModelScope.launch {
             val success = contentRepository.getCustomImportManager().importDcp(uri) != null
             if (success) {
@@ -781,7 +1663,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun openCamera(surfaceTexture: SurfaceTexture) {
         PLog.d(TAG, "openCamera")
+        cameraReopenJob?.cancel()
+        if (currentSurfaceTexture === surfaceTexture && (state.value.isPreviewActive || cameraOpenInFlight)) {
+            PLog.d(
+                TAG,
+                "openCamera skipped: same SurfaceTexture active=${state.value.isPreviewActive}, inFlight=$cameraOpenInFlight"
+            )
+            return
+        }
         currentSurfaceTexture = surfaceTexture
+        cameraOpenInFlight = true
         cameraController.openCamera(surfaceTexture)
     }
 
@@ -789,24 +1680,54 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 关闭相机
      */
     fun closeCamera() {
+        cameraReopenJob?.cancel()
+        cameraOpenInFlight = false
+        currentSurfaceTexture = null
         cameraController.closeCamera()
     }
 
     fun prewarmDepthEstimator() {
-        cameraController.previewDepthProcessor.prewarm()
+        if (startupPrewarmJob?.isActive == true) return
+
+        startupPrewarmJob = viewModelScope.launch {
+            prewarmRawDcp(rawDcpId.firstOrNull())
+        }
+    }
+
+    private suspend fun prewarmRawDcp(dcpId: String?) = withContext(Dispatchers.IO) {
+        val dcpInfo = dcpId?.let { id ->
+            contentRepository.getAvailableDcps().firstOrNull { it.id == id }
+        } ?: return@withContext
+        DcpProfileParser.prewarm(getApplication<Application>(), dcpInfo)
     }
 
     /**
      * 检查相机状态并在必要时恢复
      */
     fun checkAndRecoverCamera() {
+        if (!state.value.isPreviewActive) {
+            resetExposureCompensationForCameraRestart()
+        }
+
         // 如果有保存的 SurfaceTexture，重新打开相机
         currentSurfaceTexture?.let { texture ->
-            if (!state.value.isPreviewActive) {
+            if (!state.value.isPreviewActive && !cameraOpenInFlight) {
+                cameraOpenInFlight = true
                 cameraController.openCamera(texture)
+            } else {
+                PLog.d(
+                    TAG,
+                    "checkAndRecoverCamera skipped: active=${state.value.isPreviewActive}, inFlight=$cameraOpenInFlight"
+                )
             }
         }
         restorePreviewLutAfterResume()
+    }
+
+    private fun resetExposureCompensationForCameraRestart() {
+        if (state.value.exposureCompensation == 0) return
+        PLog.d(TAG, "Reset exposure compensation for camera restart")
+        cameraController.setExposureCompensation(0)
     }
 
     private fun restorePreviewLutAfterResume() {
@@ -880,11 +1801,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             target = baselineTarget,
             userPrefs = userPrefs,
         )
+        val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure(
+            userPrefs = userPrefs,
+            isRawCapture = baselineTarget == BaselineColorCorrectionTarget.RAW,
+            exposureBias = state.value.exposureBias,
+        )
+
+        val spectralFilmSettings = resolveRawSpectralFilmSettings(userPrefs)
 
         return MediaMetadata(
             lutId = lutIdToSave,
             frameId = frameIdToSave,
-            colorRecipeParams = currentRecipeParams.value,
+            colorRecipeParams = getMergedRecipeParams(),
             baselineTarget = baselineMetadata?.first,
             baselineLutId = baselineMetadata?.second,
             baselineColorRecipeParams = baselineMetadata?.third,
@@ -892,15 +1820,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             noiseReduction = noiseReductionValue,
             chromaNoiseReduction = chromaNoiseReductionValue,
             rawDcpId = userPrefs?.rawDcpId,
-            rawDenoiseValue = userPrefs?.rawNlmNoiseFactor ?: 0f,
             rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
-            rawAutoExposure = userPrefs?.rawAutoExposure ?: true,
+            rawAutoExposure = effectiveRawAutoExposure,
+            rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
+            rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
             rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
             rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
             rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
             rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
+            rawCfaCorrectionMode = userPrefs?.rawCfaCorrectionModes?.get(currentCameraId) ?: RawCfaCorrection.MODE_DEFAULT,
             cameraId = currentCameraId,
+            rawRenderingEngine = userPrefs?.rawRenderingEngine ?: RawRenderingEngine.AdobeCurve,
+            rawToneMappingParameters = userPrefs?.rawToneMappingParameters ?: RawToneMappingParameters.DEFAULT,
+            spectralFilmStock = spectralFilmSettings.stock,
+            spectralFilmPrint = spectralFilmSettings.print,
+            spectralFilmCDensityGain = spectralFilmSettings.tuning.cDensityGain,
+            spectralFilmMDensityGain = spectralFilmSettings.tuning.mDensityGain,
+            spectralFilmYDensityGain = spectralFilmSettings.tuning.yDensityGain,
             width = width,
             height = height,
             ratio = aspectRatio,
@@ -929,9 +1866,26 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
+    private fun resolveRawSpectralFilmSettings(
+        userPrefs: UserPreferences?
+    ): RawSpectralFilmSettings {
+        val stock = userPrefs?.rawSpectralFilmStock ?: "kodak_portra_400"
+        return RawSpectralFilmSettings(
+            stock = stock,
+            print = userPrefs?.rawSpectralFilmPrint ?: "kodak_portra_endura",
+            tuning = (userPrefs?.rawSpectralFilmTuningsByStock?.get(stock) ?: SpectralFilmTuning.DEFAULT).normalized()
+        )
+    }
+
+    private fun resolvePreviewBaselineLut(userPrefs: UserPreferences): LutConfig? {
+        val baselineLutId = resolvePreviewBaselineTarget(userPrefs.useRaw)
+            ?.let { userPrefs.getBaselineLutId(it) }
+        return baselineLutId?.let { contentRepository.lutManager.loadLut(it) }
+    }
+
     private suspend fun resolveBaselineMetadata(
         target: BaselineColorCorrectionTarget,
-        userPrefs: com.hinnka.mycamera.data.UserPreferences? = null
+        userPrefs: UserPreferences? = null
     ): Triple<BaselineColorCorrectionTarget, String, ColorRecipeParams>? {
         val preferences = userPrefs ?: userPreferencesRepository.userPreferences.firstOrNull() ?: return null
         val baselineLutId = when (target) {
@@ -954,37 +1908,25 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun defaultHdrEffectEnabled(
         hasEmbeddedGainmap: Boolean,
-        userPrefs: com.hinnka.mycamera.data.UserPreferences?
+        userPrefs: UserPreferences?
     ): Boolean {
         if (hasEmbeddedGainmap) return true
         return userPrefs?.autoEnableHdr ?: false
     }
 
     fun setUseMultipleExposure(enabled: Boolean) {
-        if (!enabled) {
-            cancelMultipleExposureSession()
-        }
-
-        if (enabled) {
-            cameraController.setUseMFNR(false)
-            cameraController.setUseMFSR(false)
-            cameraController.setUseLivePhoto(false)
-            cameraController.setUseRaw(false)
-        }
-
         viewModelScope.launch {
-            userPreferencesRepository.saveUseMultipleExposure(enabled)
+            applyCameraFeatureUpdate(
+                CameraFeatureUpdate(useMultipleExposure = SettingValue(enabled))
+            )
             if (enabled) {
-                userPreferencesRepository.setUseMFNR(false)
-                userPreferencesRepository.saveUseMFSR(false)
                 userPreferencesRepository.saveUseLivePhoto(false)
-                userPreferencesRepository.saveUseRaw(false)
+                cameraController.setUseLivePhoto(false)
             }
         }
     }
 
     fun cancelMultipleExposureSession() {
-        multipleExposureState.previewBitmap?.recycle()
         multipleExposureState.sessionId?.let { sessionId ->
             GalleryManager.clearMultipleExposureSession(getApplication(), sessionId)
         }
@@ -1084,7 +2026,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             } else {
                 null
             }
-            val oldPreview = multipleExposureState.previewBitmap
             multipleExposureState = multipleExposureState.copy(
                 capturedCount = frameFiles.size,
                 frames = frameFiles.mapIndexed { index, file -> MultipleExposureFrame(index + 1, file) },
@@ -1092,9 +2033,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 sessionId = if (frameFiles.isEmpty()) null else sessionId,
                 isProcessing = false
             )
-            if (oldPreview != null && oldPreview !== preview && !oldPreview.isRecycled) {
-                oldPreview.recycle()
-            }
             if (frameFiles.isEmpty()) {
                 multipleExposureMetadata = null
             }
@@ -1139,9 +2077,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 frames = multipleExposureState.frames + MultipleExposureFrame(frameIndex, frameFile),
                 capturedCount = frameIndex
             )
-            refreshMultipleExposurePreview(sessionId)
             if (frameIndex >= multipleExposureState.targetCount) {
                 finishMultipleExposureSession()
+            } else {
+                refreshMultipleExposurePreview(sessionId)
             }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to handle multiple exposure frame", e)
@@ -1149,6 +2088,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun capture() {
+        if (state.value.captureMode == CaptureMode.QUICK_SHOT) {
+            captureQuickShot()
+            return
+        }
+
         if (state.value.captureMode == CaptureMode.VIDEO) {
             if (state.value.videoRecordingState.isRecording) {
                 cameraController.stopVideoRecording()
@@ -1236,10 +2180,69 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         } ?: PLog.w(TAG, "captureVideoFrame skipped: glSurfaceView unavailable")
     }
 
+    private fun captureQuickShot() {
+        val currentState = state.value
+        if (currentState.captureMode != CaptureMode.QUICK_SHOT || currentState.isCapturing) {
+            return
+        }
+
+        updateCaptureLocation()
+
+        if (isShutterSoundEnabled) {
+            shutterSoundPlayer.play()
+        }
+        if (isVibrationEnabled) {
+            vibrationHelper.vibrate()
+        }
+
+        val glView = glSurfaceView
+        if (glView == null) {
+            PLog.w(TAG, "captureQuickShot skipped: glSurfaceView unavailable")
+            return
+        }
+
+        cameraController.setQuickShotCaptureState(isCapturing = true)
+        glView.capturePreviewFrame(quickShotCaptureLongEdge()) { bitmap ->
+            cameraController.setQuickShotCaptureState(isCapturing = false)
+            viewModelScope.launch {
+                try {
+                    savePreviewBitmapCapture(
+                        bitmap = bitmap,
+                        metadataCaptureMode = "quick_shot",
+                        ratio = state.value.aspectRatio,
+                        storeRenderedLookMetadata = false
+                    )
+                } finally {
+                    if (!bitmap.isRecycled) {
+                        bitmap.recycle()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun updateCaptureLocation() {
+        if (userPreferences.value.saveLocation) {
+            val location = locationManager.getCurrentLocation()
+            cameraController.setLocation(location?.latitude, location?.longitude)
+        } else {
+            cameraController.setLocation(null, null)
+        }
+    }
+
+    private fun quickShotCaptureLongEdge(): Int {
+        val previewSize = state.value.currentPreviewSize
+        return maxOf(previewSize.width, previewSize.height).coerceAtLeast(1)
+    }
+
     /**
      * 开始连拍
      */
     fun startContinuousCapture() {
+        if (state.value.captureMode == CaptureMode.QUICK_SHOT) {
+            startQuickShotBurst()
+            return
+        }
         if (state.value.useRaw && state.value.isRawSupported) return
         generateThumbnail()
         burstImages.clear()
@@ -1258,11 +2261,87 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 停止连拍
      */
     fun stopContinuousCapture() {
+        if (state.value.captureMode == CaptureMode.QUICK_SHOT) {
+            stopQuickShotBurst()
+            return
+        }
         if (state.value.useRaw && state.value.isRawSupported) return
         cameraController.stopBurstCapture()
         shutterSoundPlayer.stopBurst()
         viewModelScope.launch {
             _imageSavedEvent.emit(Unit)
+        }
+    }
+
+    private fun startQuickShotBurst() {
+        if (quickShotBurstActive) return
+        updateCaptureLocation()
+        generateThumbnail()
+        burstImages.clear()
+        burstImageCount = 0
+        burstPhotoId = UUID.randomUUID().toString()
+        quickShotBurstPendingSaves.set(0)
+        quickShotBurstCaptureInFlight = false
+        quickShotBurstActive = true
+        cameraController.setQuickShotCaptureState(isCapturing = true, burstCapturing = true)
+        if (isShutterSoundEnabled) {
+            shutterSoundPlayer.playBurst()
+        }
+        requestNextQuickShotBurstFrame()
+    }
+
+    private fun stopQuickShotBurst() {
+        if (!quickShotBurstActive && !state.value.burstCapturing) return
+        quickShotBurstActive = false
+        quickShotBurstCaptureInFlight = false
+        cameraController.setQuickShotCaptureState(isCapturing = false, burstCapturing = false)
+        shutterSoundPlayer.stopBurst()
+        burstImageCount = 0
+        viewModelScope.launch {
+            _imageSavedEvent.emit(Unit)
+        }
+    }
+
+    private fun requestNextQuickShotBurstFrame() {
+        if (!quickShotBurstActive || quickShotBurstCaptureInFlight) return
+        val glView = glSurfaceView ?: run {
+            PLog.w(TAG, "Quick-shot burst stopped: glSurfaceView unavailable")
+            stopQuickShotBurst()
+            return
+        }
+        quickShotBurstCaptureInFlight = true
+        glView.captureNextPreviewFrame(quickShotCaptureLongEdge()) { bitmap ->
+            quickShotBurstCaptureInFlight = false
+            if (!quickShotBurstActive) {
+                if (!bitmap.isRecycled) {
+                    bitmap.recycle()
+                }
+                return@captureNextPreviewFrame
+            }
+
+            val pendingSaveCount = quickShotBurstPendingSaves.incrementAndGet()
+            if (pendingSaveCount > QUICK_SHOT_BURST_MAX_PENDING_SAVES) {
+                quickShotBurstPendingSaves.decrementAndGet()
+                if (!bitmap.isRecycled) {
+                    bitmap.recycle()
+                }
+                PLog.w(TAG, "Quick-shot burst frame dropped: pendingSaves=$pendingSaveCount")
+                requestNextQuickShotBurstFrame()
+                return@captureNextPreviewFrame
+            }
+
+            burstImageCount++
+            viewModelScope.launch {
+                try {
+                    saveQuickShotBurstFrame(bitmap)
+                } finally {
+                    if (!bitmap.isRecycled) {
+                        bitmap.recycle()
+                    }
+                    quickShotBurstPendingSaves.decrementAndGet()
+                }
+            }
+            requestNextQuickShotBurstFrame()
         }
     }
 
@@ -1272,7 +2351,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun switchCamera() {
         cameraController.switchCamera()
-        reopenCamera(preserveVideoRecording = true)
+        reopenCamera(
+            preserveVideoRecording = true
+        )
         zoomRatioByMain = 1f
     }
 
@@ -1280,15 +2361,43 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 切换到指定的镜头类型
      */
     fun switchToLens(cameraId: String) {
+        val targetCamera = state.value.availableCameras.find { it.cameraId == cameraId }
+        syncVendorCaptureSettingsToController()
         cameraController.switchToCameraId(cameraId)
-        reopenCamera(preserveVideoRecording = true)
+        targetCamera?.let { camera ->
+            setZoomRatioForCamera(camera.defaultVisibleZoomRatio(), camera.cameraId)
+        }
+        reopenCamera(
+            preserveVideoRecording = true
+        )
+    }
+
+    fun switchToLensAndSetZoomRatio(cameraId: String, ratio: Float) {
+        syncVendorCaptureSettingsToController()
+        cameraController.switchToCameraId(cameraId)
+        setZoomRatioForCamera(ratio, cameraId)
+        reopenCamera(
+            preserveVideoRecording = true
+        )
     }
 
     /**
      * 重新打开相机（切换摄像头后使用）
      */
-    private fun reopenCamera(preserveVideoRecording: Boolean = false) {
-        currentSurfaceTexture?.let { texture ->
+    private fun reopenCamera(
+        preserveVideoRecording: Boolean = false
+    ) {
+        if (currentSurfaceTexture == null) {
+            cameraOpenInFlight = false
+            return
+        }
+        cameraReopenJob?.cancel()
+        cameraOpenInFlight = true
+        cameraReopenJob = viewModelScope.launch {
+            val texture = currentSurfaceTexture ?: run {
+                cameraOpenInFlight = false
+                return@launch
+            }
             cameraController.openCamera(
                 surfaceTexture = texture,
                 preserveVideoRecording = preserveVideoRecording
@@ -1346,34 +2455,93 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.setFocusDistance(distance)
     }
 
+    fun setHyperfocalFocusEnabled(enabled: Boolean) {
+        cameraController.setHyperfocalFocusEnabled(enabled)
+    }
+
     /**
      * 设置变焦倍数
      */
     fun setZoomRatio(ratio: Float) {
         zoomRatioByMain = ratio
         val cameraInfo = state.value.getCurrentCameraInfo()
-        val intrinsicZoomRatio = cameraInfo?.intrinsicZoomRatio ?: 1.0f
-        cameraController.setZoomRatio(ratio / intrinsicZoomRatio)
+        setCameraControllerZoomRatio(ratio, cameraInfo)
+    }
+
+    private fun setZoomRatioForCamera(ratio: Float, cameraId: String) {
+        zoomRatioByMain = ratio
+        val cameraInfo = state.value.availableCameras.find { it.cameraId == cameraId }
+        setCameraControllerZoomRatio(ratio, cameraInfo)
+    }
+
+    private fun setCameraControllerZoomRatio(ratio: Float, cameraInfo: CameraInfo?) {
+        val displayIntrinsicZoomRatio = cameraInfo?.displayIntrinsicZoomRatio?.takeIf { it > 0f } ?: 1.0f
+        cameraController.setZoomRatio(ratio / displayIntrinsicZoomRatio)
+    }
+
+    private fun CameraInfo.defaultVisibleZoomRatio(): Float {
+        return displayIntrinsicZoomRatio.takeIf { it > 0f }
+            ?: intrinsicZoomRatio.takeIf { it > 0f }
+            ?: 1f
+    }
+
+    private fun syncVendorCaptureSettingsToController() {
+        val settings = vendorCaptureSettingsByLens.value
+        if (cameraController.state.value.vendorCaptureSettingsByLens != settings) {
+            cameraController.setVendorCaptureSettingsByLens(settings)
+        }
     }
 
     /**
      * 设置画面比例
      */
     fun setAspectRatio(ratio: AspectRatio) {
-        cameraController.setAspectRatio(ratio)
-        reopenCamera()
-        // 保存到用户偏好设置
         viewModelScope.launch {
-            userPreferencesRepository.saveAspectRatio(ratio.name)
+            applyCameraFeatureUpdate(
+                CameraFeatureUpdate(aspectRatio = SettingValue(ratio))
+            )
+        }
+    }
+
+    fun setTopSheetAspectRatios(ratios: List<AspectRatio>) {
+        val sanitizedRatios = AspectRatio.sanitizeTopSheetRatios(ratios)
+        if (state.value.aspectRatio !in sanitizedRatios) {
+            setAspectRatio(sanitizedRatios.first())
+        }
+        viewModelScope.launch {
+            userPreferencesRepository.saveTopSheetAspectRatios(sanitizedRatios)
+        }
+    }
+
+    fun addCustomAspectRatio(widthRatio: Int, heightRatio: Int) {
+        val ratio = AspectRatio.custom(widthRatio, heightRatio)
+        val customRatios = AspectRatio.sanitizeCustomRatios(customAspectRatios.value + ratio)
+        viewModelScope.launch {
+            userPreferencesRepository.saveCustomAspectRatios(customRatios)
+            val selectedRatios = AspectRatio.sanitizeTopSheetRatios(topSheetAspectRatios.value + ratio)
+            userPreferencesRepository.saveTopSheetAspectRatios(selectedRatios)
+        }
+    }
+
+    fun deleteCustomAspectRatio(ratio: AspectRatio) {
+        val customRatios = customAspectRatios.value.filterNot { it.name == ratio.name }
+        val selectedRatios = topSheetAspectRatios.value.filterNot { it.name == ratio.name }
+        if (state.value.aspectRatio.name == ratio.name) {
+            setAspectRatio(AspectRatio.RATIO_4_3)
+        }
+        viewModelScope.launch {
+            userPreferencesRepository.saveCustomAspectRatios(customRatios)
+            userPreferencesRepository.saveTopSheetAspectRatios(selectedRatios)
         }
     }
 
     fun setCaptureMode(mode: CaptureMode) {
         if (state.value.videoRecordingState.isRecording && mode != state.value.captureMode) return
-        val shouldDisableVideoLog = mode == CaptureMode.PHOTO &&
+        val shouldDisableVideoLog = mode != CaptureMode.VIDEO &&
             state.value.videoConfig.logProfile != VideoLogProfile.OFF
         cameraController.setCaptureMode(mode)
-        reopenCamera()
+        currentSurfaceTexture = null
+        cameraController.closeCamera()
         viewModelScope.launch {
             userPreferencesRepository.saveCaptureMode(mode)
             if (shouldDisableVideoLog) {
@@ -1387,6 +2555,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         reopenCamera()
         viewModelScope.launch {
             userPreferencesRepository.saveVideoResolution(resolution)
+        }
+    }
+
+    fun setQuickShotResolution(resolution: QuickShotResolutionPreset) {
+        cameraController.setQuickShotResolution(resolution)
+        reopenCamera()
+        viewModelScope.launch {
+            userPreferencesRepository.saveQuickShotResolution(resolution)
         }
     }
 
@@ -1419,6 +2595,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             userPreferencesRepository.saveVideoLogProfile(logProfile)
         }
+        validateAndCancelNonMatchingVideoLut(logProfile, currentLutConfig)
+    }
+
+    /**
+     * 验证并取消选择非匹配的视频 LUT
+     * 如果当前处于视频模式且启用了 Log，若当前选中的 LUT 与 Log 格式不匹配，则取消该 LUT
+     */
+    private fun validateAndCancelNonMatchingVideoLut(logProfile: VideoLogProfile, lutConfig: LutConfig?) {
+        if (logProfile != VideoLogProfile.OFF && lutConfig != null) {
+            if (lutConfig.curve != logProfile.logCurve || lutConfig.colorSpace != logProfile.colorSpace) {
+                PLog.d(TAG, "Cancelling selected LUT [${lutConfig.title}] because it does not match video log profile [${logProfile.name}] colorSpace/curve")
+                setLut(null)
+            }
+        }
     }
 
     fun setVideoBitrate(bitrate: VideoBitratePreset) {
@@ -1433,6 +2623,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.setVideoAudioInputId(audioInputId)
         viewModelScope.launch {
             userPreferencesRepository.saveVideoAudioInputId(audioInputId)
+        }
+    }
+
+    fun setVideoRecordingPath(recordingPath: VideoRecordingPath, treeUri: String? = null) {
+        cameraController.setVideoRecordingPath(recordingPath, treeUri)
+        viewModelScope.launch {
+            userPreferencesRepository.saveVideoRecordingPath(recordingPath, treeUri)
+        }
+    }
+
+    fun setPhotoSavePath(savePath: PhotoSavePath, treeUri: String? = null) {
+        viewModelScope.launch {
+            userPreferencesRepository.savePhotoSavePath(savePath, treeUri)
         }
     }
 
@@ -1507,8 +2710,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.setAwbTemperature(kelvin)
     }
 
-    fun setMeteringMode(mode: com.hinnka.mycamera.camera.MeteringMode) {
+    fun setMeteringMode(mode: MeteringMode) {
         cameraController.setMeteringMode(mode)
+        viewModelScope.launch {
+            userPreferencesRepository.saveMeteringMode(mode)
+        }
     }
 
     // ==================== 计费相关方法 ====================
@@ -1600,6 +2806,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     val categoryOrder: Flow<List<String>> = userPreferencesRepository.userPreferences.map { it.categoryOrder }
 
+    val lutSelectorMode: StateFlow<LutSelectorMode> = userPreferencesRepository.userPreferences
+        .map { it.lutSelectorMode }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, LutSelectorMode.Style)
+
     /**
      * 保存滤镜排序顺序
      */
@@ -1627,14 +2837,22 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun setLutSelectorMode(mode: LutSelectorMode) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveLutSelectorMode(mode)
+        }
+    }
+
     // ==================== LUT 相关方法 ====================
 
     /**
      * 设置当前 LUT
      */
-    fun setLut(lutId: String?) {
-        currentLutId.value = lutId ?: currentLutId.value
-        if (lutId == null) {
+    fun setLut(lutId: String?, persist: Boolean = true) {
+        val normalizedLutId = lutId ?: "none"
+        currentLutId.value = normalizedLutId
+        currentRecipeParams = recipeFlowFor(normalizedLutId)
+        if (lutId == null || lutId == "none") {
             currentLutConfig = null
             // LUT 已禁用，通知相机控制器
             cameraController.setLogLutActive(false)
@@ -1649,12 +2867,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 val loadedLut = withContext(Dispatchers.IO) {
                     contentRepository.lutManager.loadLut(lutId)
                 }
+                if (state.value.captureMode == CaptureMode.VIDEO) {
+                    val logProfile = state.value.videoConfig.logProfile
+                    if (logProfile != VideoLogProfile.OFF && loadedLut != null) {
+                        if (loadedLut.curve != logProfile.logCurve || loadedLut.colorSpace != logProfile.colorSpace) {
+                            PLog.d(TAG, "Deselecting newly selected LUT [${loadedLut.title}] because it does not match video log profile [${logProfile.name}] colorSpace/curve")
+                            setLut(null)
+                            return@launch
+                        }
+                    }
+                }
                 currentLutConfig = loadedLut
-                currentRecipeParams = contentRepository.lutManager.getColorRecipeParams(lutId).stateIn(
-                    viewModelScope,
-                    started = SharingStarted.Lazily,
-                    initialValue = ColorRecipeParams.DEFAULT,
-                )
                 cameraController.setLogLutActive(loadedLut?.curve?.isLog == true)
                 cameraController.setLutEnabled(loadedLut != null)
             }
@@ -1663,9 +2886,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // 保存到用户偏好设置
-        viewModelScope.launch {
-            userPreferencesRepository.saveLutConfig(lutId)
+        if (persist) {
+            viewModelScope.launch {
+                userPreferencesRepository.saveLutConfig(lutId)
+                clearActivePresetIfCurrentSettingsMismatch()
+            }
         }
     }
 
@@ -1685,7 +2910,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         return userHlg || logLutHlg || videoLogHlg
     }
 
-    private fun shouldTreatPreviewAsHlgInput(currentState: com.hinnka.mycamera.camera.CameraState): Boolean {
+    private fun shouldTreatPreviewAsHlgInput(currentState: CameraState): Boolean {
         return hlgHardwareCompatibilityEnabled.value && currentState.isHLG
     }
 
@@ -1732,6 +2957,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setSaveLocation(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.saveSaveLocation(enabled)
+        }
+    }
+
+    fun refreshLocationOnResume() {
+        if (userPreferences.value.saveLocation) {
+            locationManager.requestCurrentLocation()
         }
     }
 
@@ -1891,7 +3122,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     suspend fun applyLut(bitmap: Bitmap): Bitmap = withContext(Dispatchers.IO) {
         currentLutConfig?.let { lut ->
-            val params = contentRepository.lutManager.loadColorRecipeParams(currentLutId.value)
+            val params = getMergedRecipeParams(contentRepository.lutManager.loadColorRecipeParams(currentLutId.value))
             contentRepository.imageProcessor.applyLut(
                 bitmap = bitmap,
                 isHlgInput = shouldTreatPreviewAsHlgInput(state.value),
@@ -1913,8 +3144,36 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.updateHighlightPoint(x, y)
     }
 
-    fun handleDepthMapUpdate(bitmap: android.graphics.Bitmap) {
+    fun handleDepthMapUpdate(bitmap: Bitmap) {
         cameraController.previewDepthProcessor.processBitmap(bitmap)
+    }
+
+    fun handleAiFocusInputUpdate(bitmap: Bitmap) {
+        if (isAiFocusBusy) return
+        if (!state.value.isAutoFocus || state.value.isFocusing) return
+        cameraController.previewAiFocusProcessor.targetMode = aiFocusTargetMode.value
+        cameraController.previewAiFocusProcessor.scoreThreshold = aiFocusScoreThreshold.value
+        cameraController.previewAiFocusProcessor.onFocusTarget = { target ->
+            viewModelScope.launch(Dispatchers.Main) {
+                val currentState = state.value
+                if (currentState.focusPoint != null &&
+                    currentState.focusPointSource == FocusPointSource.MANUAL
+                ) {
+                    return@launch
+                }
+                if (!state.value.isAutoFocus || state.value.isFocusing) return@launch
+                cameraController.focusOnNormalizedPoint(target.x, target.y)
+            }
+        }
+        cameraController.previewAiFocusProcessor.onTargetSeen = { target ->
+            cameraController.notifyAiSubjectSeen(target.x, target.y)
+        }
+        cameraController.previewAiFocusProcessor.onTargetLost = {
+            viewModelScope.launch(Dispatchers.Main) {
+                cameraController.cancelSubjectFocus("ai_target_lost")
+            }
+        }
+        cameraController.previewAiFocusProcessor.processBitmap(bitmap)
     }
 
     // ==================== 边框相关方法 ====================
@@ -1923,10 +3182,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 设置当前边框
      */
     fun setFrame(frameId: String?) {
-        currentFrameId = frameId
-        // 保存到用户偏好设置
         viewModelScope.launch {
-            userPreferencesRepository.saveFrameConfig(frameId)
+            applyCameraFeatureUpdate(
+                CameraFeatureUpdate(frameId = SettingValue(frameId))
+            )
         }
     }
 
@@ -1985,15 +3244,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 设置是否使用多帧降噪
      */
     fun setUseMFNR(enabled: Boolean) {
-        if (enabled) {
-            setUseMultipleExposure(false)
-            setUseMFSR(false)
-        }
-        cameraController.setUseMFNR(enabled)
         viewModelScope.launch {
-            userPreferencesRepository.setUseMFNR(enabled)
+            applyCameraFeatureUpdate(
+                CameraFeatureUpdate(useMFNR = SettingValue(enabled))
+            )
         }
-        reopenCamera()
     }
 
     /**
@@ -2023,15 +3278,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 设置是否使用超分辨率
      */
     fun setUseMFSR(enabled: Boolean) {
-        if (enabled) {
-            setUseMultipleExposure(false)
-            setUseMFNR(false)
-        }
-        cameraController.setUseMFSR(enabled)
         viewModelScope.launch {
-            userPreferencesRepository.saveUseMFSR(enabled)
+            applyCameraFeatureUpdate(
+                CameraFeatureUpdate(useMFSR = SettingValue(enabled))
+            )
         }
-        reopenCamera()
+    }
+
+    fun setUseHdrComposition(enabled: Boolean) {
+        cameraController.setUseHdrComposition(enabled)
+        if (state.value.useMFNR || state.value.useMFSR) {
+            reopenCamera()
+        }
+        viewModelScope.launch {
+            userPreferencesRepository.saveUseHdrComposition(enabled)
+        }
     }
 
     fun setSuperResolutionScale(scale: Float) {
@@ -2100,14 +3361,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setUseRaw(useRaw: Boolean) {
-        if (useRaw) {
-            setUseMultipleExposure(false)
-        }
-        cameraController.setUseRaw(useRaw)
         viewModelScope.launch {
-            userPreferencesRepository.saveUseRaw(useRaw)
+            applyCameraFeatureUpdate(
+                CameraFeatureUpdate(useRaw = SettingValue(useRaw))
+            )
         }
-        reopenCamera()
     }
 
     fun setExportDngWithRawExport(enabled: Boolean) {
@@ -2128,6 +3386,62 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * 设置手动对焦时是否显示峰值对焦
+     */
+    fun setFocusPeakingEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveFocusPeakingEnabled(enabled)
+        }
+    }
+
+    /**
+     * 复制边框并把副本插入到原边框后面。
+     */
+    fun copyFrame(frame: FrameInfo, copyName: String) {
+        viewModelScope.launch {
+            val newFrameId = withContext(Dispatchers.IO) {
+                contentRepository.getCustomImportManager().copyFrame(frame, copyName)
+            }
+            if (newFrameId != null) {
+                withContext(Dispatchers.IO) {
+                    val currentOrder = userPreferencesRepository.userPreferences.first().frameOrder.toMutableList()
+                    if (currentOrder.isEmpty()) {
+                        val allIds = availableFrameList.map { it.id }.toMutableList()
+                        val index = allIds.indexOf(frame.id)
+                        if (index != -1) {
+                            allIds.add(index + 1, newFrameId)
+                        } else {
+                            allIds.add(newFrameId)
+                        }
+                        userPreferencesRepository.saveFrameOrder(allIds)
+                    } else {
+                        val index = currentOrder.indexOf(frame.id)
+                        if (index != -1) {
+                            currentOrder.add(index + 1, newFrameId)
+                        } else {
+                            currentOrder.add(newFrameId)
+                        }
+                        userPreferencesRepository.saveFrameOrder(currentOrder)
+                    }
+                    contentRepository.refreshCustomContent()
+                }
+            }
+        }
+    }
+
+    fun setAiFocusTargetMode(mode: AiFocusTargetMode) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveAiFocusTargetMode(mode)
+        }
+    }
+
+    fun setAiFocusScoreThreshold(value: Float) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveAiFocusScoreThreshold(value)
+        }
+    }
+
+    /**
      * 设置是否启用快门声音
      */
     fun setShutterSoundEnabled(enabled: Boolean) {
@@ -2142,6 +3456,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setVibrationEnabled(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.saveVibrationEnabled(enabled)
+        }
+    }
+
+    /**
+     * 设置是否保持屏幕常亮
+     */
+    fun setKeepScreenOn(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveKeepScreenOn(enabled)
         }
     }
 
@@ -2214,7 +3537,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         // 2. 计算变焦档位 (逻辑同步自 ZoomControlBar.kt)
         val lensZoomStops = calculateLensZoomStops(availableCameras, currentCamera)
-        val zoomStops = allZoomStops(lensZoomStops, mainCamera, currentCamera)
+        val zoomStops = allZoomStops(
+            lensZoomStops,
+            mainCamera,
+            currentCamera,
+            userPreferences.value.customFocalLengths,
+            userPreferences.value.hiddenFocalLengths
+        )
 
         if (zoomStops.isEmpty()) return
 
@@ -2237,14 +3566,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (nextIndex != currentIndex) {
             val targetZoom = zoomStops[nextIndex]
 
+            if (isCurrentLensCustomZoomRatioStop(targetZoom)) {
+                setZoomRatio(targetZoom)
+                return
+            }
+
             // 5. 检查是否需要切换镜头 (逻辑同步自 ZoomControlBar.kt)
             val optimalLens = findOptimalLens(targetZoom, availableCameras, currentCamera.cameraId)
             if (optimalLens != null && optimalLens.cameraId != currentCamera.cameraId) {
-                switchToLens(optimalLens.cameraId)
+                switchToLensAndSetZoomRatio(optimalLens.cameraId, targetZoom)
+            } else {
+                setZoomRatio(targetZoom)
             }
-
-            // 6. 应用变焦
-            setZoomRatio(targetZoom)
         }
     }
 
@@ -2265,10 +3598,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         // 添加各个镜头的固有变焦比例
         cameras.filter(filter).forEach { camera ->
-            if (camera.intrinsicZoomRatio > 0) {
+            val displayZoomRatio = camera.displayIntrinsicZoomRatio
+            if (displayZoomRatio > 0) {
                 // 避免添加极其接近的变焦倍率（例如 1.0 和 1.0006）
-                if (stops.none { abs(it - camera.intrinsicZoomRatio) < 0.01f }) {
-                    stops.add(camera.intrinsicZoomRatio)
+                if (stops.none { abs(it - displayZoomRatio) < 0.01f }) {
+                    stops.add(displayZoomRatio)
                 }
             }
         }
@@ -2282,29 +3616,75 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         lensZoomStops: List<Float>,
         mainCamera: CameraInfo?,
         currentCamera: CameraInfo?,
-        customFocalLengths: List<Float> = emptyList()
+        customFocalLengths: List<Float> = emptyList(),
+        hiddenFocalLengths: List<Float> = emptyList()
     ): List<Float> {
         val stops = mutableListOf<Float>()
-        stops.addAll(lensZoomStops)
 
         if (currentCamera?.lensType == LensType.FRONT) {
+            stops.addAll(lensZoomStops)
             if (stops.none { abs(it - 2f) <= 0.1f }) {
                 stops.add(2f)
+            }
+            customFocalLengths.forEach { value ->
+                CustomFocalLengthValue.toZoomRatio(value, mainCamera, currentCamera)?.let { zoom ->
+                    if (stops.none { abs(it - zoom) <= 0.01f }) {
+                        stops.add(zoom)
+                    }
+                }
             }
             return stops.sorted()
         }
 
-        mainCamera ?: return stops.sorted()
+        mainCamera ?: return lensZoomStops.sorted()
 
+        // 1. 添加并过滤原生镜头焦段
         if (mainCamera.focalLength35mmEquivalent > 0) {
-            customFocalLengths.forEach { fl ->
-                val zoom = fl / mainCamera.focalLength35mmEquivalent
-                if (stops.none { abs(it - zoom) <= 0.1f }) {
+            val filteredLensStops = lensZoomStops.filter { zoom ->
+                val fl = zoom * mainCamera.focalLength35mmEquivalent
+                hiddenFocalLengths.none { abs(it - fl) < 0.5f }
+            }
+            stops.addAll(filteredLensStops)
+        } else {
+            stops.addAll(lensZoomStops)
+        }
+
+        addDefaultMinimumZoomStop(stops, lensZoomStops, mainCamera, hiddenFocalLengths)
+
+        // 2. 添加自定义焦段/倍率 (不参与隐藏过滤)
+        customFocalLengths.forEach { value ->
+            CustomFocalLengthValue.toZoomRatio(value, mainCamera, currentCamera)?.let { zoom ->
+                if (stops.none { abs(it - zoom) <= 0.01f }) {
                     stops.add(zoom)
                 }
             }
         }
+
         return stops.sorted()
+    }
+
+    private fun addDefaultMinimumZoomStop(
+        stops: MutableList<Float>,
+        lensZoomStops: List<Float>,
+        mainCamera: CameraInfo,
+        hiddenFocalLengths: List<Float> = emptyList()
+    ) {
+        val mainZoom = mainCamera.displayIntrinsicZoomRatio
+        val hasSmallerLens = lensZoomStops.any { it < mainZoom - 0.01f }
+        val minimumZoom = mainCamera.minZoom * mainZoom
+
+        if (hasSmallerLens || minimumZoom >= mainZoom - 0.01f) return
+
+        val isHidden = if (mainCamera.focalLength35mmEquivalent > 0) {
+            val minimumFocalLength = minimumZoom * mainCamera.focalLength35mmEquivalent
+            hiddenFocalLengths.any { abs(it - minimumFocalLength) < 0.5f }
+        } else {
+            false
+        }
+
+        if (!isHidden && stops.none { abs(it - minimumZoom) <= 0.01f }) {
+            stops.add(minimumZoom)
+        }
     }
 
     /**
@@ -2320,11 +3700,26 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             cameras.filter { if (currentLensType == LensType.FRONT) it.lensType == LensType.FRONT else (it.lensType != LensType.FRONT && it.lensType != LensType.BACK_MACRO) }
         if (zoomableCameras.isEmpty()) return null
         val candidates = zoomableCameras
-            .filter { it.intrinsicZoomRatio <= targetZoom + 0.01f }
-        val bestZoom = candidates.maxOfOrNull { it.intrinsicZoomRatio } ?: return null
-        val tiedCandidates = candidates.filter { abs(it.intrinsicZoomRatio - bestZoom) <= 0.01f }
+            .filter { it.displayIntrinsicZoomRatio <= targetZoom + 0.01f }
+        val bestZoom = candidates.maxOfOrNull { it.displayIntrinsicZoomRatio }
+            ?: zoomableCameras.minOfOrNull { it.displayIntrinsicZoomRatio }
+            ?: return null
+        val tiedCandidates = candidates.filter { abs(it.displayIntrinsicZoomRatio - bestZoom) <= 0.01f }
+            .ifEmpty { zoomableCameras.filter { abs(it.displayIntrinsicZoomRatio - bestZoom) <= 0.01f } }
         return tiedCandidates.firstOrNull { it.cameraId == currentCameraId }
             ?: tiedCandidates.firstOrNull()
+    }
+
+    fun isCurrentLensCustomZoomRatioStop(targetZoom: Float): Boolean {
+        val currentState = state.value
+        val currentCamera = currentState.getCurrentCameraInfo() ?: return false
+        val mainCamera = currentState.availableCameras.find {
+            it.lensType == if (currentCamera.lensType == LensType.FRONT) LensType.FRONT else LensType.BACK_MAIN
+        } ?: return false
+        return userPreferences.value.customFocalLengths.any { value ->
+            CustomFocalLengthValue.isZoomRatio(value) &&
+                    abs((CustomFocalLengthValue.toZoomRatio(value, mainCamera, currentCamera) ?: return@any false) - targetZoom) <= 0.01f
+        }
     }
 
     /**
@@ -2333,6 +3728,51 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setAutoSaveAfterCapture(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.saveAutoSaveAfterCapture(enabled)
+        }
+    }
+
+    fun addCustomFocalLength(focalLength: Float) {
+        viewModelScope.launch {
+            val prefs = userPreferencesRepository.userPreferences.first()
+            val list = prefs.customFocalLengths.toMutableList()
+            if (list.none { CustomFocalLengthValue.matches(it, focalLength) }) {
+                list.add(focalLength)
+                userPreferencesRepository.saveCustomFocalLengths(
+                    list.sortedBy { CustomFocalLengthValue.sortKey(it, state.value.getCurrentCameraInfo()) }
+                )
+            }
+        }
+    }
+
+    fun removeCustomFocalLength(focalLength: Float) {
+        viewModelScope.launch {
+            val prefs = userPreferencesRepository.userPreferences.first()
+            val list = prefs.customFocalLengths.toMutableList()
+            list.removeAll { CustomFocalLengthValue.matches(it, focalLength) }
+            userPreferencesRepository.saveCustomFocalLengths(list)
+
+            // 如果删除了当前的默认焦段，重置为0
+            if (CustomFocalLengthValue.matches(prefs.defaultFocalLength, focalLength)) {
+                userPreferencesRepository.saveDefaultFocalLength(0f)
+            }
+        }
+    }
+
+    fun toggleFocalLengthVisibility(focalLength: Float) {
+        viewModelScope.launch {
+            val prefs = userPreferencesRepository.userPreferences.first()
+            val list = prefs.hiddenFocalLengths.toMutableList()
+            val index = list.indexOfFirst { abs(it - focalLength) < 0.5f }
+            if (index != -1) {
+                list.removeAt(index)
+            } else {
+                list.add(focalLength)
+                // 如果隐藏了当前的默认焦段，重置默认焦段为0
+                if (abs(prefs.defaultFocalLength - focalLength) < 0.5f) {
+                    userPreferencesRepository.saveDefaultFocalLength(0f)
+                }
+            }
+            userPreferencesRepository.saveHiddenFocalLengths(list)
         }
     }
 
@@ -2362,14 +3802,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setBaselineLut(target: BaselineColorCorrectionTarget, lutId: String?) {
         viewModelScope.launch {
-            userPreferencesRepository.saveBaselineLutConfig(target, lutId)
+            val update = when (target) {
+                BaselineColorCorrectionTarget.JPG -> CameraFeatureUpdate(jpgBaselineLutId = SettingValue(lutId))
+                BaselineColorCorrectionTarget.RAW -> CameraFeatureUpdate(rawBaselineLutId = SettingValue(lutId))
+                BaselineColorCorrectionTarget.PHANTOM -> CameraFeatureUpdate(phantomBaselineLutId = SettingValue(lutId))
+            }
+            applyCameraFeatureUpdate(update)
         }
     }
 
-    fun setPhantomLut(lutId: String?) {
-        viewModelScope.launch {
-            userPreferencesRepository.savePhantomLutConfig(lutId)
-        }
+    /**
+     * 为指定颜色推荐最合适的 LUT 列表
+     */
+    suspend fun recommendLutsForColor(color: Int): List<LutInfo> = withContext(Dispatchers.IO) {
+        contentRepository.lutManager.recommendLutsForColor(color)
     }
 
     /**
@@ -2390,12 +3836,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun setVendorCaptureSettings(lensId: String, settings: VendorCaptureSettings) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveVendorCaptureSettingsForLens(lensId, settings)
+        }
+    }
+
     /**
      * 设置照片质量
      */
     fun setPhotoQuality(quality: Int) {
         viewModelScope.launch {
             userPreferencesRepository.savePhotoQuality(quality)
+        }
+    }
+
+    fun setUseHeicExport(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveUseHeicExport(enabled)
         }
     }
 
@@ -2446,21 +3904,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun addCustomFocalLength(fl: Float) {
+    fun saveZoomDisplayMode(mode: ZoomDisplayMode) {
         viewModelScope.launch {
-            val current = userPreferencesRepository.userPreferences.firstOrNull()?.customFocalLengths ?: emptyList()
-            val physicalCount = getAvailableFocalLengths().size
-            if (physicalCount + current.size >= 8 || current.any { abs(it - fl) < 0.5f }) return@launch
-            userPreferencesRepository.saveCustomFocalLengths((current + fl).sortedBy { it })
+            userPreferencesRepository.saveZoomDisplayMode(mode.name)
         }
     }
 
-    fun removeCustomFocalLength(fl: Float) {
-        viewModelScope.launch {
-            val current = userPreferencesRepository.userPreferences.firstOrNull()?.customFocalLengths ?: emptyList()
-            userPreferencesRepository.saveCustomFocalLengths(current.filter { abs(it - fl) >= 0.5f })
-        }
-    }
 
     fun setCustomLensIds(value: String) {
         viewModelScope.launch {
@@ -2469,6 +3918,77 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 .filter { it.isNotEmpty() }
                 .distinct()
             userPreferencesRepository.saveCustomLensIds(lensIds)
+            cameraController.refreshCameraList()
+        }
+    }
+
+    fun setLensIdBlacklist(value: String) {
+        viewModelScope.launch {
+            val lensIds = value.split(",")
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+            userPreferencesRepository.saveLensIdBlacklist(lensIds)
+            cameraController.refreshCameraList()
+        }
+    }
+
+    fun addIszLensConfig(
+        baseCameraId: String,
+        iszZoomRatio: Float,
+        isMacro: Boolean,
+        settings: VendorCaptureSettings
+    ) {
+        viewModelScope.launch {
+            val normalizedBaseCameraId = baseCameraId.trim()
+            if (normalizedBaseCameraId.isEmpty() || iszZoomRatio < 1f) return@launch
+
+            val config = IszLensConfig(normalizedBaseCameraId, iszZoomRatio, isMacro)
+            val prefs = userPreferencesRepository.userPreferences.first()
+            val updatedConfigs = (prefs.iszLensConfigs
+                .filterNot { it.virtualCameraId == config.virtualCameraId } + config)
+                .distinctBy { it.virtualCameraId }
+            userPreferencesRepository.saveIszLensConfigs(updatedConfigs)
+            userPreferencesRepository.saveVendorCaptureSettingsForLens(config.virtualCameraId, settings)
+            cameraController.refreshCameraList()
+        }
+    }
+
+    fun removeIszLensConfig(config: IszLensConfig) {
+        viewModelScope.launch {
+            val prefs = userPreferencesRepository.userPreferences.first()
+            val updatedConfigs = prefs.iszLensConfigs
+                .filterNot { it.virtualCameraId == config.virtualCameraId }
+            userPreferencesRepository.saveIszLensConfigs(updatedConfigs)
+            userPreferencesRepository.saveVendorCaptureSettingsForLens(
+                config.virtualCameraId,
+                VendorCaptureSettings.Empty
+            )
+            cameraController.refreshCameraList()
+        }
+    }
+
+    suspend fun discoverMainCameraIdOptions(): List<String> = withContext(Dispatchers.IO) {
+        CameraDiscovery(getApplication()).discoverMainCameraIdOptions()
+    }
+
+    fun setPreferredMainCameraId(cameraId: String?) {
+        viewModelScope.launch {
+            userPreferencesRepository.savePreferredMainCameraId(cameraId)
+            cameraController.refreshCameraList()
+        }
+    }
+
+    fun setEnableLogicalMultiCameraDiscovery(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveEnableLogicalMultiCameraDiscovery(enabled)
+            cameraController.refreshCameraList()
+        }
+    }
+
+    fun setLogicalCameraBindingWhitelist(value: String) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveLogicalCameraBindingWhitelist(value.split(","))
             cameraController.refreshCameraList()
         }
     }
@@ -2486,18 +4006,26 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             it.lensType == if (currentCamera.lensType == LensType.FRONT) LensType.FRONT else LensType.BACK_MAIN
         } ?: return
 
-        if (mainCamera.focalLength35mmEquivalent <= 0) return
+        val targetZoom = CustomFocalLengthValue.toZoomRatio(focalLength, mainCamera, currentCamera) ?: return
 
-        val targetZoom = focalLength / mainCamera.focalLength35mmEquivalent
+        if (CustomFocalLengthValue.isZoomRatio(focalLength)) {
+            setZoomRatio(targetZoom)
+            PLog.d(
+                TAG,
+                "Applied default focal length: ${CustomFocalLengthValue.displayText(focalLength)} " +
+                        "on current lens ${currentCamera.cameraId} (zoom: $targetZoom)"
+            )
+            return
+        }
 
         // 找到该变焦倍率下的最佳镜头
         val optimalLens = findOptimalLens(targetZoom, availableCameras, currentCamera.cameraId)
         if (optimalLens != null && optimalLens.cameraId != currentCamera.cameraId) {
-            switchToLens(optimalLens.cameraId)
+            switchToLensAndSetZoomRatio(optimalLens.cameraId, targetZoom)
+        } else {
+            setZoomRatio(targetZoom)
         }
-
-        setZoomRatio(targetZoom)
-        PLog.d(TAG, "Applied default focal length: ${focalLength}mm (zoom: $targetZoom)")
+        PLog.d(TAG, "Applied default focal length: ${CustomFocalLengthValue.displayText(focalLength)} (zoom: $targetZoom)")
     }
 
     /**
@@ -2535,11 +4063,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
             val photoQualityValue = photoQuality.firstOrNull() ?: 95
             val droModeString = droMode.value
-            val droModeForProcessing = try {
-                com.hinnka.mycamera.raw.RawProcessingPreferences.DROMode.valueOf(droModeString)
-            } catch (e: Exception) {
-                com.hinnka.mycamera.raw.RawProcessingPreferences.DROMode.OFF
-            }
+            val droModeForProcessing =
+                com.hinnka.mycamera.raw.RawProcessingPreferences.DROMode.fromPersistedName(droModeString)
             val currentCameraId = cameraController.getCurrentCameraId()
 
             // 计算旋转角度
@@ -2575,12 +4100,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 BaselineColorCorrectionTarget.JPG
             }
             val baselineMetadata = resolveBaselineMetadata(baselineTarget, userPrefs)
+            val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure(
+                userPrefs = userPrefs,
+                isRawCapture = baselineTarget == BaselineColorCorrectionTarget.RAW,
+                exposureBias = state.value.exposureBias,
+            )
+            val spectralFilmSettings = resolveRawSpectralFilmSettings(userPrefs)
 
             // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
             val metadata = MediaMetadata(
                 lutId = lutIdToSave,
                 frameId = frameIdToSave,
-                colorRecipeParams = currentRecipeParams.value,
+                colorRecipeParams = getMergedRecipeParams(),
                 baselineTarget = baselineMetadata?.first,
                 baselineLutId = baselineMetadata?.second,
                 baselineColorRecipeParams = baselineMetadata?.third,
@@ -2588,15 +4119,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 noiseReduction = noiseReductionValue,
                 chromaNoiseReduction = chromaNoiseReductionValue,
                 rawDcpId = userPrefs?.rawDcpId,
-                rawDenoiseValue = userPrefs?.rawNlmNoiseFactor ?: 0f,
                 rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
-                rawAutoExposure = userPrefs?.rawAutoExposure ?: true,
+                rawAutoExposure = effectiveRawAutoExposure,
+                rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
+                rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
                 rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
                 rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
                 rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
                 rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
                 rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
+                rawCfaCorrectionMode = userPrefs?.rawCfaCorrectionModes?.get(currentCameraId) ?: RawCfaCorrection.MODE_DEFAULT,
                 cameraId = currentCameraId,
+                rawRenderingEngine = userPrefs?.rawRenderingEngine ?: RawRenderingEngine.AdobeCurve,
+                rawToneMappingParameters = userPrefs?.rawToneMappingParameters ?: RawToneMappingParameters.DEFAULT,
+                spectralFilmStock = spectralFilmSettings.stock,
+                spectralFilmPrint = spectralFilmSettings.print,
+                spectralFilmCDensityGain = spectralFilmSettings.tuning.cDensityGain,
+                spectralFilmMDensityGain = spectralFilmSettings.tuning.mDensityGain,
+                spectralFilmYDensityGain = spectralFilmSettings.tuning.yDensityGain,
                 width = image.width,
                 height = image.height,
                 ratio = aspectRatio,
@@ -2669,7 +4209,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     chromaNoiseReductionValue,
                     photoQualityValue,
                     exposureBias = state.value.exposureBias,
-                    droMode = droModeForProcessing,
                     exportDngWithRawExport = exportDngWithRawExport.value,
                 )
             }
@@ -2685,6 +4224,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private suspend fun saveVideoSnapshot(bitmap: Bitmap) {
+        savePreviewBitmapCapture(
+            bitmap = bitmap,
+            metadataCaptureMode = "video_snapshot",
+            ratio = mapVideoAspectRatioToPhotoAspectRatio(state.value.videoConfig.aspectRatio),
+            storeRenderedLookMetadata = true
+        )
+    }
+
+    private suspend fun savePreviewBitmapCapture(
+        bitmap: Bitmap,
+        metadataCaptureMode: String,
+        ratio: AspectRatio?,
+        storeRenderedLookMetadata: Boolean
+    ) {
         try {
             val context = getApplication<Application>()
             val currentState = state.value
@@ -2696,13 +4249,35 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
             val shouldMirror = cameraController.getLensFacing() == CameraCharacteristics.LENS_FACING_FRONT &&
                     (userPrefs?.mirrorFrontCamera ?: true)
-            val baselineMetadata = resolveBaselineMetadata(BaselineColorCorrectionTarget.JPG, userPrefs)
+            val baselineMetadata = if (storeRenderedLookMetadata) {
+                resolveBaselineMetadata(BaselineColorCorrectionTarget.JPG, userPrefs)
+            } else {
+                null
+            }
             val currentCameraId = cameraController.getCurrentCameraId()
+            val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure(
+                userPrefs = userPrefs,
+                isRawCapture = false,
+                exposureBias = currentState.exposureBias,
+            )
+            val spectralFilmSettings = resolveRawSpectralFilmSettings(userPrefs)
+            val captureInfo = cameraController.rebuildCaptureInfo(
+                result = null,
+                imageWidth = bitmap.width,
+                imageHeight = bitmap.height,
+                latitude = currentState.latitude,
+                longitude = currentState.longitude
+            )
+            val computationalAperture = if (currentState.isVirtualApertureEnabled) {
+                currentState.virtualAperture
+            } else {
+                null
+            }
 
             val metadata = MediaMetadata(
-                lutId = currentLutId.value,
-                frameId = currentFrameId,
-                colorRecipeParams = currentRecipeParams.value,
+                lutId = if (storeRenderedLookMetadata) currentLutId.value else null,
+                frameId = if (storeRenderedLookMetadata) currentFrameId else null,
+                colorRecipeParams = if (storeRenderedLookMetadata) getMergedRecipeParams() else null,
                 baselineTarget = baselineMetadata?.first,
                 baselineLutId = baselineMetadata?.second,
                 baselineColorRecipeParams = baselineMetadata?.third,
@@ -2710,30 +4285,65 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 noiseReduction = noiseReductionValue,
                 chromaNoiseReduction = chromaNoiseReductionValue,
                 rawDcpId = userPrefs?.rawDcpId,
-                rawDenoiseValue = userPrefs?.rawNlmNoiseFactor ?: 0f,
                 rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
-                rawAutoExposure = userPrefs?.rawAutoExposure ?: true,
+                rawAutoExposure = effectiveRawAutoExposure,
+                rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
+                rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
                 rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
                 rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
                 rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
                 rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
                 rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
+                rawCfaCorrectionMode = userPrefs?.rawCfaCorrectionModes?.get(currentCameraId) ?: RawCfaCorrection.MODE_DEFAULT,
                 cameraId = currentCameraId,
+                rawRenderingEngine = userPrefs?.rawRenderingEngine ?: RawRenderingEngine.AdobeCurve,
+                rawToneMappingParameters = userPrefs?.rawToneMappingParameters ?: RawToneMappingParameters.DEFAULT,
+                spectralFilmStock = if (storeRenderedLookMetadata) spectralFilmSettings.stock else null,
+                spectralFilmPrint = if (storeRenderedLookMetadata) spectralFilmSettings.print else null,
+                spectralFilmCDensityGain = if (storeRenderedLookMetadata) spectralFilmSettings.tuning.cDensityGain else 1f,
+                spectralFilmMDensityGain = if (storeRenderedLookMetadata) spectralFilmSettings.tuning.mDensityGain else 1f,
+                spectralFilmYDensityGain = if (storeRenderedLookMetadata) spectralFilmSettings.tuning.yDensityGain else 1f,
                 width = bitmap.width,
                 height = bitmap.height,
-                ratio = mapVideoAspectRatioToPhotoAspectRatio(currentState.videoConfig.aspectRatio),
+                ratio = ratio,
                 rotation = 0,
-                deviceModel = android.os.Build.MODEL,
-                brand = android.os.Build.MANUFACTURER,
-                dateTaken = System.currentTimeMillis(),
-                latitude = currentState.latitude,
-                longitude = currentState.longitude,
+                deviceModel = captureInfo.model,
+                brand = captureInfo.make,
+                dateTaken = captureInfo.captureTime,
+                latitude = captureInfo.latitude,
+                longitude = captureInfo.longitude,
+                altitude = captureInfo.altitude,
+                iso = captureInfo.iso,
+                shutterSpeed = captureInfo.formatExposureTime(),
+                focalLength = captureInfo.formatFocalLength(),
+                focalLength35mm = captureInfo.formatFocalLength35mm(),
+                aperture = captureInfo.formatAperture(),
                 exposureBias = currentState.exposureBias,
                 droMode = droMode.value,
                 isMirrored = shouldMirror,
+                colorSpace = captureInfo.colorSpace,
                 dynamicRangeProfile = currentState.currentDynamicRangeProfile,
-                captureMode = "video_snapshot"
+                computationalAperture = computationalAperture,
+                focusPointX = currentState.focusPoint?.first,
+                focusPointY = currentState.focusPoint?.second,
+                captureMode = metadataCaptureMode
             )
+
+            if (metadataCaptureMode == "quick_shot") {
+                val photoId = GalleryManager.saveQuickShotBitmapToSystemGallery(
+                    context = context,
+                    metadata = metadata,
+                    bitmap = bitmap,
+                    photoQuality = photoQualityValue
+                )
+                if (photoId == null) {
+                    PLog.e(TAG, "Failed to save quick-shot bitmap capture to system gallery")
+                    return
+                }
+                PLog.d(TAG, "Quick-shot bitmap capture saved to system gallery: $photoId")
+                _imageSavedEvent.emit(Unit)
+                return
+            }
 
             val photoId = GalleryManager.preparePhoto(
                 context,
@@ -2745,7 +4355,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 includeCropRegionInOutputSize = false
             )
             if (photoId == null) {
-                PLog.e(TAG, "Failed to prepare video snapshot")
+                PLog.e(TAG, "Failed to prepare preview bitmap capture: $metadataCaptureMode")
                 return
             }
 
@@ -2762,10 +4372,130 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     photoQualityValue
                 )
             }
-            PLog.d(TAG, "Video snapshot saved: $photoId")
+            PLog.d(TAG, "Preview bitmap capture saved: $photoId, mode=$metadataCaptureMode")
             _imageSavedEvent.emit(Unit)
         } catch (e: Exception) {
-            PLog.e(TAG, "Failed to save video snapshot", e)
+            PLog.e(TAG, "Failed to save preview bitmap capture: $metadataCaptureMode", e)
+        }
+    }
+
+    private suspend fun saveQuickShotBurstFrame(bitmap: Bitmap) {
+        try {
+            val context = getApplication<Application>()
+            val photoId = burstPhotoId ?: return
+            val currentState = state.value
+            val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
+            val sharpeningValue = sharpening.firstOrNull() ?: 0f
+            val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
+            val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
+            val photoQualityValue = photoQuality.firstOrNull() ?: 95
+            val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
+            val shouldMirror = cameraController.getLensFacing() == CameraCharacteristics.LENS_FACING_FRONT &&
+                    (userPrefs?.mirrorFrontCamera ?: true)
+            val currentCameraId = cameraController.getCurrentCameraId()
+            val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure(
+                userPrefs = userPrefs,
+                isRawCapture = false,
+                exposureBias = currentState.exposureBias,
+            )
+            val captureInfo = cameraController.rebuildCaptureInfo(
+                result = null,
+                imageWidth = bitmap.width,
+                imageHeight = bitmap.height,
+                latitude = currentState.latitude,
+                longitude = currentState.longitude
+            )
+            val computationalAperture = if (currentState.isVirtualApertureEnabled) {
+                currentState.virtualAperture
+            } else {
+                null
+            }
+
+            if (GalleryManager.loadMetadata(context, photoId) == null) {
+                val metadata = MediaMetadata(
+                    lutId = null,
+                    frameId = null,
+                    colorRecipeParams = null,
+                    baselineTarget = null,
+                    baselineLutId = null,
+                    baselineColorRecipeParams = null,
+                    sharpening = sharpeningValue,
+                    noiseReduction = noiseReductionValue,
+                    chromaNoiseReduction = chromaNoiseReductionValue,
+                    rawDcpId = userPrefs?.rawDcpId,
+                    rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
+                    rawAutoExposure = effectiveRawAutoExposure,
+                    rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
+                    rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
+                    rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
+                    rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
+                    rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
+                    rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
+                    rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
+                    rawCfaCorrectionMode = userPrefs?.rawCfaCorrectionModes?.get(currentCameraId) ?: RawCfaCorrection.MODE_DEFAULT,
+                    cameraId = currentCameraId,
+                    rawRenderingEngine = userPrefs?.rawRenderingEngine ?: RawRenderingEngine.AdobeCurve,
+                    rawToneMappingParameters = userPrefs?.rawToneMappingParameters ?: RawToneMappingParameters.DEFAULT,
+                    spectralFilmStock = null,
+                    spectralFilmPrint = null,
+                    spectralFilmCDensityGain = 1f,
+                    spectralFilmMDensityGain = 1f,
+                    spectralFilmYDensityGain = 1f,
+                    width = bitmap.width,
+                    height = bitmap.height,
+                    ratio = currentState.aspectRatio,
+                    rotation = 0,
+                    deviceModel = captureInfo.model,
+                    brand = captureInfo.make,
+                    dateTaken = captureInfo.captureTime,
+                    latitude = captureInfo.latitude,
+                    longitude = captureInfo.longitude,
+                    altitude = captureInfo.altitude,
+                    iso = captureInfo.iso,
+                    shutterSpeed = captureInfo.formatExposureTime(),
+                    focalLength = captureInfo.formatFocalLength(),
+                    focalLength35mm = captureInfo.formatFocalLength35mm(),
+                    aperture = captureInfo.formatAperture(),
+                    exposureBias = currentState.exposureBias,
+                    droMode = droMode.value,
+                    isMirrored = shouldMirror,
+                    colorSpace = captureInfo.colorSpace,
+                    dynamicRangeProfile = currentState.currentDynamicRangeProfile,
+                    computationalAperture = computationalAperture,
+                    focusPointX = currentState.focusPoint?.first,
+                    focusPointY = currentState.focusPoint?.second,
+                    captureMode = "quick_shot"
+                )
+
+                val preparedPhotoId = GalleryManager.preparePhoto(
+                    context,
+                    metadata,
+                    null,
+                    bitmap,
+                    false,
+                    1.0f,
+                    includeCropRegionInOutputSize = false,
+                    photoId = photoId
+                )
+                if (preparedPhotoId == null) {
+                    PLog.e(TAG, "Failed to prepare quick-shot burst photo")
+                    return
+                }
+            }
+
+            GalleryManager.saveBitmapBurstPhoto(
+                context,
+                photoId,
+                bitmap,
+                shouldAutoSave,
+                contentRepository.photoProcessor,
+                sharpeningValue,
+                noiseReductionValue,
+                chromaNoiseReductionValue,
+                photoQualityValue
+            )
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to save quick-shot burst frame", e)
         }
     }
 
@@ -2796,11 +4526,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
             val photoQualityValue = photoQuality.firstOrNull() ?: 95
             val droModeString = droMode.value
-            val droModeForProcessing = try {
-                com.hinnka.mycamera.raw.RawProcessingPreferences.DROMode.valueOf(droModeString)
-            } catch (e: Exception) {
-                com.hinnka.mycamera.raw.RawProcessingPreferences.DROMode.OFF
-            }
             val currentCameraId = cameraController.getCurrentCameraId()
 
             // 计算旋转角度
@@ -2839,12 +4564,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 BaselineColorCorrectionTarget.JPG
             }
             val baselineMetadata = resolveBaselineMetadata(baselineTarget, userPrefs)
+            val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure(
+                userPrefs = userPrefs,
+                isRawCapture = baselineTarget == BaselineColorCorrectionTarget.RAW,
+                exposureBias = state.value.exposureBias,
+            )
+            val spectralFilmSettings = resolveRawSpectralFilmSettings(userPrefs)
 
             // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
             val metadata = MediaMetadata(
                 lutId = lutIdToSave,
                 frameId = frameIdToSave,
-                colorRecipeParams = currentRecipeParams.value,
+                colorRecipeParams = getMergedRecipeParams(),
                 baselineTarget = baselineMetadata?.first,
                 baselineLutId = baselineMetadata?.second,
                 baselineColorRecipeParams = baselineMetadata?.third,
@@ -2852,15 +4583,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 noiseReduction = noiseReductionValue,
                 chromaNoiseReduction = chromaNoiseReductionValue,
                 rawDcpId = userPrefs?.rawDcpId,
-                rawDenoiseValue = userPrefs?.rawNlmNoiseFactor ?: 0f,
                 rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
-                rawAutoExposure = userPrefs?.rawAutoExposure ?: true,
+                rawAutoExposure = effectiveRawAutoExposure,
+                rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
+                rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
                 rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
                 rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
                 rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
                 rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
                 rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
+                rawCfaCorrectionMode = userPrefs?.rawCfaCorrectionModes?.get(currentCameraId) ?: RawCfaCorrection.MODE_DEFAULT,
                 cameraId = currentCameraId,
+                rawRenderingEngine = userPrefs?.rawRenderingEngine ?: RawRenderingEngine.AdobeCurve,
+                rawToneMappingParameters = userPrefs?.rawToneMappingParameters ?: RawToneMappingParameters.DEFAULT,
+                spectralFilmStock = spectralFilmSettings.stock,
+                spectralFilmPrint = spectralFilmSettings.print,
+                spectralFilmCDensityGain = spectralFilmSettings.tuning.cDensityGain,
+                spectralFilmMDensityGain = spectralFilmSettings.tuning.mDensityGain,
+                spectralFilmYDensityGain = spectralFilmSettings.tuning.yDensityGain,
                 width = (images[0].width.toFloat() * superResScale).roundToInt(),
                 height = (images[0].height.toFloat() * superResScale).roundToInt(),
                 ratio = aspectRatio,
@@ -2935,7 +4675,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     superResolutionScale = superResScale,
                     useGpuAcceleration = useGpuAcceleration.value,
                     exposureBias = state.value.exposureBias,
-                    droMode = droModeForProcessing,
                     exportDngWithRawExport = exportDngWithRawExport.value
                 )
             }
@@ -2943,6 +4682,306 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             _imageSavedEvent.emit(Unit)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save image", e)
+        }
+    }
+
+    private fun handleHdrBracketFrameCaptured(
+        image: SafeImage,
+        captureInfo: CaptureInfo,
+        characteristics: CameraCharacteristics?,
+        captureResult: CaptureResult?
+    ) {
+        if (hdrBracketImages.size >= hdrBracketExpectedFrameCount) {
+            image.close()
+            return
+        }
+
+        if (hdrBracketCaptureInfo == null) {
+            hdrBracketCaptureInfo = captureInfo
+            hdrBracketCharacteristics = characteristics
+            hdrBracketCaptureResult = captureResult
+            val frameCount = state.value.hdrBracketFrameCount
+                .coerceAtLeast(HDR_BRACKET_FRAME_COUNT)
+            hdrBracketExpectedFrameCount = frameCount
+            hdrBracketZeroEvFrameCount = if (isRawCaptureFormat(image.format)) {
+                (frameCount - 1).coerceAtLeast(1)
+            } else {
+                (frameCount - 2).coerceAtLeast(1)
+            }
+        }
+        hdrBracketImages.add(image)
+        hdrBracketCaptureResults.add(captureResult)
+        PLog.d(TAG, "HDR bracket frame received: ${hdrBracketImages.size}/$hdrBracketExpectedFrameCount")
+
+        if (hdrBracketImages.size >= hdrBracketExpectedFrameCount) {
+            val imagesToProcess = hdrBracketImages.toList()
+            val resultsToProcess = hdrBracketCaptureResults.toList()
+            val info = hdrBracketCaptureInfo ?: captureInfo
+            val chars = hdrBracketCharacteristics ?: characteristics
+            val result = hdrBracketCaptureResult ?: captureResult
+            val zeroEvFrameCount = hdrBracketZeroEvFrameCount
+            val expectedFrameCount = hdrBracketExpectedFrameCount
+            hdrBracketImages.clear()
+            hdrBracketCaptureResults.clear()
+            hdrBracketCaptureInfo = null
+            hdrBracketCharacteristics = null
+            hdrBracketCaptureResult = null
+            cameraController.onHdrBracketFramesCollected()
+            viewModelScope.launch {
+                processHdrBracket(
+                    imagesToProcess,
+                    resultsToProcess,
+                    zeroEvFrameCount,
+                    expectedFrameCount,
+                    info,
+                    chars,
+                    result
+                )
+            }
+        }
+    }
+
+    private suspend fun processHdrBracket(
+        images: List<SafeImage>,
+        captureResults: List<CaptureResult?>,
+        zeroEvFrameCount: Int,
+        expectedFrameCount: Int,
+        captureInfo: CaptureInfo,
+        characteristics: CameraCharacteristics?,
+        captureResult: CaptureResult?
+    ) {
+        val orderedFrames = orderHdrBracketFramesByTimestamp(images, captureResults)
+        val orderedImages = orderedFrames.images
+        val orderedCaptureResults = orderedFrames.captureResults
+        if (orderedImages.firstOrNull()?.format?.let(::isRawCaptureFormat) == true) {
+            processRawHdrBracket(
+                images = orderedImages,
+                captureResults = orderedCaptureResults,
+                zeroEvFrameCount = zeroEvFrameCount,
+                expectedFrameCount = expectedFrameCount,
+                captureInfo = captureInfo,
+                characteristics = characteristics,
+                captureResult = captureResult
+            )
+            return
+        }
+        var imagesHandedToGallery = false
+        try {
+            if (orderedImages.size != expectedFrameCount) return
+            val context = getApplication<Application>()
+            val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
+            val sharpeningValue = sharpening.firstOrNull() ?: 0f
+            val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
+            val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
+            val photoQualityValue = photoQuality.firstOrNull() ?: 95
+            val baseImage = orderedImages[HDR_BRACKET_ZERO_INDEX]
+            if (state.value.useMFSR) {
+                PLog.w(TAG, "YUV HDR bracket uses Mertens fusion without super resolution")
+            }
+            val useSuperRes = false
+            val superResScale = 1.0f
+            val captureMode = if (zeroEvFrameCount > 1) "hdr_mfnr" else "hdr_bracket"
+            val metadata = buildPhotoMetadata(
+                width = (baseImage.width.toFloat() * superResScale).roundToInt(),
+                height = (baseImage.height.toFloat() * superResScale).roundToInt(),
+                captureInfo = captureInfo,
+                sharpeningValue = sharpeningValue,
+                noiseReductionValue = noiseReductionValue,
+                chromaNoiseReductionValue = chromaNoiseReductionValue,
+                captureMode = captureMode,
+                multipleExposureFrameCount = expectedFrameCount,
+                baselineTarget = BaselineColorCorrectionTarget.JPG,
+            )
+
+            val photoId = GalleryManager.preparePhoto(
+                context,
+                metadata,
+                null,
+                previewThumbnail,
+                false,
+                superResScale,
+                includeCropRegionInOutputSize = false
+            ) ?: return
+
+            val aspectRatio = metadata.ratio ?: state.value.aspectRatio
+            val useGpuAccelerationValue = useGpuAcceleration.firstOrNull() ?: DeviceUtil.defaultGpuAcceleration
+            val colorSpace = android.graphics.ColorSpace.get(captureInfo.colorSpace)
+            imagesHandedToGallery = true
+            viewModelScope.launch(Dispatchers.IO) {
+                var fusedBitmap: Bitmap? = null
+                try {
+                    fusedBitmap = GalleryManager.composeHdrBracketPhoto(
+                        images = orderedImages,
+                        captureResults = orderedCaptureResults,
+                        zeroEvFrameCount = zeroEvFrameCount,
+                        rotation = metadata.rotation,
+                        aspectRatio = aspectRatio,
+                        shouldMirror = metadata.isMirrored,
+                        useGpuAcceleration = useGpuAccelerationValue,
+                        useSuperResolution = useSuperRes,
+                        colorSpace = colorSpace
+                    )
+                    val outputBitmap = fusedBitmap ?: return@launch
+
+                    GalleryManager.saveBitmapPhoto(
+                        context,
+                        photoId,
+                        outputBitmap,
+                        shouldAutoSave,
+                        contentRepository.photoProcessor,
+                        sharpeningValue,
+                        noiseReductionValue,
+                        chromaNoiseReductionValue,
+                        photoQualityValue
+                    )
+                    PLog.d(TAG, "HDR bracket image saved: $photoId, characteristics=${characteristics != null}, result=${captureResult != null}")
+                } catch (e: Exception) {
+                    PLog.e(TAG, "Failed to process HDR bracket", e)
+                } finally {
+                    fusedBitmap?.takeIf { !it.isRecycled }?.recycle()
+                }
+            }
+            PLog.d(TAG, "Image saved: $photoId, HDR mode: $captureMode")
+            _imageSavedEvent.emit(Unit)
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to process HDR bracket", e)
+        } finally {
+            if (!imagesHandedToGallery) {
+                orderedImages.forEach { it.close() }
+            }
+        }
+    }
+
+    private fun orderHdrBracketFramesByTimestamp(
+        images: List<SafeImage>,
+        captureResults: List<CaptureResult?>
+    ): HdrBracketFrameOrder {
+        val frames = images.mapIndexed { index, image ->
+            val result = captureResults.getOrNull(index)
+            HdrBracketFrame(
+                image = image,
+                captureResult = result,
+                originalIndex = index,
+                timestamp = result?.get(CaptureResult.SENSOR_TIMESTAMP) ?: image.timestamp
+            )
+        }
+        val sortedFrames = frames.sortedWith(
+            compareBy<HdrBracketFrame> { it.timestamp }
+                .thenBy { it.originalIndex }
+        )
+        val sortedOrder = sortedFrames.map { it.originalIndex }
+        val originalOrder = frames.map { it.originalIndex }
+        if (sortedOrder != originalOrder) {
+            PLog.d(
+                TAG,
+                "HDR bracket frames reordered by timestamp: " +
+                        sortedFrames.joinToString { "${it.originalIndex}:${it.timestamp}" }
+            )
+        }
+        return HdrBracketFrameOrder(
+            images = sortedFrames.map { it.image },
+            captureResults = sortedFrames.map { it.captureResult }
+        )
+    }
+
+    private fun resetHdrBracketCapture(closeImages: Boolean) {
+        if (closeImages) {
+            hdrBracketImages.forEach { it.close() }
+        }
+        hdrBracketImages.clear()
+        hdrBracketCaptureResults.clear()
+        hdrBracketCaptureInfo = null
+        hdrBracketCharacteristics = null
+        hdrBracketCaptureResult = null
+        hdrBracketExpectedFrameCount = HDR_BRACKET_FRAME_COUNT
+        hdrBracketZeroEvFrameCount = 1
+    }
+
+    private fun captureExposureProduct(result: CaptureResult): Double? {
+        val exposureTime = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+            ?.takeIf { it > 0L }
+            ?: return null
+        val iso = result.get(CaptureResult.SENSOR_SENSITIVITY)
+            ?.takeIf { it > 0 }
+            ?: return null
+        val postRawBoost = (result.get(CaptureResult.CONTROL_POST_RAW_SENSITIVITY_BOOST) ?: 100)
+            .coerceAtLeast(1) / 100.0
+        return exposureTime.toDouble() * iso.toDouble() * postRawBoost
+    }
+
+    private suspend fun processRawHdrBracket(
+        images: List<SafeImage>,
+        captureResults: List<CaptureResult?>,
+        zeroEvFrameCount: Int,
+        expectedFrameCount: Int,
+        captureInfo: CaptureInfo,
+        characteristics: CameraCharacteristics?,
+        captureResult: CaptureResult?
+    ) {
+        try {
+            if (images.size != expectedFrameCount) return
+            val context = getApplication<Application>()
+            val chars = characteristics ?: return
+            val lowExposureResult = captureResults
+                .filterNotNull()
+                .minByOrNull { captureExposureProduct(it) ?: Double.MAX_VALUE }
+                ?: captureResult
+                ?: return
+            val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
+            val sharpeningValue = sharpening.firstOrNull() ?: 0f
+            val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
+            val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
+            val photoQualityValue = photoQuality.firstOrNull() ?: 95
+            val captureMode = if (zeroEvFrameCount > 1) "raw_hdr_mfnr" else "raw_hdr_bracket"
+            val baseImage = images.first()
+            val metadata = buildPhotoMetadata(
+                width = baseImage.width,
+                height = baseImage.height,
+                captureInfo = captureInfo,
+                sharpeningValue = sharpeningValue,
+                noiseReductionValue = noiseReductionValue,
+                chromaNoiseReductionValue = chromaNoiseReductionValue,
+                captureMode = captureMode,
+                multipleExposureFrameCount = expectedFrameCount,
+                baselineTarget = BaselineColorCorrectionTarget.RAW,
+            )
+
+            val photoId = GalleryManager.preparePhoto(
+                context,
+                metadata,
+                lowExposureResult,
+                previewThumbnail,
+                false,
+                1.0f,
+                includeCropRegionInOutputSize = true
+            ) ?: return
+
+            viewModelScope.launch(Dispatchers.IO) {
+                GalleryManager.saveRawHdrBracketPhoto(
+                    context = context,
+                    photoId = photoId,
+                    images = images,
+                    captureResults = captureResults,
+                    zeroEvFrameCount = zeroEvFrameCount,
+                    rotation = metadata.rotation,
+                    aspectRatio = metadata.ratio ?: state.value.aspectRatio,
+                    characteristics = chars,
+                    lowExposureCaptureResult = lowExposureResult,
+                    shouldAutoSave = shouldAutoSave,
+                    photoProcessor = contentRepository.photoProcessor,
+                    sharpeningValue = sharpeningValue,
+                    noiseReductionValue = noiseReductionValue,
+                    chromaNoiseReductionValue = chromaNoiseReductionValue,
+                    photoQuality = photoQualityValue,
+                    useGpuAcceleration = useGpuAcceleration.firstOrNull() ?: DeviceUtil.defaultGpuAcceleration,
+                    exposureBias = state.value.exposureBias,
+                    exportDngWithRawExport = exportDngWithRawExport.firstOrNull() ?: false
+                )
+            }
+            PLog.d(TAG, "RAW HDR bracket image saved: $photoId, mode=$captureMode")
+            _imageSavedEvent.emit(Unit)
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to process RAW HDR bracket", e)
         }
     }
 
@@ -2989,12 +5028,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             BaselineColorCorrectionTarget.JPG
         }
         val baselineMetadata = resolveBaselineMetadata(baselineTarget, userPrefs)
+        val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure(
+            userPrefs = userPrefs,
+            isRawCapture = baselineTarget == BaselineColorCorrectionTarget.RAW,
+            exposureBias = state.value.exposureBias,
+        )
+        val spectralFilmSettings = resolveRawSpectralFilmSettings(userPrefs)
 
         // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
         val metadata = MediaMetadata(
             lutId = lutIdToSave,
             frameId = frameIdToSave,
-            colorRecipeParams = currentRecipeParams.value,
+            colorRecipeParams = getMergedRecipeParams(),
             baselineTarget = baselineMetadata?.first,
             baselineLutId = baselineMetadata?.second,
             baselineColorRecipeParams = baselineMetadata?.third,
@@ -3002,15 +5047,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             noiseReduction = noiseReductionValue,
             chromaNoiseReduction = chromaNoiseReductionValue,
             rawDcpId = userPrefs?.rawDcpId,
-            rawDenoiseValue = userPrefs?.rawNlmNoiseFactor ?: 0f,
             rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
-            rawAutoExposure = userPrefs?.rawAutoExposure ?: true,
+            rawAutoExposure = effectiveRawAutoExposure,
+            rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
+            rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
             rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
             rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
             rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
             rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
+            rawCfaCorrectionMode = userPrefs?.rawCfaCorrectionModes?.get(currentCameraId) ?: RawCfaCorrection.MODE_DEFAULT,
             cameraId = currentCameraId,
+            rawRenderingEngine = userPrefs?.rawRenderingEngine ?: RawRenderingEngine.AdobeCurve,
+            rawToneMappingParameters = userPrefs?.rawToneMappingParameters ?: RawToneMappingParameters.DEFAULT,
+            spectralFilmStock = spectralFilmSettings.stock,
+            spectralFilmPrint = spectralFilmSettings.print,
+            spectralFilmCDensityGain = spectralFilmSettings.tuning.cDensityGain,
+            spectralFilmMDensityGain = spectralFilmSettings.tuning.mDensityGain,
+            spectralFilmYDensityGain = spectralFilmSettings.tuning.yDensityGain,
             width = image.width,
             height = image.height,
             ratio = aspectRatio,
@@ -3103,8 +5157,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (mainCamera.focalLength35mmEquivalent <= 0) return emptyList()
 
         val lensZoomStops = calculateLensZoomStops(availableCameras, mainCamera)
+        val stops = lensZoomStops.toMutableList()
+        addDefaultMinimumZoomStop(stops, lensZoomStops, mainCamera)
 
-        return lensZoomStops.map { it * mainCamera.focalLength35mmEquivalent }
+        return stops
+            .map { it * mainCamera.focalLength35mmEquivalent }
+            .distinctBy { it.roundToInt() }
+            .sorted()
     }
 
     /**
@@ -3156,8 +5215,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
 
+    fun onShutterAnimationTriggered() {
+        _canStartShutterAnimation.value = true
+        viewModelScope.launch {
+            // Delay prewarming to avoid stuttering during the initial reveal animation
+            // 150ms initial delay + 800ms animation + 250ms buffer
+            delay(1200)
+            prewarmDepthEstimator()
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
+        cameraReopenJob?.cancel()
         cameraController.release()
         contentRepository.lutManager.clearCache()
         contentRepository.frameManager.clearCache()
@@ -3174,6 +5244,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         burstImages.clear()
         burstImageCount = 0
+        resetHdrBracketCapture(closeImages = true)
         multipleExposureState.previewBitmap?.recycle()
         multipleExposureState.sessionId?.let { GalleryManager.clearMultipleExposureSession(getApplication(), it) }
     }
@@ -3183,7 +5254,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun setDroMode(mode: String) {
         viewModelScope.launch {
-            userPreferencesRepository.saveDroMode(mode)
+            applyCameraFeatureUpdate(
+                CameraFeatureUpdate(droMode = SettingValue(mode))
+            )
+        }
+    }
+
+    /**
+     * 设置色调映射模式
+     */
+    fun setTonemapMode(mode: String) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveTonemapMode(mode)
+        }
+    }
+
+    fun setFixTonemapPreview(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveFixTonemapPreview(enabled)
         }
     }
 
@@ -3255,7 +5343,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     .getAppWidgetIds(
                         android.content.ComponentName(
                             getApplication(),
-                            com.hinnka.mycamera.phantom.PhantomWidgetProvider::class.java
+                            PhantomWidgetProvider::class.java
                         )
                     )
                 putExtra(android.appwidget.AppWidgetManager.EXTRA_APPWIDGET_IDS, ids)
@@ -3294,9 +5382,52 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * 导出原始无损 .cube 字节数组
+     */
+    suspend fun exportLutToCube(lutId: String): ByteArray? = withContext(Dispatchers.IO) {
+        getLutCubeString(lutId)?.toByteArray(Charsets.UTF_8)
+    }
+
+    /**
+     * 将 LUT 和色彩配方永久烘焙并导出为标准 .cube 字节数组
+     */
+    suspend fun exportBakedLutToCube(lutId: String): ByteArray? = withContext(Dispatchers.IO) {
+        val lutConfig = contentRepository.lutManager.loadLut(lutId) ?: return@withContext null
+        val recipe = contentRepository.lutManager.loadColorRecipeParams(lutId)
+
+        try {
+            val lutInfo = contentRepository.lutManager.getLutInfo(lutId)
+            val name = lutInfo?.getName() ?: "BakedLUT"
+            BakedLutExporter.exportBakedCube(lutConfig, recipe, name)
+        } catch (e: Exception) {
+            PLog.e("CameraViewModel", "Failed to bake LUT to cube", e)
+            null
+        }
+    }
+
+    /**
+     * 将 LUT 和色彩配方永久烘焙并导出为 HALD CLUT .png 字节数组
+     */
+    suspend fun exportBakedLutToHaldPng(lutId: String): ByteArray? = withContext(Dispatchers.IO) {
+        val lutConfig = contentRepository.lutManager.loadLut(lutId) ?: return@withContext null
+        val recipe = contentRepository.lutManager.loadColorRecipeParams(lutId)
+
+        try {
+            BakedLutExporter.exportBakedHaldPng(lutConfig, recipe)
+        } catch (e: Exception) {
+            PLog.e("CameraViewModel", "Failed to bake LUT to HALD PNG", e)
+            null
+        }
+    }
+
+    suspend fun exportFrameToJson(frame: FrameInfo): ByteArray? = withContext(Dispatchers.IO) {
+        contentRepository.getCustomImportManager().exportFrameJson(frame)
+    }
+
+    /**
      * 从导入的 .plut URI 中提取嵌入的色彩配方并保存到指定 LUT（仅 v4 文件含有配方）
      */
-    suspend fun extractAndSaveColorRecipeFromPlut(lutId: String, uri: android.net.Uri) = withContext(Dispatchers.IO) {
+    suspend fun extractAndSaveColorRecipeFromPlut(lutId: String, uri: Uri) = withContext(Dispatchers.IO) {
         try {
             val recipeJson = getApplication<Application>().contentResolver
                 .openInputStream(uri)?.use { LutConverter.extractRecipeJsonFromPlut(it) }

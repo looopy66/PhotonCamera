@@ -47,6 +47,8 @@ class HardwareLutVideoRenderer(
     private var shaderProgram: Int = 0
     private var vertexBuffer: FloatBuffer? = null
     private var texCoordBuffer: FloatBuffer? = null
+    private var horizontalMirrorTexCoordBuffer: FloatBuffer? = null
+    private var verticalMirrorTexCoordBuffer: FloatBuffer? = null
     private var indexBuffer: ShortBuffer? = null
 
     // Cached locations
@@ -218,6 +220,12 @@ class HardwareLutVideoRenderer(
         texCoordBuffer = ByteBuffer.allocateDirect(Shaders.TEXTURE_COORDS.size * 4).run {
             order(ByteOrder.nativeOrder()).asFloatBuffer().put(Shaders.TEXTURE_COORDS).apply { position(0) }
         }
+        horizontalMirrorTexCoordBuffer = ByteBuffer.allocateDirect(HORIZONTAL_MIRROR_TEXTURE_COORDS.size * 4).run {
+            order(ByteOrder.nativeOrder()).asFloatBuffer().put(HORIZONTAL_MIRROR_TEXTURE_COORDS).apply { position(0) }
+        }
+        verticalMirrorTexCoordBuffer = ByteBuffer.allocateDirect(VERTICAL_MIRROR_TEXTURE_COORDS.size * 4).run {
+            order(ByteOrder.nativeOrder()).asFloatBuffer().put(VERTICAL_MIRROR_TEXTURE_COORDS).apply { position(0) }
+        }
         indexBuffer = ByteBuffer.allocateDirect(Shaders.DRAW_ORDER.size * 2).run {
             order(ByteOrder.nativeOrder()).asShortBuffer().put(Shaders.DRAW_ORDER).apply { position(0) }
         }
@@ -227,19 +235,20 @@ class HardwareLutVideoRenderer(
      * 渲染一帧
      * @param textureId 2D 纹理 ID (GL_TEXTURE_2D)
      */
-    fun renderFrame(textureId: Int, stMatrix: FloatArray, timestampUs: Long) {
+    fun renderFrame(
+        textureId: Int,
+        stMatrix: FloatArray,
+        timestampUs: Long,
+        mirrorHorizontally: Boolean = false,
+        mirrorVertically: Boolean = false
+    ) {
         if (!isInitialized || textureId == 0 || shaderProgram == 0) return
-
-        val oldDisplay = EGL14.eglGetCurrentDisplay()
-        val oldDrawSurface = EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW)
-        val oldReadSurface = EGL14.eglGetCurrentSurface(EGL14.EGL_READ)
-        val oldContext = EGL14.eglGetCurrentContext()
 
         if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
             val currentContext = EGL14.eglGetCurrentContext()
             if (currentContext != eglContext) {
                 if (!EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
-                    // Fail silently but log periodically or once
+                    PLog.e(TAG, "eglMakeCurrent failed before render: 0x${Integer.toHexString(EGL14.eglGetError())}")
                     return
                 }
             }
@@ -269,12 +278,6 @@ class HardwareLutVideoRenderer(
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
         if (uCameraTextureLoc != -1) GLES30.glUniform1i(uCameraTextureLoc, 0)
-        
-        // 即使出错也打印一次，避免日志爆炸
-        val err = GLES30.glGetError()
-        if (err != GLES30.GL_NO_ERROR) {
-            PLog.e(TAG, "GL Error during bind: 0x${Integer.toHexString(err)} for texture $textureId")
-        }
 
         // 绘制
         if (aPositionLoc != -1) {
@@ -282,8 +285,13 @@ class HardwareLutVideoRenderer(
             GLES30.glVertexAttribPointer(aPositionLoc, 2, GLES30.GL_FLOAT, false, 0, vertexBuffer)
         }
         if (aTexCoordLoc != -1) {
+            val textureCoordinates = when {
+                mirrorHorizontally -> horizontalMirrorTexCoordBuffer
+                mirrorVertically -> verticalMirrorTexCoordBuffer
+                else -> texCoordBuffer
+            }
             GLES30.glEnableVertexAttribArray(aTexCoordLoc)
-            GLES30.glVertexAttribPointer(aTexCoordLoc, 2, GLES30.GL_FLOAT, false, 0, texCoordBuffer)
+            GLES30.glVertexAttribPointer(aTexCoordLoc, 2, GLES30.GL_FLOAT, false, 0, textureCoordinates)
         }
 
         indexBuffer?.let {
@@ -301,26 +309,6 @@ class HardwareLutVideoRenderer(
                 PLog.e(TAG, "eglSwapBuffers failed: 0x${Integer.toHexString(error)}")
             }
         }
-
-        restorePreviousEglContext(oldDisplay, oldDrawSurface, oldReadSurface, oldContext)
-    }
-
-    private fun restorePreviousEglContext(
-        oldDisplay: EGLDisplay,
-        oldDrawSurface: EGLSurface,
-        oldReadSurface: EGLSurface,
-        oldContext: EGLContext
-    ) {
-        if (oldDisplay == EGL14.EGL_NO_DISPLAY) {
-            EGL14.eglMakeCurrent(
-                EGL14.EGL_NO_DISPLAY,
-                EGL14.EGL_NO_SURFACE,
-                EGL14.EGL_NO_SURFACE,
-                EGL14.EGL_NO_CONTEXT
-            )
-            return
-        }
-        EGL14.eglMakeCurrent(oldDisplay, oldDrawSurface, oldReadSurface, oldContext)
     }
 
     fun release() {
@@ -337,3 +325,17 @@ class HardwareLutVideoRenderer(
     }
 
 }
+
+private val HORIZONTAL_MIRROR_TEXTURE_COORDS = floatArrayOf(
+    1.0f, 0.0f,
+    0.0f, 0.0f,
+    1.0f, 1.0f,
+    0.0f, 1.0f
+)
+
+private val VERTICAL_MIRROR_TEXTURE_COORDS = floatArrayOf(
+    0.0f, 1.0f,
+    1.0f, 1.0f,
+    0.0f, 0.0f,
+    1.0f, 0.0f
+)

@@ -39,6 +39,15 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     var onMeteringUpdated: ((Double, Double) -> Unit)? = null
     var onHighlightPointUpdated: ((Float, Float) -> Unit)? = null
     var onDepthInputAvailable: ((Bitmap) -> Unit)? = null
+        set(value) {
+            field = value
+            renderer.onDepthInputAvailable = value
+        }
+    var onAiFocusInputAvailable: ((Bitmap) -> Unit)? = null
+        set(value) {
+            field = value
+            renderer.onAiFocusInputAvailable = value
+        }
 
     var onSurfaceReady: ((Surface) -> Unit)? = null
     var onSurfaceDestroyed: (() -> Unit)? = null
@@ -83,10 +92,6 @@ class CameraGLSurfaceView @JvmOverloads constructor(
             onHighlightPointUpdated?.invoke(hx, hy)
         }
 
-        renderer.onDepthInputAvailable = { bitmap ->
-            onDepthInputAvailable?.invoke(bitmap)
-        }
-
         // 保持 EGL 上下文
         preserveEGLContextOnPause = true
 
@@ -99,6 +104,12 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     fun setPreviewSize(width: Int, height: Int) {
         queueEvent {
             renderer.setPreviewSize(width, height)
+        }
+    }
+
+    fun setCaptureSize(width: Int, height: Int) {
+        queueEvent {
+            renderer.setCaptureSize(width, height)
         }
     }
 
@@ -186,6 +197,16 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         requestRender()
     }
 
+    fun setFocusPeakingEnabled(enabled: Boolean) {
+        renderer.focusPeakingEnabled = enabled
+        requestRender()
+    }
+
+    fun setAiFocusBusy(busy: Boolean) {
+        renderer.isAiFocusBusy = busy
+        requestRender()
+    }
+
     /**
      * 获取当前 LUT 强度
      */
@@ -255,6 +276,22 @@ class CameraGLSurfaceView @JvmOverloads constructor(
      * @param callback 捕获完成后的回调，在主线程调用
      */
     fun capturePreviewFrame(callback: (Bitmap) -> Unit) {
+        capturePreviewFrameInternal(maxLongEdge = null, requestRenderImmediately = true, callback = callback)
+    }
+
+    fun capturePreviewFrame(maxLongEdge: Int, callback: (Bitmap) -> Unit) {
+        capturePreviewFrameInternal(maxLongEdge = maxLongEdge, requestRenderImmediately = true, callback = callback)
+    }
+
+    fun captureNextPreviewFrame(maxLongEdge: Int, callback: (Bitmap) -> Unit) {
+        capturePreviewFrameInternal(maxLongEdge = maxLongEdge, requestRenderImmediately = false, callback = callback)
+    }
+
+    private fun capturePreviewFrameInternal(
+        maxLongEdge: Int?,
+        requestRenderImmediately: Boolean,
+        callback: (Bitmap) -> Unit
+    ) {
         renderer.onPreviewFrameCaptured = { bitmap ->
             // 在主线程回调
             post {
@@ -262,8 +299,14 @@ class CameraGLSurfaceView @JvmOverloads constructor(
             }
         }
         queueEvent {
-            renderer.capturePreviewFrame()
-            requestRender()
+            if (maxLongEdge != null) {
+                renderer.capturePreviewFrame(maxLongEdge)
+            } else {
+                renderer.capturePreviewFrame()
+            }
+            if (requestRenderImmediately) {
+                requestRender()
+            }
         }
     }
 
@@ -299,11 +342,13 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     }
 
     override fun onPause() {
+        renderer.setRenderingPaused(true)
         super.onPause()
         PLog.d(TAG, "onPause")
     }
 
     override fun onResume() {
+        renderer.setRenderingPaused(false)
         super.onResume()
         PLog.d(TAG, "onResume")
     }

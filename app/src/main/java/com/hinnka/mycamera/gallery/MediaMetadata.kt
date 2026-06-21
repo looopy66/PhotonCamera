@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.gallery
 
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.graphics.ColorSpace
 import android.graphics.Rect
 import android.net.Uri
@@ -11,8 +12,10 @@ import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.hdr.HdrGainmapStrength
 import com.hinnka.mycamera.utils.PLog
-import org.json.JSONObject
 import com.hinnka.mycamera.raw.RawMetadata
+import com.hinnka.mycamera.raw.RawRenderingEngine
+import com.hinnka.mycamera.raw.RawToneMappingParameters
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.log2
@@ -23,7 +26,7 @@ import kotlin.math.log2
  * 保存 LUT、边框水印、编辑信息和拍摄参数，用于非破坏性编辑和边框水印渲染
  */
 data class MediaMetadata(
-    val version: Int = 16,
+    val version: Int = 19,
     val mediaType: MediaType = MediaType.IMAGE,
     // 编辑配置
     val lutId: String? = null,
@@ -39,10 +42,15 @@ data class MediaMetadata(
     val rawDenoiseValue: Float? = null,
     val rawExposureCompensation: Float? = null,
     val rawAutoExposure: Boolean? = null,
+    val rawHighlightsAdjustment: Float? = null,
+    val rawShadowsAdjustment: Float? = null,
     val rawBlackPointCorrection: Float? = null,
     val rawWhitePointCorrection: Float? = null,
     val rawAutoWhiteBalanceEstimate: Boolean? = null,
     val rawDcpId: String? = null,
+    val rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
+    val rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
+    val cameraId: String? = null,
     // 边框水印配置
     val frameId: String? = null,
     // 图片尺寸
@@ -102,7 +110,13 @@ data class MediaMetadata(
     val aiDenoiseStrength: Float? = null,
     val rawBlackLevelMode: String? = null,
     val rawCustomBlackLevel: Float? = null,
-    val cameraId: String? = null,
+    val rawCfaCorrectionMode: String? = null,
+    val applyEffectsToVideo: Boolean = false,
+    val spectralFilmStock: String? = null,
+    val spectralFilmPrint: String? = null,
+    val spectralFilmCDensityGain: Float = 1f,
+    val spectralFilmMDensityGain: Float = 1f,
+    val spectralFilmYDensityGain: Float = 1f,
 ) {
     /**
      * 将元数据转换为 CaptureInfo，用于写入 EXIF
@@ -159,132 +173,20 @@ data class MediaMetadata(
     val resolution: String
         get() = "${width}x${height}"
 
-    fun toJson(): String {
-        return JSONObject().apply {
-            put("version", version)
-            put("mediaType", mediaType.name.lowercase(Locale.US))
-            put("lutId", lutId ?: JSONObject.NULL)
-            // 色彩配方配置
-            if (colorRecipeParams != null) {
-                put("colorRecipeParams", JSONObject(colorRecipeParams.toJson()))
-            } else {
-                put("colorRecipeParams", JSONObject.NULL)
-            }
-            put("baselineTarget", baselineTarget?.name ?: JSONObject.NULL)
-            put("baselineLutId", baselineLutId ?: JSONObject.NULL)
-            if (baselineColorRecipeParams != null) {
-                put("baselineColorRecipeParams", JSONObject(baselineColorRecipeParams.toJson()))
-            } else {
-                put("baselineColorRecipeParams", JSONObject.NULL)
-            }
-            // 软件处理参数
-            put("sharpening", sharpening?.toDouble() ?: JSONObject.NULL)
-            put("noiseReduction", noiseReduction?.toDouble() ?: JSONObject.NULL)
-            put("chromaNoiseReduction", chromaNoiseReduction?.toDouble() ?: JSONObject.NULL)
-            put("denoiseValue", rawDenoiseValue?.toDouble() ?: JSONObject.NULL)
-            put("rawExposureCompensation", rawExposureCompensation?.toDouble() ?: JSONObject.NULL)
-            put("rawAutoExposure", rawAutoExposure ?: JSONObject.NULL)
-            put("rawBlackPointCorrection", rawBlackPointCorrection?.toDouble() ?: JSONObject.NULL)
-            put("rawWhitePointCorrection", rawWhitePointCorrection?.toDouble() ?: JSONObject.NULL)
-            put("rawAutoWhiteBalanceEstimate", rawAutoWhiteBalanceEstimate ?: JSONObject.NULL)
-            put("rawDcpId", rawDcpId ?: JSONObject.NULL)
-            put("rawBlackLevelMode", rawBlackLevelMode ?: JSONObject.NULL)
-            put("rawCustomBlackLevel", rawCustomBlackLevel?.toDouble() ?: JSONObject.NULL)
-            put("cameraId", cameraId ?: JSONObject.NULL)
-
-            put("frameId", frameId ?: JSONObject.NULL)
-            put("width", width)
-            put("height", height)
-            put("ratio", ratio?.getDisplayName() ?: JSONObject.NULL)
-            put(
-                "cropRegion", if (cropRegion != null) {
-                    JSONObject().apply {
-                        put("left", cropRegion.left)
-                        put("top", cropRegion.top)
-                        put("right", cropRegion.right)
-                        put("bottom", cropRegion.bottom)
-                    }
-                } else {
-                    JSONObject.NULL
-                })
-            put(
-                "postCropRegion", if (postCropRegion != null) {
-                    JSONObject().apply {
-                        put("left", postCropRegion.left)
-                        put("top", postCropRegion.top)
-                        put("right", postCropRegion.right)
-                        put("bottom", postCropRegion.bottom)
-                    }
-                } else {
-                    JSONObject.NULL
-                })
-            put("rotation", rotation)
-            // 拍摄信息
-            put("deviceModel", deviceModel ?: JSONObject.NULL)
-            put("brand", brand ?: JSONObject.NULL)
-            put("dateTaken", dateTaken ?: JSONObject.NULL)
-            put("location", location ?: JSONObject.NULL)
-            put("latitude", latitude ?: JSONObject.NULL)
-            put("longitude", longitude ?: JSONObject.NULL)
-            put("altitude", altitude ?: JSONObject.NULL)
-            put("iso", iso ?: JSONObject.NULL)
-            put("shutterSpeed", shutterSpeed ?: JSONObject.NULL)
-            put("focalLength", focalLength ?: JSONObject.NULL)
-            put("focalLength35mm", focalLength35mm ?: JSONObject.NULL)
-            put("aperture", aperture ?: JSONObject.NULL)
-            put("exposureBias", exposureBias ?: JSONObject.NULL)
-            put("isImported", isImported)
-            put("sourceUri", sourceUri ?: JSONObject.NULL)
-            put("mimeType", mimeType ?: JSONObject.NULL)
-            put("durationMs", durationMs ?: JSONObject.NULL)
-            put("frameRate", frameRate ?: JSONObject.NULL)
-            put("bitrate", bitrate ?: JSONObject.NULL)
-            put("rotationDegrees", rotationDegrees ?: JSONObject.NULL)
-            put("hasAudio", hasAudio ?: JSONObject.NULL)
-            put("videoWidth", videoWidth ?: JSONObject.NULL)
-            put("videoHeight", videoHeight ?: JSONObject.NULL)
-            // 边框水印自定义
-            val customPropsObj = JSONObject()
-            customProperties.forEach { (k, v) -> customPropsObj.put(k, v) }
-            put("customProperties", customPropsObj)
-            // 导出的 URI 列表
-            put("exportedUris", org.json.JSONArray(exportedUris))
-
-            // 计算摄影光圈与焦点
-            put("computationalAperture", computationalAperture?.toDouble() ?: JSONObject.NULL)
-            put("focusPointX", focusPointX?.toDouble() ?: JSONObject.NULL)
-            put("focusPointY", focusPointY?.toDouble() ?: JSONObject.NULL)
-
-            // Live Photo 时间戳
-            put("presentationTimestampUs", presentationTimestampUs ?: JSONObject.NULL)
-            // DRO 模式
-            put("droMode", droMode ?: JSONObject.NULL)
-            put("software", software ?: JSONObject.NULL)
-            put("isMirrored", isMirrored)
-            put("colorSpace", colorSpace.name)
-            put("manualHdrEffectEnabled", manualHdrEffectEnabled)
-            put("hdrEffectStrength", hdrEffectStrength.toDouble())
-            put("hasEmbeddedGainmap", hasEmbeddedGainmap)
-            put("dynamicRangeProfile", dynamicRangeProfile ?: JSONObject.NULL)
-            put("captureMode", captureMode ?: JSONObject.NULL)
-            put("multipleExposureFrameCount", multipleExposureFrameCount ?: JSONObject.NULL)
-            put("hasAiDenoisedBase", hasAiDenoisedBase)
-            put("aiDenoiseStrength", aiDenoiseStrength?.toDouble() ?: JSONObject.NULL)
-        }.toString(2)
-    }
-
     /**
      * 从 RawMetadata 补齐信息
      */
     fun merge(raw: RawMetadata): MediaMetadata {
+        val shouldSwap = rotation == 90 || rotation == 270
+        val resolvedWidth = if (shouldSwap) raw.height else raw.width
+        val resolvedHeight = if (shouldSwap) raw.width else raw.height
         return copy(
             iso = raw.iso.takeIf { it > 0 } ?: iso,
             shutterSpeed = formatShutterSpeed(raw.shutterSpeed).takeIf { it.isNotEmpty() } ?: shutterSpeed,
             aperture = formatAperture(raw.aperture).takeIf { it.isNotEmpty() } ?: aperture,
             exposureBias = raw.exposureBias,
-            droMode = null,
-            width = raw.width.takeIf { it > 0 } ?: width,
-            height = raw.height.takeIf { it > 0 } ?: height
+            width = resolvedWidth.takeIf { it > 0 } ?: width,
+            height = resolvedHeight.takeIf { it > 0 } ?: height
         )
     }
 
@@ -306,7 +208,8 @@ data class MediaMetadata(
     companion object {
         private const val TAG = "PhotoMetadata"
 
-        fun fromJson(json: String): MediaMetadata? {
+        // 旧格式，以后不再更新
+        fun fromLegacyJson(json: String): MediaMetadata? {
             return try {
                 val obj = JSONObject(json)
 
@@ -360,12 +263,51 @@ data class MediaMetadata(
                     rawDenoiseValue = if (obj.isNull("denoiseValue")) null else obj.optDouble("denoiseValue").toFloat(),
                     rawExposureCompensation = if (obj.isNull("rawExposureCompensation")) null else obj.optDouble("rawExposureCompensation").toFloat(),
                     rawAutoExposure = if (obj.isNull("rawAutoExposure")) null else obj.optBoolean("rawAutoExposure"),
+                    rawHighlightsAdjustment = if (obj.isNull("rawHighlightsAdjustment")) null else obj.optDouble("rawHighlightsAdjustment").toFloat(),
+                    rawShadowsAdjustment = if (obj.isNull("rawShadowsAdjustment")) null else obj.optDouble("rawShadowsAdjustment").toFloat(),
                     rawBlackPointCorrection = if (obj.isNull("rawBlackPointCorrection")) null else obj.optDouble("rawBlackPointCorrection").toFloat(),
                     rawWhitePointCorrection = if (obj.isNull("rawWhitePointCorrection")) null else obj.optDouble("rawWhitePointCorrection").toFloat(),
                     rawAutoWhiteBalanceEstimate = if (obj.isNull("rawAutoWhiteBalanceEstimate")) null else obj.optBoolean("rawAutoWhiteBalanceEstimate"),
                     rawDcpId = if (obj.isNull("rawDcpId")) null else obj.optString("rawDcpId"),
+                    rawRenderingEngine = RawRenderingEngine.fromPersistedName(
+                        if (obj.isNull("rawColorEngine")) null else obj.optString("rawColorEngine"),
+                        fallback = RawRenderingEngine.AdobeCurve
+                    ),
+                    rawToneMappingParameters = RawToneMappingParameters(
+                        agxBlackRelativeExposure = if (obj.isNull("rawAgxBlackRelativeExposure")) {
+                            RawToneMappingParameters.AGX_BLACK_RELATIVE_EXPOSURE_DEFAULT
+                        } else {
+                            obj.optDouble("rawAgxBlackRelativeExposure").toFloat()
+                        },
+                        agxWhiteRelativeExposure = if (obj.isNull("rawAgxWhiteRelativeExposure")) {
+                            RawToneMappingParameters.AGX_WHITE_RELATIVE_EXPOSURE_DEFAULT
+                        } else {
+                            obj.optDouble("rawAgxWhiteRelativeExposure").toFloat()
+                        },
+                        agxToe = if (obj.isNull("rawAgxToe")) {
+                            RawToneMappingParameters.AGX_TOE_DEFAULT
+                        } else {
+                            obj.optDouble("rawAgxToe").toFloat()
+                        },
+                        agxShoulder = if (obj.isNull("rawAgxShoulder")) {
+                            RawToneMappingParameters.AGX_SHOULDER_DEFAULT
+                        } else {
+                            obj.optDouble("rawAgxShoulder").toFloat()
+                        },
+                        filmicBlackRelativeExposure = if (obj.isNull("rawFilmicBlackRelativeExposure")) {
+                            RawToneMappingParameters.FILMIC_BLACK_RELATIVE_EXPOSURE_DEFAULT
+                        } else {
+                            obj.optDouble("rawFilmicBlackRelativeExposure").toFloat()
+                        },
+                        filmicWhiteRelativeExposure = if (obj.isNull("rawFilmicWhiteRelativeExposure")) {
+                            RawToneMappingParameters.FILMIC_WHITE_RELATIVE_EXPOSURE_DEFAULT
+                        } else {
+                            obj.optDouble("rawFilmicWhiteRelativeExposure").toFloat()
+                        }
+                    ).normalized(),
                     rawBlackLevelMode = if (obj.isNull("rawBlackLevelMode")) null else obj.optString("rawBlackLevelMode"),
                     rawCustomBlackLevel = if (obj.isNull("rawCustomBlackLevel")) null else obj.optDouble("rawCustomBlackLevel").toFloat(),
+                    rawCfaCorrectionMode = if (obj.isNull("rawCfaCorrectionMode")) null else obj.optString("rawCfaCorrectionMode"),
                     cameraId = if (obj.isNull("cameraId")) null else obj.optString("cameraId"),
                     frameId = if (obj.isNull("frameId")) null else obj.optString("frameId"),
                     width = obj.optInt("width", 0),
@@ -444,6 +386,12 @@ data class MediaMetadata(
                     multipleExposureFrameCount = if (obj.isNull("multipleExposureFrameCount")) null else obj.optInt("multipleExposureFrameCount"),
                     hasAiDenoisedBase = obj.optBoolean("hasAiDenoisedBase", false),
                     aiDenoiseStrength = if (obj.isNull("aiDenoiseStrength")) null else obj.optDouble("aiDenoiseStrength").toFloat(),
+                    applyEffectsToVideo = obj.optBoolean("applyEffectsToVideo", false),
+                    spectralFilmStock = if (obj.isNull("spectralFilmStock")) null else obj.optString("spectralFilmStock"),
+                    spectralFilmPrint = if (obj.isNull("spectralFilmPrint")) null else obj.optString("spectralFilmPrint"),
+                    spectralFilmCDensityGain = if (obj.isNull("spectralFilmCDensityGain")) 1f else obj.optDouble("spectralFilmCDensityGain").toFloat(),
+                    spectralFilmMDensityGain = if (obj.isNull("spectralFilmMDensityGain")) 1f else obj.optDouble("spectralFilmMDensityGain").toFloat(),
+                    spectralFilmYDensityGain = if (obj.isNull("spectralFilmYDensityGain")) 1f else obj.optDouble("spectralFilmYDensityGain").toFloat(),
                 )
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to parse JSON", e)
@@ -468,6 +416,28 @@ data class MediaMetadata(
          * 从指定的 URI 加载 EXIF 元数据
          */
         fun fromUri(context: Context, uri: Uri): MediaMetadata {
+            var width = 0
+            var height = 0
+            var mimeType: String? = null
+            var rotation = 0
+
+            // 尝试从图片流获取基础信息（宽高、MIME 类型）作为兜底
+            try {
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeStream(stream, null, options)
+                    width = options.outWidth
+                    height = options.outHeight
+                    mimeType = options.outMimeType
+                }
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to decode bounds from $uri", e)
+            }
+
+            if (mimeType == null) {
+                mimeType = context.contentResolver.getType(uri)
+            }
+
             return try {
                 context.contentResolver.openInputStream(uri)?.use { inputStream ->
                     val exif = ExifInterface(inputStream)
@@ -502,10 +472,22 @@ data class MediaMetadata(
                     val focalLength35mm = exif.getAttributeInt(ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM, 0)
                         .takeIf { it > 0 }?.let { "${it}mm" }
 
-                    val width = exif.getAttributeInt(ExifInterface.TAG_IMAGE_WIDTH, 0)
+                    val exifWidth = exif.getAttributeInt(ExifInterface.TAG_IMAGE_WIDTH, 0)
                         .let { if (it == 0) exif.getAttributeInt(ExifInterface.TAG_PIXEL_X_DIMENSION, 0) else it }
-                    val height = exif.getAttributeInt(ExifInterface.TAG_IMAGE_LENGTH, 0)
+                    val exifHeight = exif.getAttributeInt(ExifInterface.TAG_IMAGE_LENGTH, 0)
                         .let { if (it == 0) exif.getAttributeInt(ExifInterface.TAG_PIXEL_Y_DIMENSION, 0) else it }
+
+                    if (exifWidth > 0) width = exifWidth
+                    if (exifHeight > 0) height = exifHeight
+
+                    rotation = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL).let {
+                        when (it) {
+                            ExifInterface.ORIENTATION_ROTATE_90 -> 90
+                            ExifInterface.ORIENTATION_ROTATE_180 -> 180
+                            ExifInterface.ORIENTATION_ROTATE_270 -> 270
+                            else -> 0
+                        }
+                    }
 
                     val dateTaken = dateStr?.let {
                         try {
@@ -534,16 +516,18 @@ data class MediaMetadata(
                         aperture = aperture,
                         width = width,
                         height = height,
+                        rotation = rotation,
                         latitude = latitude,
                         longitude = longitude,
                         altitude = altitude,
                         software = software,
+                        mimeType = mimeType,
                         isImported = true
                     )
-                } ?: createDefault(0, 0)
+                } ?: createDefault(width, height).copy(mimeType = mimeType, isImported = true)
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to load EXIF from $uri", e)
-                createDefault(0, 0)
+                createDefault(width, height).copy(mimeType = mimeType, isImported = true)
             }
         }
     }

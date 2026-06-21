@@ -17,6 +17,7 @@ import android.media.ImageReader
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Size
 import android.view.Surface
@@ -28,10 +29,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.model.SafeImage
-import com.hinnka.mycamera.processor.MultiFrameStacker
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.video.CaptureMode
+import com.hinnka.mycamera.video.QuickShotCapabilitiesResolver
+import com.hinnka.mycamera.video.QuickShotResolutionPreset
 import com.hinnka.mycamera.video.VideoAspectRatio
 import com.hinnka.mycamera.video.VIDEO_AUDIO_INPUT_AUTO
 import com.hinnka.mycamera.video.VideoBitratePreset
@@ -40,20 +42,20 @@ import com.hinnka.mycamera.video.VideoFpsPreset
 import com.hinnka.mycamera.video.VideoEncoderColorRequest
 import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.video.VideoRecorder
+import com.hinnka.mycamera.video.VideoRecordingPath
 import com.hinnka.mycamera.video.VideoResolutionPreset
 import com.hinnka.mycamera.video.VideoRecordingState
 import com.hinnka.mycamera.video.VideoStabilizationMode
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 
 
 /**
@@ -78,6 +80,8 @@ class Camera2Controller(private val context: Context) {
 
         private const val SINGLE_CAPTURE_READER_MAX_IMAGES = 2
         private const val BURST_CAPTURE_BATCH_SIZE = 8
+        private const val HDR_BRACKET_BASE_CAPTURE_COUNT = 3
+        private const val HDR_BRACKET_SIDE_FRAME_COUNT = 2
 
         // 拍照状态机常量
         private const val STATE_PREVIEW = 0 // Showing camera preview.
@@ -91,7 +95,21 @@ class Camera2Controller(private val context: Context) {
         private const val SCENE_CHANGE_FOCUS_DISTANCE_DELTA = 0.2f // 焦距跳变阈值（diopters），对焦锁定后逐帧跟踪
         private const val FOCUS_LOCK_SETTLE_FRAMES = 5        // 对焦锁定后等待镜头稳定的帧数
         private const val SCENE_CHANGE_CONFIRM_FRAMES = 3     // 连续 N 帧检测到变化才确认
+        private const val AI_SUBJECT_RECENT_MS = 1800L
+        private const val AI_FOCUS_FALLBACK_FRAMES = 6
+        private const val DEFAULT_HYPERFOCAL_FOCAL_LENGTH_MM = 4.0f
+        private const val DEFAULT_HYPERFOCAL_APERTURE = 1.8f
+        private const val HYPERFOCAL_COC_DIAGONAL_DIVISOR = 1500.0
     }
+
+    private data class HyperfocalFocusResult(
+        val cameraId: String,
+        val focalLengthMm: Float,
+        val aperture: Float,
+        val circleOfConfusionMm: Float,
+        val distanceMeters: Float,
+        val focusDistanceDiopters: Float
+    )
 
     private val cameraManager: CameraManager by lazy {
         context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -110,11 +128,14 @@ class Camera2Controller(private val context: Context) {
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var previewRequestBuilder: CaptureRequest.Builder? = null
+    private var previewSessionGeneration: Long = 0L
+    private val previewUpdateScheduled = AtomicBoolean(false)
 
     private var previewSurface: Surface? = null
     private var imageReader: ImageReader? = null
 
     val previewDepthProcessor = com.hinnka.mycamera.preview.PreviewDepthProcessor(context)
+    val previewAiFocusProcessor = com.hinnka.mycamera.preview.PreviewAiFocusProcessor(context)
 
 
     // 降噪等级 (0=Off, 1=Fast, 2=High Quality, 3=ZSL, 4=Minimal, 5=Auto)
@@ -127,6 +148,9 @@ class Camera2Controller(private val context: Context) {
     private var cameraHandler: Handler? = null
 
     private var cachedCharacteristics: CameraCharacteristics? = null
+    private var activeOpenCameraId: String = ""
+    private var activeOutputPhysicalCameraId: String? = null
+    private val failedPhysicalOutputCameraIds = mutableSetOf<String>()
     private var cachedSensorOrientation: Int = 0
     private var cachedLensFacing: Int = CameraCharacteristics.LENS_FACING_BACK
     private var cachedHardwareLevel: Int = CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED
@@ -150,11 +174,15 @@ class Camera2Controller(private val context: Context) {
     private var isRawSupported = false
     private var isP010Supported = false
     private var isHlg10Supported = false
+    private var isZslControlSupported: Boolean? = null
     private var availableAeModes: IntArray = intArrayOf()
     private var availableAwbModes: IntArray = intArrayOf()
     private var videoCaptureStatsWindowStartMs: Long = 0L
     private var videoCaptureStatsFrames: Int = 0
     private var videoCaptureStatsLastTimestampNs: Long = 0L
+    private var mirrorFrontCameraEnabled: Boolean = true
+    @Volatile
+    private var cameraOpenGeneration: Long = 0L
 
     private val _state = MutableStateFlow(CameraState())
     val state: StateFlow<CameraState> = _state.asStateFlow()
@@ -195,7 +223,6 @@ class Camera2Controller(private val context: Context) {
     private var imageReaderMaxImages = SINGLE_CAPTURE_READER_MAX_IMAGES
 
     private var burstCapturing = false
-
     // 保留最近的一个结果作为后备
     @Volatile
     private var lastCaptureResult: TotalCaptureResult? = null
@@ -207,6 +234,12 @@ class Camera2Controller(private val context: Context) {
     private var focusLockedReferenceDistance: Float = 0f
     private var focusLockSettleFrames = 0       // 对焦锁定后等待镜头稳定的帧数
     private var sceneChangeFrameCount = 0
+    private var aiFocusFallbackFrames = 0
+    private var aiSubjectLastSeenElapsedMs: Long = 0L
+    private var aiSubjectLastSeenX: Float = -1f
+    private var aiSubjectLastSeenY: Float = -1f
+    private var focusModeBeforeHyperfocal: Boolean? = null
+    private var focusDistanceBeforeHyperfocal: Float? = null
 
     // 高光优先测光：最亮区域坐标（归一化 0-1）及平滑状态
     @Volatile
@@ -221,6 +254,7 @@ class Camera2Controller(private val context: Context) {
 
     // 图片拍摄回调（携带 CaptureInfo, CameraCharacteristics 和 CaptureResult 用于 RAW 处理）
     var onImageCaptured: ((SafeImage, CaptureInfo, CameraCharacteristics?, CaptureResult?) -> Unit)? = null
+    var onHdrBracketCaptureFailed: (() -> Unit)? = null
 
     private fun trackImage(image: Image?): SafeImage? {
         if (image != null) {
@@ -233,6 +267,49 @@ class Camera2Controller(private val context: Context) {
         val frameNumber = result.frameNumber
         val startedTimestamp = pendingCaptureStartedTimestamps.remove(frameNumber)
         return result.get(CaptureResult.SENSOR_TIMESTAMP) ?: startedTimestamp
+    }
+
+    private fun shouldPairImageWithCaptureResult(image: SafeImage): Boolean {
+        return image.format == ImageFormat.RAW_SENSOR || _state.value.hdrBracketCapturing
+    }
+
+    private fun processOrBufferImageForCaptureResult(image: SafeImage) {
+        val timestamp = image.timestamp
+        val pendingResult = pendingResults.remove(timestamp)
+        if (pendingResult != null) {
+            processAndTriggerCapture(image, pendingResult)
+        } else {
+            pendingImages.put(timestamp, image)?.close()
+            trimPendingImages()
+        }
+    }
+
+    private fun processOrBufferCaptureResult(result: TotalCaptureResult) {
+        val timestamp = getCaptureTimestamp(result)
+        if (timestamp == null) {
+            PLog.w(TAG, "Capture result missing timestamp, frame=${result.frameNumber}")
+            return
+        }
+
+        val pendingImage = pendingImages.remove(timestamp)
+        if (pendingImage != null) {
+            processAndTriggerCapture(pendingImage, result)
+        } else {
+            pendingResults[timestamp] = result
+            trimPendingResults()
+        }
+    }
+
+    private fun trimPendingImages(maxSize: Int = 20) {
+        if (pendingImages.size <= maxSize) return
+        val oldestKey = pendingImages.keys.minOrNull() ?: return
+        pendingImages.remove(oldestKey)?.close()
+    }
+
+    private fun trimPendingResults(maxSize: Int = 20) {
+        if (pendingResults.size <= maxSize) return
+        val oldestKey = pendingResults.keys.minOrNull() ?: return
+        pendingResults.remove(oldestKey)
     }
 
     // 快门音效播放回调
@@ -252,18 +329,26 @@ class Camera2Controller(private val context: Context) {
             _state.value = _state.value.copy(isCapturing = false)
         }
         if (count == 0) {
-            _state.value = _state.value.copy(isCapturing = false)
+            _state.value = _state.value.copy(
+                isCapturing = false,
+                hdrBracketCapturing = false,
+                hdrBracketFrameCount = 0
+            )
             checkAndClosePendingReaders()
         }
     }
 
     private fun resolveImageReaderMaxImages(): Int {
         val currentState = _state.value
+        val multiFrameCount = currentState.multiFrameCount.coerceIn(
+            MultiFrameConfig.MIN_FRAME_COUNT,
+            MultiFrameConfig.MAX_FRAME_COUNT
+        )
         val requestedImages = when {
-            currentState.useMFNR || currentState.useMFSR -> currentState.multiFrameCount.coerceIn(
-                MultiFrameConfig.MIN_FRAME_COUNT,
-                MultiFrameConfig.MAX_FRAME_COUNT
-            )
+            currentState.useHdrComposition && (currentState.useMFNR || currentState.useMFSR) ->
+                multiFrameCount + HDR_BRACKET_SIDE_FRAME_COUNT
+
+            currentState.useMFNR || currentState.useMFSR -> multiFrameCount
 
             else -> BURST_CAPTURE_BATCH_SIZE
         }
@@ -274,6 +359,8 @@ class Camera2Controller(private val context: Context) {
         val currentState = _state.value
         return when {
             currentState.burstCapturing -> BURST_CAPTURE_BATCH_SIZE
+            currentState.hdrBracketCapturing -> currentState.hdrBracketFrameCount
+                .coerceAtLeast(HDR_BRACKET_BASE_CAPTURE_COUNT)
             currentState.useMFNR || currentState.useMFSR -> currentState.multiFrameCount.coerceIn(
                 MultiFrameConfig.MIN_FRAME_COUNT,
                 MultiFrameConfig.MAX_FRAME_COUNT
@@ -331,13 +418,26 @@ class Camera2Controller(private val context: Context) {
             if (_state.value.isFocusing) {
                 when (afState) {
                     CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED -> {
-                        _state.value = _state.value.copy(focusSuccess = true)
+                        aiFocusFallbackFrames = 0
+                        _state.value = _state.value.copy(isFocusing = false, focusSuccess = true)
                         // 只在首次锁定时记录一次，后续 AF 狩猎重新锁定不再覆盖
                         if (!isFocusLockedWaitingForSceneChange) recordFocusLockExposure(result)
                     }
 
                     CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED -> {
-                        _state.value = _state.value.copy(focusSuccess = false)
+                        aiFocusFallbackFrames = 0
+                        _state.value = _state.value.copy(isFocusing = false, focusSuccess = false)
+                        if (!isFocusLockedWaitingForSceneChange) recordFocusLockExposure(result)
+                    }
+                }
+                if (_state.value.isFocusing &&
+                    _state.value.focusPointSource == FocusPointSource.AI &&
+                    aiFocusFallbackFrames > 0
+                ) {
+                    aiFocusFallbackFrames--
+                    if (aiFocusFallbackFrames == 0) {
+                        PLog.d(TAG, "AI focus fallback complete")
+                        _state.value = _state.value.copy(isFocusing = false, focusSuccess = true)
                         if (!isFocusLockedWaitingForSceneChange) recordFocusLockExposure(result)
                     }
                 }
@@ -363,7 +463,7 @@ class Camera2Controller(private val context: Context) {
                         if (refProduct > 0) {
                             val ratio = if (curProduct > refProduct) curProduct / refProduct else refProduct / curProduct
                             if (ratio > SCENE_CHANGE_EXPOSURE_RATIO) {
-                                PLog.d(TAG, "scene change: exposure ratio=$ratio")
+//                                PLog.d(TAG, "scene change: exposure ratio=$ratio")
                                 sceneChanged = true
                             }
                         }
@@ -374,15 +474,20 @@ class Camera2Controller(private val context: Context) {
                     if (focusLockedReferenceDistance > 0f && currentFocusDistance > 0f) {
                         val delta = abs(currentFocusDistance - focusLockedReferenceDistance)
                         if (delta > SCENE_CHANGE_FOCUS_DISTANCE_DELTA) {
-                            PLog.d(TAG, "scene change: focusDistance delta=$delta (ref=$focusLockedReferenceDistance, cur=$currentFocusDistance)")
+//                            PLog.d(TAG, "scene change: focusDistance delta=$delta (ref=$focusLockedReferenceDistance, cur=$currentFocusDistance)")
                             sceneChanged = true
                         }
                     }
 
                     if (sceneChanged) {
-                        sceneChangeFrameCount++
-                        if (sceneChangeFrameCount >= SCENE_CHANGE_CONFIRM_FRAMES) {
-                            restoreContinuousAf()
+                        if (isAiSubjectRecentlySeen()) {
+                            updateFocusLockSceneReference(result)
+                            sceneChangeFrameCount = 0
+                        } else {
+                            sceneChangeFrameCount++
+                            if (sceneChangeFrameCount >= SCENE_CHANGE_CONFIRM_FRAMES) {
+                                restoreContinuousAf()
+                            }
                         }
                     } else {
                         sceneChangeFrameCount = 0
@@ -575,8 +680,16 @@ class Camera2Controller(private val context: Context) {
         PLog.d(TAG, "Discovered ${cameras.size} cameras:")
         PLog.d(TAG, "发现 ${cameras.size} 个摄像头")
         cameras.forEach { cam ->
-            PLog.d(TAG, "  - ${cam.cameraId}: ${cam.lensType}, intrinsicZoom=${cam.intrinsicZoomRatio}")
-            PLog.d(TAG, "摄像头: ${cam.cameraId}, 类型: ${cam.lensType}, 变焦: ${cam.intrinsicZoomRatio}")
+            PLog.d(
+                TAG,
+                "  - ${cam.cameraId}: ${cam.lensType}, intrinsicZoom=${cam.intrinsicZoomRatio}, " +
+                        "displayZoom=${cam.displayIntrinsicZoomRatio}"
+            )
+            PLog.d(
+                TAG,
+                "摄像头: ${cam.cameraId}, 类型: ${cam.lensType}, 变焦: ${cam.displayIntrinsicZoomRatio}, " +
+                        "提交倍率基准: ${cam.intrinsicZoomRatio}"
+            )
         }
 
         // 默认选择主摄
@@ -601,14 +714,56 @@ class Camera2Controller(private val context: Context) {
         discoverCameras(preferredCameraId = currentCameraId.takeIf { it.isNotEmpty() })
     }
 
+    private fun getCurrentOpenCameraId(): String {
+        val state = _state.value
+        return state.getCurrentCameraInfo()?.getOpenCameraId() ?: state.currentCameraId
+    }
+
+    private fun resolveActiveFocusCharacteristics(
+        fallbackCharacteristics: CameraCharacteristics? = cachedCharacteristics
+    ): Pair<String, CameraCharacteristics>? {
+        val state = _state.value
+        val camera = state.getCurrentCameraInfo()
+        val targetZoomRatioByMain = getTargetZoomRatioByMain(state, camera)
+        val candidateIds = buildList {
+            activeOutputPhysicalCameraId?.let(::add)
+            camera?.getBoundPhysicalCameraId(targetZoomRatioByMain)?.let(::add)
+            camera?.baseCameraId?.let(::add)
+            camera?.cameraId?.takeUnless { camera.isVirtualIszLens }?.let(::add)
+            activeOpenCameraId.takeIf { it.isNotEmpty() }?.let(::add)
+            state.currentCameraId.takeIf { it.isNotEmpty() }?.let(::add)
+        }.distinct()
+
+        for (cameraId in candidateIds) {
+            try {
+                return cameraId to cameraManager.getCameraCharacteristics(cameraId)
+            } catch (e: Exception) {
+                PLog.v(TAG, "Failed to load focus characteristics for camera $cameraId: ${e.message}")
+            }
+        }
+
+        return fallbackCharacteristics?.let {
+            val fallbackId = activeOpenCameraId.takeIf { id -> id.isNotEmpty() }
+                ?: state.currentCameraId
+            fallbackId to it
+        }
+    }
+
+    private fun refreshActiveFocusLimit() {
+        val focusCharacteristics = resolveActiveFocusCharacteristics()?.second
+        val minimumFocusDistance =
+            focusCharacteristics?.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
+        _state.value = _state.value.copy(minimumFocusDistance = minimumFocusDistance)
+    }
+
     private fun refreshVideoCapabilities(characteristics: CameraCharacteristics? = null): Size {
-        val currentCameraId = _state.value.currentCameraId
-        if (currentCameraId.isEmpty()) {
+        val openCameraId = getCurrentOpenCameraId()
+        if (openCameraId.isEmpty()) {
             return _state.value.currentPreviewSize
         }
 
         val resolvedCharacteristics = try {
-            characteristics ?: cachedCharacteristics ?: cameraManager.getCameraCharacteristics(currentCameraId)
+            characteristics ?: cachedCharacteristics ?: cameraManager.getCameraCharacteristics(openCameraId)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to load video capabilities", e)
             return _state.value.currentPreviewSize
@@ -627,6 +782,37 @@ class Camera2Controller(private val context: Context) {
             videoConfig = snapshot.config,
             videoCapabilities = snapshot.capabilities,
             currentPreviewSize = if (_state.value.captureMode == CaptureMode.VIDEO) {
+                snapshot.previewSize
+            } else {
+                _state.value.currentPreviewSize
+            }
+        )
+        return snapshot.previewSize
+    }
+
+    private fun refreshQuickShotCapabilities(characteristics: CameraCharacteristics? = null): Size {
+        val openCameraId = getCurrentOpenCameraId()
+        if (openCameraId.isEmpty()) {
+            return _state.value.currentPreviewSize
+        }
+
+        val resolvedCharacteristics = try {
+            characteristics ?: cachedCharacteristics ?: cameraManager.getCameraCharacteristics(openCameraId)
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to load quick-shot capabilities", e)
+            return _state.value.currentPreviewSize
+        }
+
+        val snapshot = QuickShotCapabilitiesResolver.resolve(
+            characteristics = resolvedCharacteristics,
+            requestedConfig = _state.value.quickShotConfig,
+            aspectRatio = _state.value.aspectRatio
+        )
+
+        _state.value = _state.value.copy(
+            quickShotConfig = snapshot.config,
+            quickShotCapabilities = snapshot.capabilities,
+            currentPreviewSize = if (_state.value.captureMode == CaptureMode.QUICK_SHOT) {
                 snapshot.previewSize
             } else {
                 _state.value.currentPreviewSize
@@ -654,8 +840,17 @@ class Camera2Controller(private val context: Context) {
      */
     @SuppressLint("MissingPermission")
     fun openCamera(surfaceTexture: SurfaceTexture, preserveVideoRecording: Boolean = false) {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post {
+                openCamera(surfaceTexture, preserveVideoRecording)
+            }
+            return
+        }
         // 先关闭旧的相机和资源，防止资源泄漏
         closeCamera(preserveVideoRecording = preserveVideoRecording)
+        resetAiFocusForCameraOpen()
+        val openGeneration = ++cameraOpenGeneration
 
         // 确保在权限已授予后才发现相机（延迟初始化）
         if (_state.value.availableCameras.isEmpty()) {
@@ -664,19 +859,31 @@ class Camera2Controller(private val context: Context) {
         }
 
         val cameraId = _state.value.currentCameraId
+        val selectedCamera = _state.value.getCurrentCameraInfo()
+        val openCameraId = selectedCamera?.getOpenCameraId() ?: cameraId
+        val targetZoomRatioByMain = getTargetZoomRatioByMain(_state.value, selectedCamera)
+        val outputPhysicalCameraId = resolveOutputPhysicalCameraId(_state.value, selectedCamera)
         val captureMode = _state.value.captureMode
         if (cameraId.isEmpty()) {
             PLog.e(TAG, "No camera ID set")
             return
         }
 
-        PLog.i(TAG, "打开相机: $cameraId, 模式: ${captureMode.name}")
+        activeOpenCameraId = openCameraId
+        activeOutputPhysicalCameraId = outputPhysicalCameraId
+
+        PLog.i(
+            TAG,
+            "打开相机: selected=$cameraId, open=$openCameraId, targetZoom=$targetZoomRatioByMain, " +
+                    "physicalOutput=$outputPhysicalCameraId, " +
+                    "模式: ${captureMode.name}"
+        )
 
         var previewSize = _state.value.currentPreviewSize
 
         try {
             try {
-                cachedCharacteristics = cameraManager.getCameraCharacteristics(cameraId)
+                cachedCharacteristics = cameraManager.getCameraCharacteristics(openCameraId)
 
                 // 缓存固定属性（传感器方向、镜头朝向、硬件级别）
                 // 这些值在相机生命周期内不会改变，避免在每帧预览中重复获取
@@ -704,6 +911,7 @@ class Camera2Controller(private val context: Context) {
                 isFlashSupported = cachedCharacteristics?.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
                 maxAfRegions = cachedCharacteristics?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0
                 maxAeRegions = cachedCharacteristics?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AE) ?: 0
+                val maxAwbRegions = cachedCharacteristics?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AWB) ?: 0
                 availableAfModes =
                     cachedCharacteristics?.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
                 availableEdgeModes =
@@ -758,9 +966,11 @@ class Camera2Controller(private val context: Context) {
                 }
 
                 val resolvedVideoPreviewSize = refreshVideoCapabilities(cachedCharacteristics)
+                val resolvedQuickShotPreviewSize = refreshQuickShotCapabilities(cachedCharacteristics)
                 previewSize = when (captureMode) {
                     CaptureMode.VIDEO -> resolvedVideoPreviewSize
-                    CaptureMode.PHOTO -> CameraUtils.getFixedPreviewSize(context, cameraId, _state.value.aspectRatio)
+                    CaptureMode.QUICK_SHOT -> resolvedQuickShotPreviewSize
+                    CaptureMode.PHOTO -> CameraUtils.getFixedPreviewSize(context, openCameraId, _state.value.aspectRatio)
                 }
                 surfaceTexture.setDefaultBufferSize(previewSize.width, previewSize.height)
 
@@ -769,12 +979,19 @@ class Camera2Controller(private val context: Context) {
                 }
 
                 PLog.i(
-                    TAG, "Camera characteristics cached - ID: $cameraId, Level: $hardwareLevelName, " +
+                    TAG, "Camera characteristics cached - selected=$cameraId, open=$openCameraId, Level: $hardwareLevelName, " +
                             "ManualSensor: $isManualSensorSupported, ManualPost: $isManualPostProcessingSupported, " +
-                            "RAW: $isRawSupported, P010: $isP010Supported, AF modes: ${availableAfModes.joinToString()}"
+                            "RAW: $isRawSupported, P010: $isP010Supported, " +
+                            "MaxRegions(AF/AE/AWB): $maxAfRegions/$maxAeRegions/$maxAwbRegions, " +
+                            "AF modes: ${availableAfModes.joinToString()}"
                 )
 
                 val selectableNrModes = buildSelectableNoiseReductionModes(availableNoiseReductionModes)
+
+                val focusCharacteristics = resolveActiveFocusCharacteristics(cachedCharacteristics)?.second
+                    ?: cachedCharacteristics
+                val minimumFocusDistance =
+                    focusCharacteristics?.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
 
                 _state.value = _state.value.copy(
                     isRawSupported = isRawSupported,
@@ -782,8 +999,14 @@ class Camera2Controller(private val context: Context) {
                     isHlg10Supported = isHlg10Supported,
                     availableNrModes = selectableNrModes,
                     currentPreviewSize = previewSize,
-                    minimumFocusDistance = cachedCharacteristics?.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
+                    currentCaptureSize = if (captureMode == CaptureMode.VIDEO || captureMode == CaptureMode.QUICK_SHOT) {
+                        previewSize
+                    } else {
+                        _state.value.currentCaptureSize
+                    },
+                    minimumFocusDistance = minimumFocusDistance
                 )
+                refreshHyperfocalFocusDistanceIfEnabled(updatePreview = false)
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to cache camera characteristics", e)
                 cachedCharacteristics = null
@@ -799,28 +1022,41 @@ class Camera2Controller(private val context: Context) {
                 val aspectRatio = state.value.aspectRatio
                 val effectivelyUseRaw = state.value.useRaw && isRawSupported
                 val rawCaptureSize = if (effectivelyUseRaw) {
-                    CameraUtils.getRawCaptureSize(context, cameraId)
+                    CameraUtils.getRawCaptureSize(context, openCameraId)
                 } else {
                     null
                 }
                 val captureSize = if (rawCaptureSize != null) {
                     rawCaptureSize
                 } else if (effectivelyUseRaw) {
-                    PLog.w(TAG, "RAW requested for camera $cameraId but no RAW_SENSOR output size was reported")
+                    PLog.w(TAG, "RAW requested for camera $cameraId (open=$openCameraId) but no RAW_SENSOR output size was reported")
                     CameraUtils.getBestCaptureSize(
                         context,
-                        cameraId,
+                        openCameraId,
                         aspectRatio
                     )
                 } else {
-                    CameraUtils.getBestCaptureSize(context, cameraId, aspectRatio)
+                    CameraUtils.getBestCaptureSize(context, openCameraId, aspectRatio)
                 }
+                val forceStandardPhysicalOutput = outputPhysicalCameraId != null
                 val captureFormat = if (rawCaptureSize != null) {
                     ImageFormat.RAW_SENSOR
-                } else if (isP010Supported && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && state.value.useP010) {
+                } else if (
+                    !forceStandardPhysicalOutput &&
+                    isP010Supported &&
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    state.value.useP010
+                ) {
                     ImageFormat.YCBCR_P010
                 } else {
                     ImageFormat.YUV_420_888
+                }
+                if (forceStandardPhysicalOutput && state.value.useP010) {
+                    PLog.i(
+                        TAG,
+                        "Physical output binding uses standard YUV stream for stability: " +
+                                "physicalCameraId=$outputPhysicalCameraId"
+                    )
                 }
 
                 val isP3Supported = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -829,7 +1065,10 @@ class Camera2Controller(private val context: Context) {
                         ?.contains(ColorSpace.Named.DISPLAY_P3) == true
                 } else false
 
-                _state.value = _state.value.copy(isP3Supported = isP3Supported)
+                _state.value = _state.value.copy(
+                    isP3Supported = isP3Supported,
+                    currentCaptureSize = captureSize
+                )
 
                 val readerMaxImages = resolveImageReaderMaxImages()
                 imageReaderMaxImages = readerMaxImages
@@ -857,73 +1096,64 @@ class Camera2Controller(private val context: Context) {
                             }
                             val rawImage = when {
                                 state.value.burstCapturing -> reader.acquireNextImage()
+                                state.value.hdrBracketCapturing -> reader.acquireNextImage()
                                 state.value.useMFNR -> reader.acquireNextImage()
                                 state.value.useMFSR -> reader.acquireNextImage()
                                 else -> reader.acquireLatestImage()
                             }
                             val image = trackImage(rawImage)
                             if (image != null) {
-                                if (image.image.format == ImageFormat.RAW_SENSOR) {
-                                    val timestamp = image.timestamp
-                                    val pendingResult = pendingResults.remove(timestamp)
-                                    if (pendingResult != null) {
-                                        processAndTriggerCapture(image, pendingResult)
-                                    } else {
-                                        pendingImages[timestamp] = image
-                                        if (pendingImages.size > 20) {
-                                            val oldestKey = pendingImages.keys.minOrNull()
-                                            if (oldestKey != null) {
-                                                pendingImages.remove(oldestKey)?.close()
-                                            }
-                                        }
-                                    }
+                                if (shouldPairImageWithCaptureResult(image)) {
+                                    processOrBufferImageForCaptureResult(image)
                                 } else {
                                     processAndTriggerCapture(image, null)
                                 }
                             } else {
                                 PLog.w(TAG, "acquireNextImage() returned null, resetting capture state")
-                                _state.value = _state.value.copy(isCapturing = false)
+                                _state.value = _state.value.copy(
+                                    isCapturing = false,
+                                    hdrBracketCapturing = false,
+                                    hdrBracketFrameCount = 0
+                                )
                                 resetPreviewAfterCapture()
                             }
                         } catch (e: Exception) {
                             PLog.e(TAG, "Error in onImageAvailable", e)
-                            _state.value = _state.value.copy(isCapturing = false)
+                            _state.value = _state.value.copy(
+                                isCapturing = false,
+                                hdrBracketCapturing = false,
+                                hdrBracketFrameCount = 0
+                            )
                             resetPreviewAfterCapture()
                         }
                     }, cameraHandler)
                 }
 
-                if ((state.value.useMFNR || state.value.useMFSR) &&
-                    captureFormat != ImageFormat.RAW_SENSOR
-                ) {
-                    CoroutineScope(Dispatchers.IO).launch {
-                        val prewarmOk = MultiFrameStacker.prewarmVulkanStacker(
-                            width = captureSize.width,
-                            height = captureSize.height,
-                            enableSuperResolution = state.value.useMFSR,
-                        )
-                        PLog.i(
-                            TAG,
-                            "Vulkan stacker prewarm after ImageReader creation: size=${captureSize.width}x${captureSize.height}, SR=${state.value.useMFSR}, ok=$prewarmOk"
-                        )
-                    }
-                }
             } else {
                 safeCloseImageReader(imageReader)
                 imageReader = null
                 _state.value = _state.value.copy(isP3Supported = false)
             }
 
-            PLog.d(TAG, "Opening camera: $cameraId")
+            PLog.d(TAG, "Opening camera: open=$openCameraId, selected=$cameraId")
 
-            cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
+            cameraManager.openCamera(openCameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
+                    if (openGeneration != cameraOpenGeneration) {
+                        PLog.w(TAG, "Ignoring stale camera open callback: camera=${camera.id}")
+                        camera.close()
+                        return
+                    }
                     PLog.d(TAG, "Camera opened: ${camera.id}")
                     cameraDevice = camera
-                    createPreviewSession()
+                    createPreviewSession(openGeneration = openGeneration)
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
+                    if (openGeneration != cameraOpenGeneration) {
+                        camera.close()
+                        return
+                    }
                     PLog.w(TAG, "Camera disconnected: ${camera.id} - 相机被其他应用或系统接管")
                     videoRecorder.forceStop()
                     stopVideoRecordingTicker()
@@ -943,6 +1173,10 @@ class Camera2Controller(private val context: Context) {
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
+                    if (openGeneration != cameraOpenGeneration) {
+                        camera.close()
+                        return
+                    }
                     val errorMessage = when (error) {
                         ERROR_CAMERA_IN_USE ->
                             "相机正在被其他应用使用"
@@ -1103,11 +1337,19 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    private fun createPreviewSession(forceStandardSession: Boolean = false) {
+    private fun createPreviewSession(
+        forceStandardSession: Boolean = false,
+        openGeneration: Long = cameraOpenGeneration
+    ) {
+        if (openGeneration != cameraOpenGeneration) {
+            PLog.w(TAG, "Skipping stale preview session creation")
+            return
+        }
         val device = cameraDevice ?: return
         val surface = previewSurface ?: return
         val captureMode = _state.value.captureMode
         val reader = imageReader
+        val sessionGeneration = ++previewSessionGeneration
 
         try {
             previewRequestBuilder = device.createCaptureRequest(
@@ -1126,37 +1368,42 @@ class Camera2Controller(private val context: Context) {
             }
 
             if (captureMode == CaptureMode.VIDEO) {
-                val useHlgCapture = _state.value.useHlg10 && !forceStandardSession
+                val useHlgCapture = _state.value.useHlg10 && activeOutputPhysicalCameraId == null && !forceStandardSession
                 val sessionConfig = SessionConfiguration(
                     SessionConfiguration.SESSION_REGULAR,
                     surfaces.map { outputSurface ->
-                        OutputConfiguration(outputSurface).apply {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !DeviceUtil.isHarmonyOS) {
-                                dynamicRangeProfile = if (useHlgCapture) {
-                                    DynamicRangeProfiles.HLG10
-                                } else {
-                                    DynamicRangeProfiles.STANDARD
-                                }
-                            }
-                        }
+                        createOutputConfiguration(outputSurface, useHlgCapture)
                     },
                     Executors.newSingleThreadExecutor(),
                     object : CameraCaptureSession.StateCallback() {
                         override fun onConfigured(session: CameraCaptureSession) {
+                            if (openGeneration != cameraOpenGeneration || sessionGeneration != previewSessionGeneration) {
+                                PLog.w(TAG, "Closing stale video preview session")
+                                safeCloseCaptureSession(session, "stale video preview session")
+                                return
+                            }
                             if (useHlgCapture) {
                                 _state.value = _state.value.copy(currentDynamicRangeProfile = "HLG10")
                             } else if (_state.value.currentDynamicRangeProfile != "STANDARD") {
                                 _state.value = _state.value.copy(currentDynamicRangeProfile = "STANDARD")
                             }
-                            onSessionConfigured(session)
+                            onSessionConfigured(session, openGeneration, sessionGeneration)
                         }
 
                         override fun onConfigureFailed(session: CameraCaptureSession) {
+                            if (openGeneration != cameraOpenGeneration || sessionGeneration != previewSessionGeneration) {
+                                safeCloseCaptureSession(session, "stale video configure failure")
+                                return
+                            }
                             PLog.e(TAG, "Video session configuration failed: useHlgCapture=$useHlgCapture")
+                            safeCloseCaptureSession(session, "video configure failure")
+                            if (retryPreviewSessionWithoutPhysicalOutput("video configure failed", openGeneration)) {
+                                return
+                            }
                             if (useHlgCapture) {
                                 PLog.w(TAG, "Retrying video preview session with STANDARD dynamic range fallback")
                                 _state.value = _state.value.copy(currentDynamicRangeProfile = "STANDARD")
-                                createPreviewSession(forceStandardSession = true)
+                                createPreviewSession(forceStandardSession = true, openGeneration = openGeneration)
                             }
                         }
                     }
@@ -1167,7 +1414,10 @@ class Camera2Controller(private val context: Context) {
 
 
             // Android 9+ 使用 SessionConfiguration
-            val useHlgCapture = _state.value.useHlg10 && !forceStandardSession
+            val useHlgCapture = _state.value.useHlg10 &&
+                    activeOutputPhysicalCameraId == null &&
+                    !_state.value.useRaw &&
+                    !forceStandardSession
             val readerFormat = reader?.imageFormat ?: ImageFormat.YUV_420_888
             PLog.i(
                 TAG,
@@ -1175,17 +1425,8 @@ class Camera2Controller(private val context: Context) {
                         "useHlgCapture=$useHlgCapture, readerFormat=${imageFormatToString(readerFormat)}, " +
                         "isP010Supported=$isP010Supported, isHlg10Supported=$isHlg10Supported, "
             )
-            val outputConfigs = surfaces.mapIndexed { index, outputSurface ->
-                OutputConfiguration(outputSurface).apply {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !DeviceUtil.isHarmonyOS) {
-                        val profile = if (useHlgCapture) {
-                            DynamicRangeProfiles.HLG10
-                        } else {
-                            DynamicRangeProfiles.STANDARD
-                        }
-                        dynamicRangeProfile = profile
-                    }
-                }
+            val outputConfigs = surfaces.map { outputSurface ->
+                createOutputConfiguration(outputSurface, useHlgCapture)
             }
             val sessionConfig = SessionConfiguration(
                 SessionConfiguration.SESSION_REGULAR,
@@ -1193,25 +1434,38 @@ class Camera2Controller(private val context: Context) {
                 Executors.newSingleThreadExecutor(),
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
+                        if (openGeneration != cameraOpenGeneration || sessionGeneration != previewSessionGeneration) {
+                            PLog.w(TAG, "Closing stale preview session")
+                            safeCloseCaptureSession(session, "stale preview session")
+                            return
+                        }
                         if (useHlgCapture) {
                             _state.value = _state.value.copy(currentDynamicRangeProfile = "HLG10")
                         } else if (_state.value.currentDynamicRangeProfile != "STANDARD") {
                             _state.value = _state.value.copy(currentDynamicRangeProfile = "STANDARD")
                         }
-                        onSessionConfigured(session)
+                        onSessionConfigured(session, openGeneration, sessionGeneration)
                     }
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
+                        if (openGeneration != cameraOpenGeneration || sessionGeneration != previewSessionGeneration) {
+                            safeCloseCaptureSession(session, "stale configure failure")
+                            return
+                        }
                         PLog.e(
                             TAG,
                             "Session configuration failed: useHlgCapture=$useHlgCapture, " +
                                     "readerFormat=${imageFormatToString(readerFormat)}, " +
                                     "sessionColorSpace=${if (shouldUseP3ColorSpace()) "DISPLAY_P3" else "DEFAULT"}"
                         )
-                       if (useHlgCapture) {
+                        safeCloseCaptureSession(session, "photo configure failure")
+                        if (retryPreviewSessionWithoutPhysicalOutput("photo configure failed", openGeneration)) {
+                            return
+                        }
+                        if (useHlgCapture) {
                             PLog.w(TAG, "Retrying preview session with STANDARD dynamic range fallback")
                             _state.value = _state.value.copy(currentDynamicRangeProfile = "STANDARD")
-                            createPreviewSession(forceStandardSession = true)
+                            createPreviewSession(forceStandardSession = true, openGeneration = openGeneration)
                         }
                     }
                 }
@@ -1222,12 +1476,81 @@ class Camera2Controller(private val context: Context) {
                 }
             }
             device.createCaptureSession(sessionConfig)
+        } catch (e: IllegalStateException) {
+            PLog.w(TAG, "Failed to create preview session", e)
+            retryPreviewSessionWithoutPhysicalOutput("create session illegal state: ${e.message}", openGeneration)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to create preview session", e)
+            retryPreviewSessionWithoutPhysicalOutput("create session exception: ${e.message}", openGeneration)
         }
     }
 
-    private fun onSessionConfigured(session: CameraCaptureSession) {
+    private fun retryPreviewSessionWithoutPhysicalOutput(
+        reason: String,
+        openGeneration: Long
+    ): Boolean {
+        val failedPhysicalCameraId = activeOutputPhysicalCameraId ?: return false
+        failedPhysicalOutputCameraIds.add(failedPhysicalCameraId)
+        PLog.w(
+            TAG,
+            "Retrying preview session without physical output binding: " +
+                    "physicalCameraId=$failedPhysicalCameraId, reason=$reason"
+        )
+        activeOutputPhysicalCameraId = null
+        createPreviewSession(openGeneration = openGeneration)
+        return true
+    }
+
+    private fun createOutputConfiguration(
+        surface: Surface,
+        useHlgCapture: Boolean
+    ): OutputConfiguration {
+        return OutputConfiguration(surface).apply {
+            activeOutputPhysicalCameraId?.let { physicalCameraId ->
+                setPhysicalCameraId(physicalCameraId)
+                PLog.i(
+                    TAG,
+                    "OutputConfiguration bound to physicalCameraId=$physicalCameraId " +
+                            "(openCameraId=$activeOpenCameraId)"
+                )
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !DeviceUtil.isHarmonyOS) {
+                dynamicRangeProfile = if (useHlgCapture) {
+                    DynamicRangeProfiles.HLG10
+                } else {
+                    DynamicRangeProfiles.STANDARD
+                }
+            }
+        }
+    }
+
+    private fun getTargetZoomRatioByMain(
+        state: CameraState,
+        camera: CameraInfo?
+    ): Float {
+        return camera?.let { it.intrinsicZoomRatio * state.zoomRatio } ?: state.zoomRatio
+    }
+
+    private fun resolveOutputPhysicalCameraId(
+        state: CameraState = _state.value,
+        camera: CameraInfo? = state.getCurrentCameraInfo()
+    ): String? {
+        return camera
+            ?.getBoundPhysicalCameraId(getTargetZoomRatioByMain(state, camera))
+            ?.takeUnless { failedPhysicalOutputCameraIds.contains(it) }
+    }
+
+    private fun onSessionConfigured(
+        session: CameraCaptureSession,
+        openGeneration: Long = cameraOpenGeneration,
+        sessionGeneration: Long = previewSessionGeneration
+    ) {
+        if (openGeneration != cameraOpenGeneration || sessionGeneration != previewSessionGeneration) {
+            PLog.w(TAG, "Ignoring stale configured session")
+            safeCloseCaptureSession(session, "stale configured session")
+            return
+        }
         captureSession = session
 
         try {
@@ -1280,7 +1603,8 @@ class Camera2Controller(private val context: Context) {
     private fun applyBaseCameraSettings(
         builder: CaptureRequest.Builder,
         isCapture: Boolean = false,
-        isRawCapture: Boolean = false
+        isRawCapture: Boolean = false,
+        disableZslForHdrCapture: Boolean = false
     ) {
         val currentState = _state.value
 
@@ -1296,8 +1620,8 @@ class Camera2Controller(private val context: Context) {
         // 4. 变焦设置
         applyZoomSettings(builder, currentState)
 
-        // 5. 自动对焦设置
-        applyAutoFocusSettings(builder, currentState)
+        // 5. 对焦设置
+        applyFocusSettings(builder, currentState)
 
         if (!isRawCapture) {
             // 6. 图像质量设置（锐化、降噪）
@@ -1322,6 +1646,65 @@ class Camera2Controller(private val context: Context) {
                 CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON
             )
         }
+
+        if (disableZslForHdrCapture) {
+            setZslDisabledIfSupported(builder)
+        }
+        applyVendorCaptureSettings(builder, isCapture)
+    }
+
+    private fun applyVendorCaptureSettings(builder: CaptureRequest.Builder, isCapture: Boolean) {
+//        if (!isCapture) return
+        val state = _state.value
+        val lensId = state.currentCameraId
+        val settings = state.vendorCaptureSettingsByLens.settingsFor(lensId)
+        if (!settings.isEnabled) return
+
+        settings.values.forEach { (key, value) ->
+            try {
+                when (key.valueType) {
+                    VendorCaptureValueType.INT -> {
+                        builder.set(
+                            CaptureRequest.Key(key.requestKeyName, Int::class.java),
+                            value
+                        )
+                    }
+
+                    VendorCaptureValueType.BYTE -> {
+                        builder.set(
+                            CaptureRequest.Key(key.requestKeyName, Byte::class.java),
+                            key.normalizeValue(value).toByte()
+                        )
+                    }
+                }
+                PLog.d(TAG, "Applied vendor capture key for lens $lensId: ${key.requestKeyName}=${key.normalizeValue(value)}")
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to apply vendor capture key for lens $lensId: ${key.requestKeyName}", e)
+            }
+        }
+    }
+
+    private fun setZslDisabledIfSupported(builder: CaptureRequest.Builder) {
+        if (!isZslControlAvailable()) return
+        builder.set(CaptureRequest.CONTROL_ENABLE_ZSL, false)
+    }
+
+    private fun isZslControlAvailable(): Boolean {
+        isZslControlSupported?.let { return it }
+        val supported = try {
+            cachedCharacteristics
+                ?.availableCaptureRequestKeys
+                ?.contains(CaptureRequest.CONTROL_ENABLE_ZSL)
+                ?: true
+        } catch (e: Exception) {
+            PLog.w(TAG, "Failed to query available capture request keys for ZSL control", e)
+            true
+        }
+        isZslControlSupported = supported
+        if (!supported) {
+            PLog.i(TAG, "CONTROL_ENABLE_ZSL is not listed in available capture request keys")
+        }
+        return supported
     }
 
     /**
@@ -1342,12 +1725,34 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
+    private fun applyFocusSettings(builder: CaptureRequest.Builder, state: CameraState) {
+        if (state.isAutoFocus) {
+            applyAutoFocusSettings(builder, state)
+            return
+        }
+
+        val clampedDistance = if (state.minimumFocusDistance > 0f) {
+            state.focusDistance.coerceIn(0f, state.minimumFocusDistance)
+        } else {
+            0f
+        }
+
+        builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+        builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
+        builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+        builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, clampedDistance)
+
+        if (_state.value.currentAfMode != CaptureRequest.CONTROL_AF_MODE_OFF) {
+            _state.value = _state.value.copy(currentAfMode = CaptureRequest.CONTROL_AF_MODE_OFF)
+        }
+    }
+
     private fun resolveAutoFocusMode(captureMode: CaptureMode): Int {
         if (availableAfModes.isEmpty()) {
             return CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
         }
 
-        val preferredModes = if (captureMode == CaptureMode.VIDEO) {
+        val preferredModes = if (captureMode == CaptureMode.VIDEO || captureMode == CaptureMode.QUICK_SHOT) {
             intArrayOf(
                 CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO,
                 CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE,
@@ -1429,7 +1834,7 @@ class Camera2Controller(private val context: Context) {
             if (isCapture && state.captureMode == CaptureMode.PHOTO) {
                 try {
                     val characteristics =
-                        cachedCharacteristics ?: cameraManager.getCameraCharacteristics(state.currentCameraId)
+                        cachedCharacteristics ?: cameraManager.getCameraCharacteristics(getCurrentOpenCameraId())
                     val availableFpsRanges =
                         characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
                     val lowestFpsRange = availableFpsRanges?.minByOrNull { it.upper }
@@ -1447,37 +1852,183 @@ class Camera2Controller(private val context: Context) {
         val characteristics = cachedCharacteristics ?: return
         val availableRanges =
             characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: return
-        val matchingRange = availableRanges
-            .filter { range -> range.upper >= targetFps && range.lower <= targetFps }
-            .sortedWith(
-                compareBy<android.util.Range<Int>> { kotlin.math.abs(it.upper - targetFps) }
-                    .thenBy { kotlin.math.abs(it.lower - targetFps) }
-            )
-            .firstOrNull()
-        val resolvedRange = matchingRange ?: android.util.Range(targetFps, targetFps).also {
+        
+        // 寻找完全匹配的固定帧率区间，例如 [60, 60]
+        val exactRange = availableRanges.firstOrNull { it.lower == targetFps && it.upper == targetFps }
+        
+        val resolvedRange = if (exactRange != null) {
+            exactRange
+        } else {
+            // 如果设备未宣传 [60, 60]，但为了稳定吐出 60fps，我们强行构造并锁定固定区间 [targetFps, targetFps]
+            val forced = android.util.Range(targetFps, targetFps)
             PLog.w(
                 TAG,
-                "Camera characteristics do not advertise $targetFps fps, forcing exact range $it. " +
+                "Camera characteristics do not advertise exact $targetFps fps range, forcing $forced. " +
                     "Advertised ranges=${availableRanges.joinToString()}"
             )
+            forced
         }
         builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, resolvedRange)
     }
 
-    private fun applyToneMapSettings(builder: CaptureRequest.Builder, state: CameraState, isCapture: Boolean) {
-        val preferredTonemapMode = when {
-            isCapture && state.captureMode == CaptureMode.PHOTO &&
-                    availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_HIGH_QUALITY) -> {
-                CaptureRequest.TONEMAP_MODE_HIGH_QUALITY
-            }
-
-            availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_FAST) -> {
-                CaptureRequest.TONEMAP_MODE_FAST
-            }
-
-            else -> null
+    private fun generateSrgbCurve(linearizeInput: Boolean = false): FloatArray {
+        val points = 64
+        val curve = FloatArray(points * 2)
+        for (i in 0 until points) {
+            val x = i.toFloat() / (points - 1)
+            val linearInput = if (linearizeInput) inverseSrgb(x) else x
+            val y = linearToSrgb(linearInput)
+            curve[i * 2] = x
+            curve[i * 2 + 1] = y.coerceIn(0f, 1f)
         }
-        preferredTonemapMode?.let { builder.set(CaptureRequest.TONEMAP_MODE, it) }
+        return curve
+    }
+
+    private fun generateRec709Curve(linearizeInput: Boolean = false): FloatArray {
+        val points = 64
+        val curve = FloatArray(points * 2)
+        for (i in 0 until points) {
+            val x = i.toFloat() / (points - 1)
+            val linearInput = if (linearizeInput) inverseSrgb(x) else x
+            val y = linearToRec709(linearInput)
+            curve[i * 2] = x
+            curve[i * 2 + 1] = y.coerceIn(0f, 1f)
+        }
+        return curve
+    }
+
+    private fun inverseSrgb(x: Float): Float {
+        return if (x <= 0.04045f) {
+            x / 12.92f
+        } else {
+            Math.pow(((x + 0.055) / 1.055), 2.4).toFloat()
+        }
+    }
+
+    private fun linearToSrgb(x: Float): Float {
+        return if (x <= 0.0031308f) {
+            12.92f * x
+        } else {
+            1.055f * Math.pow(x.toDouble(), 1.0 / 2.4).toFloat() - 0.055f
+        }
+    }
+
+    private fun linearToRec709(x: Float): Float {
+        return if (x < 0.018f) {
+            4.5f * x
+        } else {
+            1.099f * Math.pow(x.toDouble(), 0.45).toFloat() - 0.099f
+        }
+    }
+
+    private fun getAcr3LinearValue(x: Float): Float {
+        val samples = com.hinnka.mycamera.raw.ACR3Curve.samples()
+        val length = samples.size
+        if (length == 0) return x
+        val index = x * (length - 1)
+        val low = Math.floor(index.toDouble()).toInt().coerceIn(0, length - 1)
+        val high = Math.ceil(index.toDouble()).toInt().coerceIn(0, length - 1)
+        if (low == high) return samples[low]
+        val weight = index - low
+        return samples[low] * (1f - weight) + samples[high] * weight
+    }
+
+    private fun generateSrgbAcr3Curve(linearizeInput: Boolean = false): FloatArray {
+        val points = 64
+        val curve = FloatArray(points * 2)
+        for (i in 0 until points) {
+            val x = i.toFloat() / (points - 1)
+            val linearInput = if (linearizeInput) inverseSrgb(x) else x
+            val linearVal = getAcr3LinearValue(linearInput)
+            val y = linearToSrgb(linearVal)
+            curve[i * 2] = x
+            curve[i * 2 + 1] = y.coerceIn(0f, 1f)
+        }
+        return curve
+    }
+
+    private fun generateRec709Acr3Curve(linearizeInput: Boolean = false): FloatArray {
+        val points = 64
+        val curve = FloatArray(points * 2)
+        for (i in 0 until points) {
+            val x = i.toFloat() / (points - 1)
+            val linearInput = if (linearizeInput) inverseSrgb(x) else x
+            val linearVal = getAcr3LinearValue(linearInput)
+            val y = linearToRec709(linearVal)
+            curve[i * 2] = x
+            curve[i * 2 + 1] = y.coerceIn(0f, 1f)
+        }
+        return curve
+    }
+
+    private fun applyToneMapSettings(builder: CaptureRequest.Builder, state: CameraState, isCapture: Boolean) {
+        val linearizePreviewInput = state.fixTonemapPreview && !isCapture
+        when (sanitizeTonemapMode(state.tonemapMode)) {
+            "FAST" -> {
+                if (availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_FAST)) {
+                    builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_FAST)
+                }
+            }
+            "HIGH_QUALITY" -> {
+                if (availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_HIGH_QUALITY)) {
+                    builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_HIGH_QUALITY)
+                } else if (availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_FAST)) {
+                    builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_FAST)
+                }
+            }
+            "SRGB" -> {
+                if (availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)) {
+                    builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
+                    val srgbCurve = generateSrgbCurve(linearizePreviewInput)
+                    val curve = TonemapCurve(srgbCurve, srgbCurve, srgbCurve)
+                    builder.set(CaptureRequest.TONEMAP_CURVE, curve)
+                }
+            }
+            "REC709" -> {
+                if (availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)) {
+                    builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
+                    val rec709Curve = generateRec709Curve(linearizePreviewInput)
+                    val curve = TonemapCurve(rec709Curve, rec709Curve, rec709Curve)
+                    builder.set(CaptureRequest.TONEMAP_CURVE, curve)
+                }
+            }
+            "SRGB_ACR3" -> {
+                if (availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)) {
+                    builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
+                    val srgbAcr3Curve = generateSrgbAcr3Curve(linearizePreviewInput)
+                    val curve = TonemapCurve(srgbAcr3Curve, srgbAcr3Curve, srgbAcr3Curve)
+                    builder.set(CaptureRequest.TONEMAP_CURVE, curve)
+                }
+            }
+            "REC709_ACR3" -> {
+                if (availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)) {
+                    builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
+                    val rec709Acr3Curve = generateRec709Acr3Curve(linearizePreviewInput)
+                    val curve = TonemapCurve(rec709Acr3Curve, rec709Acr3Curve, rec709Acr3Curve)
+                    builder.set(CaptureRequest.TONEMAP_CURVE, curve)
+                }
+            }
+            else -> {
+                val preferredTonemapMode = when {
+                    isCapture && state.captureMode == CaptureMode.PHOTO &&
+                            availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_HIGH_QUALITY) -> {
+                        CaptureRequest.TONEMAP_MODE_HIGH_QUALITY
+                    }
+                    availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_FAST) -> {
+                        CaptureRequest.TONEMAP_MODE_FAST
+                    }
+                    else -> null
+                }
+                preferredTonemapMode?.let { builder.set(CaptureRequest.TONEMAP_MODE, it) }
+            }
+        }
+    }
+
+    private fun sanitizeTonemapMode(mode: String): String {
+        return when (mode) {
+            "FAST", "HIGH_QUALITY", "SRGB", "REC709", "SRGB_ACR3", "REC709_ACR3" -> mode
+            else -> "FAST"
+        }
     }
 
     /**
@@ -1558,11 +2109,11 @@ class Camera2Controller(private val context: Context) {
      * 应用变焦设置
      */
     private fun applyZoomSettings(builder: CaptureRequest.Builder, state: CameraState) {
-        val cameraId = state.currentCameraId
-        if (cameraId.isEmpty() || state.zoomRatio <= 1f) return
+        val openCameraId = getCurrentOpenCameraId()
+        if (openCameraId.isEmpty() || state.zoomRatio <= 1f) return
 
         try {
-            val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
+            val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(openCameraId)
             val activeRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
 
             val centerX = activeRect.width() / 2
@@ -1819,12 +2370,48 @@ class Camera2Controller(private val context: Context) {
         _state.value = _state.value.copy(nrLevel = level)
     }
 
+    fun setVendorCaptureSettingsByLens(settingsByLens: VendorCaptureSettingsByLens) {
+        _state.value = _state.value.copy(vendorCaptureSettingsByLens = settingsByLens)
+        PLog.d(TAG, "Vendor capture lens settings count: ${settingsByLens.settingsByLensId.size}")
+    }
+
     /**
      * 设置是否使用 RAW 格式拍照
      */
     fun setUseRaw(enabled: Boolean) {
         _state.value = _state.value.copy(useRaw = enabled)
         PLog.d(TAG, "RAW 格式拍照: $enabled")
+    }
+
+    fun setRawMinShutterSpeedNs(value: Long) {
+        val resolvedValue = value.coerceAtLeast(0L)
+        _state.value = _state.value.copy(rawMinShutterSpeedNs = resolvedValue)
+        PLog.d(TAG, "RAW 最低快门速度: $resolvedValue ns")
+    }
+
+    /**
+     * 设置色调映射模式
+     */
+    fun setTonemapMode(mode: String) {
+        val resolvedMode = sanitizeTonemapMode(mode)
+        _state.value = _state.value.copy(tonemapMode = resolvedMode)
+        PLog.d(TAG, "色调映射模式: $resolvedMode")
+        previewRequestBuilder?.apply {
+            applyToneMapSettings(this, _state.value, false)
+            updatePreview()
+        }
+    }
+
+    /**
+     * 设置是否修复自定义色调映射预览异常
+     */
+    fun setFixTonemapPreview(enabled: Boolean) {
+        _state.value = _state.value.copy(fixTonemapPreview = enabled)
+        PLog.d(TAG, "修复色调映射预览异常: $enabled")
+        previewRequestBuilder?.apply {
+            applyToneMapSettings(this, _state.value, false)
+            updatePreview()
+        }
     }
 
     /**
@@ -2123,11 +2710,11 @@ class Camera2Controller(private val context: Context) {
      * 只有 FULL 或 LEVEL_3 级别的设备才支持 COLOR_CORRECTION_GAINS
      */
     private fun supportsManualWhiteBalance(): Boolean {
-        val cameraId = _state.value.currentCameraId
-        if (cameraId.isEmpty()) return false
+        val openCameraId = getCurrentOpenCameraId()
+        if (openCameraId.isEmpty()) return false
 
         return try {
-            val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
+            val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(openCameraId)
             val hardwareLevel = characteristics.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
 
             val isSupported =
@@ -2149,11 +2736,11 @@ class Camera2Controller(private val context: Context) {
      * 获取当前相机支持的 AWB 模式列表
      */
     private fun getSupportedAwbModes(): IntArray {
-        val cameraId = _state.value.currentCameraId
-        if (cameraId.isEmpty()) return intArrayOf(CameraMetadata.CONTROL_AWB_MODE_AUTO)
+        val openCameraId = getCurrentOpenCameraId()
+        if (openCameraId.isEmpty()) return intArrayOf(CameraMetadata.CONTROL_AWB_MODE_AUTO)
 
         return try {
-            val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
+            val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(openCameraId)
             characteristics.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)
                 ?: intArrayOf(CameraMetadata.CONTROL_AWB_MODE_AUTO)
         } catch (e: Exception) {
@@ -2264,24 +2851,24 @@ class Camera2Controller(private val context: Context) {
             highlightPointSmoothedY = y
             highlightPointInitialized = true
         } else {
-            val alpha = 0.3
+            val alpha = 0.1 // 降低平滑系数，增加稳定性
             highlightPointSmoothedX = (alpha * x + (1 - alpha) * highlightPointSmoothedX).toFloat()
             highlightPointSmoothedY = (alpha * y + (1 - alpha) * highlightPointSmoothedY).toFloat()
         }
         if (_state.value.meteringMode == MeteringMode.HIGHLIGHT_PRIORITY) {
-            applyMeteringRegions()
-            
             // 计算当前平滑点与上次发送点的位移距离
             val dist = hypot(
                 highlightPointSmoothedX.toDouble() - lastSentHighlightPointX,
                 highlightPointSmoothedY.toDouble() - lastSentHighlightPointY
             )
             
-            // 只有位移超过 5% (0.05) 或者这是初始化后的第一帧，才更新预览
-            // 这能有效防止测光区域频繁微动导致的画面“呼吸感”
-            if (dist > 0.05 || lastSentHighlightPointX < 0) {
+            // 只有位移超过 8% (0.08) 或者这是初始化后的第一帧，才更新测光区域并触发预览
+            // 这样可以避免微小的坐标抖动导致 AE 系统频繁重算测光
+            if (dist > 0.08 || lastSentHighlightPointX < 0) {
                 lastSentHighlightPointX = highlightPointSmoothedX
                 lastSentHighlightPointY = highlightPointSmoothedY
+                
+                applyMeteringRegions()
                 updatePreview()
             }
         }
@@ -2290,15 +2877,22 @@ class Camera2Controller(private val context: Context) {
     /**
      * 根据当前测光模式设置默认 AE 区域
      *
-     * 点测光和中央重点模式在画面中心（或对焦点）设置加权区域；
-     * 平均测光模式清除 AE 区域，使用硬件默认全画面测光。
+     * 系统默认模式清除自定义 AE 区域，由 Camera2/设备自行决定测光行为；
+     * 点测光和高光优先模式设置加权区域；
+     * 平均测光模式设置全画面 AE 区域。
      */
     private fun applyMeteringRegions() {
-        if (maxAeRegions <= 0) return
         val builder = previewRequestBuilder ?: return
+        val mode = _state.value.meteringMode
+
+        if (mode == MeteringMode.SYSTEM_DEFAULT) {
+            clearCustomAeRegions(builder)
+            return
+        }
+
+        if (maxAeRegions <= 0) return
         val characteristics = cachedCharacteristics ?: return
         val activeRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
-        val mode = _state.value.meteringMode
 
         if (mode == MeteringMode.AVERAGE) {
             val fullRegion = MeteringRectangle(activeRect, MeteringRectangle.METERING_WEIGHT_MAX)
@@ -2341,6 +2935,8 @@ class Camera2Controller(private val context: Context) {
                 MeteringMode.SPOT -> 0.03f
                 MeteringMode.CENTER_WEIGHTED -> 0.2f
                 MeteringMode.HIGHLIGHT_PRIORITY -> 0.08f
+                MeteringMode.SYSTEM_DEFAULT,
+                MeteringMode.AVERAGE -> return
             }
             val regionSize = (activeRect.width() * regionSizeFraction).toInt()
 
@@ -2360,6 +2956,10 @@ class Camera2Controller(private val context: Context) {
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to apply metering regions", e)
         }
+    }
+
+    private fun clearCustomAeRegions(builder: CaptureRequest.Builder) {
+        builder.set(CaptureRequest.CONTROL_AE_REGIONS, null)
     }
 
     /**
@@ -2482,8 +3082,17 @@ class Camera2Controller(private val context: Context) {
      * 更新预览
      */
     private fun updatePreview() {
-        // 关键修复：检查相机和会话是否仍然有效
-        // 避免在相机关闭后的回调中调用 setRepeatingRequest
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            if (!previewUpdateScheduled.compareAndSet(false, true)) return
+            handler.post {
+                previewUpdateScheduled.set(false)
+                updatePreview()
+            }
+            return
+        }
+
+        // 检查相机和会话是否仍然有效，避免在相机关闭后的回调中调用 setRepeatingRequest。
         val device = cameraDevice
         val session = captureSession
         val builder = previewRequestBuilder
@@ -2500,6 +3109,8 @@ class Camera2Controller(private val context: Context) {
         } catch (e: IllegalStateException) {
             // 相机已关闭或处于错误状态
             PLog.w(TAG, "Failed to update preview - camera closed or in error state", e)
+        } catch (e: IllegalArgumentException) {
+            PLog.w(TAG, "Failed to update preview - request settings error", e)
         }
     }
 
@@ -2510,18 +3121,36 @@ class Camera2Controller(private val context: Context) {
      * 注意：Camera2 的变焦通过 SCALER_CROP_REGION 实现
      */
     fun setZoomRatio(ratio: Float) {
-        val cameraId = _state.value.currentCameraId
-        if (cameraId.isEmpty()) return
+        val openCameraId = getCurrentOpenCameraId()
+        if (openCameraId.isEmpty()) return
 
         try {
-            val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
+            val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(openCameraId)
             val maxZoom = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
-            val clampedRatio = ratio.coerceIn(1f, maxZoom)
+            val zoomRatioRange = characteristics.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+            val minZoom = zoomRatioRange?.lower ?: 1f
+            val maxSupportedZoom = zoomRatioRange?.upper ?: maxZoom
+            val clampedRatio = ratio.coerceIn(minZoom, maxSupportedZoom)
 
             _state.value = _state.value.copy(zoomRatio = clampedRatio)
+            if (recreateSessionForPhysicalZoomIfNeeded(_state.value)) {
+                PLog.d(TAG, "setZoomRatio: $ratio -> $clampedRatio (physical output session recreated)")
+                return
+            }
 
             // 计算裁剪区域
             val activeRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
+            if (clampedRatio < 1f && zoomRatioRange != null) {
+                previewRequestBuilder?.apply {
+                    set(CaptureRequest.CONTROL_ZOOM_RATIO, clampedRatio)
+                    set(CaptureRequest.SCALER_CROP_REGION, activeRect)
+                    updatePreview()
+                }
+
+                PLog.d(TAG, "setZoomRatio: $ratio -> $clampedRatio (CONTROL_ZOOM_RATIO)")
+                return
+            }
+
             val centerX = activeRect.width() / 2
             val centerY = activeRect.height() / 2
             val deltaX = ((activeRect.width() / 2) / clampedRatio).toInt()
@@ -2535,6 +3164,7 @@ class Camera2Controller(private val context: Context) {
             )
 
             previewRequestBuilder?.apply {
+                set(CaptureRequest.CONTROL_ZOOM_RATIO, 1f)
                 set(CaptureRequest.SCALER_CROP_REGION, cropRect)
                 updatePreview()
             }
@@ -2546,19 +3176,39 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
+    private fun recreateSessionForPhysicalZoomIfNeeded(state: CameraState): Boolean {
+        val desiredPhysicalCameraId = resolveOutputPhysicalCameraId(state)
+        if (desiredPhysicalCameraId == activeOutputPhysicalCameraId) return false
+        if (cameraDevice == null || previewSurface == null) return false
+
+        PLog.i(
+            TAG,
+            "Recreating session for zoom physical output: " +
+                    "old=$activeOutputPhysicalCameraId, new=$desiredPhysicalCameraId, " +
+                    "targetZoom=${getTargetZoomRatioByMain(state, state.getCurrentCameraInfo())}"
+        )
+
+        activeOutputPhysicalCameraId = desiredPhysicalCameraId
+        refreshActiveFocusLimit()
+        refreshHyperfocalFocusDistanceIfEnabled(updatePreview = false)
+        safeCloseCaptureSession(captureSession, "physical zoom output changed")
+        captureSession = null
+        createPreviewSession(openGeneration = cameraOpenGeneration)
+        return true
+    }
+
     /**
      * 设置自动对焦开关
      */
     fun setAutoFocus(auto: Boolean) {
-        _state.value = _state.value.copy(isAutoFocus = auto)
+        clearHyperfocalFocusMemory()
+        _state.value = _state.value.copy(
+            isAutoFocus = auto,
+            isHyperfocalFocusEnabled = false,
+            hyperfocalDistanceMeters = 0f
+        )
         previewRequestBuilder?.apply {
-            if (auto) {
-                set(CaptureRequest.CONTROL_AF_MODE, resolveAutoFocusMode(_state.value.captureMode))
-                set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
-            } else {
-                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
-                set(CaptureRequest.LENS_FOCUS_DISTANCE, _state.value.focusDistance)
-            }
+            applyFocusSettings(this, _state.value)
             updatePreview()
         }
     }
@@ -2571,28 +3221,182 @@ class Camera2Controller(private val context: Context) {
         if (minFocusDistance <= 0) return
 
         val clampedDistance = distance.coerceIn(0f, minFocusDistance)
-        _state.value = _state.value.copy(focusDistance = clampedDistance)
+        clearHyperfocalFocusMemory()
+        _state.value = _state.value.copy(
+            focusDistance = clampedDistance,
+            isHyperfocalFocusEnabled = false,
+            hyperfocalDistanceMeters = 0f
+        )
 
         if (!_state.value.isAutoFocus) {
             previewRequestBuilder?.apply {
-                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
-                set(CaptureRequest.LENS_FOCUS_DISTANCE, clampedDistance)
+                applyFocusSettings(this, _state.value)
                 updatePreview()
             }
         }
     }
 
+    fun setHyperfocalFocusEnabled(enabled: Boolean) {
+        if (enabled) {
+            applyHyperfocalFocus(storePreviousFocus = true, updatePreview = true)
+        } else {
+            restoreFocusBeforeHyperfocal(updatePreview = true)
+        }
+    }
+
+    private fun refreshHyperfocalFocusDistanceIfEnabled(updatePreview: Boolean) {
+        if (!_state.value.isHyperfocalFocusEnabled) return
+        applyHyperfocalFocus(storePreviousFocus = false, updatePreview = updatePreview)
+    }
+
+    private fun applyHyperfocalFocus(
+        storePreviousFocus: Boolean,
+        updatePreview: Boolean
+    ): Boolean {
+        refreshActiveFocusLimit()
+
+        val minFocusDistance = _state.value.minimumFocusDistance
+        if (minFocusDistance <= 0f) {
+            PLog.w(TAG, "Hyperfocal focus unavailable: manual focus is not supported")
+            if (_state.value.isHyperfocalFocusEnabled) {
+                restoreFocusBeforeHyperfocal(updatePreview = updatePreview)
+            }
+            return false
+        }
+
+        val result = calculateHyperfocalFocusResult()
+        if (result == null) {
+            PLog.w(TAG, "Hyperfocal focus unavailable: unable to resolve physical camera optics")
+            if (_state.value.isHyperfocalFocusEnabled) {
+                restoreFocusBeforeHyperfocal(updatePreview = updatePreview)
+            }
+            return false
+        }
+
+        if (storePreviousFocus && !_state.value.isHyperfocalFocusEnabled) {
+            focusModeBeforeHyperfocal = _state.value.isAutoFocus
+            focusDistanceBeforeHyperfocal = _state.value.focusDistance
+        }
+
+        val clampedFocusDistance = result.focusDistanceDiopters.coerceIn(0f, minFocusDistance)
+        _state.value = _state.value.copy(
+            isAutoFocus = false,
+            focusDistance = clampedFocusDistance,
+            isHyperfocalFocusEnabled = true,
+            hyperfocalDistanceMeters = result.distanceMeters
+        )
+
+        if (updatePreview) {
+            previewRequestBuilder?.apply {
+                applyFocusSettings(this, _state.value)
+                updatePreview()
+            }
+        }
+
+        PLog.i(
+            TAG,
+            "Hyperfocal focus enabled: camera=${result.cameraId}, " +
+                    "f=${result.focalLengthMm}mm, N=${result.aperture}, " +
+                    "c=${result.circleOfConfusionMm}mm, H=${result.distanceMeters}m, " +
+                    "focus=${clampedFocusDistance}D"
+        )
+        return true
+    }
+
+    private fun restoreFocusBeforeHyperfocal(updatePreview: Boolean) {
+        val restoreAutoFocus = focusModeBeforeHyperfocal ?: true
+        val restoreFocusDistance = focusDistanceBeforeHyperfocal
+            ?.coerceIn(0f, _state.value.minimumFocusDistance.takeIf { it > 0f } ?: Float.MAX_VALUE)
+            ?: _state.value.focusDistance
+
+        clearHyperfocalFocusMemory()
+        _state.value = _state.value.copy(
+            isAutoFocus = restoreAutoFocus,
+            focusDistance = restoreFocusDistance,
+            isHyperfocalFocusEnabled = false,
+            hyperfocalDistanceMeters = 0f
+        )
+
+        if (updatePreview) {
+            previewRequestBuilder?.apply {
+                applyFocusSettings(this, _state.value)
+                updatePreview()
+            }
+        }
+
+        PLog.i(TAG, "Hyperfocal focus disabled: restoreAutoFocus=$restoreAutoFocus")
+    }
+
+    private fun clearHyperfocalFocusMemory() {
+        focusModeBeforeHyperfocal = null
+        focusDistanceBeforeHyperfocal = null
+    }
+
+    private fun calculateHyperfocalFocusResult(): HyperfocalFocusResult? {
+        val (cameraId, characteristics) = resolveActiveFocusCharacteristics() ?: return null
+
+        val focalLengthMm = characteristics
+            .get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+            ?.firstOrNull()
+            ?.takeIf { it.isFinite() && it > 0f }
+            ?: DEFAULT_HYPERFOCAL_FOCAL_LENGTH_MM
+
+        val aperture = characteristics
+            .get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)
+            ?.firstOrNull()
+            ?.takeIf { it.isFinite() && it > 0f }
+            ?: DEFAULT_HYPERFOCAL_APERTURE
+
+        val physicalSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+            ?: return null
+        val diagonal = hypot(
+            physicalSize.width.toDouble(),
+            physicalSize.height.toDouble()
+        )
+        if (!diagonal.isFinite() || diagonal <= 0.0) return null
+
+        val circleOfConfusionMm = (diagonal / HYPERFOCAL_COC_DIAGONAL_DIVISOR).toFloat()
+        if (!circleOfConfusionMm.isFinite() || circleOfConfusionMm <= 0f) return null
+
+        val hyperfocalDistanceMm =
+            (focalLengthMm * focalLengthMm) / (aperture * circleOfConfusionMm) + focalLengthMm
+        val hyperfocalDistanceMeters = hyperfocalDistanceMm / 1000f
+        if (!hyperfocalDistanceMeters.isFinite() || hyperfocalDistanceMeters <= 0f) return null
+
+        return HyperfocalFocusResult(
+            cameraId = cameraId,
+            focalLengthMm = focalLengthMm,
+            aperture = aperture,
+            circleOfConfusionMm = circleOfConfusionMm,
+            distanceMeters = hyperfocalDistanceMeters,
+            focusDistanceDiopters = 1f / hyperfocalDistanceMeters
+        )
+    }
+
 // ==================== 对焦控制 ====================
 
     private fun recordFocusLockExposure(result: CaptureResult) {
-        val iso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: return
-        val exposure = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: return
-        focusLockedReferenceIso = iso
-        focusLockedReferenceExposureNs = exposure
-        focusLockedReferenceDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE) ?: 0f
+        updateFocusLockSceneReference(result)
         isFocusLockedWaitingForSceneChange = true
         focusLockSettleFrames = FOCUS_LOCK_SETTLE_FRAMES
         sceneChangeFrameCount = 0
+    }
+
+    private fun updateFocusLockSceneReference(result: CaptureResult) {
+        focusLockedReferenceIso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: return
+        focusLockedReferenceExposureNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: return
+        focusLockedReferenceDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE) ?: 0f
+    }
+
+    private fun isAiSubjectRecentlySeen(): Boolean {
+        if (aiSubjectLastSeenElapsedMs <= 0L) return false
+        return SystemClock.elapsedRealtime() - aiSubjectLastSeenElapsedMs <= AI_SUBJECT_RECENT_MS
+    }
+
+    fun notifyAiSubjectSeen(x: Float, y: Float) {
+        aiSubjectLastSeenElapsedMs = SystemClock.elapsedRealtime()
+        aiSubjectLastSeenX = x
+        aiSubjectLastSeenY = y
     }
 
     private fun restoreContinuousAf() {
@@ -2602,6 +3406,7 @@ class Camera2Controller(private val context: Context) {
         focusLockedReferenceExposureNs = 0L
         focusLockedReferenceDistance = 0f
         focusLockSettleFrames = 0
+        aiFocusFallbackFrames = 0
 
         previewRequestBuilder?.apply {
             set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
@@ -2611,45 +3416,82 @@ class Camera2Controller(private val context: Context) {
             applyMeteringRegions()
             updatePreview()
         }
-        _state.value = _state.value.copy(isFocusing = false, focusSuccess = null)
+        _state.value = _state.value.copy(focusPoint = null, isFocusing = false, focusSuccess = null)
+    }
+
+    fun cancelSubjectFocus(reason: String) {
+        PLog.d(TAG, "Cancel subject focus: $reason")
+        restoreContinuousAf()
+    }
+
+    private fun resetAiFocusForCameraOpen() {
+        PLog.d(TAG, "Reset AI focus state for camera open")
+        previewAiFocusProcessor.resetForPreviewRestart()
+        aiSubjectLastSeenElapsedMs = 0L
+        aiSubjectLastSeenX = 0.5f
+        aiSubjectLastSeenY = 0.5f
+        isFocusLockedWaitingForSceneChange = false
+        sceneChangeFrameCount = 0
+        focusLockedReferenceIso = 0
+        focusLockedReferenceExposureNs = 0L
+        focusLockedReferenceDistance = 0f
+        focusLockSettleFrames = 0
+        aiFocusFallbackFrames = 0
+        _state.value = _state.value.copy(
+            focusPoint = null,
+            focusPointSource = FocusPointSource.MANUAL,
+            isFocusing = false,
+            focusSuccess = null
+        )
     }
 
     /**
      * 点击对焦
      */
     fun focusOnPoint(x: Float, y: Float, viewWidth: Int, viewHeight: Int) {
-        val cameraId = _state.value.currentCameraId
-        if (cameraId.isEmpty()) return
+        if (viewWidth <= 0 || viewHeight <= 0) return
+        focusOnNormalizedPoint(x / viewWidth, y / viewHeight, FocusPointSource.MANUAL)
+    }
+
+    fun focusOnNormalizedPoint(
+        normX: Float,
+        normY: Float,
+        source: FocusPointSource = FocusPointSource.AI,
+    ) {
+        val openCameraId = getCurrentOpenCameraId()
+        if (openCameraId.isEmpty()) return
 
         // 重置场景变化检测状态（新的对焦覆盖旧的）
         isFocusLockedWaitingForSceneChange = false
         sceneChangeFrameCount = 0
 
         try {
-            val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
+            val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(openCameraId)
             val activeRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
             val sensorOrientation = getSensorOrientation()
             val lensFacing = getLensFacing()
 
             // 计算归一化坐标（0-1）
-            val normX = x / viewWidth
-            val normY = y / viewHeight
+            val normalizedX = normX.coerceIn(0f, 1f)
+            val normalizedY = normY.coerceIn(0f, 1f)
 
             // 存储UI坐标用于显示对焦框
             _state.value = _state.value.copy(
-                focusPoint = Pair(normX, normY),
+                focusPoint = Pair(normalizedX, normalizedY),
+                focusPointSource = source,
                 isFocusing = true,
                 focusSuccess = null
             )
+            aiFocusFallbackFrames = if (source == FocusPointSource.AI) AI_FOCUS_FALLBACK_FRAMES else 0
 
             // 根据传感器方向转换坐标
             // 传感器坐标系与UI坐标系可能不同，需要旋转
             val (sensorX, sensorY) = when (sensorOrientation) {
-                0 -> Pair(normX, normY)
-                90 -> Pair(normY, 1 - normX)  // 顺时针90度
-                180 -> Pair(1 - normX, 1 - normY)  // 180度
-                270 -> Pair(1 - normY, normX)  // 顺时针270度
-                else -> Pair(normX, normY)
+                0 -> Pair(normalizedX, normalizedY)
+                90 -> Pair(normalizedY, 1 - normalizedX)  // 顺时针90度
+                180 -> Pair(1 - normalizedX, 1 - normalizedY)  // 180度
+                270 -> Pair(1 - normalizedY, normalizedX)  // 顺时针270度
+                else -> Pair(normalizedX, normalizedY)
             }
 
             // 如果是前置摄像头，需要水平翻转
@@ -2673,34 +3515,43 @@ class Camera2Controller(private val context: Context) {
             )
             val afRegion = MeteringRectangle(afRect, MeteringRectangle.METERING_WEIGHT_MAX)
 
-            // 2. AE 区域：根据测光模式决定
-            val aeRegion = if (_state.value.meteringMode == MeteringMode.AVERAGE) {
-                // 平均测光模式下，点击屏幕仅改变对焦点，测光区域强制保持全屏平均
-                MeteringRectangle(activeRect, MeteringRectangle.METERING_WEIGHT_MAX)
-            } else {
-                val aeSizeFraction = when (_state.value.meteringMode) {
-                    MeteringMode.SPOT -> 0.03f
-                    MeteringMode.CENTER_WEIGHTED -> 0.2f
-                    MeteringMode.HIGHLIGHT_PRIORITY -> 0.08f
-                    else -> 0.1f
+            // 2. AE 区域：根据测光模式决定；系统默认模式不随点按写入 AE 区域
+            val meteringMode = _state.value.meteringMode
+            val aeRegion = when (meteringMode) {
+                MeteringMode.SYSTEM_DEFAULT -> null
+                MeteringMode.AVERAGE -> {
+                    // 平均测光模式下，点击屏幕仅改变对焦点，测光区域强制保持全屏平均
+                    MeteringRectangle(activeRect, MeteringRectangle.METERING_WEIGHT_MAX)
                 }
-                val aeSize = (activeRect.width() * aeSizeFraction).toInt()
-                val aeRect = android.graphics.Rect(
-                    (focusX - aeSize).coerceAtLeast(0),
-                    (focusY - aeSize).coerceAtLeast(0),
-                    (focusX + aeSize).coerceAtMost(activeRect.width()),
-                    (focusY + aeSize).coerceAtMost(activeRect.height())
-                )
-                MeteringRectangle(aeRect, MeteringRectangle.METERING_WEIGHT_MAX)
+                MeteringMode.SPOT,
+                MeteringMode.CENTER_WEIGHTED,
+                MeteringMode.HIGHLIGHT_PRIORITY -> {
+                    val aeSizeFraction = when (meteringMode) {
+                        MeteringMode.SPOT -> 0.03f
+                        MeteringMode.CENTER_WEIGHTED -> 0.2f
+                        MeteringMode.HIGHLIGHT_PRIORITY -> 0.08f
+                        else -> 0.1f
+                    }
+                    val aeSize = (activeRect.width() * aeSizeFraction).toInt()
+                    val aeRect = android.graphics.Rect(
+                        (focusX - aeSize).coerceAtLeast(0),
+                        (focusY - aeSize).coerceAtLeast(0),
+                        (focusX + aeSize).coerceAtMost(activeRect.width()),
+                        (focusY + aeSize).coerceAtMost(activeRect.height())
+                    )
+                    MeteringRectangle(aeRect, MeteringRectangle.METERING_WEIGHT_MAX)
+                }
             }
 
-            PLog.d(TAG, "Focus: UI($normX, $normY) -> Sensor($finalX, $finalY), mode=${_state.value.meteringMode}")
+            PLog.d(TAG, "Focus: UI($normalizedX, $normalizedY) -> Sensor($finalX, $finalY), mode=$meteringMode")
 
             previewRequestBuilder?.apply {
                 if (maxAfRegions > 0) {
                     set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(afRegion))
                 }
-                if (maxAeRegions > 0) {
+                if (meteringMode == MeteringMode.SYSTEM_DEFAULT) {
+                    clearCustomAeRegions(this)
+                } else if (maxAeRegions > 0 && aeRegion != null) {
                     set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(aeRegion))
                 }
                 val afMode = CaptureRequest.CONTROL_AF_MODE_AUTO
@@ -2725,6 +3576,9 @@ class Camera2Controller(private val context: Context) {
      */
     fun setAspectRatio(ratio: AspectRatio) {
         _state.value = _state.value.copy(aspectRatio = ratio)
+        if (_state.value.captureMode == CaptureMode.QUICK_SHOT) {
+            refreshQuickShotCapabilities()
+        }
     }
 
     /**
@@ -2759,6 +3613,11 @@ class Camera2Controller(private val context: Context) {
         if (mode == CaptureMode.VIDEO) {
             livePhotoRecorder.stopRecording()
             refreshVideoCapabilities()
+        } else if (mode == CaptureMode.QUICK_SHOT) {
+            livePhotoRecorder.stopRecording()
+            stopVideoRecordingTicker()
+            _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
+            refreshQuickShotCapabilities()
         } else {
             stopVideoRecordingTicker()
             _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
@@ -2771,6 +3630,20 @@ class Camera2Controller(private val context: Context) {
     fun setVideoResolution(resolution: VideoResolutionPreset) {
         _state.value = _state.value.copy(videoConfig = _state.value.videoConfig.copy(resolution = resolution))
         refreshVideoCapabilities()
+    }
+
+    fun setQuickShotResolution(resolution: QuickShotResolutionPreset) {
+        _state.value = _state.value.copy(
+            quickShotConfig = _state.value.quickShotConfig.copy(resolution = resolution)
+        )
+        refreshQuickShotCapabilities()
+    }
+
+    fun setQuickShotCaptureState(isCapturing: Boolean, burstCapturing: Boolean = false) {
+        _state.value = _state.value.copy(
+            isCapturing = isCapturing,
+            burstCapturing = burstCapturing
+        )
     }
 
     fun setVideoFps(fps: VideoFpsPreset) {
@@ -2832,6 +3705,15 @@ class Camera2Controller(private val context: Context) {
         videoRecorder.setPreferredAudioInputId(normalizedAudioInputId)
     }
 
+    fun setVideoRecordingPath(recordingPath: VideoRecordingPath, recordingTreeUri: String? = null) {
+        _state.value = _state.value.copy(
+            videoConfig = _state.value.videoConfig.copy(
+                recordingPath = recordingPath,
+                recordingTreeUri = recordingTreeUri?.takeIf { it.isNotBlank() }
+            )
+        )
+    }
+
     fun setVideoTorchEnabled(enabled: Boolean) {
         _state.value = _state.value.copy(
             videoConfig = _state.value.videoConfig.copy(
@@ -2842,6 +3724,10 @@ class Camera2Controller(private val context: Context) {
             applyBaseCameraSettings(this, isCapture = false)
             updatePreview()
         }
+    }
+
+    fun setMirrorFrontCameraEnabled(enabled: Boolean) {
+        mirrorFrontCameraEnabled = enabled
     }
 
     fun startVideoRecording() {
@@ -2855,6 +3741,8 @@ class Camera2Controller(private val context: Context) {
         val outputSize = _state.value.videoConfig.resolveOutputSize(
             _state.value.videoCapabilities.openGatePortraitAspectRatio
         )
+        val isFrontCamera = isCurrentCameraFrontFacing()
+        val shouldFlipEncodedFrame = isFrontCamera && !mirrorFrontCameraEnabled
         val started = videoRecorder.startRecording(
             size = outputSize,
             fps = _state.value.videoConfig.fps.fps,
@@ -2864,7 +3752,14 @@ class Camera2Controller(private val context: Context) {
                 logProfile = _state.value.videoConfig.logProfile,
                 hasActiveLut = _state.value.lutEnabled && _state.value.currentLutName != null
             ),
-            orientationHintDegrees = resolveVideoOrientationHintDegrees()
+            orientationHintDegrees = resolveVideoOrientationHintDegrees(),
+            flipEncodedFrame = shouldFlipEncodedFrame,
+            recordingPath = _state.value.videoConfig.recordingPath,
+            recordingTreeUri = _state.value.videoConfig.recordingTreeUri,
+            onError = { message ->
+                PLog.e(TAG, "Video recording error: $message")
+                onCameraError?.invoke(-1, message, false)
+            }
         ) { uri ->
             PLog.i(TAG, "Video saved: $uri")
             _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
@@ -2879,6 +3774,11 @@ class Camera2Controller(private val context: Context) {
         )
         videoRecordingPausedMs = 0L
         startVideoRecordingTicker()
+    }
+
+    private fun isCurrentCameraFrontFacing(): Boolean {
+        return cachedLensFacing == CameraCharacteristics.LENS_FACING_FRONT ||
+            _state.value.getCurrentCameraInfo()?.lensType == LensType.FRONT
     }
 
     fun pauseVideoRecording() {
@@ -2943,8 +3843,23 @@ class Camera2Controller(private val context: Context) {
         _state.value = _state.value.copy(useMFNR = useMultiFrame)
     }
 
+    fun setUseHdrComposition(useHdrComposition: Boolean) {
+        _state.value = _state.value.copy(useHdrComposition = useHdrComposition)
+    }
+
     fun setUseMFSR(useSuperResolution: Boolean) {
         _state.value = _state.value.copy(useMFSR = useSuperResolution)
+    }
+
+    fun setUseMultipleExposure(useMultipleExposure: Boolean) {
+        _state.value = _state.value.copy(useMultipleExposure = useMultipleExposure)
+    }
+
+    fun onHdrBracketFramesCollected() {
+        _state.value = _state.value.copy(
+            hdrBracketCapturing = false,
+            hdrBracketFrameCount = 0
+        )
     }
 
     fun setMultiFrameCount(multiFrameCount: Int) {
@@ -2965,13 +3880,19 @@ class Camera2Controller(private val context: Context) {
         _state.value = _state.value.copy(applyUltraHDR = enabled)
     }
 
-
 // ==================== 拍照 ====================
 
     /**
      * 拍照
      */
     fun capture() {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post {
+                capture()
+            }
+            return
+        }
         if (_state.value.captureMode != CaptureMode.PHOTO) return
         val device = cameraDevice ?: return
         val reader = imageReader ?: return
@@ -3019,20 +3940,315 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
+    fun captureHdrBracket(zeroEvFrameCount: Int? = null) {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post {
+                captureHdrBracket(zeroEvFrameCount)
+            }
+            return
+        }
+        if (_state.value.captureMode != CaptureMode.PHOTO) {
+            onHdrBracketCaptureFailed?.invoke()
+            return
+        }
+        val device = cameraDevice
+        val reader = imageReader
+        val session = captureSession
+        if (device == null || reader == null || session == null) {
+            onHdrBracketCaptureFailed?.invoke()
+            return
+        }
+        lastCaptureResult = null
+        performHdrBracketCapture(
+            device = device,
+            reader = reader,
+            session = session,
+            zeroEvFrameCount = zeroEvFrameCount ?: resolveHdrBracketZeroEvFrameCount(_state.value),
+            playShutterSound = true
+        )
+    }
+
+    private fun performHdrBracketCapture(
+        device: CameraDevice,
+        reader: ImageReader,
+        session: CameraCaptureSession,
+        zeroEvFrameCount: Int,
+        playShutterSound: Boolean
+    ) {
+        val isRawCapture = isRawCaptureReader(reader)
+        val normalizedZeroEvFrameCount = zeroEvFrameCount.coerceIn(
+            1,
+            MultiFrameConfig.MAX_FRAME_COUNT
+        )
+        val evOffsets = buildHdrBracketEvOffsets(
+            zeroEvFrameCount = normalizedZeroEvFrameCount,
+            isRawCapture = isRawCapture,
+        )
+        val hdrFrameCount = evOffsets.size
+        _state.value = _state.value.copy(
+            isCapturing = true,
+            hdrBracketCapturing = true,
+            hdrBracketFrameCount = hdrFrameCount
+        )
+
+        try {
+            if (playShutterSound && !_state.value.useLivePhoto) {
+                onPlayShutterSound?.invoke()
+            }
+            val currentState = _state.value
+            val manualBaseExposure = resolveHdrBracketManualBaseExposure(currentState)
+            val requests = evOffsets.mapIndexed { index, evOffset ->
+                device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
+                    addTarget(reader.surface)
+                    applyBaseCameraSettings(
+                        builder = this,
+                        isCapture = true,
+                        isRawCapture = isRawCapture,
+                        disableZslForHdrCapture = !isRawCapture
+                    )
+                    applyHdrBracketExposure(this, currentState, evOffset, manualBaseExposure)
+                    set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE)
+                    set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+                    if (currentState.awbMode != CameraMetadata.CONTROL_AWB_MODE_OFF) {
+                        set(CaptureRequest.CONTROL_AWB_LOCK, true)
+                    }
+                    copyStillFocusSettingsFromPreview(this)
+                    PLog.d(TAG, "HDR bracket request[$index]: ev=$evOffset, manual=${manualBaseExposure != null}")
+                }.build()
+            }
+
+            session.captureBurst(requests, object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureStarted(
+                    session: CameraCaptureSession,
+                    request: CaptureRequest,
+                    timestamp: Long,
+                    frameNumber: Long
+                ) {
+                    pendingCaptureStartedTimestamps[frameNumber] = timestamp
+                    PLog.d(TAG, "HDR bracket capture started: frame=$frameNumber")
+                }
+
+                override fun onCaptureCompleted(
+                    session: CameraCaptureSession,
+                    request: CaptureRequest,
+                    result: TotalCaptureResult
+                ) {
+                    processOrBufferCaptureResult(result)
+                    lastCaptureResult = result
+                }
+
+                override fun onCaptureSequenceCompleted(
+                    session: CameraCaptureSession,
+                    sequenceId: Int,
+                    frameNumber: Long
+                ) {
+                    super.onCaptureSequenceCompleted(session, sequenceId, frameNumber)
+                    PLog.d(TAG, "HDR bracket sequence completed")
+                    resetPreviewAfterCapture()
+                }
+
+                override fun onCaptureFailed(
+                    session: CameraCaptureSession,
+                    request: CaptureRequest,
+                    failure: CaptureFailure
+                ) {
+                    PLog.e(TAG, "HDR bracket capture failed: ${failure.reason}")
+                    _state.value = _state.value.copy(
+                        isCapturing = false,
+                        hdrBracketCapturing = false,
+                        hdrBracketFrameCount = 0
+                    )
+                    onHdrBracketCaptureFailed?.invoke()
+                    resetPreviewAfterCapture()
+                }
+            }, cameraHandler)
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to capture HDR bracket", e)
+            _state.value = _state.value.copy(
+                isCapturing = false,
+                hdrBracketCapturing = false,
+                hdrBracketFrameCount = 0
+            )
+            onHdrBracketCaptureFailed?.invoke()
+            resetPreviewAfterCapture()
+        }
+    }
+
+    private fun buildHdrBracketEvOffsets(zeroEvFrameCount: Int, isRawCapture: Boolean): List<Float> {
+        if (isRawCapture) {
+            val normalFrameCount = zeroEvFrameCount.coerceAtLeast(2)
+            return buildList {
+                add(-HdrBracketConfig.SIDE_EV)
+                repeat(normalFrameCount) {
+                    add(0f)
+                }
+            }
+        }
+        return buildList {
+            add(0f)
+            add(HdrBracketConfig.SIDE_EV)
+            add(-HdrBracketConfig.SIDE_EV)
+            repeat((zeroEvFrameCount - 1).coerceAtLeast(0)) {
+                add(0f)
+            }
+        }
+    }
+
     /**
      * 执行实际的拍照操作
      */
+    private fun resolveHdrBracketManualBaseExposure(state: CameraState): Pair<Int, Long>? {
+        if (!isManualSensorSupported || !availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_OFF)) {
+            return null
+        }
+        val result = lastCaptureResult
+        val baseIso = if (state.isAutoExposure) {
+            result?.get(CaptureResult.SENSOR_SENSITIVITY)
+        } else {
+            state.iso
+        } ?: return null
+        val baseShutter = if (state.isAutoExposure) {
+            result?.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+        } else {
+            state.shutterSpeed
+        } ?: return null
+        if (baseIso <= 0 || baseShutter <= 0L) return null
+        return Pair(baseIso, baseShutter)
+    }
+
+    private fun applyHdrBracketExposure(
+        builder: CaptureRequest.Builder,
+        state: CameraState,
+        evOffset: Float,
+        manualBaseExposure: Pair<Int, Long>?
+    ) {
+        if (manualBaseExposure != null) {
+            val (iso, shutter) = calculateHdrBracketManualExposure(
+                baseIso = manualBaseExposure.first,
+                baseShutter = manualBaseExposure.second,
+                evOffset = evOffset,
+                state = state
+            )
+            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+            builder.set(CaptureRequest.SENSOR_SENSITIVITY, iso)
+            builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, shutter)
+            PLog.d(TAG, "HDR bracket manual exposure: ev=$evOffset, ISO=$iso, shutter=$shutter")
+            return
+        }
+
+        val compensation = calculateHdrBracketExposureCompensation(state, evOffset)
+        builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+        builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, compensation)
+        PLog.d(TAG, "HDR bracket AE compensation: ev=$evOffset, compensation=$compensation")
+    }
+
+    private fun calculateHdrBracketManualExposure(
+        baseIso: Int,
+        baseShutter: Long,
+        evOffset: Float,
+        state: CameraState
+    ): Pair<Int, Long> {
+        val isoRange = state.getIsoRange()
+        val shutterRange = state.getShutterSpeedRange()
+        val multiplier = 2.0.pow(evOffset.toDouble())
+        val targetProduct = baseIso.toDouble() * baseShutter.toDouble() * multiplier
+
+        val shutterFirst = (baseShutter.toDouble() * multiplier)
+            .roundToLong()
+            .coerceIn(shutterRange.lower, shutterRange.upper)
+        val isoForShutter = (targetProduct / shutterFirst.toDouble())
+            .roundToInt()
+            .coerceIn(isoRange.lower, isoRange.upper)
+        val shutterForIso = (targetProduct / isoForShutter.toDouble())
+            .roundToLong()
+            .coerceIn(shutterRange.lower, shutterRange.upper)
+
+        return Pair(isoForShutter, shutterForIso)
+    }
+
+    private fun calculateHdrBracketExposureCompensation(state: CameraState, evOffset: Float): Int {
+        val evStep = state.getExposureCompensationStep().takeIf { it > 0f } ?: return state.exposureCompensation
+        val range = state.getExposureCompensationRange()
+        val steps = roundHdrBracketCompensationSteps(evOffset, evStep)
+        return (state.exposureCompensation + steps).coerceIn(range.lower, range.upper)
+    }
+
+    private fun roundHdrBracketCompensationSteps(evOffset: Float, evStep: Float): Int {
+        if (evOffset == 0f) return 0
+        val magnitude = (abs(evOffset / evStep) + 0.0001f).roundToInt()
+        return if (evOffset < 0f) -magnitude else magnitude
+    }
+
+    private fun copyStillFocusSettingsFromPreview(builder: CaptureRequest.Builder) {
+        previewRequestBuilder?.let { preview ->
+            preview.get(CaptureRequest.CONTROL_AF_MODE)?.let {
+                builder.set(CaptureRequest.CONTROL_AF_MODE, it)
+            }
+            preview.get(CaptureRequest.LENS_FOCUS_DISTANCE)?.let {
+                builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, it)
+            }
+            preview.get(CaptureRequest.CONTROL_AF_REGIONS)?.let {
+                builder.set(CaptureRequest.CONTROL_AF_REGIONS, it)
+            }
+            preview.get(CaptureRequest.CONTROL_AE_REGIONS)?.let {
+                builder.set(CaptureRequest.CONTROL_AE_REGIONS, it)
+            }
+        }
+    }
+
+    private fun shouldUseDefaultHdrBracketCapture(state: CameraState, isRawCapture: Boolean): Boolean {
+        return state.captureMode == CaptureMode.PHOTO &&
+                state.useHdrComposition &&
+                !state.burstCapturing &&
+                !state.hdrBracketCapturing &&
+                !state.useMultipleExposure &&
+                !state.useLivePhoto &&
+                (isRawCapture || !state.useRaw || !isRawSupported)
+    }
+
+    private fun resolveHdrBracketZeroEvFrameCount(state: CameraState): Int {
+        return if (state.useMFNR || state.useMFSR) {
+            state.multiFrameCount.coerceIn(
+                MultiFrameConfig.MIN_FRAME_COUNT,
+                MultiFrameConfig.MAX_FRAME_COUNT
+            )
+        } else {
+            1
+        }
+    }
+
     private fun performCapture(device: CameraDevice, reader: ImageReader) {
         try {
             val isRawCapture = isRawCaptureReader(reader)
+            val currentState = _state.value
+            if (shouldUseDefaultHdrBracketCapture(currentState, isRawCapture)) {
+                val session = captureSession ?: run {
+                    PLog.e(TAG, "Failed to capture HDR bracket: capture session unavailable")
+                    _state.value = _state.value.copy(isCapturing = false)
+                    onHdrBracketCaptureFailed?.invoke()
+                    return
+                }
+                PLog.d(TAG, "Default HDR bracket capture, raw=$isRawCapture")
+                performHdrBracketCapture(
+                    device = device,
+                    reader = reader,
+                    session = session,
+                    zeroEvFrameCount = resolveHdrBracketZeroEvFrameCount(currentState),
+                    playShutterSound = false
+                )
+                return
+            }
+
             val captureBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 addTarget(reader.surface)
 
-                if (!isRawCapture && shouldMirrorStillCaptureToPreview()) {
-                    previewSurface?.let { addTarget(it) }
-                } else if (isRawCapture) {
-                    PLog.d(TAG, "RAW capture uses RAW target only to avoid unstable RAW+preview still requests")
-                }
+                // Do not mirror still capture frames to the GL preview SurfaceTexture.
+                // Some camera HALs occasionally deliver a still-capture buffer that
+                // SurfaceTexture.updateTexImage cannot bind as an external OES image.
+                // if (!isRawCapture && shouldMirrorStillCaptureToPreview()) {
+                //     previewSurface?.let { addTarget(it) }
+                // }
 
                 // 应用所有相机参数（曝光、白平衡、闪光灯、变焦、色调映射）
                 // isCapture = true 确保使用完整的曝光时间（不限制长曝光）
@@ -3229,28 +4445,20 @@ class Camera2Controller(private val context: Context) {
         longitude: Double? = null,
         effectiveCharacteristics: CameraCharacteristics? = null
     ): CaptureInfo {
-        val cameraId = _state.value.currentCameraId
+        val openCameraId = getCurrentOpenCameraId()
         val zoomRatio = _state.value.zoomRatio
 
         // 从 CameraCharacteristics 获取镜头固定信息
         var aperture: Float? = null
-        var focalLength: Float? = null
-        var focalLength35mm: Int? = null
+        var characteristicsForMetadata: CameraCharacteristics? = null
 
         try {
-            val characteristics = effectiveCharacteristics ?: cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
+            val characteristics = effectiveCharacteristics ?: cachedCharacteristics ?: cameraManager.getCameraCharacteristics(openCameraId)
+            characteristicsForMetadata = characteristics
 
             // 光圈值（取第一个可用光圈）
             val apertures = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)
             aperture = apertures?.firstOrNull()
-
-            // 焦距（取第一个可用焦距）
-            val focalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-            focalLengths?.firstOrNull()?.let {
-                focalLength = it * zoomRatio
-            }
-            // 计算等效35mm焦距
-            focalLength35mm = calculate35mmEquivalent(characteristics)?.times(zoomRatio)?.roundToInt()
 
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to get camera characteristics for EXIF", e)
@@ -3264,23 +4472,18 @@ class Camera2Controller(private val context: Context) {
 
         // 如果有实时的光圈/焦距，使用实时值
         result?.get(CaptureResult.LENS_APERTURE)?.let { aperture = it }
-        result?.get(CaptureResult.LENS_FOCAL_LENGTH)?.let {
-            focalLength = it * zoomRatio
-            // 重新计算35mm等效焦距
-            try {
-                val characteristics = effectiveCharacteristics ?: cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
-                focalLength35mm = calculate35mmEquivalent(characteristics)?.times(zoomRatio)?.roundToInt()
-            } catch (e: Exception) {
-                // 忽略
-            }
-        }
+        val resolvedFocalLength = resolveCaptureFocalLength(
+            characteristics = characteristicsForMetadata,
+            captureResultFocalLength = result?.get(CaptureResult.LENS_FOCAL_LENGTH),
+            zoomRatio = zoomRatio
+        )
 
         return CaptureInfo(
             exposureTime = exposureTime,
             iso = iso,
             aperture = aperture,
-            focalLength = focalLength,
-            focalLength35mm = focalLength35mm,
+            focalLength = resolvedFocalLength.focalLength,
+            focalLength35mm = resolvedFocalLength.focalLength35mm,
             whiteBalance = whiteBalance,
             flashState = flashState,
             // 传给下游的方向永远是 NORMAL (1)
@@ -3294,6 +4497,36 @@ class Camera2Controller(private val context: Context) {
                 shouldUseP3ColorSpace() -> ColorSpace.Named.DISPLAY_P3
                 else -> ColorSpace.Named.SRGB
             }
+        )
+    }
+
+    private data class ResolvedCaptureFocalLength(
+        val focalLength: Float?,
+        val focalLength35mm: Int?
+    )
+
+    private fun resolveCaptureFocalLength(
+        characteristics: CameraCharacteristics?,
+        captureResultFocalLength: Float?,
+        zoomRatio: Float
+    ): ResolvedCaptureFocalLength {
+        val selectedCamera = _state.value.getCurrentCameraInfo()
+        val selectedCameraFocalLength = selectedCamera?.focalLength?.takeIf { it > 0f }
+        val selectedCameraFocalLength35mm = selectedCamera?.focalLength35mmEquivalent?.takeIf { it > 0f }
+        val characteristicsFocalLength = characteristics
+            ?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+            ?.firstOrNull()
+            ?.takeIf { it > 0f }
+
+        val baseFocalLength = selectedCameraFocalLength
+            ?: captureResultFocalLength?.takeIf { it > 0f }
+            ?: characteristicsFocalLength
+        val baseFocalLength35mm = selectedCameraFocalLength35mm
+            ?: characteristics?.let(::calculate35mmEquivalent)?.toFloat()
+
+        return ResolvedCaptureFocalLength(
+            focalLength = baseFocalLength?.times(zoomRatio),
+            focalLength35mm = baseFocalLength35mm?.times(zoomRatio)?.roundToInt()
         )
     }
 
@@ -3339,7 +4572,15 @@ class Camera2Controller(private val context: Context) {
      * 关闭相机
      */
     fun closeCamera(preserveVideoRecording: Boolean = false) {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post {
+                closeCamera(preserveVideoRecording)
+            }
+            return
+        }
         try {
+            cameraOpenGeneration++
             val keepVideoRecording = preserveVideoRecording && _state.value.videoRecordingState.isRecording
             if (keepVideoRecording) {
                 PLog.d(TAG, "Closing camera while keeping active video recording")
@@ -3352,7 +4593,7 @@ class Camera2Controller(private val context: Context) {
                 _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
             }
 
-            captureSession?.close()
+            safeCloseCaptureSession(captureSession, "closeCamera")
             captureSession = null
 
             cameraDevice?.close()
@@ -3366,11 +4607,15 @@ class Camera2Controller(private val context: Context) {
 
             //清理所有缓存的相机特性和属性
             cachedCharacteristics = null
+            activeOpenCameraId = ""
+            activeOutputPhysicalCameraId = null
+            failedPhysicalOutputCameraIds.clear()
             cachedSensorOrientation = 0
             cachedLensFacing = CameraCharacteristics.LENS_FACING_BACK
             cachedHardwareLevel = CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED
             availableAfModes = intArrayOf()
             lastAfState = null
+            isZslControlSupported = null
 
             _state.value = if (keepVideoRecording) {
                 _state.value.copy(isPreviewActive = false)
@@ -3387,6 +4632,16 @@ class Camera2Controller(private val context: Context) {
             PLog.d(TAG, "Camera closed")
         } catch (e: Exception) {
             PLog.e(TAG, "Error closing camera", e)
+        }
+    }
+
+    private fun safeCloseCaptureSession(session: CameraCaptureSession?, reason: String) {
+        try {
+            session?.close()
+        } catch (e: SecurityException) {
+            PLog.w(TAG, "Ignoring SecurityException while closing capture session ($reason): ${e.message}")
+        } catch (e: Exception) {
+            PLog.e(TAG, "Error closing capture session ($reason)", e)
         }
     }
 
@@ -3482,7 +4737,26 @@ class Camera2Controller(private val context: Context) {
      * 释放资源
      */
     fun release() {
-        closeCamera()
+        val handler = cameraHandler
+        if (handler != null) {
+            val latch = java.util.concurrent.CountDownLatch(1)
+            handler.post {
+                try {
+                    closeCamera()
+                } finally {
+                    latch.countDown()
+                }
+            }
+            try {
+                latch.await(2000, java.util.concurrent.TimeUnit.MILLISECONDS)
+            } catch (e: InterruptedException) {
+                PLog.e(TAG, "Interrupted while waiting for camera close during release", e)
+            }
+        } else {
+            closeCamera()
+        }
+        previewDepthProcessor.release()
+        previewAiFocusProcessor.release()
         videoRecorder.release()
         stopBackgroundThread()
         cameraDiscovery.clearCache()
@@ -3541,6 +4815,13 @@ class Camera2Controller(private val context: Context) {
      * 启动连拍
      */
     fun startBurstCapture() {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post {
+                startBurstCapture()
+            }
+            return
+        }
         val device = cameraDevice ?: return
         val session = captureSession ?: return
         val builder = previewRequestBuilder ?: return
@@ -3617,6 +4898,13 @@ class Camera2Controller(private val context: Context) {
      * 停止连拍
      */
     fun stopBurstCapture() {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post {
+                stopBurstCapture()
+            }
+            return
+        }
         PLog.d(TAG, "Stop Burst Capture")
         captureSession?.abortCaptures()
         resetPreviewAfterCapture()

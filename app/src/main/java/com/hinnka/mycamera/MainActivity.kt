@@ -2,16 +2,16 @@ package com.hinnka.mycamera
 
 import android.Manifest
 import android.content.Intent
-import android.net.Uri
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.SystemBarStyle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.fadeIn
@@ -48,42 +48,55 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.combine
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.gallery.GalleryManager
+import com.hinnka.mycamera.lut.creator.LutCreatorScreen
+import com.hinnka.mycamera.lut.creator.LutCreatorViewModel
+import com.hinnka.mycamera.ml.StartupMlPreloader
 import com.hinnka.mycamera.screencapture.ScreenCaptureRenderConfigStore
-import com.hinnka.mycamera.ui.settings.PhantomPipCropScreen
 import com.hinnka.mycamera.ui.camera.CameraScreen
+import com.hinnka.mycamera.data.FilmData
+import com.hinnka.mycamera.ui.camera.ColorWalkScreen
+import com.hinnka.mycamera.ui.camera.FilmDetailScreen
+import com.hinnka.mycamera.ui.camera.FilmLibraryScreen
+import com.hinnka.mycamera.ui.camera.ToolboxScreen
+import com.hinnka.mycamera.ui.camera.PuzzleScreen
 import com.hinnka.mycamera.ui.gallery.BurstDetailScreen
-import com.hinnka.mycamera.ui.gallery.GalleryScreen
 import com.hinnka.mycamera.ui.gallery.GalleryDetailScreen
-import com.hinnka.mycamera.ui.gallery.PhotoEditScreen
+import com.hinnka.mycamera.ui.gallery.GalleryScreen
+import com.hinnka.mycamera.ui.gallery.GalleryEditScreen
 import com.hinnka.mycamera.ui.settings.FilterManagementScreen
 import com.hinnka.mycamera.ui.settings.FrameEditorScreen
 import com.hinnka.mycamera.ui.settings.FrameManagementScreen
+import com.hinnka.mycamera.ui.settings.PhantomPipCropScreen
 import com.hinnka.mycamera.ui.settings.SettingsScreen
+import com.hinnka.mycamera.ui.settings.PresetEditorScreen
+import com.hinnka.mycamera.ui.settings.PresetManagementScreen
 import com.hinnka.mycamera.ui.theme.PhotonCameraTheme
 import com.hinnka.mycamera.update.AppUpdateManager
 import com.hinnka.mycamera.utils.BuglyHelper
+import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.OrientationObserver
+import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.utils.StartupTrace
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryTab
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
-import com.hinnka.mycamera.lut.creator.LutCreatorScreen
-import com.hinnka.mycamera.lut.creator.LutCreatorViewModel
-import com.hinnka.mycamera.utils.DeviceUtil
-import com.hinnka.mycamera.gallery.GalleryManager
-import com.hinnka.mycamera.utils.PLog
-import com.hinnka.mycamera.utils.StartupTrace
 
 /**
  * 路由常量
@@ -95,14 +108,31 @@ object Routes {
     const val BURST_DETAIL = "burst_detail/{photoId}"
     const val PHOTO_EDIT = "photo_edit"
     const val SETTINGS = "settings"
-    const val FILTER_MANAGEMENT = "filter_management"
+    const val FILTER_MANAGEMENT = "filter_management?locateLutId={locateLutId}"
     const val FRAME_MANAGEMENT = "frame_management"
     const val FRAME_EDITOR = "frame_editor?frameId={frameId}&imageFrame={imageFrame}"
     const val LUT_CREATOR = "lut_creator"
+    const val LUT_SYNTHESIS = "lut_synthesis"
+    const val TOOLBOX = "toolbox"
+    const val PUZZLE = "puzzle"
+    const val PRESET_EDITOR = "preset_editor?presetId={presetId}"
+    const val PRESET_MANAGEMENT = "preset_management"
+
+    fun presetEditor(presetId: String? = null): String {
+        return if (presetId != null) "preset_editor?presetId=$presetId" else "preset_editor"
+    }
     const val PHANTOM_PIP_CROP = "phantom_pip_crop"
+    const val COLOR_WALK = "color_walk"
+    const val FILM_LIBRARY = "film_library"
+    const val FILM_DETAIL = "film_detail/{filmId}"
+
+    fun filmDetail(filmId: String) = "film_detail/$filmId"
 
     fun photoDetail(tab: GalleryTab = GalleryTab.PHOTON, index: Int = 0, photoId: String? = null) =
         "photo_detail/$tab/$index" + (if (photoId != null) "?photoId=$photoId" else "")
+
+    fun filterManagement(locateLutId: String? = null) = 
+        "filter_management" + (if (locateLutId != null) "?locateLutId=$locateLutId" else "")
 
     fun burstDetail(photoId: String) = "burst_detail/$photoId"
 
@@ -125,6 +155,7 @@ class MainActivity : ComponentActivity() {
         arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
 
     private var hasPermissions by mutableStateOf(false)
+    private var mlPreloadComplete by mutableStateOf(false)
     private var pendingRoute by mutableStateOf<String?>(null)
     private var pendingZipImportUris by mutableStateOf<List<Uri>>(emptyList())
 
@@ -134,19 +165,23 @@ class MainActivity : ComponentActivity() {
         hasPermissions = result.values.all { it }
     }
 
-    private fun applyPreferredWindowColorMode() {
+    private fun applyPreferredWindowColorMode(useHdrScreenMode: Boolean, useP3ColorSpace: Boolean) {
         val configuration = resources.configuration
         when {
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !DeviceUtil.isHarmonyOS && configuration.isScreenHdr -> {
+            useHdrScreenMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !DeviceUtil.isHarmonyOS && configuration.isScreenHdr -> {
                 window.colorMode = ActivityInfo.COLOR_MODE_HDR
             }
-            configuration.isScreenWideColorGamut -> {
+            useP3ColorSpace && configuration.isScreenWideColorGamut -> {
                 window.colorMode = ActivityInfo.COLOR_MODE_WIDE_COLOR_GAMUT
+            }
+            else -> {
+                window.colorMode = ActivityInfo.COLOR_MODE_DEFAULT
             }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        val splashScreen = installSplashScreen()
         super.onCreate(savedInstanceState)
         StartupTrace.mark("MainActivity.onCreate start")
 
@@ -159,8 +194,20 @@ class MainActivity : ComponentActivity() {
         }
         hideSystemUI()
         StartupTrace.mark("MainActivity.hideSystemUI applied")
-        applyPreferredWindowColorMode()
-        StartupTrace.mark("MainActivity.applyPreferredWindowColorMode applied")
+        
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                combine(
+                    cameraViewModel.useHdrScreenMode,
+                    cameraViewModel.useP3ColorSpace
+                ) { useHdrScreen, useP3 ->
+                    useHdrScreen to useP3
+                }.collect { (useHdrScreen, useP3) ->
+                    applyPreferredWindowColorMode(useHdrScreen, useP3)
+                    StartupTrace.mark("MainActivity.applyPreferredWindowColorMode applied: useHdrScreen=$useHdrScreen, useP3=$useP3")
+                }
+            }
+        }
 
         OrientationObserver.observe(this)
         StartupTrace.mark("MainActivity.OrientationObserver.observe applied")
@@ -178,17 +225,40 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
         StartupTrace.mark("MainActivity.intent handled", "pendingRoute=$pendingRoute")
 
+        lifecycleScope.launch {
+            FilmData.init(this@MainActivity)
+        }
+
+        lifecycleScope.launch {
+            try {
+                StartupMlPreloader.preloadForStartup(
+                    context = this@MainActivity,
+                    preferences = cameraViewModel.userPreferences.value
+                )
+            } finally {
+                mlPreloadComplete = true
+                StartupTrace.mark("MainActivity.mlPreloadComplete")
+            }
+        }
+
+        splashScreen.setKeepOnScreenCondition {
+            val cameraInitialized = cameraViewModel.isInitialized.value
+            val galleryInitialized = galleryViewModel.isInitialized.value
+            !(cameraInitialized && galleryInitialized && mlPreloadComplete)
+        }
+
 
         StartupTrace.mark("MainActivity.setContent start")
         setContent {
             StartupComposeReadyEffect()
             val currentRecipeParams by cameraViewModel.currentRecipeParams.collectAsState()
+            val currentEffectParams by cameraViewModel.currentEffectParams.collectAsState()
             val phantomPipCrop by cameraViewModel.phantomPipCrop.collectAsState()
             ScreenCaptureRenderConfigStore.save(
                 baselineLutConfig = cameraViewModel.currentBaselineLutConfig,
                 baselineColorRecipeParams = cameraViewModel.currentBaselineRecipeParams.value,
                 creativeLutConfig = cameraViewModel.currentLutConfig,
-                creativeColorRecipeParams = currentRecipeParams,
+                creativeColorRecipeParams = currentEffectParams.applyTo(currentRecipeParams),
                 crop = phantomPipCrop
             )
 
@@ -198,6 +268,15 @@ class MainActivity : ComponentActivity() {
                     color = Color.Black
                 ) {
                     Box(modifier = Modifier.fillMaxSize()) {
+                        val cameraInitialized by cameraViewModel.isInitialized.collectAsState()
+                        val galleryInitialized by galleryViewModel.isInitialized.collectAsState()
+
+                        LaunchedEffect(cameraInitialized, galleryInitialized) {
+                            if (cameraInitialized && galleryInitialized) {
+                                cameraViewModel.onShutterAnimationTriggered()
+                            }
+                        }
+
                         if (hasPermissions) {
                             NavigationHost(
                                 cameraViewModel = cameraViewModel,
@@ -214,6 +293,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             )
                         }
+
                         AppUpdateInstallPrompt()
                     }
                 }
@@ -224,13 +304,11 @@ class MainActivity : ComponentActivity() {
             StartupTrace.mark("MainActivity.decorView.post")
             reportFullyDrawn()
             StartupTrace.reportFullyDrawn("MainActivity.reportFullyDrawn")
-            cameraViewModel.prewarmDepthEstimator()
         }
     }
 
     override fun onResume() {
         super.onResume()
-        applyPreferredWindowColorMode()
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
@@ -463,11 +541,20 @@ fun NavigationHost(
                             onSettingsClick = {
                                 navController.navigate(Routes.SETTINGS)
                             },
-                            onFilterManagementClick = {
-                                navController.navigate(Routes.FILTER_MANAGEMENT)
+                            onFilterManagementClick = { lutId ->
+                                navController.navigate(Routes.filterManagement(lutId))
                             },
                             onFrameManagementClick = {
                                 navController.navigate(Routes.FRAME_MANAGEMENT)
+                            },
+                            onToolboxClick = {
+                                navController.navigate(Routes.TOOLBOX)
+                            },
+                            onPresetEditClick = { id ->
+                                navController.navigate(Routes.presetEditor(id))
+                            },
+                            onPresetManagementClick = {
+                                navController.navigate(Routes.PRESET_MANAGEMENT)
                             },
                             modifier = Modifier.weight(1f)
                         )
@@ -488,21 +575,31 @@ fun NavigationHost(
                         viewModel = cameraViewModel,
                         galleryViewModel = galleryViewModel,
                         onGalleryClick = {
-                            navController.navigate(Routes.GALLERY)
                             val latestPhoto = galleryViewModel.latestPhoto.value
                             if (latestPhoto != null && System.currentTimeMillis() - latestPhoto.dateAdded < 3 * 60 * 1000) {
                                 galleryViewModel.setCurrentPhotoById(latestPhoto.id)
                                 navController.navigate(Routes.photoDetail(photoId = latestPhoto.id))
+                            } else {
+                                navController.navigate(Routes.GALLERY)
                             }
                         },
                         onSettingsClick = {
                             navController.navigate(Routes.SETTINGS)
                         },
-                        onFilterManagementClick = {
-                            navController.navigate(Routes.FILTER_MANAGEMENT)
+                        onFilterManagementClick = { lutId ->
+                            navController.navigate(Routes.filterManagement(lutId))
                         },
                         onFrameManagementClick = {
                             navController.navigate(Routes.FRAME_MANAGEMENT)
+                        },
+                        onToolboxClick = {
+                            navController.navigate(Routes.TOOLBOX)
+                        },
+                        onPresetEditClick = { id ->
+                            navController.navigate(Routes.presetEditor(id))
+                        },
+                        onPresetManagementClick = {
+                            navController.navigate(Routes.PRESET_MANAGEMENT)
                         },
                     )
                 }
@@ -516,6 +613,12 @@ fun NavigationHost(
                     },
                     onPhotoClick = { tab, index ->
                         navController.navigate(Routes.photoDetail(tab, index))
+                    },
+                    onNavigateToEdit = { photoId ->
+                        if (photoId != null) {
+                            navController.navigate(Routes.photoDetail(galleryViewModel.selectedTab, 0, photoId))
+                        }
+                        navController.navigate(Routes.PHOTO_EDIT)
                     }
                 )
             }
@@ -542,6 +645,11 @@ fun NavigationHost(
                     photoId = photoId,
                     onBack = {
                         navController.popBackStack()
+                    },
+                    onGoToGallery = {
+                        navController.navigate(Routes.GALLERY) {
+                            popUpTo(Routes.CAMERA)
+                        }
                     },
                     onEdit = {
                         navController.navigate(Routes.PHOTO_EDIT)
@@ -570,7 +678,7 @@ fun NavigationHost(
             }
 
             composable(Routes.PHOTO_EDIT) {
-                PhotoEditScreen(
+                GalleryEditScreen(
                     viewModel = galleryViewModel,
                     cameraViewModel = cameraViewModel,
                     onBack = {
@@ -578,6 +686,9 @@ fun NavigationHost(
                     },
                     onOpenFrameEditor = { frameId ->
                         navController.navigate(Routes.frameEditor(frameId = frameId))
+                    },
+                    onFilterManagementClick = { lutId ->
+                        navController.navigate(Routes.filterManagement(lutId))
                     }
                 )
             }
@@ -596,6 +707,41 @@ fun NavigationHost(
                     },
                     onPhantomPipCropClick = {
                         navController.navigate(Routes.PHANTOM_PIP_CROP)
+                    },
+                    onPresetManagementClick = {
+                        navController.navigate(Routes.PRESET_MANAGEMENT)
+                    }
+                )
+            }
+
+            composable(
+                route = Routes.PRESET_EDITOR,
+                arguments = listOf(
+                    navArgument("presetId") {
+                        type = NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    }
+                )
+            ) { backStackEntry ->
+                val presetId = backStackEntry.arguments?.getString("presetId")
+                PresetEditorScreen(
+                    viewModel = cameraViewModel,
+                    presetId = presetId,
+                    onBack = {
+                        navController.popBackStack()
+                    }
+                )
+            }
+
+            composable(Routes.PRESET_MANAGEMENT) {
+                PresetManagementScreen(
+                    viewModel = cameraViewModel,
+                    onBack = {
+                        navController.popBackStack()
+                    },
+                    onPresetEditClick = { id ->
+                        navController.navigate(Routes.presetEditor(id))
                     }
                 )
             }
@@ -612,17 +758,25 @@ fun NavigationHost(
                 )
             }
 
-            composable(Routes.FILTER_MANAGEMENT) {
+            composable(
+                route = Routes.FILTER_MANAGEMENT,
+                arguments = listOf(
+                    navArgument("locateLutId") {
+                        type = NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    }
+                )
+            ) { backStackEntry ->
+                val locateLutId = backStackEntry.arguments?.getString("locateLutId")
                 FilterManagementScreen(
                     viewModel = cameraViewModel,
                     onBack = {
                         navController.popBackStack()
                     },
-                    onLutCreatorClick = {
-                        navController.navigate(Routes.LUT_CREATOR)
-                    },
                     pendingZipImportUris = pendingZipImportUris,
-                    onZipImportHandled = onZipImportHandled
+                    onZipImportHandled = onZipImportHandled,
+                    locateLutId = locateLutId
                 )
             }
 
@@ -635,6 +789,62 @@ fun NavigationHost(
                         cameraViewModel.refreshCustomContent()
                         navController.popBackStack()
                     }
+                )
+            }
+
+            composable(Routes.LUT_SYNTHESIS) {
+                com.hinnka.mycamera.lut.synthesis.LutSynthesisScreen(
+                    onNavigateBack = {
+                        cameraViewModel.refreshCustomContent()
+                        navController.popBackStack()
+                    }
+                )
+            }
+
+            composable(Routes.TOOLBOX) {
+                ToolboxScreen(
+                    onBack = { navController.popBackStack() },
+                    onLutCreatorClick = { navController.navigate(Routes.LUT_CREATOR) },
+                    onLutSynthesisClick = { navController.navigate(Routes.LUT_SYNTHESIS) },
+                    onColorWalkClick = { navController.navigate(Routes.COLOR_WALK) },
+                    onFilmLibraryClick = { navController.navigate(Routes.FILM_LIBRARY) },
+                    onPuzzleClick = { navController.navigate(Routes.PUZZLE) }
+                )
+            }
+
+            composable(Routes.PUZZLE) {
+                PuzzleScreen(
+                    onBack = { navController.popBackStack() }
+                )
+            }
+
+            composable(Routes.FILM_LIBRARY) {
+                FilmLibraryScreen(
+                    onBack = { navController.popBackStack() },
+                    onFilmClick = { film ->
+                        navController.navigate(Routes.filmDetail(film.id ?: ""))
+                    }
+                )
+            }
+
+            composable(
+                route = Routes.FILM_DETAIL,
+                arguments = listOf(navArgument("filmId") { type = NavType.StringType })
+            ) { backStackEntry ->
+                val filmId = backStackEntry.arguments?.getString("filmId") ?: ""
+                val film = FilmData.getFilmById(filmId)
+                if (film != null) {
+                    FilmDetailScreen(
+                        film = film,
+                        onBack = { navController.popBackStack() }
+                    )
+                }
+            }
+
+            composable(Routes.COLOR_WALK) {
+                ColorWalkScreen(
+                    viewModel = cameraViewModel,
+                    onBack = { navController.popBackStack() }
                 )
             }
 

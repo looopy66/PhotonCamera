@@ -10,6 +10,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.FilterVintage
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -54,8 +55,7 @@ fun ZoomControlBarVerticel(
     onFilterClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // 显示模式状态
-    var displayMode by remember { mutableStateOf(ZoomDisplayMode.FOCAL_LENGTH) }
+    val displayMode by viewModel.zoomDisplayMode.collectAsState()
 
     val currentCameraIdState by rememberUpdatedState(currentCameraId)
 
@@ -67,6 +67,7 @@ fun ZoomControlBarVerticel(
 
     // 根据可用相机计算变焦档位
     val customFocalLengths by viewModel.customFocalLengths.collectAsState(initial = emptyList())
+    val hiddenFocalLengths by viewModel.hiddenFocalLengths.collectAsState(initial = emptyList())
     val lensZoomStops = viewModel.calculateLensZoomStops(availableCameras, currentCamera)
     val customLensZoomStops = remember(availableCameras, currentCamera) {
         availableCameras
@@ -78,16 +79,20 @@ fun ZoomControlBarVerticel(
                         camera.lensType != LensType.FRONT && camera.lensType != LensType.BACK_MACRO
                     }
             }
-            .map { it.intrinsicZoomRatio }
+            .map { it.displayIntrinsicZoomRatio }
     }
-    val zoomStops = viewModel.allZoomStops(lensZoomStops, mainCamera, currentCamera, customFocalLengths)
+    val zoomStops = viewModel.allZoomStops(lensZoomStops, mainCamera, currentCamera, customFocalLengths, hiddenFocalLengths)
+
+    val macroCameras = remember(availableCameras) {
+        availableCameras.filter { it.lensType == LensType.BACK_MACRO }
+    }
 
     val cameraState by viewModel.state.collectAsState()
     val minZoom = remember(cameraState.availableCameras) {
-        cameraState.availableCameras.filter { it.lensType != LensType.FRONT }.minOfOrNull { it.minZoom * it.intrinsicZoomRatio } ?: 1f
+        cameraState.availableCameras.filter { it.lensType != LensType.FRONT }.minOfOrNull { it.minZoom * it.displayIntrinsicZoomRatio } ?: 1f
     }
     val maxZoom = remember(cameraState.availableCameras) {
-        cameraState.availableCameras.filter { it.lensType != LensType.FRONT }.maxOfOrNull { it.maxZoom * it.intrinsicZoomRatio } ?: 20f
+        cameraState.availableCameras.filter { it.lensType != LensType.FRONT }.maxOfOrNull { it.maxZoom * it.displayIntrinsicZoomRatio } ?: 20f
     }
 
     var isContinuousZooming by remember { mutableStateOf(false) }
@@ -176,10 +181,6 @@ fun ZoomControlBarVerticel(
                             val newZoom = (internalZoomRatio * exp(-dragAmount.toDouble() * sensitivity).toFloat()).coerceIn(minZoom, maxZoom)
                             internalZoomRatio = newZoom
 
-                            val camera = viewModel.findOptimalLens(newZoom, availableCameras, currentCameraIdState)
-                            if (camera != null && camera.cameraId != currentCameraIdState) {
-                                onLensSwitch(camera.cameraId)
-                            }
                             onZoomChange(newZoom)
                         }
                     },
@@ -206,11 +207,7 @@ fun ZoomControlBarVerticel(
             // Display Mode Toggle (Top)
             IconButton(
                 onClick = {
-                    displayMode = if (displayMode == ZoomDisplayMode.ZOOM_RATIO) {
-                        ZoomDisplayMode.FOCAL_LENGTH
-                    } else {
-                        ZoomDisplayMode.ZOOM_RATIO
-                    }
+                    viewModel.saveZoomDisplayMode(displayMode.next())
                 },
                 modifier = Modifier.size(32.dp)
             ) {
@@ -276,18 +273,17 @@ fun ZoomControlBarVerticel(
                     lensStops = lensZoomStops,
                     customLensStops = customLensZoomStops,
                     stops = effectiveStops,
+                    macroCameras = macroCameras,
+                    currentCameraId = currentCameraIdState,
                     mainCamera = mainCamera,
                     displayMode = displayMode,
                     onZoomChange = { stop ->
                         val targetStop = if (customZoomStop != null && stop == customZoomStop) originalStopRatio else stop
-                        val camera = viewModel.findOptimalLens(targetStop, availableCameras, currentCameraIdState)
-                        if (camera != null && camera.cameraId != currentCameraIdState) {
-                            onLensSwitch(camera.cameraId)
-                        }
                         onZoomChange(targetStop)
                         customZoomStop = null
                         replacedStopIndex = -1
                     },
+                    onLensSwitch = onLensSwitch,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -318,9 +314,12 @@ fun ZoomRulerVertical(
     lensStops: List<Float>,
     customLensStops: List<Float>,
     stops: List<Float>,
+    macroCameras: List<CameraInfo>,
+    currentCameraId: String,
     mainCamera: CameraInfo?,
     displayMode: ZoomDisplayMode,
     onZoomChange: (Float) -> Unit,
+    onLensSwitch: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val activeColor = Color(0xFFFFD700)
@@ -330,20 +329,14 @@ fun ZoomRulerVertical(
 
     Column(
         modifier = modifier
-            .background(Color.Black.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
-            .pointerInput(Unit) {
-                detectTapGestures { offset ->
-                    val height = size.height
-                    val stepHeight = height / stopsState.size
-                    val index = (offset.y / stepHeight).toInt().coerceIn(0, stopsState.lastIndex)
-                    onZoomChange(stopsState[index])
-                }
-            },
+            .background(Color.Black.copy(alpha = 0.3f), RoundedCornerShape(16.dp)),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceAround
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        val selectedStopIndex = stops.indices.minByOrNull { abs(stops[it] - zoomRatio) }
-        stops.forEachIndexed { index, stop ->
+        val isCurrentMacro = macroCameras.any { it.cameraId == currentCameraId }
+        val selectedStopIndex = if (isCurrentMacro) -1 else stopsState.indices.minByOrNull { abs(stopsState[it] - zoomRatio) }
+
+        stopsState.forEachIndexed { index, stop ->
             val isSelected = index == selectedStopIndex && abs(stop - zoomRatio) <= 0.01f
             val isCustomLensStop = customLensStops.any { abs(it - stop) <= 0.01f }
 
@@ -365,8 +358,44 @@ fun ZoomRulerVertical(
                 textDecoration = if (lensStops.contains(stop)) TextDecoration.Underline else TextDecoration.None
             )
 
-            Box(modifier = Modifier.size(32.dp).autoRotate(), contentAlignment = Alignment.Center) {
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .autoRotate()
+                    .pointerInput(stop) {
+                        detectTapGestures { onZoomChange(stop) }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
                 Text(text, style = style)
+            }
+        }
+
+        if (macroCameras.isNotEmpty()) {
+            Box(
+                modifier = Modifier
+                    .width(12.dp)
+                    .height(1.dp)
+                    .background(Color.White.copy(alpha = 0.2f))
+            )
+            macroCameras.forEach { macroCam ->
+                val isSelected = macroCam.cameraId == currentCameraId
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .autoRotate()
+                        .pointerInput(macroCam.cameraId) {
+                            detectTapGestures { onLensSwitch(macroCam.cameraId) }
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.FilterVintage,
+                        contentDescription = "Macro",
+                        tint = if (isSelected) activeColor else inactiveColor,
+                        modifier = Modifier.size(if (isSelected) 16.dp else 14.dp)
+                    )
+                }
             }
         }
     }

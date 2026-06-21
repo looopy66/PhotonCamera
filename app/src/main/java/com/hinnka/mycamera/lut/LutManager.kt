@@ -47,7 +47,7 @@ class LutManager(private val context: Context) {
             "exposure", "contrast", "saturation", "temperature", "tint", "fade", "color",
             "highlights", "shadows", "toneToe", "toneShoulder", "tonePivot",
             "paletteX", "paletteY", "paletteDensity",
-            "filmGrain", "vignette", "bleachBypass", "halation", "chromaticAberration",
+            "filmGrain", "vignette", "bleachBypass", "bloom", "softLight", "halation", "redHalation", "chromaticAberration",
             "noise", "lowRes",
             "skinHue", "skinChroma", "skinLightness",
             "redHue", "redChroma", "redLightness",
@@ -85,7 +85,10 @@ class LutManager(private val context: Context) {
                 filmGrain = f("filmGrain"),
                 vignette = f("vignette"),
                 bleachBypass = f("bleachBypass"),
-                halation = f("halation"),
+                bloom = f("bloom"),
+                softLight = f("softLight"),
+                halation = 0f,
+                redHalation = f("redHalation"),
                 chromaticAberration = f("chromaticAberration"),
                 noise = f("noise"),
                 lowRes = f("lowRes"),
@@ -130,6 +133,9 @@ class LutManager(private val context: Context) {
     // LUT 缓存
     private val lutCache = LruCache<String, LutConfig>(CACHE_SIZE)
 
+    // LUT 色彩倾向缓存 (ID -> [R, G, B])
+    private val tendencyCache = mutableMapOf<String, FloatArray>()
+
     // 可用 LUT 列表
     private var availableLuts: List<LutInfo> = emptyList()
 
@@ -154,24 +160,24 @@ class LutManager(private val context: Context) {
      * 初始化，扫描可用的 LUT 文件（包括内置和自定义）
      */
     fun initialize() {
-        // 加载内置滤镜并强制把初始分类设为空（用户不想要内置分类标签）
-        val builtInLuts = LutParser.listAvailableLuts(context, BUILT_IN_LUT_FOLDER).map {
-            it.copy(category = "")
-        }
+        val configuredBuiltInLuts = LutParser.listAvailableLuts(context, BUILT_IN_LUT_FOLDER)
+        customImportManager.initializeBuiltInLutCategoriesIfNeeded(configuredBuiltInLuts)
+        val builtInLuts = configuredBuiltInLuts.map { it.copy(category = "") }
         val customLuts = customImportManager.getCustomLuts()
         val categoryOverrides = customImportManager.getCategoryOverrides()
+        val favoriteOverrides = customImportManager.getFavoriteOverrides()
 
-        // 合并列表
-        val allLuts = customLuts + builtInLuts
+        // 合并列表并以 ID 去重，避免 ID 重复导致的 Jetpack Compose 主键重复崩溃
+        val allLuts = (customLuts + builtInLuts).distinctBy { it.id }
 
         // 应用分类重写 (用户手动创建的分类会通过这里恢复)
         availableLuts = allLuts.map { lut ->
             val overriddenCategory = categoryOverrides[lut.id]
-            if (overriddenCategory != null) {
-                lut.copy(category = overriddenCategory)
-            } else {
-                lut
-            }
+            val overriddenFavorite = favoriteOverrides[lut.id]
+            lut.copy(
+                category = overriddenCategory ?: lut.category,
+                isFavorite = overriddenFavorite ?: lut.isFavorite
+            )
         }
 
         PLog.d(TAG, "Found ${availableLuts.size} LUT files (${customLuts.size} custom, ${builtInLuts.size} built-in)")
@@ -204,7 +210,7 @@ class LutManager(private val context: Context) {
 
         // 查找 LUT 信息
         val lutInfo = getLutInfo(id) ?: run {
-            PLog.w(TAG, "LUT not found: $id")
+//            PLog.w(TAG, "LUT not found: $id")
             return null
         }
 
@@ -258,6 +264,36 @@ class LutManager(private val context: Context) {
      */
     fun getCacheInfo(): String {
         return "LUT Cache: ${lutCache.size()}/${CACHE_SIZE}, hits=${lutCache.hitCount()}, misses=${lutCache.missCount()}"
+    }
+
+    /**
+     * 获取指定 LUT 的色彩倾向性（带缓存）
+     */
+    fun getLutTendency(id: String): FloatArray? {
+        tendencyCache[id]?.let { return it }
+        
+        val lutConfig = loadLut(id) ?: return null
+        val tendency = LutColorAnalyzer.analyzeTendency(lutConfig)
+        tendencyCache[id] = tendency
+        return tendency
+    }
+
+    /**
+     * 为指定颜色推荐最合适的 LUT 列表
+     * @param targetColor 目标颜色 (Color Int)
+     * @param limit 推荐数量
+     * @return 按匹配度排序的 LUT 列表
+     */
+    fun recommendLutsForColor(targetColor: Int, limit: Int = 5): List<LutInfo> {
+        return availableLuts
+            .mapNotNull { info ->
+                val tendency = getLutTendency(info.id) ?: return@mapNotNull null
+                val score = LutColorAnalyzer.calculateSuitability(targetColor, tendency)
+                info to score
+            }
+            .sortedByDescending { it.second }
+            .take(limit)
+            .map { it.first }
     }
 
     // ========== 色彩配方持久化方法 ==========

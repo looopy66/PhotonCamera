@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
 }
 
 val localProperties = Properties().apply {
@@ -25,8 +26,8 @@ android {
         applicationId = "com.hinnka.mycamera"
         minSdk = 30
         targetSdk = 36
-        versionCode = 73
-        versionName = "1.17.0"
+        versionCode = 108
+        versionName = "1.23.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
@@ -39,6 +40,17 @@ android {
                 arguments += "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384"
             }
         }
+
+        buildConfigField(
+            "String",
+            "BUILT_IN_API_URL",
+            "https://camera-api.hinnka.me/v1".toBuildConfigString()
+        )
+        buildConfigField(
+            "String",
+            "BUILT_IN_API_KEY",
+            localProperties.getProperty("BUILT_IN_API_KEY_GOOGLE", "").toBuildConfigString()
+        )
     }
 
     signingConfigs {
@@ -66,6 +78,7 @@ android {
         }
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("release")
         }
@@ -79,43 +92,17 @@ android {
     productFlavors {
         create("google") {
             dimension = "channel"
-            buildConfigField(
-                "String",
-                "BUILT_IN_API_URL",
-                "https://camera-api.hinnka.com/v1".toBuildConfigString()
-            )
-            buildConfigField(
-                "String",
-                "BUILT_IN_API_KEY",
-                localProperties.getProperty("BUILT_IN_API_KEY_GOOGLE", "").toBuildConfigString()
-            )
         }
         create("default") {
             dimension = "channel"
-            buildConfigField(
-                "String",
-                "BUILT_IN_API_URL",
-                "https://token-plan-cn.xiaomimimo.com/v1".toBuildConfigString()
-            )
-            buildConfigField(
-                "String",
-                "BUILT_IN_API_KEY",
-                localProperties.getProperty("BUILT_IN_API_KEY", "").toBuildConfigString()
-            )
         }
         create("samsung") {
             dimension = "channel"
             applicationId = "com.samsung.android.scan3d"
-            buildConfigField(
-                "String",
-                "BUILT_IN_API_URL",
-                "https://token-plan-cn.xiaomimimo.com/v1".toBuildConfigString()
-            )
-            buildConfigField(
-                "String",
-                "BUILT_IN_API_KEY",
-                localProperties.getProperty("BUILT_IN_API_KEY", "").toBuildConfigString()
-            )
+        }
+        create("meitu") {
+            dimension = "channel"
+            applicationId = "com.meitu.meiyancamera"
         }
     }
 
@@ -135,6 +122,12 @@ android {
 
     sourceSets {
         getByName("samsung") {
+            java {
+                srcDir("src/default/java")
+            }
+            manifest.srcFile("src/default/AndroidManifest.xml")
+        }
+        getByName("meitu") {
             java {
                 srcDir("src/default/java")
             }
@@ -161,6 +154,7 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     implementation(libs.androidx.fragment.ktx)
+    implementation(libs.androidx.recyclerview)
     
     // ViewModel Compose
     implementation(libs.androidx.lifecycle.viewmodel.compose)
@@ -179,11 +173,18 @@ dependencies {
     
     // ExifInterface for writing EXIF metadata
     implementation(libs.androidx.exifinterface)
+
+    // HEIC export through the platform image encoder
+    implementation(libs.androidx.heifwriter)
     
     // DataStore for user preferences
     implementation("androidx.datastore:datastore-preferences:1.0.0")
     implementation(libs.androidx.animation.core)
     implementation(libs.androidx.lifecycle.process)
+    implementation(libs.androidx.core.splashscreen)
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
 
     implementation(libs.okhttp)
     implementation(libs.gson)
@@ -191,6 +192,7 @@ dependencies {
     // Bugly for default flavor
     "defaultImplementation"("com.tencent.bugly:crashreport:latest.release")
     "samsungImplementation"("com.tencent.bugly:crashreport:latest.release")
+    "meituImplementation"("com.tencent.bugly:crashreport:latest.release")
 
     // Billing for google flavor
     "googleImplementation"(libs.google.billing)
@@ -199,9 +201,11 @@ dependencies {
     // Reorderable for drag-and-drop list reordering
     implementation("sh.calvin.reorderable:reorderable:2.4.3")
 
-    // Media3 for video playback
+    // Media3 for video playback and export
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.ui)
+    implementation(libs.media3.effect)
+    implementation(libs.media3.transformer)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

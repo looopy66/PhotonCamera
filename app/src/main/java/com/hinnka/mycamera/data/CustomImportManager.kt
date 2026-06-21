@@ -17,6 +17,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Locale
 import java.util.UUID
 
 /**
@@ -41,6 +42,8 @@ class CustomImportManager(private val context: Context) {
         private const val CUSTOM_FRAME_CONFIG = "custom_frames.json"
         private const val CUSTOM_DCP_CONFIG = "custom_dcps.json"
         private const val CATEGORY_OVERRIDES_CONFIG = "category_overrides.json"
+        private const val FAVORITE_OVERRIDES_CONFIG = "favorite_overrides.json"
+        private const val BUILT_IN_LUT_CATEGORY_INITIALIZED_CONFIG = "built_in_lut_categories_initialized.json"
 
         // 自定义字体目录
         private const val CUSTOM_FONT_DIR = "custom_fonts"
@@ -81,6 +84,65 @@ class CustomImportManager(private val context: Context) {
         }
     }
 
+    fun initializeBuiltInLutCategoriesIfNeeded(luts: List<LutInfo>) {
+        try {
+            val categorizedLuts = luts
+                .filter { it.isBuiltIn && it.category.isNotEmpty() }
+                .associate { it.id to it.category }
+            if (categorizedLuts.isEmpty()) return
+
+            val initializedFile = File(context.filesDir, BUILT_IN_LUT_CATEGORY_INITIALIZED_CONFIG)
+            val initializedJson = if (initializedFile.exists()) {
+                JSONObject(initializedFile.readText())
+            } else {
+                JSONObject()
+            }
+
+            val overridesFile = File(context.filesDir, CATEGORY_OVERRIDES_CONFIG)
+            val overridesJson = if (overridesFile.exists()) {
+                JSONObject(overridesFile.readText())
+            } else {
+                JSONObject()
+            }
+
+            var updatedCount = 0
+            categorizedLuts.forEach { (id, category) ->
+                if (!initializedJson.optBoolean(id, false)) {
+                    overridesJson.put(id, category)
+                    initializedJson.put(id, true)
+                    updatedCount++
+                }
+            }
+
+            if (updatedCount > 0) {
+                overridesFile.writeText(overridesJson.toString())
+                initializedFile.writeText(initializedJson.toString())
+            }
+            PLog.d(TAG, "Built-in LUT categories initialized: $updatedCount")
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to initialize built-in LUT categories", e)
+        }
+    }
+
+    /**
+     * 获取收藏重写映射。
+     */
+    fun getFavoriteOverrides(): Map<String, Boolean> {
+        return try {
+            val file = File(context.filesDir, FAVORITE_OVERRIDES_CONFIG)
+            if (!file.exists()) return emptyMap()
+            val json = JSONObject(file.readText())
+            val map = mutableMapOf<String, Boolean>()
+            json.keys().forEach { key ->
+                map[key] = json.optBoolean(key, false)
+            }
+            map
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to get favorite overrides", e)
+            emptyMap()
+        }
+    }
+
     private val customLutDir: File
         get() = File(context.filesDir, CUSTOM_LUT_DIR).apply { mkdirs() }
 
@@ -113,7 +175,7 @@ class CustomImportManager(private val context: Context) {
             val plutFile = File(customLutDir, plutFileName)
 
             // 读取 .cube / .png / .xmp / .plut 文件并转换（或复制）为内部 .plut (v3)
-            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+            openInputStream(uri)?.use { inputStream ->
                 FileOutputStream(plutFile).use { outputStream ->
                     val success = when {
                         fileName.endsWith(".xmp", ignoreCase = true) ->
@@ -133,8 +195,15 @@ class CustomImportManager(private val context: Context) {
                 }
             } ?: return null
 
+            var parsedName: String? = null
+            if (fileName.endsWith(".xmp", ignoreCase = true) && displayName.isNullOrBlank()) {
+                openInputStream(uri)?.use { inputStream ->
+                    parsedName = XmpLutParser.parseName(inputStream)
+                }
+            }
+
             // 生成显示名称
-            val name = displayName ?: fileName.substringBeforeLast('.')
+            val name = displayName?.takeIf { it.isNotBlank() } ?: parsedName ?: fileName.substringBeforeLast('.')
             val sanitizedCategory = sanitizeCustomLutCategory(category)
 
             // 保存到配置文件
@@ -215,33 +284,107 @@ class CustomImportManager(private val context: Context) {
             val frameId = "custom_${UUID.randomUUID()}"
             val frameConfigFile = File(customFrameDir, "$frameId.json")
 
-            // 复制配置文件
-            context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                FileOutputStream(frameConfigFile).use { outputStream ->
-                    inputStream.copyTo(outputStream)
-                }
+            val importedJson = openInputStream(uri)?.use { inputStream ->
+                inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
             } ?: return null
 
-            // 验证并解析配置
-            val configJson = frameConfigFile.readText()
-            val frameConfig = JSONObject(configJson)
-
-            // 提取边框名称
-            val nameObj = frameConfig.getJSONObject("name")
-            val nameMap = mutableMapOf<String, String>()
-            nameObj.keys().forEach { lang ->
-                nameMap[lang] = nameObj.getString(lang)
+            val importedTemplate = FrameTemplateParser.parseTemplate(importedJson)
+            val templateToSave = importedTemplate.copy(id = frameId)
+            val validationErrors = FrameTemplateParser.validateTemplate(templateToSave)
+            if (validationErrors.isNotEmpty()) {
+                PLog.e(TAG, "Failed to import frame, invalid fields: $validationErrors")
+                return null
             }
 
-            // 保存到配置文件
-            saveFrameToConfig(frameId, nameMap, "$frameId.json")
+            frameConfigFile.writeText(FrameTemplateParser.serializeTemplate(templateToSave))
 
-            PLog.d(TAG, "Frame imported successfully: $frameId")
+            // 保存到配置文件
+            saveFrameToConfig(frameId, templateToSave.nameMap, "$frameId.json")
+
+            PLog.d(TAG, "Frame imported successfully: $frameId source=${importedTemplate.id}")
             frameId
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to import frame", e)
             null
         }
+    }
+
+    /**
+     * 复制边框样式。
+     *
+     * 内置边框会从 assets 读取模板，自定义边框会从私有目录读取模板。若模板引用了私有目录内的图片边框资源，
+     * 会一并复制图片文件并把 imagePath 改为副本路径。
+     */
+    fun copyFrame(frame: com.hinnka.mycamera.frame.FrameInfo, copyName: String): String? {
+        return try {
+            val frameId = "custom_${UUID.randomUUID()}"
+            val sourceTemplate = if (frame.isBuiltIn) {
+                FrameTemplateParser.parseFromAssets(context, frame.path)
+            } else {
+                FrameTemplateParser.parseFromFile(frame.path)
+            } ?: return null
+
+            val copiedLayout = sourceTemplate.layout.imagePath?.let { imagePath ->
+                copyCustomFrameImageIfNeeded(imagePath, frameId)
+            }?.let { copiedImagePath ->
+                sourceTemplate.layout.copy(imagePath = copiedImagePath)
+            } ?: sourceTemplate.layout
+
+            val copiedTemplate = sourceTemplate.copy(
+                id = frameId,
+                nameMap = mapOf("en" to copyName, "zh" to copyName),
+                layout = copiedLayout
+            )
+
+            val validationErrors = FrameTemplateParser.validateTemplate(copiedTemplate)
+            if (validationErrors.isNotEmpty()) {
+                PLog.e(TAG, "Copy frame failed, invalid fields: $validationErrors")
+                return null
+            }
+
+            val frameConfigFile = File(customFrameDir, "$frameId.json")
+            frameConfigFile.writeText(FrameTemplateParser.serializeTemplate(copiedTemplate))
+            saveFrameToConfig(frameId, copiedTemplate.nameMap, frameConfigFile.name)
+
+            PLog.d(TAG, "Frame copied successfully: $frameId ($copyName)")
+            frameId
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to copy frame", e)
+            null
+        }
+    }
+
+    fun exportFrameJson(frame: com.hinnka.mycamera.frame.FrameInfo): ByteArray? {
+        return try {
+            val json = if (frame.isBuiltIn) {
+                context.assets.open(frame.path).use { input ->
+                    input.bufferedReader().use { it.readText() }
+                }
+            } else {
+                File(frame.path).takeIf { it.exists() }?.readText() ?: return null
+            }
+            json.toByteArray(Charsets.UTF_8)
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to export frame JSON: ${frame.id}", e)
+            null
+        }
+    }
+
+    private fun copyCustomFrameImageIfNeeded(imagePath: String, frameId: String): String? {
+        val sourceFile = File(imagePath)
+        if (!sourceFile.exists() || sourceFile.parentFile != customFrameDir) {
+            return imagePath
+        }
+
+        val extension = sourceFile.extension.takeIf { it.isNotBlank() } ?: "png"
+        val imageFileName = "${frameId}_image.${extension.lowercase(Locale.US)}"
+        val copiedFile = File(customFrameDir, imageFileName)
+        sourceFile.inputStream().use { input ->
+            copiedFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+        return copiedFile.absolutePath
     }
 
     fun importDcp(uri: Uri, displayName: String? = null): String? {
@@ -251,7 +394,7 @@ class CustomImportManager(private val context: Context) {
             val normalizedFileName = "$dcpId.dcp"
             val dcpFile = File(customDcpDir, normalizedFileName)
 
-            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+            openInputStream(uri)?.use { inputStream ->
                 FileOutputStream(dcpFile).use { outputStream ->
                     inputStream.copyTo(outputStream)
                 }
@@ -284,7 +427,7 @@ class CustomImportManager(private val context: Context) {
             val frameConfigFile = File(customFrameDir, "$frameId.json")
 
             // 复制图片文件
-            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+            openInputStream(uri)?.use { inputStream ->
                 FileOutputStream(imageFile).use { outputStream ->
                     inputStream.copyTo(outputStream)
                 }
@@ -333,7 +476,7 @@ class CustomImportManager(private val context: Context) {
             val imageFileName = (frameIdHint ?: "frame_${UUID.randomUUID()}") + "_image.$extension"
             val imageFile = File(customFrameDir, imageFileName)
 
-            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+            openInputStream(uri)?.use { inputStream ->
                 imageFile.outputStream().use { outputStream ->
                     inputStream.copyTo(outputStream)
                 }
@@ -383,7 +526,7 @@ class CustomImportManager(private val context: Context) {
             val fileName = getFileName(uri) ?: "font_${UUID.randomUUID()}.ttf"
             val fontFile = File(customFontDir, fileName)
 
-            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+            openInputStream(uri)?.use { inputStream ->
                 fontFile.outputStream().use { outputStream ->
                     inputStream.copyTo(outputStream)
                 }
@@ -404,7 +547,7 @@ class CustomImportManager(private val context: Context) {
             val fileName = getFileName(uri) ?: "logo_${UUID.randomUUID()}.png"
             val logoFile = File(customLogoDir, fileName)
 
-            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+            openInputStream(uri)?.use { inputStream ->
                 logoFile.outputStream().use { outputStream ->
                     inputStream.copyTo(outputStream)
                 }
@@ -456,7 +599,8 @@ class CustomImportManager(private val context: Context) {
                         isBuiltIn = false,
                         isDefault = false,
                         isVip = false,
-                        category = lutObj.optString("category", "")
+                        category = lutObj.optString("category", ""),
+                        isFavorite = lutObj.optBoolean("isFavorite", false)
                     )
                 )
             }
@@ -634,6 +778,47 @@ class CustomImportManager(private val context: Context) {
             true
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to update LUT category", e)
+            false
+        }
+    }
+
+    /**
+     * 更新 LUT 收藏状态（支持内置和自定义）。
+     */
+    fun updateLutFavorite(lutId: String, isFavorite: Boolean): Boolean {
+        return try {
+            val overridesFile = File(context.filesDir, FAVORITE_OVERRIDES_CONFIG)
+            val overridesJson = if (overridesFile.exists()) {
+                JSONObject(overridesFile.readText())
+            } else {
+                JSONObject()
+            }
+            overridesJson.put(lutId, isFavorite)
+            overridesFile.writeText(overridesJson.toString())
+
+            val configFile = File(context.filesDir, CUSTOM_LUT_CONFIG)
+            if (configFile.exists()) {
+                val configJson = configFile.readText()
+                val jsonArray = JSONArray(configJson)
+                val newArray = JSONArray()
+                var updated = false
+                for (i in 0 until jsonArray.length()) {
+                    val lutObj = jsonArray.getJSONObject(i)
+                    if (lutObj.getString("id") == lutId) {
+                        lutObj.put("isFavorite", isFavorite)
+                        updated = true
+                    }
+                    newArray.put(lutObj)
+                }
+                if (updated) {
+                    configFile.writeText(newArray.toString())
+                }
+            }
+
+            PLog.d(TAG, "LUT favorite updated: $lutId -> $isFavorite")
+            true
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to update LUT favorite", e)
             false
         }
     }
@@ -912,6 +1097,9 @@ class CustomImportManager(private val context: Context) {
      * 从 URI 获取文件名
      */
     private fun getFileName(uri: Uri): String? {
+        if (uri.scheme == "file") {
+            return uri.lastPathSegment
+        }
         return try {
             context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
                 val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
@@ -919,6 +1107,20 @@ class CustomImportManager(private val context: Context) {
                 cursor.getString(nameIndex)
             }
         } catch (e: Exception) {
+            uri.lastPathSegment
+        }
+    }
+
+    private fun openInputStream(uri: Uri): java.io.InputStream? {
+        return try {
+            if (uri.scheme == "file") {
+                val path = uri.path ?: return null
+                java.io.FileInputStream(path)
+            } else {
+                context.contentResolver.openInputStream(uri)
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to open input stream for $uri", e)
             null
         }
     }

@@ -10,6 +10,8 @@ enum class BaselineColorCorrectionTarget {
     PHANTOM
 }
 
+const val DEFAULT_RAW_BASELINE_LUT_ID = "lumix_std"
+
 data class BaselineColorCorrectionConfig(
     val lutId: String? = null
 )
@@ -48,7 +50,7 @@ fun UserPreferences.getPrimaryLutId(
     target: BaselineColorCorrectionTarget
 ): String? {
     return when (target) {
-        BaselineColorCorrectionTarget.PHANTOM -> lutId ?: phantomLutId
+        BaselineColorCorrectionTarget.PHANTOM,
         BaselineColorCorrectionTarget.JPG,
         BaselineColorCorrectionTarget.RAW -> lutId
     }

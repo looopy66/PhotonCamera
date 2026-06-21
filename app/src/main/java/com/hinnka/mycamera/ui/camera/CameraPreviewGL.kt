@@ -3,6 +3,7 @@ package com.hinnka.mycamera.ui.camera
 import android.graphics.SurfaceTexture
 import android.util.Size
 import androidx.compose.foundation.background
+import com.hinnka.mycamera.utils.PLog
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
@@ -18,11 +19,13 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
+import com.hinnka.mycamera.camera.FocusPointSource
 import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.ui.components.FocusIndicator
 import com.hinnka.mycamera.utils.OrientationObserver
+import com.hinnka.mycamera.video.CaptureMode
 import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.video.VideoRecorder
 
@@ -35,6 +38,8 @@ import com.hinnka.mycamera.video.VideoRecorder
 fun CameraPreviewGL(
     aspectRatio: Float,
     previewSize: Size,
+    captureSize: Size,
+    captureMode: CaptureMode,
     sensorOrientation: Int,
     lensFacing: Int,
     calibrationOffset: Int,
@@ -43,9 +48,10 @@ fun CameraPreviewGL(
     baselineColorRecipeParams: ColorRecipeParams,
     colorRecipeParams: ColorRecipeParams,
     focusPoint: Pair<Float, Float>?,
+    focusPointSource: FocusPointSource = FocusPointSource.MANUAL,
     isFocusing: Boolean,
     focusSuccess: Boolean?,
-    meteringMode: MeteringMode = MeteringMode.CENTER_WEIGHTED,
+    meteringMode: MeteringMode = MeteringMode.SYSTEM_DEFAULT,
     onSurfaceTextureReady: (SurfaceTexture) -> Unit,
     onSurfaceDestroyed: () -> Unit,
     onTap: (Float, Float, Int, Int) -> Unit,
@@ -53,18 +59,22 @@ fun CameraPreviewGL(
     onMeteringUpdated: ((Double, Double) -> Unit)? = null,
     onHighlightPointUpdated: ((Float, Float) -> Unit)? = null,
     onDepthInputAvailable: ((android.graphics.Bitmap) -> Unit)? = null,
+    onAiFocusInputAvailable: ((android.graphics.Bitmap) -> Unit)? = null,
     livePhotoRecorder: LivePhotoRecorder? = null,
     videoRecorder: VideoRecorder? = null,
     videoLogProfile: VideoLogProfile = VideoLogProfile.OFF,
     isHlgInput: Boolean = false,
+    isAiFocusBusy: Boolean = false,
     onGLSurfaceViewReady: ((CameraGLSurfaceView) -> Unit)? = null,
     aperture: Float = 0f,
     isAutoFocus: Boolean = true,
+    focusPeakingEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val rotationDegrees = OrientationObserver.rotationDegrees
     val lifecycleOwner = LocalLifecycleOwner.current
     var glSurfaceViewRef by remember { mutableStateOf<CameraGLSurfaceView?>(null) }
+    var resumeGeneration by remember { mutableIntStateOf(0) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -73,6 +83,7 @@ fun CameraPreviewGL(
                 Lifecycle.Event.ON_RESUME -> {
                     glSurfaceViewRef?.onResume()
                     glSurfaceViewRef?.restoreRenderStateAfterResume()
+                    resumeGeneration++
                 }
                 else -> Unit
             }
@@ -116,6 +127,8 @@ fun CameraPreviewGL(
         // 标记是否已经通知过 SurfaceTexture
         var surfaceTextureNotified by remember { mutableStateOf(false) }
         var notifiedPreviewSize by remember { mutableStateOf<Size?>(null) }
+        var notifiedResumeGeneration by remember { mutableIntStateOf(-1) }
+        var notifiedSurfaceTexture by remember { mutableStateOf<SurfaceTexture?>(null) }
         // 标记 Surface 是否已经准备好
         var surfaceAvailable by remember { mutableStateOf(false) }
 
@@ -135,7 +148,7 @@ fun CameraPreviewGL(
                 }
         ) {
             // GLSurfaceView 用于相机预览
-            key(previewSize.width, previewSize.height) {
+            key(previewSize.width, previewSize.height, captureMode) {
                 AndroidView(
                     factory = { ctx ->
                         CameraGLSurfaceView(ctx).apply {
@@ -147,25 +160,37 @@ fun CameraPreviewGL(
                     update = { glSurfaceView ->
                         // 更新闭包捕获的状态
                         glSurfaceView.onSurfaceReady = { _ ->
+                            PLog.d("CameraPreviewGL", "onSurfaceReady called")
                             // SurfaceTexture 已经准备好，可以开始预览
                             surfaceAvailable = true
                             glSurfaceView.getSurfaceTexture()?.let { surfaceTexture ->
                                 glSurfaceView.setPreviewSize(previewSize.width, previewSize.height)
+                                PLog.d("CameraPreviewGL", "onSurfaceReady: notifiedST=$notifiedSurfaceTexture, newST=$surfaceTexture")
+                                // If the SurfaceTexture changed (e.g. Surface recreated due to layout bounds change), force notify
+                                if (notifiedSurfaceTexture != null && notifiedSurfaceTexture != surfaceTexture) {
+                                    PLog.d("CameraPreviewGL", "onSurfaceReady: Forcing surfaceTextureNotified = false")
+                                    surfaceTextureNotified = false
+                                }
                                 // 取消从这里回调，统一在 update 中处理
                             }
                         }
 
                         glSurfaceView.onSurfaceDestroyed = {
-                            surfaceAvailable = false
-                            surfaceTextureNotified = false
-                            notifiedPreviewSize = null
-                            onSurfaceDestroyed()
+                            if (glSurfaceViewRef === glSurfaceView) {
+                                surfaceAvailable = false
+                                surfaceTextureNotified = false
+                                notifiedPreviewSize = null
+                                notifiedResumeGeneration = -1
+                                notifiedSurfaceTexture = null
+                                onSurfaceDestroyed()
+                            }
                         }
 
                         glSurfaceView.onHistogramUpdated = { onHistogramUpdated?.invoke(it) }
                         glSurfaceView.onMeteringUpdated = { w, l -> onMeteringUpdated?.invoke(w, l) }
                         glSurfaceView.onHighlightPointUpdated = { hx, hy -> onHighlightPointUpdated?.invoke(hx, hy) }
                         glSurfaceView.onDepthInputAvailable = { onDepthInputAvailable?.invoke(it) }
+                        glSurfaceView.onAiFocusInputAvailable = { onAiFocusInputAvailable?.invoke(it) }
 
                         viewWidth = glSurfaceView.width
                         viewHeight = glSurfaceView.height
@@ -178,14 +203,28 @@ fun CameraPreviewGL(
                         // 当 SurfaceTexture 准备好且尺寸已就绪时，通知外部打开相机。
                         // 对 previewSize 变化使用 key 重建 GLSurfaceView，避免旧 SurfaceTexture
                         // 的残留帧在新尺寸矩阵下继续显示几帧。
+                        
+                        // 强制在所有的条件分支之外读取这几个 State，让 Compose 确保能监听到变化！
+                        val currentSurfaceNotified = surfaceTextureNotified
+                        val currentNotifiedST = notifiedSurfaceTexture
+                        val currentNotifiedResumeGen = notifiedResumeGeneration
+                        val currentNotifiedPreviewSize = notifiedPreviewSize
+                        
                         if (viewWidth > 0 && viewHeight > 0 && surfaceAvailable) {
                             glSurfaceView.getSurfaceTexture()?.let { surfaceTexture ->
                                 glSurfaceView.setPreviewSize(previewSize.width, previewSize.height)
+                                glSurfaceView.setCaptureSize(captureSize.width, captureSize.height)
                                 val shouldNotifySurfaceTexture =
-                                    !surfaceTextureNotified || notifiedPreviewSize != previewSize
+                                    !currentSurfaceNotified ||
+                                        currentNotifiedPreviewSize != previewSize ||
+                                        currentNotifiedResumeGen != resumeGeneration ||
+                                        currentNotifiedST != surfaceTexture
                                 if (shouldNotifySurfaceTexture) {
+                                    PLog.d("CameraPreviewGL", "shouldNotifySurfaceTexture is true, calling onSurfaceTextureReady")
                                     surfaceTextureNotified = true
                                     notifiedPreviewSize = previewSize
+                                    notifiedResumeGeneration = resumeGeneration
+                                    notifiedSurfaceTexture = surfaceTexture
                                     onSurfaceTextureReady(surfaceTexture)
                                 }
                             }
@@ -205,8 +244,8 @@ fun CameraPreviewGL(
 
                         glSurfaceView.setFocusPoint(focusPoint?.let {
                             android.graphics.PointF(
-                                it.first / viewWidth,
-                                it.second / viewHeight
+                                it.first,
+                                it.second
                             )
                         })
                         glSurfaceView.setMeteringMode(meteringMode)
@@ -215,6 +254,8 @@ fun CameraPreviewGL(
                         glSurfaceView.setVideoLogProfile(videoLogProfile)
                         glSurfaceView.setIsHlgInput(isHlgInput)
                         glSurfaceView.setAutoFocus(isAutoFocus)
+                        glSurfaceView.setFocusPeakingEnabled(focusPeakingEnabled)
+                        glSurfaceView.setAiFocusBusy(isAiFocusBusy)
                     },
                     modifier = Modifier.fillMaxSize()
                 )
@@ -223,6 +264,7 @@ fun CameraPreviewGL(
             // 对焦指示器
             FocusIndicator(
                 position = focusPoint,
+                source = focusPointSource,
                 isFocusing = isFocusing,
                 focusSuccess = focusSuccess,
                 modifier = Modifier.fillMaxSize()

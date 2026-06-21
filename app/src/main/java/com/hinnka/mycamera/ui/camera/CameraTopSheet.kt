@@ -1,10 +1,10 @@
 package com.hinnka.mycamera.ui.camera
 
 import android.media.AudioDeviceInfo
+import android.graphics.Bitmap
 import android.os.Build
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -27,7 +27,13 @@ import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.MeteringMode
-import com.hinnka.mycamera.utils.DeviceUtil
+import com.hinnka.mycamera.lut.LutInfo
+import com.hinnka.mycamera.raw.DcpInfo
+import com.hinnka.mycamera.raw.RawRenderingEngine
+import com.hinnka.mycamera.raw.RawToneMappingParameters
+import com.hinnka.mycamera.raw.SpectralFilmSelection
+import com.hinnka.mycamera.ui.components.RawEditPanel
+import com.hinnka.mycamera.ui.components.RawEditPanelContentMode
 import com.hinnka.mycamera.video.*
 import com.hinnka.mycamera.video.VideoCodec
 
@@ -39,12 +45,13 @@ private enum class VideoSettingPanel {
     MICROPHONE
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun CameraTopSheet(
     visible: Boolean,
     captureMode: CaptureMode,
     aspectRatio: AspectRatio,
+    topSheetAspectRatios: List<AspectRatio>,
     onAspectRatioChange: (AspectRatio) -> Unit,
     videoAspectRatio: VideoAspectRatio,
     onVideoAspectRatioChange: (VideoAspectRatio) -> Unit,
@@ -57,25 +64,54 @@ fun CameraTopSheet(
     videoAudioInputId: String,
     videoAudioInputOptions: List<VideoAudioInputOption>,
     onVideoAudioInputChange: (String) -> Unit,
+    quickShotResolution: QuickShotResolutionPreset,
+    quickShotCapabilities: QuickShotCapabilities,
+    onQuickShotResolutionChange: (QuickShotResolutionPreset) -> Unit,
     useRaw: Boolean,
     onRawToggle: (Boolean) -> Unit,
     isRawSupported: Boolean,
+    rawDcpId: String?,
+    availableDcps: List<DcpInfo>,
+    rawBaselineLutId: String?,
+    availableLuts: List<LutInfo>,
+    previewThumbnail: Bitmap?,
+    rawExposureCompensation: Float,
+    rawAutoExposure: Boolean,
+    rawHighlightsAdjustment: Float,
+    rawShadowsAdjustment: Float,
+    rawDROMode: String,
+    rawBlackPointCorrection: Float,
+    rawWhitePointCorrection: Float,
+    rawRenderingEngine: RawRenderingEngine,
+    rawToneMappingParameters: RawToneMappingParameters,
+    rawSpectralFilmSelection: SpectralFilmSelection?,
+    rawSpectralFilmPrint: String?,
+    onRawDcpChange: (String?) -> Unit,
+    onImportRawDcp: () -> Unit,
+    onDeleteRawDcp: (DcpInfo) -> Unit,
+    onRawBaselineLutChange: (String?) -> Unit,
+    onEditRawBaselineRecipe: (String) -> Unit,
+    onRawDROModeChange: (String) -> Unit,
+    onRawColorEngineChange: (RawRenderingEngine) -> Unit,
+    onRawSpectralFilmSelectionChange: (SpectralFilmSelection?) -> Unit,
+    onRawSpectralFilmPrintChange: (String?) -> Unit,
     meteringMode: MeteringMode,
     onMeteringModeChange: (MeteringMode) -> Unit,
     onFilterManageClick: () -> Unit,
     onFrameManageClick: () -> Unit,
-    phantomMode: Boolean,
-    onPhantomModeToggle: (Boolean) -> Unit,
+    onPresetManageClick: () -> Unit,
+    onToolboxClick: () -> Unit,
     onMoreSettingsClick: () -> Unit,
     useMFNR: Boolean,
     onMFNRToggle: (Boolean) -> Unit,
+    useHdrComposition: Boolean,
+    onHdrCompositionToggle: (Boolean) -> Unit,
     useMultipleExposure: Boolean,
     onMultipleExposureToggle: (Boolean) -> Unit,
-    useMFSR: Boolean,
-    onMFSRToggle: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var expandedVideoPanel by rememberSaveable { mutableStateOf<VideoSettingPanel?>(null) }
+    var showRawSheet by rememberSaveable { mutableStateOf(false) }
     AnimatedVisibility(
         visible = visible,
         enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
@@ -96,9 +132,9 @@ fun CameraTopSheet(
                 SectionLabel(title = stringResource(R.string.aspect_ratio))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    AspectRatio.entries.forEach { ratio ->
+                    AspectRatio.sanitizeTopSheetRatios(topSheetAspectRatios).forEach { ratio ->
                         val isSelected = aspectRatio == ratio
                         Box(
                             modifier = Modifier
@@ -116,7 +152,7 @@ fun CameraTopSheet(
                             Text(
                                 text = ratio.getDisplayName(),
                                 color = if (isSelected) Color.Black else Color.White,
-                                fontSize = 13.sp,
+                                fontSize = 11.sp,
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                             )
                         }
@@ -137,21 +173,19 @@ fun CameraTopSheet(
                     )
 
                     QuickSettingToggle(
-                        title = stringResource(R.string.settings_use_super_resolution),
-                        checked = useMFSR,
-                        onCheckedChange = onMFSRToggle,
+                        title = stringResource(R.string.settings_use_hdr_composition),
+                        checked = useHdrComposition,
+                        onCheckedChange = onHdrCompositionToggle,
                         modifier = Modifier.weight(1f)
                     )
 
                     if (isRawSupported) {
-                        QuickSettingToggle(
-                            title = stringResource(R.string.settings_use_raw),
+                        QuickSettingButton2(
+                            title = stringResource(R.string.baseline_target_raw),
                             checked = useRaw,
-                            onCheckedChange = onRawToggle,
+                            onClick = { showRawSheet = true },
                             modifier = Modifier.weight(1f)
                         )
-                    } else {
-                        Spacer(modifier = Modifier.weight(1f))
                     }
                 }
 
@@ -161,15 +195,6 @@ fun CameraTopSheet(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    if (DeviceUtil.canShowPhantom) {
-                        QuickSettingToggle(
-                            title = stringResource(R.string.ghost_mode),
-                            checked = phantomMode,
-                            onCheckedChange = onPhantomModeToggle,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-
                     QuickSettingToggle(
                         title = stringResource(R.string.settings_use_multiple_exposure),
                         checked = useMultipleExposure,
@@ -180,6 +205,7 @@ fun CameraTopSheet(
                     val meteringLabel = when (meteringMode) {
                         MeteringMode.SPOT -> stringResource(R.string.metering_spot)
                         MeteringMode.CENTER_WEIGHTED -> stringResource(R.string.metering_center_weighted)
+                        MeteringMode.SYSTEM_DEFAULT -> stringResource(R.string.metering_system_default)
                         MeteringMode.AVERAGE -> stringResource(R.string.metering_average)
                         MeteringMode.HIGHLIGHT_PRIORITY -> stringResource(R.string.metering_highlight_priority)
                     }
@@ -188,7 +214,8 @@ fun CameraTopSheet(
                         value = meteringLabel,
                         onClick = {
                             val next = when (meteringMode) {
-                                MeteringMode.SPOT -> MeteringMode.CENTER_WEIGHTED
+                                MeteringMode.SPOT -> MeteringMode.SYSTEM_DEFAULT
+                                MeteringMode.SYSTEM_DEFAULT -> MeteringMode.CENTER_WEIGHTED
                                 MeteringMode.CENTER_WEIGHTED -> MeteringMode.AVERAGE
                                 MeteringMode.AVERAGE -> MeteringMode.HIGHLIGHT_PRIORITY
                                 MeteringMode.HIGHLIGHT_PRIORITY -> MeteringMode.SPOT
@@ -197,8 +224,14 @@ fun CameraTopSheet(
                         },
                         modifier = Modifier.weight(1f)
                     )
+                    QuickSettingButton(
+                        title = stringResource(R.string.toolbox_title),
+                        icon = Icons.Default.Palette,
+                        onClick = onToolboxClick,
+                        modifier = Modifier.weight(1f)
+                    )
                 }
-            } else {
+            } else if (captureMode == CaptureMode.VIDEO) {
                 SectionLabel(title = stringResource(R.string.video_aspect_chip))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -362,6 +395,72 @@ fun CameraTopSheet(
                         }
                     }
                 }
+            } else {
+                SectionLabel(title = stringResource(R.string.aspect_ratio))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    AspectRatio.sanitizeTopSheetRatios(topSheetAspectRatios).forEach { ratio ->
+                        val isSelected = aspectRatio == ratio
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(40.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(
+                                    if (isSelected) Color(0xFFFF6B35) else Color.White.copy(
+                                        alpha = 0.12f
+                                    )
+                                )
+                                .clickable { onAspectRatioChange(ratio) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = ratio.getDisplayName(),
+                                color = if (isSelected) Color.Black else Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    val meteringLabel = when (meteringMode) {
+                        MeteringMode.SPOT -> stringResource(R.string.metering_spot)
+                        MeteringMode.CENTER_WEIGHTED -> stringResource(R.string.metering_center_weighted)
+                        MeteringMode.SYSTEM_DEFAULT -> stringResource(R.string.metering_system_default)
+                        MeteringMode.AVERAGE -> stringResource(R.string.metering_average)
+                        MeteringMode.HIGHLIGHT_PRIORITY -> stringResource(R.string.metering_highlight_priority)
+                    }
+                    QuickSettingValue(
+                        title = stringResource(R.string.metering_mode),
+                        value = meteringLabel,
+                        onClick = {
+                            val next = when (meteringMode) {
+                                MeteringMode.SPOT -> MeteringMode.SYSTEM_DEFAULT
+                                MeteringMode.SYSTEM_DEFAULT -> MeteringMode.CENTER_WEIGHTED
+                                MeteringMode.CENTER_WEIGHTED -> MeteringMode.AVERAGE
+                                MeteringMode.AVERAGE -> MeteringMode.HIGHLIGHT_PRIORITY
+                                MeteringMode.HIGHLIGHT_PRIORITY -> MeteringMode.SPOT
+                            }
+                            onMeteringModeChange(next)
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                    QuickSettingButton(
+                        title = stringResource(R.string.toolbox_title),
+                        icon = Icons.Default.Palette,
+                        onClick = onToolboxClick,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -381,6 +480,13 @@ fun CameraTopSheet(
                     title = stringResource(R.string.settings_frame_management),
                     icon = Icons.Default.BorderBottom,
                     onClick = onFrameManageClick,
+                    modifier = Modifier.weight(1f)
+                )
+
+                QuickSettingButton(
+                    title = stringResource(R.string.settings_preset_management),
+                    icon = Icons.Default.Tune,
+                    onClick = onPresetManageClick,
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -433,6 +539,108 @@ fun CameraTopSheet(
 
             Spacer(Modifier.weight(1f))
         }
+    }
+
+    if (showRawSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showRawSheet = false },
+            containerColor = Color(0xFF1E1E1E),
+            dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.2f)) }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    text = stringResource(R.string.settings_use_raw),
+                    color = Color.White,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                RawCaptureSwitch(
+                    checked = useRaw,
+                    onCheckedChange = onRawToggle
+                )
+                RawEditPanel(
+                    selectedDcpId = rawDcpId,
+                    availableDcps = availableDcps,
+                    selectedBaselineLutId = rawBaselineLutId,
+                    onSelectBaselineLut = onRawBaselineLutChange,
+                    onEditBaselineRecipe = onEditRawBaselineRecipe,
+                    availableLuts = availableLuts,
+                    thumbnail = previewThumbnail,
+                    rawExposureCompensation = rawExposureCompensation,
+                    rawAutoExposure = rawAutoExposure,
+                    rawHighlightsAdjustment = rawHighlightsAdjustment,
+                    rawShadowsAdjustment = rawShadowsAdjustment,
+                    rawBlackPointCorrection = rawBlackPointCorrection,
+                    rawWhitePointCorrection = rawWhitePointCorrection,
+                    rawRenderingEngine = rawRenderingEngine,
+                    rawToneMappingParameters = rawToneMappingParameters,
+                    spectralFilmSelection = rawSpectralFilmSelection,
+                    spectralFilmPrint = rawSpectralFilmPrint,
+                    onSelectDcp = onRawDcpChange,
+                    onImportDcp = onImportRawDcp,
+                    onDeleteDcp = onDeleteRawDcp,
+                    onRawExposureCompensationChange = {},
+                    onRawAutoExposureChange = {},
+                    onRawHighlightsAdjustmentChange = {},
+                    onRawShadowsAdjustmentChange = {},
+                    onRawBlackPointCorrectionChange = {},
+                    onRawWhitePointCorrectionChange = {},
+                    onRawColorEngineChange = onRawColorEngineChange,
+                    onSpectralFilmSelectionChange = onRawSpectralFilmSelectionChange,
+                    onSpectralFilmPrintChange = onRawSpectralFilmPrintChange,
+                    onAdjustmentStart = {},
+                    onAdjustmentEnd = {},
+                    contentMode = RawEditPanelContentMode.QUICK
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RawCaptureSwitch(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = stringResource(R.string.settings_use_raw),
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Normal
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = stringResource(R.string.settings_use_raw_description),
+                color = Color.White.copy(alpha = 0.6f),
+                fontSize = 13.sp,
+                lineHeight = 18.sp
+            )
+        }
+        Spacer(modifier = Modifier.width(16.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Color.White,
+                checkedTrackColor = Color(0xFFFF6B35),
+                uncheckedThumbColor = Color.Gray,
+                uncheckedTrackColor = Color.White.copy(alpha = 0.2f),
+                uncheckedBorderColor = Color.Transparent
+            )
+        )
     }
 }
 
@@ -569,6 +777,14 @@ private fun videoAspectRatioLabel(aspectRatio: VideoAspectRatio): String {
 }
 
 @Composable
+private fun quickShotResolutionLabel(resolution: QuickShotResolutionPreset): String {
+    return when (resolution) {
+        QuickShotResolutionPreset.FULL -> stringResource(R.string.quick_shot_resolution_full)
+        else -> resolution.displayName
+    }
+}
+
+@Composable
 private fun videoLogProfileLabel(profile: VideoLogProfile): String {
     return when (profile) {
         VideoLogProfile.OFF -> stringResource(R.string.video_log_off)
@@ -635,7 +851,7 @@ fun QuickSettingButton(
             .clip(RoundedCornerShape(8.dp))
             .background(Color.White.copy(alpha = 0.15f))
             .clickable { onClick() }
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 8.dp),
         contentAlignment = Alignment.CenterStart
     ) {
         Row(
@@ -659,11 +875,13 @@ fun QuickSettingButton(
     }
 }
 
+
+
 @Composable
-fun QuickSettingToggle(
+fun QuickSettingButton2(
     title: String,
     checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -675,7 +893,7 @@ fun QuickSettingToggle(
                     alpha = 0.15f
                 )
             )
-            .clickable { onCheckedChange(!checked) }
+            .clickable { onClick() }
             .padding(horizontal = 16.dp),
         contentAlignment = Alignment.CenterStart
     ) {
@@ -688,6 +906,53 @@ fun QuickSettingToggle(
                 text = title,
                 color = if (checked) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.9f),
                 fontSize = 10.sp,
+                fontWeight = if (checked) FontWeight.Bold else FontWeight.Normal,
+            )
+            Icon(
+                imageVector = Icons.Default.ChevronRight,
+                contentDescription = null,
+                tint = if (checked) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.9f),
+                modifier = Modifier.size(18.dp)
+            )
+        }
+    }
+}
+
+@Composable
+fun QuickSettingToggle(
+    title: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
+    modifier: Modifier = Modifier
+) {
+    val contentAlpha = if (enabled) 1f else 0.38f
+    Box(
+        modifier = modifier
+            .height(40.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+                if (checked) Color(0xFFFF6B35).copy(alpha = 0.15f * contentAlpha) else Color.White.copy(
+                    alpha = 0.15f
+                )
+            )
+            .clickable(enabled = enabled) { onCheckedChange(!checked) }
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                color = if (checked) {
+                    Color(0xFFFF6B35).copy(alpha = contentAlpha)
+                } else {
+                    Color.White.copy(alpha = 0.9f * contentAlpha)
+                },
+                fontSize = 10.sp,
                 lineHeight = 10.sp,
                 fontWeight = if (checked) FontWeight.Bold else FontWeight.Normal,
                 modifier = Modifier.weight(1f)
@@ -698,7 +963,13 @@ fun QuickSettingToggle(
                 modifier = Modifier
                     .size(8.dp)
                     .clip(androidx.compose.foundation.shape.CircleShape)
-                    .background(if (checked) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.2f))
+                    .background(
+                        if (checked) {
+                            Color(0xFFFF6B35).copy(alpha = contentAlpha)
+                        } else {
+                            Color.White.copy(alpha = 0.2f * contentAlpha)
+                        }
+                    )
             )
         }
     }

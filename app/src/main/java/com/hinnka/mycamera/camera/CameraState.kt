@@ -4,19 +4,33 @@ import android.graphics.Rect
 import android.util.Range
 import android.util.Size
 import com.hinnka.mycamera.video.CaptureMode
+import com.hinnka.mycamera.video.QuickShotCapabilities
+import com.hinnka.mycamera.video.QuickShotConfig
 import com.hinnka.mycamera.video.VideoCapabilities
 import com.hinnka.mycamera.video.VideoConfig
 import com.hinnka.mycamera.video.VideoRecordingState
+import kotlin.math.abs
 
 /**
- * 画面比例枚举
+ * 画面比例。内置比例使用稳定名称持久化，自定义比例使用 CUSTOM_宽_高。
  */
-enum class AspectRatio(val widthRatio: Int, val heightRatio: Int) {
-        RATIO_3_2(3, 2),
-    RATIO_4_3(4, 3),
-    RATIO_16_9(16, 9),
-    RATIO_1_1(1, 1),
-    XPAN(65, 24);
+class AspectRatio private constructor(
+    val name: String,
+    val widthRatio: Int,
+    val heightRatio: Int
+) {
+    override fun equals(other: Any?): Boolean {
+        return other is AspectRatio && name == other.name
+    }
+
+    override fun hashCode(): Int {
+        return name.hashCode()
+    }
+
+    override fun toString(): String {
+        return name
+    }
+
 
     fun getValue(isLandscape: Boolean): Float {
         return if (isLandscape) {
@@ -34,8 +48,83 @@ enum class AspectRatio(val widthRatio: Int, val heightRatio: Int) {
     }
 
     companion object {
+        const val TOP_SHEET_MAX_COUNT = 5
+        private const val CUSTOM_PREFIX = "CUSTOM_"
+
+        val RATIO_3_2 = AspectRatio("RATIO_3_2", 3, 2)
+        val RATIO_4_3 = AspectRatio("RATIO_4_3", 4, 3)
+        val RATIO_16_9 = AspectRatio("RATIO_16_9", 16, 9)
+        val RATIO_1_1 = AspectRatio("RATIO_1_1", 1, 1)
+        val RATIO_21_9 = AspectRatio("RATIO_21_9", 21, 9)
+        val XPAN = AspectRatio("XPAN", 65, 24)
+
+        val entries: List<AspectRatio> = listOf(
+            RATIO_3_2,
+            RATIO_4_3,
+            RATIO_16_9,
+            RATIO_1_1,
+            RATIO_21_9,
+            XPAN
+        )
+
+        val defaultTopSheetRatios: List<AspectRatio> = listOf(
+            RATIO_3_2,
+            RATIO_4_3,
+            RATIO_16_9,
+            RATIO_1_1,
+            XPAN
+        )
+
         fun fromString(string: String): AspectRatio {
-            return entries.firstOrNull { it.getDisplayName() == string } ?: RATIO_4_3
+            return valueOfOrNull(string) ?: entries.firstOrNull { it.getDisplayName() == string } ?: RATIO_4_3
+        }
+
+        fun valueOf(name: String): AspectRatio {
+            return valueOfOrNull(name) ?: throw IllegalArgumentException("Unknown AspectRatio: $name")
+        }
+
+        fun valueOfOrNull(name: String): AspectRatio? {
+            entries.firstOrNull { it.name == name }?.let { return it }
+            if (!name.startsWith(CUSTOM_PREFIX)) return null
+            val parts = name.removePrefix(CUSTOM_PREFIX).split("_")
+            if (parts.size != 2) return null
+            val width = parts[0].toIntOrNull() ?: return null
+            val height = parts[1].toIntOrNull() ?: return null
+            return custom(width, height)
+        }
+
+        fun custom(widthRatio: Int, heightRatio: Int): AspectRatio {
+            val width = widthRatio.coerceIn(1, 999)
+            val height = heightRatio.coerceIn(1, 999)
+            val divisor = gcd(width, height)
+            val normalizedWidth = width / divisor
+            val normalizedHeight = height / divisor
+            entries.firstOrNull {
+                it.widthRatio == normalizedWidth && it.heightRatio == normalizedHeight
+            }?.let { return it }
+            return AspectRatio(
+                name = "${CUSTOM_PREFIX}${normalizedWidth}_${normalizedHeight}",
+                widthRatio = normalizedWidth,
+                heightRatio = normalizedHeight
+            )
+        }
+
+        fun sanitizeTopSheetRatios(ratios: List<AspectRatio>): List<AspectRatio> {
+            val sanitized = ratios
+                .distinct()
+                .take(TOP_SHEET_MAX_COUNT)
+            return sanitized.ifEmpty { defaultTopSheetRatios }
+        }
+
+        fun sanitizeCustomRatios(ratios: List<AspectRatio>): List<AspectRatio> {
+            return ratios
+                .map { custom(it.widthRatio, it.heightRatio) }
+                .filter { ratio -> entries.none { it.name == ratio.name } }
+                .distinctBy { it.name }
+        }
+
+        private tailrec fun gcd(a: Int, b: Int): Int {
+            return if (b == 0) kotlin.math.abs(a) else gcd(b, a % b)
         }
     }
 }
@@ -55,10 +144,11 @@ enum class LensType {
  * 测光模式
  */
 enum class MeteringMode {
-    SPOT,              // 点测光 - 对焦点附近小区域
+    SYSTEM_DEFAULT,    // 系统默认 - 不设置 AE 测光区域
     CENTER_WEIGHTED,   // 中央重点 - 中等区域，中心加权
+    SPOT,              // 点测光 - 对焦点附近小区域
     AVERAGE,           // 平均测光 - 全画面均匀
-    HIGHLIGHT_PRIORITY // 高光优先 - 亮部加权，防止过曝
+    HIGHLIGHT_PRIORITY; // 高光优先 - 亮部加权，防止过曝
 }
 
 /**
@@ -66,6 +156,9 @@ enum class MeteringMode {
  */
 data class CameraInfo(
     val cameraId: String,
+    val logicalCameraId: String? = null,
+    val outputPhysicalCameraId: String? = null,
+    val physicalCameras: List<CameraPhysicalInfo> = emptyList(),
     val lensFacing: Int,
     val lensType: LensType,
     val physicalCameraIds: List<String>,
@@ -81,12 +174,28 @@ data class CameraInfo(
     val focalLength35mmEquivalent: Float = 0f,  // 35mm等效焦距
     val zoomSteps: List<Float> = listOf(1f),  // 可用的变焦档位 (如 [0.5, 1.0, 2.0])
     val intrinsicZoomRatio: Float = 1f,  // 固有变焦比例 (CameraX 1.3.0+)
+    val displayIntrinsicZoomRatio: Float = intrinsicZoomRatio, // 用户可见固有倍率，ISZ 虚拟镜头会高于底层提交倍率
     val hardwareLevel: Int = -1,  // 硬件支持级别
     val supportsManualProcessing: Boolean = false, // 是否支持手动处理（关闭系统锐化/降噪）
     val supportsRaw: Boolean = false, // 是否支持 RAW 格式
     val isCustomLensId: Boolean = false, // 是否来自用户手动添加的镜头 ID
+    val isVirtualIszLens: Boolean = false, // 是否为用户创建的 ISZ 虚拟镜头
+    val isVirtualIszMacroLens: Boolean = false, // ISZ 虚拟镜头是否强制识别为微距
+    val baseCameraId: String? = null, // 虚拟镜头对应的真实物理镜头 ID
+    val iszZoomRatio: Float = 1f, // ISZ 虚拟倍率
     val minimumFocusDistance: Float = 0f // 最小对焦距离 (diopters, 0 = infinity only)
 ) {
+    fun getOpenCameraId(): String = logicalCameraId ?: cameraId
+
+    fun getBoundPhysicalCameraId(): String? = outputPhysicalCameraId
+
+    fun getBoundPhysicalCameraId(zoomRatioByMain: Float): String? {
+        if (physicalCameras.isEmpty()) return outputPhysicalCameraId
+        return physicalCameras.minByOrNull {
+            abs(it.intrinsicZoomRatio - zoomRatioByMain)
+        }?.cameraId ?: outputPhysicalCameraId
+    }
+
     /**
      * 获取镜头类型显示名称
      */
@@ -126,6 +235,18 @@ data class CameraInfo(
     }
 }
 
+data class CameraPhysicalInfo(
+    val cameraId: String,
+    val intrinsicZoomRatio: Float,
+    val focalLength35mmEquivalent: Float = 0f,
+    val focalLength: Float = 0f
+)
+
+enum class FocusPointSource {
+    MANUAL,
+    AI
+}
+
 /**
  * 相机状态数据类
  */
@@ -135,6 +256,7 @@ data class CameraState(
     val currentLensType: LensType = LensType.BACK_MAIN,
     val availableCameras: List<CameraInfo> = emptyList(),
     val currentPreviewSize: Size = Size(1440, 1080),
+    val currentCaptureSize: Size = Size(1440, 1080),
 
     // 曝光控制
     val exposureCompensation: Int = 0,
@@ -148,7 +270,7 @@ data class CameraState(
     val awbTemperature: Int = 5000, // 色温 (K)
 
     // 测光模式
-    val meteringMode: MeteringMode = MeteringMode.CENTER_WEIGHTED,
+    val meteringMode: MeteringMode = MeteringMode.SYSTEM_DEFAULT,
 
     val isVirtualApertureEnabled: Boolean = false,
     val physicalAperture: Float = 2.0f, // 物理光圈值
@@ -156,8 +278,11 @@ data class CameraState(
     // 对焦
     val isAutoFocus: Boolean = true,
     val focusDistance: Float = 0f, // 当前对焦距离 (0.0 - minimumFocusDistance)
+    val isHyperfocalFocusEnabled: Boolean = false,
+    val hyperfocalDistanceMeters: Float = 0f,
     val minimumFocusDistance: Float = 0f, // 最小对焦距离
     val focusPoint: Pair<Float, Float>? = null, // normalized coordinates (0-1)
+    val focusPointSource: FocusPointSource = FocusPointSource.MANUAL,
     val isFocusing: Boolean = false,
     val focusSuccess: Boolean? = null,
     val currentAfMode: Int? = null, // 当前的 AF 模式
@@ -199,13 +324,20 @@ data class CameraState(
     // 降噪等级 (0=Off, 1=Fast, 2=High Quality, 3=ZSL, 4=Minimal, 5=Auto)
     val nrLevel: Int = 5,
     val availableNrModes: IntArray = intArrayOf(),
+    val vendorCaptureSettingsByLens: VendorCaptureSettingsByLens = VendorCaptureSettingsByLens.Empty,
 
     val isRawSupported: Boolean = false,
     val useMFNR: Boolean = false,
+    val useHdrComposition: Boolean = false,
     val multiFrameCount: Int = 0,
     val useMFSR: Boolean = false,
     val useRaw: Boolean = false,
+    val useMultipleExposure: Boolean = false,
+    val rawMinShutterSpeedNs: Long = 0L,
     val useLivePhoto: Boolean = false,
+    val droMode: String = "OFF",
+    val tonemapMode: String = "FAST",
+    val fixTonemapPreview: Boolean = false,
     // 是否正在拍摄 Live Photo (用于 UI 动画)
     val isCapturingLivePhoto: Boolean = false,
     val applyUltraHDR: Boolean = true,
@@ -215,11 +347,15 @@ data class CameraState(
     val isP010Supported: Boolean = false,
     val isHlg10Supported: Boolean = false,
     val burstCapturing: Boolean = false,
+    val hdrBracketCapturing: Boolean = false,
+    val hdrBracketFrameCount: Int = 0,
     val latitude: Double? = null,
     val longitude: Double? = null,
     val isP3Supported: Boolean = false,
     val currentDynamicRangeProfile: String = "STANDARD",
     val captureMode: CaptureMode = CaptureMode.PHOTO,
+    val quickShotConfig: QuickShotConfig = QuickShotConfig(),
+    val quickShotCapabilities: QuickShotCapabilities = QuickShotCapabilities(),
     val videoConfig: VideoConfig = VideoConfig(),
     val videoCapabilities: VideoCapabilities = VideoCapabilities(),
     val videoRecordingState: VideoRecordingState = VideoRecordingState(),
@@ -301,7 +437,7 @@ data class CameraState(
 
     fun getPreviewAspectRatio(): Float {
         return when (captureMode) {
-            CaptureMode.PHOTO -> aspectRatio.getValue(isLandscape = false)
+            CaptureMode.PHOTO, CaptureMode.QUICK_SHOT -> aspectRatio.getValue(isLandscape = false)
             CaptureMode.VIDEO -> videoConfig.aspectRatio.getPortraitAspectRatio(
                 videoCapabilities.openGatePortraitAspectRatio
             )

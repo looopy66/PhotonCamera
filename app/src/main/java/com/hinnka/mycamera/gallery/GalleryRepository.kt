@@ -3,6 +3,7 @@ package com.hinnka.mycamera.gallery
 import android.content.Context
 import android.content.ContentUris
 import android.provider.MediaStore
+import com.hinnka.mycamera.gallery.db.GalleryMediaStore
 import com.hinnka.mycamera.utils.StartupTrace
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.Dispatchers
@@ -10,6 +11,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -47,7 +50,7 @@ class GalleryRepository(private val context: Context) {
      * 获取最新的一张照片
      */
     suspend fun getLatestPhoto(): MediaData? = withContext(Dispatchers.IO) {
-        queryPhotos(limit = 1).firstOrNull()
+        GalleryMediaStore.queryLatestPhoto(context)
     }
 
     /**
@@ -108,13 +111,13 @@ class GalleryRepository(private val context: Context) {
         fallbackItems
     }
 
-    private fun queryAllSystemPhotosByPages(pageSize: Int = 200): List<MediaData> {
+    private suspend fun queryAllSystemPhotosByPages(pageSize: Int = 200): List<MediaData> {
         val imageItems = querySystemImagesByPages(pageSize)
         val videoItems = querySystemVideosByPages(pageSize)
         return (imageItems + videoItems).sortedByDescending { it.dateAdded }
     }
 
-    private fun querySystemImagesByPages(pageSize: Int): List<MediaData> {
+    private suspend fun querySystemImagesByPages(pageSize: Int): List<MediaData> {
         val items = mutableListOf<MediaData>()
         var offset = 0
         while (true) {
@@ -128,7 +131,7 @@ class GalleryRepository(private val context: Context) {
         return items
     }
 
-    private fun querySystemVideosByPages(pageSize: Int): List<MediaData> {
+    private suspend fun querySystemVideosByPages(pageSize: Int): List<MediaData> {
         val items = mutableListOf<MediaData>()
         var offset = 0
         while (true) {
@@ -146,14 +149,10 @@ class GalleryRepository(private val context: Context) {
      * 查询私有存储中的照片
      */
     private suspend fun queryPhotos(offset: Int = 0, limit: Int = Int.MAX_VALUE): List<MediaData> {
-        return GalleryManager.getPhotoIds(context)
-            .mapNotNull { GalleryManager.buildPhotoData(context, it) }
-            .sortedByDescending { it.dateAdded }
-            .drop(offset)
-            .take(limit)
+        return GalleryMediaStore.queryPhotos(context, offset, limit)
     }
 
-    private fun querySystemImages(offset: Int = 0, limit: Int? = null): List<MediaData> {
+    private suspend fun querySystemImages(offset: Int = 0, limit: Int? = null): List<MediaData> {
         val items = mutableListOf<MediaData>()
         val projection = arrayOf(
             MediaStore.Images.Media._ID,
@@ -232,7 +231,7 @@ class GalleryRepository(private val context: Context) {
         return items
     }
 
-    private fun querySystemVideos(offset: Int = 0, limit: Int? = null): List<MediaData> {
+    private suspend fun querySystemVideos(offset: Int = 0, limit: Int? = null): List<MediaData> {
         val items = mutableListOf<MediaData>()
         val projection = arrayOf(
             MediaStore.Video.Media._ID,
